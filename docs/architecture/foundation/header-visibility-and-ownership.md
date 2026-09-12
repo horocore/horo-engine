@@ -724,3 +724,21 @@ Existing `SaveParticipantId` dependency initializers retain their required-both
 meaning; callers that intended optional or phase-specific behavior must migrate to
 an explicit `SaveParticipantDependency` value. The generated Runtime public-header
 consumer continues to cover the extended Foundation-only surface.
+
+## RND-010.2 Renderer Memory Boundary
+
+`HoroEngine::RenderFrontend` owns `Horo/Runtime/Render/RenderMemoryBudget.h` and
+`RenderMemoryBudgetErrors.h`. The contracts depend only on Foundation results and
+RenderApi resource-operation identities. They expose backend-neutral cost,
+compatibility, scope, reservation, allocation and accounting values; native heap
+types, handles and allocation-policy libraries remain private to concrete backends.
+The generated standalone RenderFrontend public-header consumer verifies those staged
+dependencies.
+
+This is a new explicit frontend ledger, so existing callers require no compatibility
+shim. Resource realization paths migrate by obtaining a complete backend cost plan,
+reserving the owning host/editor/world/service scope before native allocation, and
+committing or cancelling that exact attempt. They must not retain a parallel byte
+counter or treat payload, padding, reusable slack and whole backing capacity as
+additive totals. Pool compatibility IDs are opaque process-local classifications,
+not serialized native memory-type values.

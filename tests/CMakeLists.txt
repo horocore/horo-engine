@@ -1282,6 +1282,13 @@ target_link_libraries(HoroRenderFrontendTests
         HoroEngine::RenderFrontend
         HoroEngine::RenderNull
 )
+add_executable(HoroRenderMemoryBudgetTests
+        support/AllocationProbe.cpp
+        unit/runtime/renderer/RenderMemoryBudgetTests.cpp
+)
+target_compile_features(HoroRenderMemoryBudgetTests PRIVATE cxx_std_20)
+target_include_directories(HoroRenderMemoryBudgetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRenderMemoryBudgetTests PRIVATE HoroEngine::RenderFrontend)
 add_executable(HoroRuntimeLifecycleTests
         unit/runtime/lifecycle/RuntimeLifecycleTests.cpp
 )
@@ -1863,6 +1870,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroShaderManifestTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests
+        HoroRenderMemoryBudgetTests
         HoroEditorViewportResourceTests
         HoroRuntimeLifecycleTests
         HoroRuntimeSaveIdentityTests

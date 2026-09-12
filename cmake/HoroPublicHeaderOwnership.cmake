@@ -461,6 +461,8 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/RenderFrontend.h
+    Horo/Runtime/Render/RenderMemoryBudget.h
+    Horo/Runtime/Render/RenderMemoryBudgetErrors.h
     Horo/Runtime/Render/UiRenderComposition.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS
