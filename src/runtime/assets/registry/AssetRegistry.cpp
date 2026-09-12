@@ -122,6 +122,17 @@ namespace Horo::Assets {
             return ProjectPath::Parse(value);
         }
 
+        [[nodiscard]] bool IsPrefabSourcePath(const std::string_view sourcePath) {
+            return PortableFold(std::filesystem::path{sourcePath}.extension().string()) == ".prefab";
+        }
+
+        [[nodiscard]] Result<void> ValidateSourceType(const ProjectPath &sourcePath, const AssetTypeId &type) {
+            constexpr std::string_view kPrefabAssetType = "core.prefab";
+            if (IsPrefabSourcePath(sourcePath.String()) != (type.Value() == kPrefabAssetType))
+                return Result<void>::Failure(Failure(AssetErrors::TypeMismatch));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<AssetRecord> ParseRecord(const Json &value, const std::optional<std::string_view> objectId = {}) {
             if (!value.is_object() || !value.contains("assetId") || !value["assetId"].is_string())
                 return Result<AssetRecord>::Failure(Failure(AssetErrors::IdentityMissing));
@@ -143,6 +154,8 @@ namespace Horo::Assets {
             Result<ProjectPath> metadata = ParseAssetPath(value["metadataPath"].get<std::string>());
             if (source.HasError() || metadata.HasError())
                 return Result<AssetRecord>::Failure(source.HasError() ? source.ErrorValue() : metadata.ErrorValue());
+            if (Result<void> sourceType = ValidateSourceType(source.Value(), type.Value()); sourceType.HasError())
+                return Result<AssetRecord>::Failure(sourceType.ErrorValue());
             return Result<AssetRecord>::Success(
                 AssetRecord{std::move(id).Value(), std::move(type).Value(), std::move(source).Value(), std::move(metadata).Value()});
         }
@@ -233,9 +246,10 @@ namespace Horo::Assets {
             sidecarJson["metadataPath"] = metadataPath;
             Result<AssetRecord> record = ParseRecord(sidecarJson);
             if (record.HasError()) {
-                const ErrorCodeDescriptor &descriptor = record.ErrorValue().code.Value() == "asset.identity.invalid"
-                                                            ? AssetErrors::RegistryIdentityInvalid
-                                                            : AssetErrors::SidecarMalformed;
+                const std::string_view code = record.ErrorValue().code.Value();
+                const ErrorCodeDescriptor &descriptor = code == "asset.identity.invalid" ? AssetErrors::RegistryIdentityInvalid
+                                                        : code == AssetErrors::TypeMismatch.code.Value() ? AssetErrors::TypeMismatch
+                                                                                                         : AssetErrors::SidecarMalformed;
                 AddDiagnostic(diagnostics, descriptor, metadataPath, record.ErrorValue().message);
                 return std::nullopt;
             }
@@ -322,6 +336,10 @@ namespace Horo::Assets {
                 AddDiagnostic(diagnostics, AssetErrors::RegistryIdentityInvalid, record.sourcePath.String());
                 ambiguous = true;
             }
+            if (ValidateSourceType(record.sourcePath, record.type).HasError()) {
+                AddDiagnostic(diagnostics, AssetErrors::TypeMismatch, record.sourcePath.String());
+                ambiguous = true;
+            }
             if (index > 0 && candidate[index - 1].id == record.id) {
                 AddDiagnostic(diagnostics, AssetErrors::DuplicateId, record.sourcePath.String());
                 ambiguous = true;
@@ -370,10 +388,20 @@ namespace Horo::Assets {
 
         std::vector<AssetRecord> records;
         records.reserve(root["assets"].size());
+        std::set<AssetId> identities;
+        TransparentStringSet paths;
+        TransparentStringSet foldedPaths;
         for (const Json &item : root["assets"]) {
             Result<AssetRecord> record = ParseRecord(item);
             if (record.HasError())
                 return Result<std::vector<AssetRecord>>::Failure(record.ErrorValue());
+            const AssetRecord &value = record.Value();
+            if (!identities.insert(value.id).second)
+                return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::DuplicateId));
+            if (!paths.insert(value.sourcePath.String()).second)
+                return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::DuplicatePath));
+            if (!foldedPaths.insert(PortableFold(value.sourcePath.String())).second)
+                return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::PathCollision));
             records.push_back(std::move(record).Value());
         }
         return Result<std::vector<AssetRecord>>::Success(std::move(records));
