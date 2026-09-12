@@ -48,4 +48,32 @@ namespace Horo::Render::ShaderCompilerPipelineErrors {
         MakeErrorDescriptor(Domain, "render.shader_compiler.allocation_failed", ErrorSeverity::Error,
                             "The shader compilation batch could not allocate its bounded result storage.",
                             "Reduce the requested target, dependency, payload, or diagnostic bounds and retry the offline operation.");
+    const ErrorCodeDescriptor ToolchainConfigurationInvalid =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.toolchain_configuration_invalid", ErrorSeverity::Error,
+                                    "The host shader-toolchain configuration is malformed.",
+                                    "Provide an absolute scratch root, finite process bounds, and sorted unique approved tools.");
+    const ErrorCodeDescriptor ToolNotApproved =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.tool_not_approved", ErrorSeverity::Error,
+                                    "A configured shader tool is not present in the reviewed host lock catalog.",
+                                    "Install an exact release and host artifact recorded in the shader-toolchain lock catalog.");
+    const ErrorCodeDescriptor ToolMissing =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.tool_missing", ErrorSeverity::Error,
+                                    "A required shader-tool executable is absent or unreadable.",
+                                    "Configure the reviewed executable for this cook host or submit the target to a qualified build host.");
+    const ErrorCodeDescriptor ToolDigestMismatch =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.tool_digest_mismatch", ErrorSeverity::Error,
+                                    "A shader-tool executable does not match its reviewed content digest.",
+                                    "Replace the executable with the exact locked artifact; do not continue with an ambient SDK default.");
+    const ErrorCodeDescriptor ScratchIoFailed =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.scratch_io_failed", ErrorSeverity::Error,
+                                    "The shader compiler could not create, read, or clean its isolated scratch files.",
+                                    "Check the configured scratch root permissions and available storage, then retry the bounded cook.");
+    const ErrorCodeDescriptor ToolProcessFailed = Detail::
+        MakeErrorDescriptor(Domain, "render.shader_compiler.tool_process_failed", ErrorSeverity::Error,
+                            "A locked shader compiler, translator, or validator process failed.",
+                            "Inspect the bounded source diagnostic and exact tool identity, then correct the source or host toolchain.");
+    const ErrorCodeDescriptor ToolOutputInvalid =
+        Detail::MakeErrorDescriptor(Domain, "render.shader_compiler.tool_output_invalid", ErrorSeverity::Error,
+                                    "A shader tool emitted an absent, malformed, or over-budget artifact.",
+                                    "Inspect the exact tool invocation and reject the candidate generation until the artifact validates.");
 }  // namespace Horo::Render::ShaderCompilerPipelineErrors

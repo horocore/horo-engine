@@ -14,6 +14,8 @@ namespace Horo::Render {
     namespace {
         constexpr std::size_t HardMaximumSourceBytes = 64U * 1024U * 1024U;
         constexpr std::size_t HardMaximumDependencies = 1'024;
+        constexpr std::size_t HardMaximumDependencyBytes = 16U * 1024U * 1024U;
+        constexpr std::size_t HardMaximumTotalDependencyBytes = 128U * 1024U * 1024U;
         constexpr std::size_t HardMaximumDefines = 512;
         constexpr std::size_t HardMaximumTargets = 8;
         constexpr std::size_t HardMaximumPayloadBytes = 256U * 1024U * 1024U;
@@ -28,6 +30,8 @@ namespace Horo::Render {
         [[nodiscard]] bool IsValidLimits(const ShaderCompilerLimits &limits) noexcept {
             return IsWithinBound(limits.maximumSourceBytes, HardMaximumSourceBytes) &&
                    IsWithinBound(limits.maximumDependencies, HardMaximumDependencies) &&
+                   IsWithinBound(limits.maximumDependencyBytes, HardMaximumDependencyBytes) &&
+                   IsWithinBound(limits.maximumTotalDependencyBytes, HardMaximumTotalDependencyBytes) &&
                    IsWithinBound(limits.maximumDefines, HardMaximumDefines) && IsWithinBound(limits.maximumTargets, HardMaximumTargets) &&
                    IsWithinBound(limits.maximumPayloadBytes, HardMaximumPayloadBytes) &&
                    IsWithinBound(limits.maximumDebugPayloadBytes, HardMaximumPayloadBytes) &&
@@ -165,10 +169,15 @@ namespace Horo::Render {
             if (manifestResult.HasError())
                 return Result<void>::Failure(WrapError(ShaderCompilerPipelineErrors::InvalidRequest, manifestResult.ErrorValue()));
 
+            std::size_t totalDependencyBytes = 0;
             for (std::size_t index = 0; index < request.dependencies.size(); ++index) {
                 const auto &dependency = request.dependencies[index];
-                if (!IsValidLogicalPath(dependency.logicalPath, limits.maximumIdentityBytes) || !HasNonZeroDigest(dependency.digest))
+                if (!IsValidLogicalPath(dependency.logicalPath, limits.maximumIdentityBytes) || !HasNonZeroDigest(dependency.digest) ||
+                    dependency.content.size() > limits.maximumDependencyBytes ||
+                    dependency.content.size() > limits.maximumTotalDependencyBytes - totalDependencyBytes ||
+                    ComputeSha256(std::as_bytes(std::span{dependency.content})) != dependency.digest)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
+                totalDependencyBytes += dependency.content.size();
                 if (index > 0 && request.dependencies[index - 1].logicalPath >= dependency.logicalPath)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::NonCanonicalInput));
             }
@@ -330,7 +339,10 @@ namespace Horo::Render {
 
         const Sha256Digest sourceDigest = ComputeSha256(std::as_bytes(std::span{request.source}));
         try {
-            ShaderCompilationBatch batch{sourceDigest, request.dependencies, {}};
+            ShaderCompilationBatch batch{sourceDigest, {}, {}};
+            batch.dependencies.reserve(request.dependencies.size());
+            for (const ShaderCompilerDependency &dependency : request.dependencies)
+                batch.dependencies.push_back({dependency.logicalPath, dependency.digest});
             batch.artifacts.reserve(request.targets.size());
             for (const ShaderCompilerTargetDescriptor &target : request.targets) {
                 if (cancellation.IsCancellationRequested())

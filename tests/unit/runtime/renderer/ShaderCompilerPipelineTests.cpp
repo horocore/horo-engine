@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -29,6 +30,11 @@ namespace {
 
     [[nodiscard]] ShaderCompilerToolIdentity Tool(const ShaderCompilerTool tool, const std::uint8_t marker) {
         return {tool, "test-1.0+locked", Digest(marker)};
+    }
+
+    [[nodiscard]] ShaderCompilerDependency Dependency(std::string logicalPath, std::vector<std::uint8_t> content) {
+        const Sha256Digest digest = ComputeSha256(std::as_bytes(std::span{content}));
+        return {std::move(logicalPath), digest, std::move(content)};
     }
 
     [[nodiscard]] ShaderCompilerTargetDescriptor Target(const ShaderTargetBackend backend, const ShaderPayloadFormat format) {
@@ -80,7 +86,7 @@ namespace {
                                         Requirement(ShaderTargetBackend::Metal, ShaderPayloadFormat::MetalLibrary24),
                                         Requirement(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60)}};
         request.source = {1, 2, 3, 4, 5};
-        request.dependencies = {{"shaders/common.hlsli", Digest(20)}, {"shaders/lighting.hlsli", Digest(21)}};
+        request.dependencies = {Dependency("shaders/common.hlsli", {20}), Dependency("shaders/lighting.hlsli", {21})};
         request.defines = {{"ALPHA_MASK", "0"}, {"NORMAL_MAP", "1"}};
         request.targets = {Target(ShaderTargetBackend::Null, ShaderPayloadFormat::ValidationFixture),
                            Target(ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410),
@@ -159,7 +165,7 @@ TEST_CASE("Shader artifact identity covers source dependencies options and pinne
         request.source.push_back(9);
     }) != baselineAdapter.keys.front());
     CHECK(changedKey([](ShaderCompilationRequest &request) {
-        request.dependencies.front().digest = Digest(44);
+        request.dependencies.front() = Dependency("shaders/common.hlsli", {44});
     }) != baselineAdapter.keys.front());
     CHECK(changedKey([](ShaderCompilationRequest &request) {
         request.defines.front().value = "1";
@@ -200,6 +206,10 @@ TEST_CASE("Shader compiler pipeline rejects malformed bounds and noncanonical im
 
     request = ValidRequest();
     request.dependencies.front().logicalPath = "../outside.hlsli";
+    RequireError(CompileShaderTargets(request, adapter, {}), ShaderCompilerPipelineErrors::InvalidRequest);
+
+    request = ValidRequest();
+    request.dependencies.front().content.push_back(99);
     RequireError(CompileShaderTargets(request, adapter, {}), ShaderCompilerPipelineErrors::InvalidRequest);
 }
 

@@ -63,6 +63,7 @@ namespace Horo::Render {
     struct ShaderCompilerDependency {
         std::string logicalPath;
         Sha256Digest digest;
+        std::vector<std::uint8_t> content; /**< Immutable bytes whose SHA-256 digest must equal `digest`. */
     };
 
     /** @brief One canonical preprocessor definition supplied by the manifest/permutation owner. */
@@ -75,6 +76,8 @@ namespace Horo::Render {
     struct ShaderCompilerLimits {
         std::size_t maximumSourceBytes{16U * 1024U * 1024U};
         std::size_t maximumDependencies{256};
+        std::size_t maximumDependencyBytes{4U * 1024U * 1024U};
+        std::size_t maximumTotalDependencyBytes{32U * 1024U * 1024U};
         std::size_t maximumDefines{128};
         std::size_t maximumTargets{8};
         std::size_t maximumPayloadBytes{64U * 1024U * 1024U};
@@ -165,10 +168,16 @@ namespace Horo::Render {
         std::vector<ShaderCompilerDiagnostic> diagnostics;
     };
 
+    /** @brief Published dependency identity without retaining the private include snapshot bytes. */
+    struct CompiledShaderDependency final {
+        std::string logicalPath;
+        Sha256Digest digest;
+    };
+
     /** @brief Atomic logical result for the complete requested target set. */
     struct ShaderCompilationBatch {
         Sha256Digest sourceDigest;
-        std::vector<ShaderCompilerDependency> dependencies;
+        std::vector<CompiledShaderDependency> dependencies;
         std::vector<CompiledShaderArtifact> artifacts;
     };
 

@@ -790,6 +790,20 @@ target_include_directories(HoroRenderApi
 )
 target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
 
+add_library(HoroShaderCompilerToolchain STATIC
+        runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
+)
+add_library(HoroEngine::ShaderCompilerToolchain ALIAS HoroShaderCompilerToolchain)
+target_compile_features(HoroShaderCompilerToolchain PUBLIC cxx_std_20)
+target_include_directories(HoroShaderCompilerToolchain
+        PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/toolchain>
+)
+target_link_libraries(HoroShaderCompilerToolchain
+        PUBLIC HoroEngine::RenderApi
+        PRIVATE HoroEngine::Platform
+)
+
 add_library(HoroRenderBackendRegistry STATIC
         runtime/renderer/backend_registry/RenderBackendRegistry.cpp
         runtime/renderer/backend_registry/RenderBackendRegistryErrors.cpp
