@@ -774,6 +774,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphValidation.cpp
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
         runtime/renderer/api/RenderResourceDescriptors.cpp
+        runtime/renderer/api/ShaderCompilerPipeline.cpp
+        runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
         runtime/renderer/api/ShaderManifestErrors.cpp
         runtime/renderer/api/TemporalHistory.cpp
