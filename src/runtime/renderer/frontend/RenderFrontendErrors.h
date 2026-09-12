@@ -15,6 +15,7 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor InvalidBufferDescriptor;
     extern const ErrorCodeDescriptor InvalidMeshDescriptor;
     extern const ErrorCodeDescriptor InvalidRenderTargetDescriptor;
+    extern const ErrorCodeDescriptor InvalidMemoryConfig;
     extern const ErrorCodeDescriptor InvalidResourceUploadLimits;
     extern const ErrorCodeDescriptor InvalidStaticMeshPass;
     extern const ErrorCodeDescriptor InvalidTargetExtent;

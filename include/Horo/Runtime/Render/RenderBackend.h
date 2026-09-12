@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
+#include "Horo/Runtime/Render/RenderMemoryTypes.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/Texture.h"
 
@@ -280,13 +281,29 @@ namespace Horo::Render {
         [[nodiscard]] virtual const RenderBackendCapabilities &Capabilities() const noexcept = 0;
 
         /**
+         * @brief Queries native-free backing requirements before a buffer allocation is admitted.
+         * @param descriptor Valid backend-neutral buffer descriptor.
+         * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         */
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const = 0;
+
+        /**
+         * @brief Queries native-free backing requirements before a texture allocation is admitted.
+         * @param descriptor Valid backend-neutral texture descriptor.
+         * @return Exact or conservative requirements, or a typed unsupported/failure result.
+         */
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
+
+        /**
          * @brief Realizes one validated immutable buffer and its initial upload.
          * @param descriptor Backend-neutral buffer policy validated by the frontend.
          * @param initialData Owned request bytes borrowed synchronously for this call.
+         * @param placement Previously admitted native-free placement for this exact request.
          * @return Non-zero backend-private instance identity, or a typed failure.
          */
         [[nodiscard]] virtual Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                                                 std::span<const std::byte> initialData) = 0;
+                                                                 std::span<const std::byte> initialData,
+                                                                 const RenderMemoryPlacement &placement) = 0;
 
         /**
          * @brief Realizes one validated mesh over exact ready buffer instances.
@@ -299,11 +316,15 @@ namespace Horo::Render {
                                                                std::uint64_t indexBuffer) = 0;
 
         /**
-         * @brief Realizes one validated immutable texture allocation.
+         * @brief Realizes one validated immutable texture allocation and optional initial upload.
          * @param descriptor Backend-neutral allocation policy validated by the frontend.
+         * @param initialData Empty for undefined initial contents, or one tightly packed complete base level.
+         * @param placement Previously admitted native-free placement for this exact request.
          * @return Non-zero backend-private texture identity, or a typed failure.
          */
-        [[nodiscard]] virtual Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) = 0;
+        [[nodiscard]] virtual Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor,
+                                                                  std::span<const std::byte> initialData,
+                                                                  const RenderMemoryPlacement &placement) = 0;
 
         /**
          * @brief Realizes one validated view over an exact ready texture instance.

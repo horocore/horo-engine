@@ -7,6 +7,7 @@
 #include <glad/gl.h>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +19,21 @@ namespace Horo::Render {
 
         [[nodiscard]] Error MakeOpenGLError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
+        }
+
+        [[nodiscard]] std::optional<std::size_t> ConservativeRequirement(const std::size_t payload) noexcept {
+            constexpr std::size_t alignment = 256;
+            constexpr std::size_t mask = alignment - 1;
+            if (payload > std::numeric_limits<std::size_t>::max() - mask)
+                return std::nullopt;
+            return (payload + mask) & ~mask;
+        }
+
+        [[nodiscard]] bool MatchesPlacement(const RenderMemoryCostPlan &plan, const RenderMemoryPlacement &placement) noexcept {
+            return placement.IsValid() && placement.memoryClass == plan.memoryClass && placement.allocationClass == plan.allocationClass &&
+                   placement.provenance == plan.provenance && placement.compatibility == plan.compatibility &&
+                   placement.payloadBytes == plan.payloadBytes && placement.requiredBytes == plan.requiredBytes &&
+                   placement.offsetBytes == 0;
         }
 
         /** @brief Serializes ownership of the single context retained by one presentation port. */
@@ -148,12 +164,48 @@ namespace Horo::Render {
                 return capabilities_;
             }
 
+            /** @copydoc IRenderBackend::QueryBufferMemoryCost */
+            Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+                const auto required = ConservativeRequirement(descriptor.byteSize);
+                if (!initialized_ || !functions_.HasResourceFunctions() || !descriptor.IsValid() || !required.has_value())
+                    return Result<RenderMemoryCostPlan>::Failure(
+                        MakeOpenGLError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                        "OpenGL buffer memory requirements are unavailable for this descriptor."));
+                return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
+                                                              .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                              .provenance = RenderMemoryCostProvenance::Estimated,
+                                                              .compatibility = RenderMemoryCompatibilityId{1},
+                                                              .payloadBytes = descriptor.byteSize,
+                                                              .requiredBytes = *required,
+                                                              .alignment = 256});
+            }
+
+            /** @copydoc IRenderBackend::QueryTextureMemoryCost */
+            Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+                const auto payload = RenderTextureBaseLevelByteSize(descriptor);
+                const auto required = payload.has_value() ? ConservativeRequirement(*payload) : std::nullopt;
+                if (!initialized_ || !functions_.HasResourceFunctions() || !payload.has_value() || !required.has_value() ||
+                    TextureFormat(descriptor.format).internal == 0)
+                    return Result<RenderMemoryCostPlan>::Failure(
+                        MakeOpenGLError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                        "OpenGL texture memory requirements are unavailable for this descriptor."));
+                return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
+                                                              .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                              .provenance = RenderMemoryCostProvenance::Estimated,
+                                                              .compatibility = RenderMemoryCompatibilityId{2},
+                                                              .payloadBytes = *payload,
+                                                              .requiredBytes = *required,
+                                                              .alignment = 256});
+            }
+
             /** @copydoc IRenderBackend::CreateBuffer */
-            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                               const std::span<const std::byte> initialData) override {
+            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                               const RenderMemoryPlacement &placement) override {
                 if (!initialized_ || !functions_.HasResourceFunctions())
                     return ResourceUnavailable("OpenGL buffer creation is unavailable in the current backend state.");
-                if (!descriptor.IsValid() || initialData.size() != descriptor.byteSize ||
+                const auto cost = QueryBufferMemoryCost(descriptor);
+                if (!descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
+                    !MatchesPlacement(cost.Value(), placement) ||
                     descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
                     return Result<std::uint64_t>::Failure(
                         MakeOpenGLError(OpenGLBackendErrors::InvalidConfig, "OpenGL buffer creation request is invalid."));
@@ -163,7 +215,7 @@ namespace Horo::Render {
                     return ResourceUnavailable("OpenGL failed to allocate a buffer object.");
                 constexpr std::uint32_t target = GL_ARRAY_BUFFER;
                 functions_.buffers.bindBuffer(target, buffer);
-                functions_.buffers.bufferData(target, initialData, GL_STATIC_DRAW);
+                functions_.buffers.bufferData(target, descriptor.byteSize, initialData, GL_STATIC_DRAW);
                 functions_.buffers.bindBuffer(target, 0);
                 buffers_.insert(buffer);
                 return Result<std::uint64_t>::Success(buffer);
@@ -200,11 +252,17 @@ namespace Horo::Render {
                 return Result<std::uint64_t>::Success(vertexArray);
             }
 
-            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) override {
+            /** @copydoc IRenderBackend::CreateTexture */
+            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                                const RenderMemoryPlacement &placement) override {
                 if (!initialized_ || !functions_.HasResourceFunctions())
                     return ResourceUnavailable("OpenGL texture creation is unavailable in the current backend state.");
+                const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
+                const auto cost = QueryTextureMemoryCost(descriptor);
                 if (constexpr auto maximumExtent = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
-                    !descriptor.IsValid() || descriptor.extent.width > maximumExtent || descriptor.extent.height > maximumExtent)
+                    !descriptor.IsValid() || !bytes.has_value() || (!initialData.empty() && initialData.size() != *bytes) ||
+                    cost.HasError() || !MatchesPlacement(cost.Value(), placement) || descriptor.extent.width > maximumExtent ||
+                    descriptor.extent.height > maximumExtent)
                     return Result<std::uint64_t>::Failure(
                         MakeOpenGLError(OpenGLBackendErrors::InvalidConfig, "OpenGL texture creation request is invalid."));
                 std::uint32_t texture = 0;
@@ -224,6 +282,7 @@ namespace Horo::Render {
                     .height = static_cast<std::int32_t>(descriptor.extent.height),
                     .format = format.external,
                     .type = format.type,
+                    .initialData = initialData,
                 });
                 functions_.textures.bindTexture(GL_TEXTURE_2D, 0);
                 textureFormats_.insert_or_assign(texture, descriptor.format);

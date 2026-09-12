@@ -64,7 +64,7 @@ namespace Horo::Tests {
                 const Result<void> viewportInitialized = viewportRenderer->Initialize();
                 if (viewportInitialized.HasError())
                     ThrowRendererError(viewportInitialized.ErrorValue());
-                auto guiRenderer = std::make_unique<Editor::EditorGuiRendererMetal>(*window_, *graphicsBridge_);
+                auto guiRenderer = std::make_unique<Editor::EditorGuiRendererMetal>(*window_, *graphicsBridge_, *frontend_);
                 renderer_ = InteractiveEditorUiTestRenderer::Create(std::move(frontend).Value(), std::move(guiRenderer),
                                                                     std::move(viewportRenderer));
                 initialized_ = true;

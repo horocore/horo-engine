@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 
 #include <optional>
@@ -11,6 +12,7 @@ namespace Horo::Editor {
 
     /** @brief Backend-specific attachment policy used by the shared viewport resource coordinator. */
     struct EditorViewportResourceConfig {
+        Render::RenderMemoryScopeId memoryScope{RenderMemoryScopes::ViewportResources};
         Render::RenderTextureFormat depthFormat{Render::RenderTextureFormat::Depth32Float};
         Render::RenderTextureAspect depthAspect{Render::RenderTextureAspect::Depth};
         EditorViewportImageResolver resolveImage{nullptr};

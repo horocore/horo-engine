@@ -727,13 +727,13 @@ consumer continues to cover the extended Foundation-only surface.
 
 ## RND-010.2 Renderer Memory Boundary
 
-`HoroEngine::RenderFrontend` owns `Horo/Runtime/Render/RenderMemoryBudget.h` and
-`RenderMemoryBudgetErrors.h`. The contracts depend only on Foundation results and
-RenderApi resource-operation identities. They expose backend-neutral cost,
-compatibility, scope, reservation, allocation and accounting values; native heap
-types, handles and allocation-policy libraries remain private to concrete backends.
-The generated standalone RenderFrontend public-header consumer verifies those staged
-dependencies.
+`HoroEngine::RenderApi` owns `Horo/Runtime/Render/RenderMemoryTypes.h`; concrete
+backends exchange only its native-free cost plans and admitted placements.
+`HoroEngine::RenderFrontend` owns `RenderMemoryBudget.h` and
+`RenderMemoryBudgetErrors.h`, which add ledger policy and accounting over those
+values. Native heap types, handles and allocation-policy libraries remain private
+to concrete backends. Generated standalone consumers verify both ownership layers
+without a RenderApi-to-RenderFrontend reverse dependency.
 
 This is a new explicit frontend ledger, so existing callers require no compatibility
 shim. Resource realization paths migrate by obtaining a complete backend cost plan,
@@ -742,3 +742,9 @@ committing or cancelling that exact attempt. They must not retain a parallel byt
 counter or treat payload, padding, reusable slack and whole backing capacity as
 additive totals. Pool compatibility IDs are opaque process-local classifications,
 not serialized native memory-type values.
+Backend implementations migrate `CreateBuffer` and `CreateTexture` to require the
+matching admitted `RenderMemoryPlacement`; the frontend supplies that placement only
+after the corresponding cost query and reservation succeed. Existing host calls may
+retain the finite default memory configuration, while product composition should
+provide its explicit envelope and default scope. Editor viewport and GUI textures use
+separate explicit scopes in the shared frontend ledger.

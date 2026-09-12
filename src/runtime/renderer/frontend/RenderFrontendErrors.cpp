@@ -103,6 +103,14 @@ namespace Horo::Render::FrontendErrors {
                                                             .retryable = false,
                                                             .userActionable = false};
 
+    const ErrorCodeDescriptor InvalidMemoryConfig{.domain = Domain,
+                                                  .code = ErrorCode{"render.frontend.memory.invalid_config"},
+                                                  .defaultSeverity = ErrorSeverity::Error,
+                                                  .summary = "Render memory admission configuration is invalid.",
+                                                  .remediationHint = "Use a finite non-zero budget and a valid default scope.",
+                                                  .retryable = false,
+                                                  .userActionable = false};
+
     const ErrorCodeDescriptor InvalidResourceUploadLimits{.domain = Domain,
                                                           .code = ErrorCode{"render.frontend.resource.invalid_upload_limits"},
                                                           .defaultSeverity = ErrorSeverity::Error,

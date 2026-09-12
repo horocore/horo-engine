@@ -24,6 +24,12 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc OpenGLViewportResourceBridge::ResolveBuffer */
+    Result<std::uint32_t> OpenGLViewportResourceBridge::ResolveBuffer(const Render::RenderFrontend &frontend,
+                                                                      const Render::RenderBufferHandle buffer) {
+        return ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, buffer));
+    }
+
     /** @copydoc OpenGLViewportResourceBridge::BindMesh */
     Result<void> OpenGLViewportResourceBridge::BindMesh(const Render::RenderFrontend &frontend, const Render::RenderMeshHandle mesh) {
         const auto object = ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, mesh));

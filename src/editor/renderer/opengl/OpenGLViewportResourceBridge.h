@@ -6,6 +6,9 @@ namespace Horo::Editor {
     /** @brief Matching editor integration that consumes generic handles without exposing native objects. */
     class OpenGLViewportResourceBridge final {
     public:
+        /** @brief Returns the private OpenGL object for one ready generic buffer. */
+        [[nodiscard]] static Result<std::uint32_t> ResolveBuffer(const Render::RenderFrontend &frontend, Render::RenderBufferHandle buffer);
+
         /** @brief Binds a ready generic mesh's backend-private vertex input object. */
         [[nodiscard]] static Result<void> BindMesh(const Render::RenderFrontend &frontend, Render::RenderMeshHandle mesh);
 

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
+#include "Horo/Runtime/Render/RenderMemoryBudget.h"
 
 #include <memory>
 #include <span>
@@ -30,6 +31,18 @@ namespace Horo::Render {
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return maximumPendingBytes > 0 && maximumBytesPerDrain > 0 && maximumBytesPerDrain <= maximumPendingBytes &&
                    maximumRequestsPerDrain > 0;
+        }
+    };
+
+    /** @brief Host-composed renderer memory envelope, default scope, and bounded reclaim policy. */
+    struct RenderFrontendMemoryConfig {
+        RenderMemoryBudgetConfig budget;
+        RenderMemoryScopeId defaultResourceScope{1, 1};
+        std::uint32_t maximumEmptyBlocksReclaimedPerDrain{16};
+
+        /** @brief Reports whether the envelope, scope, and reclaim bound are usable. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return budget.IsValid() && defaultResourceScope.IsValid() && maximumEmptyBlocksReclaimedPerDrain > 0;
         }
     };
 
@@ -108,12 +121,14 @@ namespace Horo::Render {
          * @param backendId Canonical backend identity selected by host policy.
          * @param config Backend-neutral initialization policy.
          * @param uploadLimits Finite initial-upload queue and per-safe-point work limits.
+         * @param memoryConfig Finite host envelope, default resource scope, and reclaim bound.
          * @return Owned frontend, or the backend creation/initialization failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<RenderFrontend>> Create(const RenderBackendRegistry &registry,
                                                                             const RenderBackendId &backendId,
                                                                             const RenderBackendConfig &config,
-                                                                            RenderResourceUploadLimits uploadLimits = {});
+                                                                            RenderResourceUploadLimits uploadLimits = {},
+                                                                            RenderFrontendMemoryConfig memoryConfig = {});
 
         /** @brief Shuts down and releases the owned backend. */
         ~RenderFrontend();
@@ -180,6 +195,11 @@ namespace Horo::Render {
         [[nodiscard]] Result<ResourceCreation<RenderBufferHandle>> CreateBuffer(const RenderBufferDescriptor &descriptor,
                                                                                 std::span<const std::byte> initialData);
 
+        /** @brief Queues one buffer against an explicit admitted owner-scope incarnation. */
+        [[nodiscard]] Result<ResourceCreation<RenderBufferHandle>> CreateBuffer(RenderMemoryScopeId scope,
+                                                                                const RenderBufferDescriptor &descriptor,
+                                                                                std::span<const std::byte> initialData);
+
         /**
          * @brief Queues one immutable mesh over exact ready vertex and index buffers.
          * @param descriptor Valid mesh descriptor whose dependencies belong to this frontend.
@@ -192,7 +212,13 @@ namespace Horo::Render {
          * @param descriptor Valid backend-neutral texture descriptor.
          * @return Pending typed handle and completion operation, or a validation/admission failure.
          */
-        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateTexture(const RenderTextureDescriptor &descriptor);
+        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateTexture(const RenderTextureDescriptor &descriptor,
+                                                                                  std::span<const std::byte> initialData = {});
+
+        /** @brief Queues one texture and optional base-level upload against an explicit owner scope. */
+        [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateTexture(RenderMemoryScopeId scope,
+                                                                                  const RenderTextureDescriptor &descriptor,
+                                                                                  std::span<const std::byte> initialData = {});
 
         /**
          * @brief Queues one immutable view over an exact ready texture generation.
@@ -256,6 +282,9 @@ namespace Horo::Render {
         /** @brief Logically releases one generic render-target generation. */
         [[nodiscard]] Result<void> ReleaseRenderTarget(RenderTargetHandle target);
 
+        /** @brief Returns non-additive renderer memory accounting for the current frontend envelope. */
+        [[nodiscard]] RenderMemoryBudgetSnapshot MemorySnapshot() const noexcept;
+
     private:
         friend class RenderFrameScope;
         friend class Detail::RenderFrontendResourceAccess;
@@ -267,10 +296,12 @@ namespace Horo::Render {
 
     public:
         RenderFrontend(std::unique_ptr<IRenderBackend> backend, RenderResourceOwnerId resourceOwner,
-                       RenderResourceUploadLimits uploadLimits, ConstructionKey);
+                       RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                       RenderFrontendMemoryConfig memoryConfig, ConstructionKey);
 
     private:
         [[nodiscard]] bool IsLiveTarget(RenderTargetHandle target, FramebufferExtent extent) const noexcept;
+        [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderBufferHandle buffer) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderMeshHandle mesh) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderTextureViewHandle view) const;
         [[nodiscard]] Result<std::uint64_t> BackendInstance(RenderTargetHandle target) const;
@@ -301,6 +332,8 @@ namespace Horo::Render {
         };
 
         std::unique_ptr<IRenderBackend> backend_;
+        std::unique_ptr<RenderMemoryBudget> memoryBudget_;
+        RenderFrontendMemoryConfig memoryConfig_;
         std::unique_ptr<Detail::RenderResourceRegistry> resourceRegistry_;
         std::unique_ptr<Detail::RenderResourceUploadQueue> resourceUploadQueue_;
         RenderFrameScope *activeFrameScope_{nullptr};

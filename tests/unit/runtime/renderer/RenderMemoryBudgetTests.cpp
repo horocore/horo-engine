@@ -84,6 +84,13 @@ namespace {
 
         auto firstReservation = budget->Reserve(FirstScope, ResourceOperationId{21}, Suballocated(20, 24, 16));
         REQUIRE(firstReservation.HasValue());
+        const auto placement = budget->Placement(firstReservation.Value());
+        REQUIRE(placement.HasValue());
+        CHECK(placement.Value().IsValid());
+        CHECK(placement.Value().scope == FirstScope);
+        CHECK(placement.Value().attempt == ResourceOperationId{21});
+        CHECK(placement.Value().offsetBytes == 0);
+        CHECK(placement.Value().backingBytes == 64);
         const auto reserved = budget->Snapshot();
         CHECK(reserved.reservedUnallocatedBytes == 64);
         CHECK(reserved.reservedPayloadBytes == 20);
@@ -91,6 +98,8 @@ namespace {
 
         auto first = budget->Commit(firstReservation.Value());
         REQUIRE(first.HasValue());
+        CHECK(budget->Placement(firstReservation.Value()).ErrorValue().code.Value() ==
+              RenderMemoryBudgetErrors::InvalidReservation.code.Value());
         CHECK(first.Value().attempt == ResourceOperationId{21});
         CHECK(first.Value().budgetRevision == 3);
         CHECK(first.Value().offsetBytes == 0);

@@ -72,6 +72,7 @@ namespace Horo::Editor {
         std::uint32_t shadowProgram_{0};
         std::uint32_t gridVertexArray_{0};
         std::uint32_t gridVertexBuffer_{0};
+        Render::RenderBufferHandle gridVertexBufferHandle_;
         Render::RenderFrontend *frontend_{nullptr};
         EditorViewportResources resources_;
         UniformLocations uniforms_{};

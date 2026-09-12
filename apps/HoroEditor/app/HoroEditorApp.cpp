@@ -48,6 +48,7 @@
 #include "editor/input/EditorScrollSmoother.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/renderer/EditorGuiRenderer.h"
+#include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "runtime/input/sdl/SdlInputBackend.h"
 
@@ -666,7 +667,13 @@ namespace Horo::Editor {
                                                                            .presentMode =
                                                                                options.exitAfterFirstFrame || options.exitAfterFrames > 0
                                                                                    ? Render::PresentMode::Immediate
-                                                                                   : Render::PresentMode::Fifo});
+                                                                                   : Render::PresentMode::Fifo},
+                                               Render::RenderResourceUploadLimits{},
+                                               Render::RenderFrontendMemoryConfig{.budget = {.hardCapBytes = 1024U * 1024U * 1024U,
+                                                                                             .defaultBlockBytes = 16U * 1024U * 1024U,
+                                                                                             .maximumBlockBytes = 128U * 1024U * 1024U},
+                                                                                  .defaultResourceScope =
+                                                                                      RenderMemoryScopes::HostResources});
             if (frontendResult.HasError()) {
                 return Result<EditorRenderComposition>::Failure(frontendResult.ErrorValue());
             }
@@ -675,7 +682,7 @@ namespace Horo::Editor {
             if (options.rendererBackend == "opengl") {
 #if defined(HORO_HAS_RENDER_OPENGL)
                 const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
-                auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context());
+                auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
                 if (const Result<void> initialized = guiRenderer->Initialize(); initialized.HasError()) {
                     return Result<EditorRenderComposition>::Failure(initialized.ErrorValue());
                 }
@@ -689,7 +696,7 @@ namespace Horo::Editor {
             } else {
 #if defined(HORO_HAS_RENDER_METAL)
                 auto &graphicsBridge = *composition.metalGraphicsBridge;
-                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge);
+                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
                 if (const Result<void> initialized = guiRenderer->Initialize(); initialized.HasError()) {
                     return Result<EditorRenderComposition>::Failure(initialized.ErrorValue());
                 }

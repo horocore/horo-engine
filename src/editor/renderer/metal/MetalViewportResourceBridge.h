@@ -16,6 +16,7 @@ namespace Horo::Editor {
     /** @brief Resolves typed frontend resources into Metal objects at the private editor/backend boundary. */
     class MetalViewportResourceBridge final {
     public:
+        [[nodiscard]] static Result<void *> ResolveBuffer(const Render::RenderFrontend &frontend, Render::RenderBufferHandle buffer);
         [[nodiscard]] static Result<MetalViewportMeshBinding> ResolveMesh(const Render::RenderFrontend &frontend,
                                                                           Render::RenderMeshHandle mesh);
         [[nodiscard]] static Result<MetalViewportTargetBinding> ResolveRenderTarget(const Render::RenderFrontend &frontend,

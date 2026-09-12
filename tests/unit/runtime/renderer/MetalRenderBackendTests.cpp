@@ -96,7 +96,25 @@ namespace {
             return Result<void>::Success();
         }
 
-        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>) override {
+        Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+            return Result<RenderMemoryCostPlan>::Success({.allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                          .compatibility = RenderMemoryCompatibilityId{1},
+                                                          .payloadBytes = descriptor.byteSize,
+                                                          .requiredBytes = descriptor.byteSize,
+                                                          .alignment = 1});
+        }
+
+        Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);
+            return Result<RenderMemoryCostPlan>::Success({.allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                          .compatibility = RenderMemoryCompatibilityId{2},
+                                                          .payloadBytes = bytes,
+                                                          .requiredBytes = bytes,
+                                                          .alignment = 1});
+        }
+
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>,
+                                           const RenderMemoryPlacement &) override {
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
@@ -106,7 +124,8 @@ namespace {
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &) override {
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,
+                                            const RenderMemoryPlacement &) override {
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
@@ -222,15 +241,33 @@ namespace {
         std::uint64_t target{0};
     };
 
+    [[nodiscard]] RenderMemoryPlacement PlacementFor(const RenderMemoryCostPlan &plan, const std::uint64_t attempt) {
+        return {.pool = {{1}, 1},
+                .scope = {1, 1},
+                .attempt = {attempt},
+                .memoryClass = plan.memoryClass,
+                .compatibility = plan.compatibility,
+                .provenance = plan.provenance,
+                .budgetRevision = 1,
+                .payloadBytes = plan.payloadBytes,
+                .requiredBytes = plan.requiredBytes,
+                .backingBytes = plan.requiredBytes,
+                .allocationClass = plan.allocationClass};
+    }
+
     [[nodiscard]] GenericResourceIdentities CreateGenericResources(IRenderBackend &backend) {
         GenericResourceIdentities identities;
         constexpr std::array<std::byte, 12> bytes{};
-        const auto vertex =
-            backend.CreateBuffer({.byteSize = bytes.size(), .usage = RenderBufferUsage::Vertex, .access = RenderBufferAccess::DeviceLocal},
-                                 bytes);
-        const auto index =
-            backend.CreateBuffer({.byteSize = bytes.size(), .usage = RenderBufferUsage::Index, .access = RenderBufferAccess::DeviceLocal},
-                                 bytes);
+        const RenderBufferDescriptor vertexDescriptor{.byteSize = bytes.size(),
+                                                      .usage = RenderBufferUsage::Vertex,
+                                                      .access = RenderBufferAccess::DeviceLocal};
+        const RenderBufferDescriptor indexDescriptor{.byteSize = bytes.size(),
+                                                     .usage = RenderBufferUsage::Index,
+                                                     .access = RenderBufferAccess::DeviceLocal};
+        const auto vertexPlan = backend.QueryBufferMemoryCost(vertexDescriptor).Value();
+        const auto indexPlan = backend.QueryBufferMemoryCost(indexDescriptor).Value();
+        const auto vertex = backend.CreateBuffer(vertexDescriptor, bytes, PlacementFor(vertexPlan, 1));
+        const auto index = backend.CreateBuffer(indexDescriptor, bytes, PlacementFor(indexPlan, 2));
         Check(vertex.HasValue() && index.HasValue());
         identities.vertex = vertex.Value();
         identities.index = index.Value();
@@ -243,11 +280,16 @@ namespace {
                                              identities.vertex, identities.index);
         Check(mesh.HasValue());
         identities.mesh = mesh.Value();
-        const auto color = backend.CreateTexture({.extent = {64, 64},
-                                                  .format = RenderTextureFormat::Rgba8Unorm,
-                                                  .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment});
-        const auto depth = backend.CreateTexture(
-            {.extent = {64, 64}, .format = RenderTextureFormat::Depth32Float, .usage = RenderTextureUsage::RenderAttachment});
+        const RenderTextureDescriptor colorDescriptor{.extent = {64, 64},
+                                                      .format = RenderTextureFormat::Rgba8Unorm,
+                                                      .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
+        const RenderTextureDescriptor depthDescriptor{.extent = {64, 64},
+                                                      .format = RenderTextureFormat::Depth32Float,
+                                                      .usage = RenderTextureUsage::RenderAttachment};
+        const auto colorPlan = backend.QueryTextureMemoryCost(colorDescriptor).Value();
+        const auto depthPlan = backend.QueryTextureMemoryCost(depthDescriptor).Value();
+        const auto color = backend.CreateTexture(colorDescriptor, {}, PlacementFor(colorPlan, 3));
+        const auto depth = backend.CreateTexture(depthDescriptor, {}, PlacementFor(depthPlan, 4));
         Check(color.HasValue() && depth.HasValue());
         identities.color = color.Value();
         identities.depth = depth.Value();

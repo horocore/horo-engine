@@ -193,6 +193,29 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<RenderMemoryPlacement> Placement(const RenderMemoryReservationId reservation) const {
+            const auto found = FindReservation(reservation);
+            if (!found.has_value())
+                return Failure<RenderMemoryPlacement>(RenderMemoryBudgetErrors::InvalidReservation,
+                                                      "Reservation is malformed, foreign, stale, or already consumed.");
+            const Block &block = blocks_[found->block];
+            const Region &region = regions_[found->region];
+            const Pool *pool = FindPool(block.pool);
+            return Result<RenderMemoryPlacement>::Success(
+                {.pool = block.pool,
+                 .scope = pool->scope,
+                 .attempt = region.attempt,
+                 .memoryClass = pool->memoryClass,
+                 .compatibility = pool->compatibility,
+                 .provenance = region.provenance,
+                 .budgetRevision = region.budgetRevision,
+                 .offsetBytes = region.offset,
+                 .payloadBytes = region.payloadBytes,
+                 .requiredBytes = region.requiredBytes,
+                 .backingBytes = block.capacity,
+                 .allocationClass = block.dedicated ? RenderMemoryAllocationClass::Dedicated : RenderMemoryAllocationClass::Suballocated});
+        }
+
         [[nodiscard]] Result<RenderMemoryAllocation> Commit(const RenderMemoryReservationId reservation) {
             auto found = FindReservation(reservation);
             if (!found.has_value())
@@ -395,7 +418,7 @@ namespace Horo::Render {
             return found == pools_.end() ? nullptr : &*found;
         }
 
-        [[nodiscard]] std::optional<Location> FindReservation(const RenderMemoryReservationId id) noexcept {
+        [[nodiscard]] std::optional<Location> FindReservation(const RenderMemoryReservationId id) const noexcept {
             if (!id.IsValid() || id.renderer != renderer_)
                 return std::nullopt;
             for (std::size_t regionIndex = 0; regionIndex < regions_.size(); ++regionIndex) {
@@ -555,6 +578,11 @@ namespace Horo::Render {
     /** @copydoc RenderMemoryBudget::Cancel */
     Result<void> RenderMemoryBudget::Cancel(const RenderMemoryReservationId reservation) {
         return implementation_->Cancel(reservation);
+    }
+
+    /** @copydoc RenderMemoryBudget::Placement */
+    Result<RenderMemoryPlacement> RenderMemoryBudget::Placement(const RenderMemoryReservationId reservation) const {
+        return implementation_->Placement(reservation);
     }
 
     /** @copydoc RenderMemoryBudget::Commit */

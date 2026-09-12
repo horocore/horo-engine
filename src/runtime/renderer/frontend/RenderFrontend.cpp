@@ -155,10 +155,15 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::Create */
     Result<std::unique_ptr<RenderFrontend>> RenderFrontend::Create(const RenderBackendRegistry &registry, const RenderBackendId &backendId,
                                                                    const RenderBackendConfig &config,
-                                                                   const RenderResourceUploadLimits uploadLimits) {
+                                                                   const RenderResourceUploadLimits uploadLimits,
+                                                                   const RenderFrontendMemoryConfig memoryConfig) {
         if (!uploadLimits.IsValid()) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidResourceUploadLimits, "Renderer resource upload limits are invalid."));
+        }
+        if (!memoryConfig.IsValid()) {
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(
+                MakeFrontendError(FrontendErrors::InvalidMemoryConfig, "Renderer memory admission limits or scope are invalid."));
         }
         auto createdBackend = registry.Create(backendId);
         if (createdBackend.HasError()) {
@@ -182,29 +187,45 @@ namespace Horo::Render {
             backend->Shutdown();
             return Result<std::unique_ptr<RenderFrontend>>::Failure(resourceOwner.ErrorValue());
         }
+        auto memoryBudget = RenderMemoryBudget::Create(resourceOwner.Value(), memoryConfig.budget);
+        if (memoryBudget.HasError()) {
+            backend->Shutdown();
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(memoryBudget.ErrorValue());
+        }
         return Result<std::unique_ptr<RenderFrontend>>::Success(
-            std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, ConstructionKey{}));
+            std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, std::move(memoryBudget).Value(),
+                                             memoryConfig, ConstructionKey{}));
     }
 
     RenderFrontend::RenderFrontend(std::unique_ptr<IRenderBackend> backend, const RenderResourceOwnerId resourceOwner,
-                                   const RenderResourceUploadLimits uploadLimits, ConstructionKey)
-        : backend_(std::move(backend)),
-          resourceRegistry_(std::make_unique<Detail::RenderResourceRegistry>(resourceOwner, Detail::RenderResourceRegistryLimits{},
-                                                                             [this](const Detail::RenderResourceClass resourceClass,
-                                                                                    const std::uint64_t backendInstance) {
-                                                                                 using enum Detail::RenderResourceClass;
-                                                                                 if (resourceClass == Buffer) {
-                                                                                     backend_->DestroyBuffer(backendInstance);
-                                                                                 } else if (resourceClass == Mesh) {
-                                                                                     backend_->DestroyMesh(backendInstance);
-                                                                                 } else if (resourceClass == Texture) {
-                                                                                     backend_->DestroyTexture(backendInstance);
-                                                                                 } else if (resourceClass == TextureView) {
-                                                                                     backend_->DestroyTextureView(backendInstance);
-                                                                                 } else if (resourceClass == RenderTarget) {
-                                                                                     backend_->DestroyRenderTarget(backendInstance);
-                                                                                 }
-                                                                             })),
+                                   const RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                                   const RenderFrontendMemoryConfig memoryConfig, ConstructionKey)
+        : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
+          resourceRegistry_(
+              std::make_unique<Detail::RenderResourceRegistry>(resourceOwner, Detail::RenderResourceRegistryLimits{},
+                                                               [this](const Detail::RenderResourceClass resourceClass,
+                                                                      const std::uint64_t backendInstance,
+                                                                      const std::optional<RenderMemoryAllocationId> memoryAllocation) {
+                                                                   using enum Detail::RenderResourceClass;
+                                                                   if (resourceClass == Buffer) {
+                                                                       backend_->DestroyBuffer(backendInstance);
+                                                                   } else if (resourceClass == Mesh) {
+                                                                       backend_->DestroyMesh(backendInstance);
+                                                                   } else if (resourceClass == Texture) {
+                                                                       backend_->DestroyTexture(backendInstance);
+                                                                   } else if (resourceClass == TextureView) {
+                                                                       backend_->DestroyTextureView(backendInstance);
+                                                                   } else if (resourceClass == RenderTarget) {
+                                                                       backend_->DestroyRenderTarget(backendInstance);
+                                                                   }
+                                                                   if (memoryAllocation.has_value()) {
+                                                                       static_cast<void>(memoryBudget_->BeginRetire(*memoryAllocation));
+                                                                       static_cast<void>(
+                                                                           memoryBudget_->AcknowledgeRetirement(*memoryAllocation));
+                                                                       static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(
+                                                                           memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
+                                                                   }
+                                                               })),
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
@@ -212,14 +233,26 @@ namespace Horo::Render {
         if (activeFrameScope_ != nullptr) {
             activeFrameScope_->Abort();
         }
-        resourceUploadQueue_->Clear();
+        while (!resourceUploadQueue_->Empty()) {
+            const Detail::RenderResourceUploadQueue::Request request = resourceUploadQueue_->Pop();
+            if (request.memoryReservation.IsValid())
+                static_cast<void>(memoryBudget_->Cancel(request.memoryReservation));
+        }
         resourceRegistry_->Shutdown();
         backend_->Shutdown();
+        while (memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks) != 0) {
+        }
+        memoryBudget_->Shutdown();
     }
 
     /** @copydoc RenderFrontend::Capabilities */
     const RenderBackendCapabilities &RenderFrontend::Capabilities() const noexcept {
         return backend_->Capabilities();
+    }
+
+    /** @copydoc RenderFrontend::MemorySnapshot */
+    RenderMemoryBudgetSnapshot RenderFrontend::MemorySnapshot() const noexcept {
+        return memoryBudget_->Snapshot();
     }
 
     /** @copydoc RenderFrontend::BeginFrame */

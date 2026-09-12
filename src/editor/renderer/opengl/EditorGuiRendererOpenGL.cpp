@@ -1,6 +1,8 @@
 #include "EditorGuiRendererOpenGL.h"
 
+#include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorRendererErrors.h"
+#include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
 
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
@@ -13,7 +15,7 @@
 #endif
 
 #include <algorithm>
-#include <limits>
+#include <cstddef>
 #include <string>
 
 namespace Horo::Editor {
@@ -24,8 +26,9 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorGuiRendererOpenGL::EditorGuiRendererOpenGL */
-    EditorGuiRendererOpenGL::EditorGuiRendererOpenGL(SDL_Window &window, const SDL_GLContext context) noexcept
-        : window_(&window), context_(context) {}
+    EditorGuiRendererOpenGL::EditorGuiRendererOpenGL(SDL_Window &window, const SDL_GLContext context,
+                                                     Render::RenderFrontend &frontend) noexcept
+        : window_(&window), context_(context), frontend_(&frontend) {}
 
     /** @copydoc EditorGuiRendererOpenGL::~EditorGuiRendererOpenGL */
     EditorGuiRendererOpenGL::~EditorGuiRendererOpenGL() {
@@ -71,44 +74,73 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererOpenGL::CreateTexture */
     Result<std::uintptr_t> EditorGuiRendererOpenGL::CreateTexture(const EditorRgba8ImageView &image) {
-        if (!rendererInitialized_ || !image.IsValid() || image.width > static_cast<std::uint32_t>(std::numeric_limits<GLsizei>::max()) ||
-            image.height > static_cast<std::uint32_t>(std::numeric_limits<GLsizei>::max())) {
+        if (!rendererInitialized_ || !image.IsValid()) {
             return Result<std::uintptr_t>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiInvalidTexture, "OpenGL GUI texture upload is invalid."));
         }
-        GLuint texture = 0;
-        GLint previousTexture = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-        glGenTextures(1, &texture);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(image.width), static_cast<GLsizei>(image.height), 0, GL_RGBA,
-                     GL_UNSIGNED_BYTE, image.pixels.data());
-        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-        if (texture == 0) {
-            return Result<std::uintptr_t>::Failure(
-                MakeGuiRendererError(RendererErrors::GuiTextureCreationFailed, "Failed to create OpenGL GUI texture."));
+        auto texture = frontend_->CreateTexture(RenderMemoryScopes::GuiResources,
+                                                {.extent = {image.width, image.height},
+                                                 .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                 .usage = Render::RenderTextureUsage::Sampled},
+                                                std::as_bytes(image.pixels));
+        if (texture.HasError())
+            return Result<std::uintptr_t>::Failure(texture.ErrorValue());
+        if (const auto processed = frontend_->ProcessResourceRequests(); processed.HasError()) {
+            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(processed.ErrorValue());
         }
-        textures_.push_back(texture);
-        return Result<std::uintptr_t>::Success(texture);
+        if (const auto completed = frontend_->ResourceOperationResult(texture.Value().operation); completed.HasError()) {
+            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(completed.ErrorValue());
+        }
+        auto view = frontend_->CreateTextureView({.texture = texture.Value().handle,
+                                                  .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                  .aspect = Render::RenderTextureAspect::Color});
+        if (view.HasError()) {
+            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(view.ErrorValue());
+        }
+        const auto processed = frontend_->ProcessResourceRequests();
+        const auto completed = frontend_->ResourceOperationResult(view.Value().operation);
+        if (processed.HasError() || completed.HasError()) {
+            const Error error = processed.HasError() ? processed.ErrorValue() : completed.ErrorValue();
+            static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
+            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(error);
+        }
+        auto identity = OpenGLViewportResourceBridge::EditorImageIdentity(*frontend_, view.Value().handle);
+        if (identity.HasError()) {
+            static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
+            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(identity.ErrorValue());
+        }
+        try {
+            textures_.push_back({identity.Value(), texture.Value().handle, view.Value().handle});
+        } catch (...) {  // NOSONAR(cpp:S2738)
+            static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
+            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(
+                MakeGuiRendererError(RendererErrors::GuiInvalidTexture, "OpenGL GUI texture ownership record allocation failed."));
+        }
+        return Result<std::uintptr_t>::Success(identity.Value());
     }
 
     /** @copydoc EditorGuiRendererOpenGL::DestroyTexture */
     void EditorGuiRendererOpenGL::DestroyTexture(const std::uintptr_t textureId) noexcept {
-        if (const auto found = std::ranges::find(textures_, static_cast<std::uint32_t>(textureId)); found != textures_.end()) {
-            const GLuint texture = *found;
-            glDeleteTextures(1, &texture);
+        if (const auto found = std::ranges::find(textures_, textureId, &TextureRecord::imageIdentity); found != textures_.end()) {
+            static_cast<void>(frontend_->ReleaseTextureView(found->view));
+            static_cast<void>(frontend_->ReleaseTexture(found->texture));
             textures_.erase(found);
         }
     }
 
     /** @copydoc EditorGuiRendererOpenGL::Shutdown */
     void EditorGuiRendererOpenGL::Shutdown() noexcept {
-        if (!textures_.empty()) {
-            glDeleteTextures(static_cast<GLsizei>(textures_.size()), textures_.data());
-            textures_.clear();
+        for (const TextureRecord &texture : textures_) {
+            static_cast<void>(frontend_->ReleaseTextureView(texture.view));
+            static_cast<void>(frontend_->ReleaseTexture(texture.texture));
         }
+        textures_.clear();
         if (rendererInitialized_) {
             ImGui_ImplOpenGL3_Shutdown();
             rendererInitialized_ = false;

@@ -6,120 +6,13 @@
  */
 
 #include "Horo/Foundation/Result.h"
-#include "Horo/Runtime/Render/RenderResource.h"
+#include "Horo/Runtime/Render/RenderMemoryTypes.h"
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 
 namespace Horo::Render {
-    /** @brief Backend-neutral compatibility class for one renderer backing pool. */
-    enum class RenderMemoryClass : std::uint8_t {
-        PersistentDevice,
-        Upload,
-        Readback,
-        Transient,
-    };
-
-    /** @brief Declares whether a native requirement is exact or conservatively estimated. */
-    enum class RenderMemoryCostProvenance : std::uint8_t {
-        Exact,
-        Estimated,
-    };
-
-    /** @brief Selects shared-block suballocation or one dedicated backing allocation. */
-    enum class RenderMemoryAllocationClass : std::uint8_t {
-        Suballocated,
-        Dedicated,
-    };
-
-    /** @brief Backend-neutral compatibility identity for requirements that may share one backing pool. */
-    struct RenderMemoryCompatibilityId {
-        std::uint64_t value{0};
-
-        /** @brief Reports whether the compatibility class is non-zero. @return True for a usable compatibility identity. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const RenderMemoryCompatibilityId &) const noexcept = default;
-    };
-
-    /** @brief Identifies one admitted host/editor/world/service scope incarnation. */
-    struct RenderMemoryScopeId {
-        std::uint64_t owner{0};
-        std::uint64_t incarnation{0};
-
-        /** @brief Reports whether both scope identity fields are non-zero. @return True for a usable scope identity. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return owner != 0 && incarnation != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const RenderMemoryScopeId &) const noexcept = default;
-    };
-
-    /** @brief Opaque identity of one backend-neutral compatible memory pool. */
-    struct RenderMemoryPoolId {
-        RenderResourceOwnerId renderer;
-        std::uint64_t value{0};
-
-        /** @brief Reports whether the pool owner and value are non-zero. @return True for a usable pool identity. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return renderer.IsValid() && value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const RenderMemoryPoolId &) const noexcept = default;
-    };
-
-    /** @brief Generation-safe identity of one outstanding memory reservation. */
-    struct RenderMemoryReservationId {
-        RenderResourceOwnerId renderer;
-        std::uint64_t value{0};
-
-        /** @brief Reports whether the reservation owner and value are non-zero. @return True for a usable reservation identity. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return renderer.IsValid() && value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const RenderMemoryReservationId &) const noexcept = default;
-    };
-
-    /** @brief Generation-safe identity of one committed suballocation or dedicated allocation. */
-    struct RenderMemoryAllocationId {
-        RenderResourceOwnerId renderer;
-        std::uint64_t value{0};
-
-        /** @brief Reports whether the allocation owner and value are non-zero. @return True for a usable allocation identity. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return renderer.IsValid() && value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const RenderMemoryAllocationId &) const noexcept = default;
-    };
-
-    /** @brief Native-free requirements returned by a selected backend before allocation. */
-    struct RenderMemoryCostPlan {
-        RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice};
-        RenderMemoryAllocationClass allocationClass{RenderMemoryAllocationClass::Suballocated};
-        RenderMemoryCostProvenance provenance{RenderMemoryCostProvenance::Exact};
-        RenderMemoryCompatibilityId compatibility; /**< Opaque equality key for backing-pool compatibility. */
-        std::size_t payloadBytes{0};               /**< Logical descriptor/content bytes. */
-        std::size_t requiredBytes{0};              /**< Native requirement including internal padding. */
-        std::size_t alignment{1};                  /**< Required power-of-two placement alignment. */
-
-        /** @brief Reports whether all values are known, bounded, and internally consistent. @return True for an admissible cost plan. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            const bool memoryClassValid = static_cast<std::uint8_t>(memoryClass) <= static_cast<std::uint8_t>(RenderMemoryClass::Transient);
-            const bool allocationClassValid =
-                static_cast<std::uint8_t>(allocationClass) <= static_cast<std::uint8_t>(RenderMemoryAllocationClass::Dedicated);
-            const bool provenanceValid =
-                static_cast<std::uint8_t>(provenance) <= static_cast<std::uint8_t>(RenderMemoryCostProvenance::Estimated);
-            return memoryClassValid && allocationClassValid && provenanceValid && compatibility.IsValid() && payloadBytes > 0 &&
-                   requiredBytes >= payloadBytes && alignment > 0 && (alignment & (alignment - 1U)) == 0;
-        }
-    };
-
     /** @brief Finite host-composed bounds for one frontend memory ledger. */
     struct RenderMemoryBudgetConfig {
         std::size_t hardCapBytes{512U * 1024U * 1024U};     /**< Maximum charged backing for this ledger. */
@@ -139,23 +32,6 @@ namespace Horo::Render {
                    maximumPools > 0 && maximumBlocks > 0 && maximumReservations > 0 && maximumAllocations > 0 &&
                    maximumReservations <= maximumAllocations && revision > 0;
         }
-    };
-
-    /** @brief Immutable placement returned only after a reservation is committed. */
-    struct RenderMemoryAllocation {
-        RenderMemoryAllocationId id;
-        RenderMemoryPoolId pool;
-        RenderMemoryScopeId scope;
-        ResourceOperationId attempt;
-        RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice};
-        RenderMemoryCompatibilityId compatibility;
-        RenderMemoryCostProvenance provenance{RenderMemoryCostProvenance::Exact};
-        std::uint64_t budgetRevision{0};
-        std::size_t offsetBytes{0};
-        std::size_t payloadBytes{0};
-        std::size_t requiredBytes{0};
-        std::size_t backingBytes{0}; /**< Non-additive whole backing-block capacity. */
-        RenderMemoryAllocationClass allocationClass{RenderMemoryAllocationClass::Suballocated};
     };
 
     /** @brief Non-additive accounting and fragmentation snapshot for one compatible memory pool. */
@@ -241,6 +117,13 @@ namespace Horo::Render {
          * @return Success or a typed malformed, foreign, stale, or consumed-reservation failure.
          */
         [[nodiscard]] Result<void> Cancel(RenderMemoryReservationId reservation);
+
+        /**
+         * @brief Returns the native-free placement held by one unconsumed reservation.
+         * @param reservation Exact outstanding reservation owned by this ledger.
+         * @return Immutable placement or a typed malformed, foreign, stale, or consumed-reservation failure.
+         */
+        [[nodiscard]] Result<RenderMemoryPlacement> Placement(RenderMemoryReservationId reservation) const;
 
         /**
          * @brief Consumes one claim after native allocation succeeds and returns its stable placement record.

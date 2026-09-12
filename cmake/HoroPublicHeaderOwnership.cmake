@@ -445,6 +445,7 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderGraphSynchronizationErrors.h
     Horo/Runtime/Render/RenderGraphLifetime.h
     Horo/Runtime/Render/RenderGraphLifetimeErrors.h
+    Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
     Horo/Runtime/Render/RenderSubmission.h
