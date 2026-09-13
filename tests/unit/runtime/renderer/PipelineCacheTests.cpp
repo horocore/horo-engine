@@ -1,6 +1,6 @@
 #include "Horo/Runtime/Render/PipelineCache.h"
 #include "Horo/Runtime/Render/PipelineCacheErrors.h"
-#include "RendererTestSupport.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <span>
@@ -10,7 +10,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
-    using Testing::RequireError;
+    using Tests::RequireError;
 
     [[nodiscard]] Sha256Digest Digest(const std::string_view text) {
         return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));

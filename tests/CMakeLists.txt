@@ -1272,6 +1272,7 @@ add_executable(HoroPipelineCacheTests
         unit/runtime/renderer/PipelineCacheTests.cpp
 )
 target_compile_features(HoroPipelineCacheTests PRIVATE cxx_std_20)
+target_include_directories(HoroPipelineCacheTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroPipelineCacheTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderReflectionTests
         unit/runtime/renderer/ShaderReflectionTests.cpp
