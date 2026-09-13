@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Render/ShaderReflection.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
+#include "support/ShaderTestSupport.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <utility>
@@ -7,6 +9,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+    using Tests::RequireError;
 
     [[nodiscard]] ShaderTargetRequirement Target() {
         return {.backend = ShaderTargetBackend::OpenGL,
@@ -22,12 +25,7 @@ namespace {
                 .sourceIdentity = "shaders/material/surface.hlsl",
                 .sourceRevision = 12,
                 .entryPoints = {{ShaderStage::Vertex, "VertexMain"}, {ShaderStage::Fragment, "FragmentMain"}},
-                .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1,
-                              ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
-                             {ShaderBindingId{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1,
-                              ShaderStageVisibility::Fragment},
-                             {ShaderBindingId{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1,
-                              ShaderStageVisibility::Fragment}},
+                .bindings = Tests::StandardSurfaceBindings(),
                 .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 4, 4, 1},
                                {ShaderParameterId{2}, ShaderBindingId{1}, ShaderValueType::Float32, 1, 4, 2}},
                 .targets = {Target()}};
@@ -53,12 +51,6 @@ namespace {
                                    {ShaderBindingId{3}, 0, 0, 1, "AlbedoSampler", {}, true}},
                 .sourceMap = {{"generated.surface", 1, 8, "shaders/material/surface.hlsl", 21, "node.albedo", "pin.color"},
                               {"generated.surface", 9, 12, "shaders/common.hlsli", 3, {}, {}}}};
-    }
-
-    template <typename ValueT> void RequireError(const Result<ValueT> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
     }
 
     const std::vector<std::string> AdmittedIncludes{"shaders/common.hlsli"};

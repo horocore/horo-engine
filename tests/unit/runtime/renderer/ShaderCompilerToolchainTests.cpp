@@ -1,6 +1,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "ShaderCompilerToolchain.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
@@ -18,6 +19,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+    using Tests::RequireError;
 
     class TemporaryDirectory final {
     public:
@@ -195,11 +197,6 @@ namespace {
         target.tools = std::move(tools);
         request.targets = {std::move(target)};
         return request;
-    }
-
-    template <typename ValueT> void RequireError(const Result<ValueT> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
     }
 
     [[nodiscard]] ShaderCompilerToolIdentity FixtureIdentity(const ShaderCompilerTool tool) {
