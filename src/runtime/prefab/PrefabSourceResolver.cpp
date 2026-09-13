@@ -65,7 +65,7 @@ namespace Horo::Prefab {
                 auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
                     return Result<void>::Failure(address.ErrorValue());
-                state.objects.push_back({document.assetId, ExpandedPrefabObjectKey{state.instance, std::move(address).Value()}, object});
+                state.objects.emplace_back(document.assetId, ExpandedPrefabObjectKey{state.instance, std::move(address).Value()}, object);
             }
             return Result<void>::Success();
         }
