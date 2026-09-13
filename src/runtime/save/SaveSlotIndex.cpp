@@ -140,29 +140,29 @@ namespace Horo::Runtime {
             using enum IndexEntryRelation;
             const IndexEntryRelation relation = NextRelation(previous, rebuilt, oldPosition, newPosition);
             if (relation == Missing) {
-                auto added = AddDiagnostic(diagnostics, limits,
-                                           {.kind = SaveSlotIndexDiagnosticKind::Missing,
-                                            .slot = Slot(rebuilt[newPosition]),
-                                            .generation = rebuilt[newPosition].publication.generation});
-                if (added.HasError())
+                if (auto added = AddDiagnostic(diagnostics, limits,
+                                               {.kind = SaveSlotIndexDiagnosticKind::Missing,
+                                                .slot = Slot(rebuilt[newPosition]),
+                                                .generation = rebuilt[newPosition].publication.generation});
+                    added.HasError())
                     return Result<IndexEntryAdvance>::Failure(added.ErrorValue());
                 return Result<IndexEntryAdvance>::Success({.rebuilt = 1});
             }
             if (relation == Orphaned) {
-                auto added = AddDiagnostic(diagnostics, limits,
-                                           {.kind = SaveSlotIndexDiagnosticKind::Orphaned,
-                                            .slot = Slot(previous[oldPosition]),
-                                            .generation = previous[oldPosition].publication.generation});
-                if (added.HasError())
+                if (auto added = AddDiagnostic(diagnostics, limits,
+                                               {.kind = SaveSlotIndexDiagnosticKind::Orphaned,
+                                                .slot = Slot(previous[oldPosition]),
+                                                .generation = previous[oldPosition].publication.generation});
+                    added.HasError())
                     return Result<IndexEntryAdvance>::Failure(added.ErrorValue());
                 return Result<IndexEntryAdvance>::Success({.previous = 1});
             }
             if (previous[oldPosition].publication.generation != rebuilt[newPosition].publication.generation) {
-                auto added = AddDiagnostic(diagnostics, limits,
-                                           {.kind = SaveSlotIndexDiagnosticKind::Stale,
-                                            .slot = Slot(rebuilt[newPosition]),
-                                            .generation = rebuilt[newPosition].publication.generation});
-                if (added.HasError())
+                if (auto added = AddDiagnostic(diagnostics, limits,
+                                               {.kind = SaveSlotIndexDiagnosticKind::Stale,
+                                                .slot = Slot(rebuilt[newPosition]),
+                                                .generation = rebuilt[newPosition].publication.generation});
+                    added.HasError())
                     return Result<IndexEntryAdvance>::Failure(added.ErrorValue());
             }
             return Result<IndexEntryAdvance>::Success({.previous = 1, .rebuilt = 1});
