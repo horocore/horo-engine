@@ -255,7 +255,8 @@ namespace Horo::Runtime {
         const std::uint64_t totalUnits = static_cast<std::uint64_t>(staged_.size()) * 5U + 1U;
         std::uint64_t completedUnits{};
 
-        if (auto progress = PublishPreparationProgress(completedUnits, totalUnits); progress.HasError())
+        if (auto progress = PublishPreparationProgress(completedUnits, totalUnits, StagedRestorePhase::Plan, requirements_.size());
+            progress.HasError())
             return progress;
         if (auto decoded = RunIdentityPhase(StagedRestorePhase::Decode, completedUnits, totalUnits); decoded.HasError())
             return decoded;
@@ -264,7 +265,8 @@ namespace Horo::Runtime {
 
         Record(StagedRestorePhase::Plan, StagedRestoreEventOutcome::Succeeded);
         ++completedUnits;
-        if (auto progress = PublishPreparationProgress(completedUnits, totalUnits); progress.HasError())
+        if (auto progress = PublishPreparationProgress(completedUnits, totalUnits, StagedRestorePhase::Plan, requirements_.size());
+            progress.HasError())
             return progress;
         if (auto instantiated = RunRestorePlanPhase(StagedRestorePhase::Instantiate, completedUnits, totalUnits); instantiated.HasError())
             return instantiated;
@@ -388,7 +390,8 @@ namespace Horo::Runtime {
         }
     }
 
-    Result<void> StagedRestoreTransaction::PublishPreparationProgress(const std::uint64_t completedUnits, const std::uint64_t totalUnits) {
+    Result<void> StagedRestoreTransaction::PublishPreparationProgress(const std::uint64_t completedUnits, const std::uint64_t totalUnits,
+                                                                      const StagedRestorePhase phase, const std::size_t participantIndex) {
         const auto transition = operation_.PublishProgress(SaveOperationStage::PreparingRestore, {completedUnits, totalUnits});
         if (transition == SaveOperationTransitionResult::Applied)
             return Result<void>::Success();
@@ -397,7 +400,7 @@ namespace Horo::Runtime {
             state_ = StagedRestoreTransactionState::RolledBack;
             return Result<void>::Failure(TerminalErrorOr(operation_.Handle(), SaveErrors::OperationCancelled));
         }
-        return FailPreparation(MakeError(SaveErrors::OperationTransitionInvalid), StagedRestorePhase::Plan, requirements_.size());
+        return FailPreparation(MakeError(SaveErrors::OperationTransitionInvalid), phase, participantIndex);
     }
 
     Result<void> StagedRestoreTransaction::RunPreparationStep(const StagedRestorePhase phase, const std::size_t participantIndex,
@@ -436,7 +439,7 @@ namespace Horo::Runtime {
             return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), phase, participantIndex);
         Record(phase, StagedRestoreEventOutcome::Succeeded, participantIndex);
         ++completedUnits;
-        return PublishPreparationProgress(completedUnits, totalUnits);
+        return PublishPreparationProgress(completedUnits, totalUnits, phase, participantIndex);
     }
 
     Result<void> StagedRestoreTransaction::RunIdentityPhase(const StagedRestorePhase phase, std::uint64_t &completedUnits,

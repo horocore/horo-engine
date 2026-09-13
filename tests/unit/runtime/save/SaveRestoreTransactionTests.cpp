@@ -136,15 +136,11 @@ namespace Horo::Runtime {
             }
 
             void PublishPrepared() noexcept override {
-                log_.published.push_back(requirement_.participant.Value());
-                published_ = true;
+                Finalize(true);
             }
 
             void RollbackPrepared() noexcept override {
-                if (published_ || rolledBack_)
-                    return;
-                log_.rolledBack.push_back(requirement_.participant.Value());
-                rolledBack_ = true;
+                Finalize(false);
             }
 
             void Observe(std::vector<SaveParticipantId> dependencies) {
@@ -152,6 +148,16 @@ namespace Horo::Runtime {
             }
 
         private:
+            void Finalize(const bool publish) noexcept {
+                if (publish) {
+                    log_.published.push_back(requirement_.participant.Value());
+                    published_ = true;
+                } else if (!published_ && !rolledBack_) {
+                    log_.rolledBack.push_back(requirement_.participant.Value());
+                    rolledBack_ = true;
+                }
+            }
+
             Result<void> Run(const std::string_view phase, const InjectedFailure phaseFailure) {
                 log_.phases.push_back(requirement_.participant.Value() + ":" + std::string{phase});
                 if (failure_ == InjectedFailure::Throw && phase == "apply")

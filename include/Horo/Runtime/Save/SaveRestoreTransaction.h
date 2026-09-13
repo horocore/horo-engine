@@ -16,7 +16,11 @@
 #include <vector>
 
 namespace Horo::Runtime {
-    /** @brief Qualified ceiling for participant phase events retained by one restore. */
+    /**
+     * @brief Qualified ceiling for participant phase events retained by one restore.
+     * @details Seven slots per participant cover five fallible preparation phases plus terminal activation and rollback evidence;
+     *          three aggregate slots cover planning, readiness, and a non-participant failure.
+     */
     inline constexpr std::size_t MaximumStagedRestoreTraceEvents = MaximumSaveParticipantCount * 7U + 3U;
 
     /** @brief Ordered preparation and terminal phases of one staged restore. */
@@ -221,7 +225,8 @@ namespace Horo::Runtime {
         void Record(StagedRestorePhase phase, StagedRestoreEventOutcome outcome) noexcept;
         void Record(StagedRestorePhase phase, StagedRestoreEventOutcome outcome, std::size_t participantIndex) noexcept;
         void RollbackCandidates() noexcept;
-        [[nodiscard]] Result<void> PublishPreparationProgress(std::uint64_t completedUnits, std::uint64_t totalUnits);
+        [[nodiscard]] Result<void> PublishPreparationProgress(std::uint64_t completedUnits, std::uint64_t totalUnits,
+                                                              StagedRestorePhase phase, std::size_t participantIndex);
         [[nodiscard]] Result<void> RunPreparationStep(StagedRestorePhase phase, std::size_t participantIndex, std::size_t visiblePlanLength,
                                                       std::uint64_t &completedUnits, std::uint64_t totalUnits);
         [[nodiscard]] Result<void> RunIdentityPhase(StagedRestorePhase phase, std::uint64_t &completedUnits, std::uint64_t totalUnits);
