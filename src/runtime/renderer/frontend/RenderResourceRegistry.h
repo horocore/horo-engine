@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/RenderMemoryTypes.h"
 #include "Horo/Runtime/Render/RenderResource.h"
 
 #include <cstddef>
@@ -45,7 +46,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
-    using BackendResourceRelease = std::function<void(RenderResourceClass resourceClass, std::uint64_t backendInstance)>;
+    using BackendResourceRelease = std::function<void(RenderResourceClass resourceClass, std::uint64_t backendInstance,
+                                                      std::optional<RenderMemoryAllocationId> memoryAllocation)>;
 
     /** @brief Frontend-private owner of resident identity, state, pins, and retirement. */
     class RenderResourceRegistry final {
@@ -62,7 +64,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<ResourceReservation> Reserve(RenderResourceClass resourceClass,
                                                           std::span<const RenderResourceIdentity> dependencies = {});
         [[nodiscard]] Result<void> Publish(RenderResourceClass resourceClass, RenderResourceIdentity identity,
-                                           std::uint64_t backendInstance);
+                                           std::uint64_t backendInstance,
+                                           std::optional<RenderMemoryAllocationId> memoryAllocation = std::nullopt);
         [[nodiscard]] Result<void> Fail(RenderResourceClass resourceClass, RenderResourceIdentity identity, Error error);
         [[nodiscard]] Result<void> Release(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         [[nodiscard]] Result<void> CancelPending(RenderResourceClass resourceClass, RenderResourceIdentity identity);
@@ -85,6 +88,7 @@ namespace Horo::Render::Detail {
             std::uint32_t dependentPins{0};
             std::uint32_t submissionPins{0};
             std::uint64_t backendInstance{0};
+            std::optional<RenderMemoryAllocationId> memoryAllocation;
             ResourceOperationId operation;
             std::vector<RenderResourceIdentity> dependencies;
             bool generationExhausted{false};

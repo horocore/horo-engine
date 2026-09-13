@@ -16,7 +16,8 @@ namespace Horo::Render::Detail {
     using OpenGLGenerateObjectsFunction = void (*)(std::int32_t count, std::uint32_t *objects);
     using OpenGLDeleteObjectsFunction = void (*)(std::int32_t count, const std::uint32_t *objects);
     using OpenGLBindObjectFunction = void (*)(std::uint32_t target, std::uint32_t object);
-    using OpenGLBufferDataFunction = void (*)(std::uint32_t target, std::span<const std::byte> data, std::uint32_t usage);
+    using OpenGLBufferDataFunction = void (*)(std::uint32_t target, std::size_t byteSize, std::span<const std::byte> data,
+                                              std::uint32_t usage);
     using OpenGLVertexAttributePointerFunction = void (*)(std::uint32_t index, std::int32_t size, std::uint32_t type,
                                                           std::uint8_t normalized, std::int32_t stride, std::uintptr_t offset);
     using OpenGLEnableVertexAttributeFunction = void (*)(std::uint32_t index);
@@ -31,6 +32,7 @@ namespace Horo::Render::Detail {
         std::int32_t border{0};
         std::uint32_t format{0};
         std::uint32_t type{0};
+        std::span<const std::byte> initialData;
     };
 
     using OpenGLTextureImageFunction = void (*)(const OpenGLTextureImageDescriptor &descriptor);
