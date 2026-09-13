@@ -315,6 +315,39 @@ namespace {
         return std::move(created).Value();
     }
 
+    void VerifyUploadRequestLimit(RenderFrontend &frontend) {
+        const auto requestFull =
+            frontend.CreateTexture({.extent = {1, 1}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled});
+        REQUIRE(requestFull.HasError());
+        CHECK(requestFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+    }
+
+    void VerifyUploadCompaction(RenderFrontend &frontend, const RenderBufferHandle first, const std::span<const std::byte> secondBytes) {
+        REQUIRE(frontend.ReleaseBuffer(first).HasValue());
+        const RenderResourceUploadSnapshot compacted = frontend.UploadSnapshot();
+        CHECK(compacted.pendingPayloadBytes == secondBytes.size());
+        CHECK(compacted.occupiedStagingBytes == secondBytes.size());
+        CHECK(compacted.pendingRequests == 1);
+        CHECK(compacted.cancelledRequestCount == 1);
+
+        const std::array<std::byte, 9> paddingOverflow{};
+        const auto alignmentFull = frontend.CreateBuffer({.byteSize = paddingOverflow.size(),
+                                                          .usage = RenderBufferUsage::Vertex,
+                                                          .access = RenderBufferAccess::HostVisible},
+                                                         paddingOverflow);
+        REQUIRE(alignmentFull.HasError());
+        CHECK(alignmentFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+
+        REQUIRE(frontend.ProcessResourceRequests().HasValue());
+        CHECK(lifecycleState.lastBufferInitialData == std::vector<std::byte>(secondBytes.begin(), secondBytes.end()));
+        const RenderResourceUploadSnapshot completed = frontend.UploadSnapshot();
+        CHECK(completed.pendingPayloadBytes == 0);
+        CHECK(completed.occupiedStagingBytes == 0);
+        CHECK(completed.completedBatchCount == 1);
+        CHECK(completed.lastBatchPayloadBytes == secondBytes.size());
+        CHECK(completed.lastBatchRequestCount == 1);
+    }
+
     [[nodiscard]] RenderMeshDescriptor MeshDescriptor(const RenderBufferHandle vertexBuffer, const RenderBufferHandle indexBuffer) {
         return {.vertexBuffer = vertexBuffer,
                 .indexBuffer = indexBuffer,
@@ -725,36 +758,11 @@ namespace {
         CHECK(aligned.pendingRequests == 2);
 
         SECTION("Rejects requests after reaching the request limit") {
-            const auto requestFull = frontend->CreateTexture(
-                {.extent = {1, 1}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled});
-            REQUIRE(requestFull.HasError());
-            CHECK(requestFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+            VerifyUploadRequestLimit(*frontend);
         }
 
         SECTION("Compacts once after cancellation and preserves staged bytes") {
-            REQUIRE(frontend->ReleaseBuffer(first.Value().handle).HasValue());
-            const RenderResourceUploadSnapshot compacted = frontend->UploadSnapshot();
-            CHECK(compacted.pendingPayloadBytes == secondBytes.size());
-            CHECK(compacted.occupiedStagingBytes == secondBytes.size());
-            CHECK(compacted.pendingRequests == 1);
-            CHECK(compacted.cancelledRequestCount == 1);
-
-            const std::array<std::byte, 9> paddingOverflow{};
-            const auto alignmentFull = frontend->CreateBuffer({.byteSize = paddingOverflow.size(),
-                                                               .usage = RenderBufferUsage::Vertex,
-                                                               .access = RenderBufferAccess::HostVisible},
-                                                              paddingOverflow);
-            REQUIRE(alignmentFull.HasError());
-            CHECK(alignmentFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
-
-            REQUIRE(frontend->ProcessResourceRequests().HasValue());
-            CHECK(lifecycleState.lastBufferInitialData == std::vector<std::byte>(secondBytes.begin(), secondBytes.end()));
-            const RenderResourceUploadSnapshot completed = frontend->UploadSnapshot();
-            CHECK(completed.pendingPayloadBytes == 0);
-            CHECK(completed.occupiedStagingBytes == 0);
-            CHECK(completed.completedBatchCount == 1);
-            CHECK(completed.lastBatchPayloadBytes == secondBytes.size());
-            CHECK(completed.lastBatchRequestCount == 1);
+            VerifyUploadCompaction(*frontend, first.Value().handle, secondBytes);
         }
     }
 
