@@ -40,7 +40,6 @@ using Horo::FormatSha256;
 using Horo::Render::ComputeShaderInterfaceCompatibilityId;
 using Horo::Render::ShaderBindingId;
 using Horo::Render::ShaderManifest;
-using Horo::Render::ShaderManifestErrors;
 using Horo::Render::ShaderManifestLimits;
 using Horo::Render::ShaderParameterId;
 using Horo::Render::ShaderPayloadFormat;
@@ -55,6 +54,8 @@ using Horo::Render::ValidateShaderManifest;
 using Horo::Tests::RequireError;
 using ShaderManifestTests::Target;
 using ShaderManifestTests::ValidManifest;
+
+namespace ShaderManifestErrors = Horo::Render::ShaderManifestErrors;
 
 TEST_CASE("Shader manifest accepts a canonical backend-neutral interface", "[runtime][renderer][shader-manifest]") {
     const ShaderManifest manifest = ValidManifest();

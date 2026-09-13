@@ -62,7 +62,6 @@ using Horo::Render::NormalizeShaderReflection;
 using Horo::Render::ShaderBindingId;
 using Horo::Render::ShaderManifest;
 using Horo::Render::ShaderReflectionCandidate;
-using Horo::Render::ShaderReflectionErrors;
 using Horo::Render::ShaderReflectionLimits;
 using Horo::Render::ShaderTargetBackend;
 using Horo::Render::ShaderTargetRequirement;
@@ -71,6 +70,8 @@ using ShaderReflectionTests::AdmittedIncludes;
 using ShaderReflectionTests::Candidate;
 using ShaderReflectionTests::Manifest;
 using ShaderReflectionTests::Target;
+
+namespace ShaderReflectionErrors = Horo::Render::ShaderReflectionErrors;
 
 TEST_CASE("Shader reflection normalizes final target evidence and preserves inactive logical identities",
           "[runtime][renderer][shader-reflection]") {
