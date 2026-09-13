@@ -8,6 +8,8 @@
 namespace Horo::Render::Detail {
     struct MetalBufferInstance {
         __strong id<MTLBuffer> buffer{nil};
+        RenderBufferUsage usage{RenderBufferUsage::None};
+        RenderMemoryPoolId pool;
     };
 
     struct MetalMeshInstance {
@@ -17,13 +19,15 @@ namespace Horo::Render::Detail {
 
     struct MetalTextureInstance {
         __strong id<MTLTexture> texture{nil};
-        RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm};
+        RenderTextureDescriptor descriptor;
+        RenderMemoryPoolId pool;
     };
 
     struct MetalTextureViewInstance {
         __strong id<MTLTexture> texture{nil};
         RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm};
         RenderTextureAspect aspect{RenderTextureAspect::Color};
+        RenderTextureUsage usage{RenderTextureUsage::None};
     };
 
     struct MetalRenderTargetInstance {

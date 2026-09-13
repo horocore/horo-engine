@@ -921,6 +921,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
             runtime/renderer/modules/metal/MetalRenderBackend.cpp
             runtime/renderer/modules/metal/MetalRenderBackendErrors.cpp
+            runtime/renderer/modules/metal/MetalResourceFormats.mm
+            runtime/renderer/modules/metal/MetalResourcePolicy.cpp
             runtime/renderer/modules/metal/MetalResourceRuntime.mm
             runtime/renderer/modules/metal/MetalRuntime.mm
     )

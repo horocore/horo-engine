@@ -60,11 +60,14 @@ namespace Horo::Render::Detail {
         [[nodiscard]] MetalFormatCapabilities QueryFormats(id<MTLDevice> device) noexcept {
             MetalFormatCapabilities formats;
             const auto sampledAttachment = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
-            formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba8Unorm)] = sampledAttachment;
-            formats.usages[static_cast<std::size_t>(RenderTextureFormat::Bgra8Unorm)] = sampledAttachment;
-            formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = RenderTextureUsage::RenderAttachment;
+            const auto enableUsage = [&formats](const RenderTextureFormat format, const RenderTextureUsage usage) {
+                formats.usages[static_cast<std::size_t>(format)] = usage;
+            };
+            enableUsage(RenderTextureFormat::Rgba8Unorm, sampledAttachment);
+            enableUsage(RenderTextureFormat::Bgra8Unorm, sampledAttachment);
+            enableUsage(RenderTextureFormat::Depth32Float, RenderTextureUsage::RenderAttachment);
             if (device.depth24Stencil8PixelFormatSupported) {
-                formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth24Stencil8)] = RenderTextureUsage::RenderAttachment;
+                enableUsage(RenderTextureFormat::Depth24Stencil8, RenderTextureUsage::RenderAttachment);
             }
             constexpr std::array sampleCounts{1U, 2U, 4U, 8U};
             for (const std::uint32_t sampleCount : sampleCounts) {
@@ -168,11 +171,8 @@ namespace Horo::Render::Detail {
         class MetalAdapterDiscovery final : public IRenderAdapterDiscovery {
         public:
             Result<RenderAdapterSnapshot> Discover(const RenderAdapterDiscoveryRequest &request) override {
-                if (stopped_) {
-                    return Result<RenderAdapterSnapshot>::Failure(MakeError(RenderAdapterErrors::DiscoveryStopped));
-                }
-                if (!request.IsValid()) {
-                    return Result<RenderAdapterSnapshot>::Failure(MakeError(RenderAdapterErrors::InvalidDiscoveryRequest));
+                if (const std::optional<Error> invalidState = ValidateState(request)) {
+                    return Result<RenderAdapterSnapshot>::Failure(*invalidState);
                 }
 
                 NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
@@ -195,6 +195,16 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            [[nodiscard]] std::optional<Error> ValidateState(const RenderAdapterDiscoveryRequest &request) const {
+                if (stopped_) {
+                    return MakeError(RenderAdapterErrors::DiscoveryStopped);
+                }
+                if (!request.IsValid()) {
+                    return MakeError(RenderAdapterErrors::InvalidDiscoveryRequest);
+                }
+                return std::nullopt;
+            }
+
             bool stopped_{false};
         };
 
@@ -222,6 +232,8 @@ namespace Horo::Render::Detail {
 
         class MetalRuntime final : public IMetalRuntime {
         public:
+            using ResourceInstanceResult = Result<std::uint64_t>;
+
             MetalRuntime(IMetalPresentationPort &presentationPort, MetalEditorGraphicsBridge &editorGraphicsBridge) noexcept
                 : presentationPort_(&presentationPort), editorGraphicsBridge_(&editorGraphicsBridge) {}
 
@@ -277,7 +289,7 @@ namespace Horo::Render::Detail {
                 layer_.displaySyncEnabled = descriptor.presentMode == PresentMode::Fifo;
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
-                resources_.Initialize((__bridge void *)device_);
+                resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_);
                 return admitted;
             }
 
@@ -289,28 +301,28 @@ namespace Horo::Render::Detail {
                 return resources_.QueryTextureMemoryCost(descriptor);
             }
 
-            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                               const RenderMemoryPlacement &placement) override {
-                return resources_.CreateBuffer(descriptor, initialData, placement);
-            }
-
-            Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                             const std::uint64_t indexBuffer) override {
-                return resources_.CreateMesh(descriptor, vertexBuffer, indexBuffer);
-            }
-
-            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+            ResourceInstanceResult CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
                                                 const RenderMemoryPlacement &placement) override {
-                return resources_.CreateTexture(descriptor, initialData, placement);
+                return Resources().CreateBuffer(descriptor, initialData, placement);
             }
 
-            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
-                return resources_.CreateTextureView(descriptor, texture);
+            ResourceInstanceResult CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
+                                              const std::uint64_t indexBuffer) override {
+                return Resources().CreateMesh(descriptor, vertexBuffer, indexBuffer);
             }
 
-            Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                                     const std::uint64_t depthAttachment) override {
-                return resources_.CreateRenderTarget(descriptor, colorAttachment, depthAttachment);
+            ResourceInstanceResult CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                                 const RenderMemoryPlacement &placement) override {
+                return Resources().CreateTexture(descriptor, initialData, placement);
+            }
+
+            ResourceInstanceResult CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
+                return Resources().CreateTextureView(descriptor, texture);
+            }
+
+            ResourceInstanceResult CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
+                                                      const std::uint64_t depthAttachment) override {
+                return Resources().CreateRenderTarget(descriptor, colorAttachment, depthAttachment);
             }
 
             void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
@@ -436,6 +448,10 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            [[nodiscard]] MetalResourceRuntime &Resources() noexcept {
+                return resources_;
+            }
+
             static void WaitUntilIdleThunk(void *context) noexcept {
                 static_cast<MetalRuntime *>(context)->WaitUntilIdle();
             }
