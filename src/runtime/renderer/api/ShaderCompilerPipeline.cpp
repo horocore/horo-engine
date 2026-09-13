@@ -62,8 +62,8 @@ namespace Horo::Render {
                     const std::string_view segment{value.data() + segmentStart, value.size() - segmentStart};
                     return !segment.empty() && segment != "." && segment != "..";
                 } else {
-                    const std::string_view segment{value.data() + segmentStart, separator - segmentStart};
-                    if (segment.empty() || segment == "." || segment == "..")
+                    if (const std::string_view segment{value.data() + segmentStart, separator - segmentStart};
+                        segment.empty() || segment == "." || segment == "..")
                         return false;
                     segmentStart = separator + 1U;
                 }

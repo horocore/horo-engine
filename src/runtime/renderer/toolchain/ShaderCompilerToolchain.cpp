@@ -228,11 +228,12 @@ namespace Horo::Render {
 
             [[nodiscard]] Result<void> RouteSpirv(const ShaderEntryPoint &entry, const std::string &stem,
                                                   const std::filesystem::path &spirvPath, std::vector<std::uint8_t> spirv) {
-                if (invocation_.target.requirement.backend == ShaderTargetBackend::Vulkan)
+                using enum ShaderTargetBackend;
+                if (invocation_.target.requirement.backend == Vulkan)
                     return StoreVulkan(entry, std::move(spirv));
-                if (invocation_.target.requirement.backend == ShaderTargetBackend::OpenGL)
+                if (invocation_.target.requirement.backend == OpenGL)
                     return CompileOpenGLRoute(entry, stem, spirvPath);
-                if (invocation_.target.requirement.backend == ShaderTargetBackend::Metal)
+                if (invocation_.target.requirement.backend == Metal)
                     return CompileMetalRoute(entry, stem, spirvPath);
                 return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
             }
