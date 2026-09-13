@@ -60,6 +60,12 @@ namespace {
         return parsed.Value();
     }
 
+    AssetTypeId PrefabType() {
+        auto parsed = AssetTypeId::Parse("core.prefab");
+        REQUIRE((parsed.HasValue()));
+        return parsed.Value();
+    }
+
     ProjectPath Path(const std::string_view value) {
         auto parsed = ProjectPath::Parse(value);
         REQUIRE((parsed.HasValue()));
@@ -233,6 +239,141 @@ namespace {
         const auto published = authoritative.Publish(std::move(prepared).Value());
         REQUIRE((published.status == AssetRegistryBuildStatus::Complete));
         REQUIRE((authoritative.Snapshot().Records().size() == 1));
+        std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Prefab Registry Enforces Typed Sidecars And Preserves Identity Across Moves", "[unit][runtime][assets][prefab]") {
+        const std::filesystem::path root = TemporaryProject();
+        Write(root / "assets/prefabs/player.prefab", R"({"projectVersion":"0.1.0"})");
+        Write(root / "assets/prefabs/player.prefab.horo",
+              R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        Write(root / "assets/prefabs/missing.prefab", R"({"projectVersion":"0.1.0"})");
+        Write(root / "assets/prefabs/wrong.prefab", R"({"projectVersion":"0.1.0"})");
+        Write(root / "assets/prefabs/wrong.prefab.horo",
+              R"({"schemaVersion":1,"assetId":"11112233-4455-6677-8899-aabbccddeeff","assetType":"core.mesh"})");
+        Write(root / "assets/models/not-prefab.obj", "mesh");
+        Write(root / "assets/models/not-prefab.obj.horo",
+              R"({"schemaVersion":1,"assetId":"21112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+
+        AssetRegistry registry;
+        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE((rebuilt.HasValue()));
+        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Degraded));
+        REQUIRE((rebuilt.Value().registeredAssets == 1));
+        REQUIRE(
+            (std::ranges::count(rebuilt.Value().diagnostics, "asset.registry.type_mismatch", [](const AssetRegistryDiagnostic &diagnostic) {
+            return diagnostic.error.code.Value();
+        }) == 2));
+        REQUIRE((std::ranges::count(rebuilt.Value().diagnostics, "asset.registry.sidecar_missing",
+                                    [](const AssetRegistryDiagnostic &diagnostic) {
+            return diagnostic.error.code.Value();
+        }) == 1));
+
+        const AssetId prefabId = Id("00112233-4455-6677-8899-aabbccddeeff");
+        const AssetRegistrySnapshot beforeMoveSnapshot = registry.Snapshot();
+        const AssetRecord *beforeMove = beforeMoveSnapshot.Find(prefabId);
+        REQUIRE((beforeMove != nullptr));
+        REQUIRE((beforeMove->type == PrefabType()));
+        REQUIRE((beforeMove->sourcePath.String() == "assets/prefabs/player.prefab"));
+        REQUIRE((beforeMove->metadataPath.String() == "assets/prefabs/player.prefab.horo"));
+
+        std::filesystem::create_directories(root / "assets/templates");
+        std::filesystem::rename(root / "assets/prefabs/player.prefab", root / "assets/templates/hero.prefab");
+        std::filesystem::rename(root / "assets/prefabs/player.prefab.horo", root / "assets/templates/hero.prefab.horo");
+        auto moved = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE((moved.HasValue()));
+        const AssetRegistrySnapshot afterMoveSnapshot = registry.Snapshot();
+        const AssetRecord *afterMove = afterMoveSnapshot.Find(prefabId);
+        REQUIRE((afterMove != nullptr));
+        REQUIRE((afterMove->type == PrefabType()));
+        REQUIRE((afterMove->sourcePath.String() == "assets/templates/hero.prefab"));
+        REQUIRE((afterMove->metadataPath.String() == "assets/templates/hero.prefab.horo"));
+        REQUIRE((afterMoveSnapshot.FindByPath("assets/prefabs/player.prefab") == nullptr));
+        REQUIRE((beforeMoveSnapshot.Find(prefabId)->sourcePath.String() == "assets/prefabs/player.prefab"));
+        std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Prefab Registry Rejects Duplicate Sidecar Identities", "[unit][runtime][assets][prefab]") {
+        const std::filesystem::path root = TemporaryProject();
+        constexpr std::string_view sidecar =
+            R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        Write(root / "assets/prefabs/first.prefab", "{}");
+        Write(root / "assets/prefabs/first.prefab.horo", sidecar);
+
+        AssetRegistry registry;
+        auto initial = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE((initial.HasValue()));
+        REQUIRE((initial.Value().status == AssetRegistryBuildStatus::Complete));
+        const AssetRegistryRevision before = registry.Snapshot().Revision();
+
+        Write(root / "assets/prefabs/second.prefab", "{}");
+        Write(root / "assets/prefabs/second.prefab.horo", sidecar);
+
+        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE((rebuilt.HasValue()));
+        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Failed));
+        REQUIRE((rebuilt.Value().registeredAssets == 1));
+        REQUIRE((registry.Snapshot().Revision() == before));
+        REQUIRE((registry.Snapshot().Find(Id("00112233-4455-6677-8899-aabbccddeeff")) != nullptr));
+        REQUIRE((std::ranges::any_of(rebuilt.Value().diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
+            return diagnostic.error.code.Value() == "asset.registry.duplicate_id";
+        })));
+        std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Prefab Registry Handles Case Folded Extensions And Malformed Sidecars", "[unit][runtime][assets][prefab]") {
+        const std::filesystem::path root = TemporaryProject();
+        Write(root / "assets/prefabs/upper.PREFAB", "{}");
+        Write(root / "assets/prefabs/upper.PREFAB.horo",
+              R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        Write(root / "assets/prefabs/malformed.prefab", "{}");
+        Write(root / "assets/prefabs/malformed.prefab.horo", "{");
+
+        AssetRegistry registry;
+        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE((rebuilt.HasValue()));
+        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Degraded));
+        REQUIRE((rebuilt.Value().registeredAssets == 1));
+        REQUIRE((registry.Snapshot().Find(Id("00112233-4455-6677-8899-aabbccddeeff")) != nullptr));
+        REQUIRE((std::ranges::any_of(rebuilt.Value().diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
+            return diagnostic.error.code.Value() == "asset.registry.sidecar_malformed";
+        })));
+        std::filesystem::remove_all(root);
+    }
+
+    TEST_CASE("Derived Index Enforces Prefab Source Type", "[unit][runtime][assets][prefab]") {
+        const std::filesystem::path root = TemporaryProject();
+        const std::filesystem::path index = root / ".horo/asset_index.json";
+        Write(
+            index,
+            R"({"schemaVersion":1,"assets":[{"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab","sourcePath":"assets/prefabs/player.prefab","metadataPath":"assets/prefabs/player.prefab.horo"}]})");
+        auto valid = AssetIndexStore::Load(index);
+        REQUIRE((valid.HasValue()));
+        REQUIRE((valid.Value().size() == 1));
+        REQUIRE((valid.Value().front().type == PrefabType()));
+
+        Write(
+            index,
+            R"({"schemaVersion":1,"assets":[{"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.mesh","sourcePath":"assets/prefabs/player.prefab","metadataPath":"assets/prefabs/player.prefab.horo"}]})");
+        auto mismatch = AssetIndexStore::Load(index);
+        REQUIRE((mismatch.HasError()));
+        REQUIRE((mismatch.ErrorValue().code.Value() == "asset.registry.type_mismatch"));
+
+        Write(
+            index,
+            R"({"schemaVersion":1,"assets":[{"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab","sourcePath":"assets/prefabs/first.prefab","metadataPath":"assets/prefabs/first.prefab.horo"},{"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab","sourcePath":"assets/prefabs/second.prefab","metadataPath":"assets/prefabs/second.prefab.horo"}]})");
+        auto duplicate = AssetIndexStore::Load(index);
+        REQUIRE((duplicate.HasError()));
+        REQUIRE((duplicate.ErrorValue().code.Value() == "asset.registry.duplicate_id"));
+
+        AssetRegistry registry;
+        auto programmaticMismatch =
+            registry.Publish({AssetRecord{Id("11112233-4455-6677-8899-aabbccddeeff"), MeshType(), Path("assets/prefabs/wrong.prefab"),
+                                          Path("assets/prefabs/wrong.prefab.horo")}});
+        REQUIRE((programmaticMismatch.status == AssetRegistryBuildStatus::Failed));
+        REQUIRE((std::ranges::any_of(programmaticMismatch.diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
+            return diagnostic.error.code.Value() == "asset.registry.type_mismatch";
+        })));
         std::filesystem::remove_all(root);
     }
 }  // namespace
