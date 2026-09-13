@@ -151,13 +151,13 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveSlotRecoveryAction> RecoverObserved(ISaveSlotCommitStore &store, SaveSlotCommitJournal journal,
                                                                      const SaveSlotCommitObservation &observation) {
             const bool candidatePublished = IsPublishedCandidate(journal, observation);
-            if (journal.phase == SaveSlotCommitPhase::Published || candidatePublished)
-                return candidatePublished ? RemovePublishedJournal(store, journal,
-                                                                   journal.phase == SaveSlotCommitPhase::Published
-                                                                       ? SaveSlotRecoveryAction::FinalizedPublished
-                                                                       : SaveSlotRecoveryAction::PublishedCandidate)
-                                          : Result<SaveSlotRecoveryAction>::Failure(
-                                                Invalid("A published journal does not match the catalog's selected generation."));
+            if (journal.phase == SaveSlotCommitPhase::Published && !candidatePublished)
+                return Result<SaveSlotRecoveryAction>::Failure(
+                    Invalid("A published journal does not match the catalog's selected generation."));
+            if (journal.phase == SaveSlotCommitPhase::Published)
+                return RemovePublishedJournal(store, journal, SaveSlotRecoveryAction::FinalizedPublished);
+            if (candidatePublished)
+                return RemovePublishedJournal(store, journal, SaveSlotRecoveryAction::PublishedCandidate);
             if (!IsPreviousOrEmpty(journal, observation))
                 return Result<SaveSlotRecoveryAction>::Failure(
                     Invalid("Slot recovery found an unrelated catalog generation and will not overwrite it."));
