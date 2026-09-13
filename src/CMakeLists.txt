@@ -208,6 +208,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
         runtime/save/SaveOperation.cpp
+        runtime/save/SaveProjectPolicy.cpp
         runtime/save/SaveSafePointCoordinator.cpp
         runtime/save/SaveTestCompositions.cpp
 )
