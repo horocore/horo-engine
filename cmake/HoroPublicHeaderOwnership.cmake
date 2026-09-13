@@ -454,6 +454,8 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/ShaderManifestErrors.h
     Horo/Runtime/Render/ShaderReflection.h
     Horo/Runtime/Render/ShaderReflectionErrors.h
+    Horo/Runtime/Render/StandardPbrMaterial.h
+    Horo/Runtime/Render/StandardPbrMaterialErrors.h
     Horo/Runtime/Render/TemporalHistory.h
     Horo/Runtime/Render/TemporalHistoryErrors.h
     Horo/Runtime/Render/Texture.h
