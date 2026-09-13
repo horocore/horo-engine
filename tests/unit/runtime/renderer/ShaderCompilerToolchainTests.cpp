@@ -249,8 +249,8 @@ namespace {
         return configuration;
     }
 
-    void RequireFixtureRoute(ExternalShaderCompilerAdapter &adapter, const ShaderTargetBackend backend, const ShaderPayloadFormat format,
-                             std::vector<ShaderCompilerToolIdentity> tools) {
+    void RequireFixtureRoute(const ExternalShaderCompilerAdapter &adapter, const ShaderTargetBackend backend,
+                             const ShaderPayloadFormat format, std::vector<ShaderCompilerToolIdentity> tools) {
         auto request = Request(backend, format, std::move(tools));
         request.targets.front().emitDebugInformation = true;
         const auto result = CompileShaderTargets(request, adapter, {});
@@ -269,7 +269,7 @@ namespace {
         return ExternalShaderCompilerAdapter::Create(std::move(configuration), std::move(processes));
     }
 
-    void RequireRepeatable(const ShaderCompilationRequest &request, IShaderCompilerAdapter &adapter) {
+    void RequireRepeatable(const ShaderCompilationRequest &request, const IShaderCompilerAdapter &adapter) {
         const auto first = CompileShaderTargets(request, adapter, {});
         REQUIRE(first.HasValue());
         const auto second = CompileShaderTargets(request, adapter, {});
