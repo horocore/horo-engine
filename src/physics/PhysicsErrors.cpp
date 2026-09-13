@@ -195,6 +195,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor ShapeMotionUnsupported{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.shape.motion_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The cooked physics shape does not support the requested body motion mode.",
+        .remediationHint = "Use static motion for concave geometry or choose an explicitly authored convex shape.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor ShapeArtifactInvalid{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.shape_artifact.invalid"},
