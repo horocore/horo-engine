@@ -299,9 +299,9 @@ namespace Horo::Render::FrontendErrors {
     const ErrorCodeDescriptor ResourceUploadCapacityExceeded{.domain = Domain,
                                                              .code = ErrorCode{"render.frontend.resource.upload_capacity_exceeded"},
                                                              .defaultSeverity = ErrorSeverity::Error,
-                                                             .summary = "Render resource upload queue byte capacity is exhausted.",
+                                                             .summary = "Render resource upload arena capacity is exhausted.",
                                                              .remediationHint =
-                                                                 "Drain pending uploads before submitting more initial data.",
+                                                                 "Drain pending uploads before submitting more resource work.",
                                                              .retryable = true,
                                                              .userActionable = false};
 
