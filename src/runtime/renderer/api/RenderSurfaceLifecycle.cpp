@@ -55,11 +55,12 @@ namespace Horo::Render {
 
         [[nodiscard]] bool CanSupersedePending(const std::optional<RenderSurfaceCommand> &pending,
                                                const RenderSurfaceCommandKind nextKind) noexcept {
+            using enum RenderSurfaceCommandKind;
             if (!pending.has_value())
                 return true;
-            if (pending->kind == RenderSurfaceCommandKind::Close)
+            if (pending->kind == Close)
                 return false;
-            return pending->kind != RenderSurfaceCommandKind::Lose || nextKind == RenderSurfaceCommandKind::Close;
+            return pending->kind != Lose || nextKind == Close;
         }
 
         [[nodiscard]] bool CanQueue(const RenderSurfaceSnapshot &snapshot, const RenderSurfaceCommandKind kind) noexcept {
