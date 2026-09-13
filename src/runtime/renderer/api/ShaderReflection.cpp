@@ -174,39 +174,40 @@ namespace Horo::Render {
 
         [[nodiscard]] constexpr std::uint8_t NativeNamespace(const ShaderResourceKind kind, const ShaderTargetBackend backend) noexcept {
             using enum ShaderTargetBackend;
+            using enum ShaderResourceKind;
             switch (backend) {
                 case Null:
                 case Vulkan:
                     return 0;
                 case OpenGL:
                     switch (kind) {
-                        case ShaderResourceKind::UniformBuffer:
+                        case UniformBuffer:
                             return 0;
-                        case ShaderResourceKind::StorageBuffer:
+                        case StorageBuffer:
                             return 1;
-                        case ShaderResourceKind::SampledTexture:
-                        case ShaderResourceKind::Sampler:
+                        case SampledTexture:
+                        case Sampler:
                             return 2;
-                        case ShaderResourceKind::StorageTexture:
+                        case StorageTexture:
                             return 3;
                     }
                     break;
                 case Metal:
-                    if (kind == ShaderResourceKind::UniformBuffer || kind == ShaderResourceKind::StorageBuffer)
+                    if (kind == UniformBuffer || kind == StorageBuffer)
                         return 0;
-                    if (kind == ShaderResourceKind::Sampler)
+                    if (kind == Sampler)
                         return 2;
                     return 1;
                 case D3D12:
                     switch (kind) {
-                        case ShaderResourceKind::UniformBuffer:
+                        case UniformBuffer:
                             return 0;
-                        case ShaderResourceKind::StorageBuffer:
-                        case ShaderResourceKind::StorageTexture:
+                        case StorageBuffer:
+                        case StorageTexture:
                             return 1;
-                        case ShaderResourceKind::SampledTexture:
+                        case SampledTexture:
                             return 2;
-                        case ShaderResourceKind::Sampler:
+                        case Sampler:
                             return 3;
                     }
                     break;
@@ -225,8 +226,7 @@ namespace Horo::Render {
             for (std::size_t index = 0; index < candidate.targetBindings.size(); ++index) {
                 const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
                 const ShaderReflectedBinding *reflection = FindReflectedBinding(candidate, mapping.id);
-                const auto key = std::pair{mapping.id, mapping.generatedHelperIndex};
-                if (!mapping.id.IsValid() ||
+                if (const auto key = std::pair{mapping.id, mapping.generatedHelperIndex}; !mapping.id.IsValid() ||
                     (index > 0 &&
                      std::pair{candidate.targetBindings[index - 1].id, candidate.targetBindings[index - 1].generatedHelperIndex} >= key) ||
                     reflection == nullptr ||
