@@ -60,8 +60,13 @@ namespace Horo::Runtime {
             Assets::AssetRegistry registry;
             const Assets::AssetId asset = Assets::AssetId::FromBytes(descriptor.baseScene.Bytes());
             const std::string identity = asset.ToString();
-            const auto report = registry.Publish(
-                {Assets::AssetRecord{asset, type, Path("unrelated/source/" + identity), Path("unrelated/metadata/" + identity)}});
+            std::string sourcePath = "unrelated/source/" + identity;
+            std::string metadataPath = "unrelated/metadata/" + identity;
+            if (type == SceneAssetType("core.prefab")) {
+                sourcePath += ".prefab";
+                metadataPath = sourcePath + ".horo";
+            }
+            const auto report = registry.Publish({Assets::AssetRecord{asset, type, Path(sourcePath), Path(metadataPath)}});
             REQUIRE(report.status == Assets::AssetRegistryBuildStatus::Complete);
             return registry.Snapshot();
         }
