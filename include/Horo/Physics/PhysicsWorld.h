@@ -6,6 +6,7 @@
 
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
+#include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsTickPipeline.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
@@ -155,6 +156,11 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsWorldLifecycleCause LifecycleCause() const noexcept;
         /** @brief Reads the retained fatal/reset failure. @return Typed terminal error, or empty outside Failed. */
         [[nodiscard]] const std::optional<Error> &LastFailure() const noexcept;
+        /** @brief Reads the latest bounded solver diagnostic retained by this world.
+         * @return Owned inert evidence, or empty before a solver finding and after reset/retirement.
+         * @note A diagnostic is evidence only. LastFailure and State remain control-flow authority.
+         */
+        [[nodiscard]] const std::optional<PhysicsDiagnosticRecord> &LastDiagnostic() const noexcept;
         /** @brief Defers one structural intent to its semantic fixed-tick safe point.
          * @param command Owned command envelope copied into bounded world storage.
          * @return Admission status, or a typed malformed/state/affinity error. Rejected work remains caller-owned.

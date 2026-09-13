@@ -90,6 +90,7 @@ namespace Horo::Physics {
             state = PhysicsWorldState::Destroyed;
             lifecycleCause = cause;
             lastFailure.reset();
+            lastDiagnostic.reset();
             std::ranges::fill(commands, PhysicsStructuralCommand{});
             commandHead = 0;
             commandCount = 0;
@@ -98,9 +99,21 @@ namespace Horo::Physics {
             runtime->ReleaseNativeWhenIdle();
         }
 
-        void Fail(Error error) {
+        void RecordDiagnostic(const Error &error, const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
+            const std::array context{
+                PhysicsDiagnosticContextEntry{.key = PhysicsDiagnosticContextKey::World, .value = identity},
+                PhysicsDiagnosticContextEntry{.key = PhysicsDiagnosticContextKey::SceneGeneration, .value = sceneGeneration},
+                PhysicsDiagnosticContextEntry{.key = PhysicsDiagnosticContextKey::SimulationTick, .value = simulationTick},
+            };
+            const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error, context);
+            if (record.HasValue())
+                lastDiagnostic = record.Value();
+        }
+
+        void Fail(Error error, const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
             state = PhysicsWorldState::Failed;
             lifecycleCause = PhysicsWorldLifecycleCause::FatalSolverError;
+            RecordDiagnostic(error, sceneGeneration, simulationTick);
             lastFailure = std::move(error);
         }
 
@@ -118,6 +131,7 @@ namespace Horo::Physics {
             }
             statistics = {};
             lastFailure.reset();
+            lastDiagnostic.reset();
             lifecycleCause = PhysicsWorldLifecycleCause::Reset;
         }
 
@@ -184,6 +198,7 @@ namespace Horo::Physics {
         PhysicsTickStatistics statistics;
         PhysicsWorldLifecycleCause lifecycleCause{PhysicsWorldLifecycleCause::None};
         std::optional<Error> lastFailure;
+        std::optional<PhysicsDiagnosticRecord> lastDiagnostic;
     };
 
     namespace {
@@ -514,6 +529,7 @@ namespace Horo::Physics {
         if (impl_->state == PreparedSolver || impl_->state == PreparedNull) {
             impl_->lifecycleCause = PhysicsWorldLifecycleCause::Reset;
             impl_->lastFailure.reset();
+            impl_->lastDiagnostic.reset();
             return Result<void>::Success();
         }
 
@@ -556,6 +572,11 @@ namespace Horo::Physics {
     /** @copydoc PhysicsWorld::LastFailure */
     const std::optional<Error> &PhysicsWorld::LastFailure() const noexcept {
         return impl_->lastFailure;
+    }
+
+    /** @copydoc PhysicsWorld::LastDiagnostic */
+    const std::optional<PhysicsDiagnosticRecord> &PhysicsWorld::LastDiagnostic() const noexcept {
+        return impl_->lastDiagnostic;
     }
 
     /** @copydoc PhysicsWorld::QueueStructuralCommand */
@@ -622,17 +643,19 @@ namespace Horo::Physics {
         if (input.solverJobs.jobCount != 0) {
             const Result<void> jobs = RunSolverJobs(*impl_->runtime->solverJobs, input.solverJobs);
             if (jobs.HasError()) {
-                impl_->Fail(jobs.ErrorValue());
+                impl_->Fail(jobs.ErrorValue(), input.sceneGeneration, input.simulationTick);
                 return Result<void>::Failure(jobs.ErrorValue());
             }
         }
 
-        if (const auto stepped =
-                Detail::StepCanonicalWorld(impl_->native, static_cast<float>(impl_->settings.Values().world.fixedDeltaSeconds));
-            stepped.HasError()) {
-            impl_->Fail(stepped.ErrorValue());
+        const auto stepped =
+            Detail::StepCanonicalWorld(impl_->native, static_cast<float>(impl_->settings.Values().world.fixedDeltaSeconds));
+        if (stepped.HasError()) {
+            impl_->Fail(stepped.ErrorValue(), input.sceneGeneration, input.simulationTick);
             return Result<void>::Failure(stepped.ErrorValue());
         }
+        if (stepped.Value().diagnostic.has_value())
+            impl_->RecordDiagnostic(*stepped.Value().diagnostic, input.sceneGeneration, input.simulationTick);
 
         ObservePhase(input, IntegrateBodies);
         ObservePhase(input, WriteRuntimeTransforms);

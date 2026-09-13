@@ -515,6 +515,13 @@ namespace Horo::Physics {
         REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::FatalSolverError);
         REQUIRE(world->LastFailure().has_value());
         REQUIRE(world->LastFailure()->code.Value() == PhysicsErrors::InitializationFailed.code.Value());
+        REQUIRE(world->LastDiagnostic().has_value());
+        REQUIRE(world->LastDiagnostic()->code.Value() == PhysicsErrors::InitializationFailed.code.Value());
+        REQUIRE(world->LastDiagnostic()->category == PhysicsDiagnosticCategory::Runtime);
+        REQUIRE(world->LastDiagnostic()->contextCount == 3);
+        REQUIRE(world->LastDiagnostic()->context[0].key == PhysicsDiagnosticContextKey::World);
+        REQUIRE(world->LastDiagnostic()->context[1].key == PhysicsDiagnosticContextKey::SceneGeneration);
+        REQUIRE(world->LastDiagnostic()->context[2].key == PhysicsDiagnosticContextKey::SimulationTick);
         REQUIRE(world->PublishedTick().completedTick == 1);
         REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = fixedDelta}).ErrorValue().code.Value() ==
                 PhysicsErrors::InvalidState.code.Value());
@@ -522,6 +529,7 @@ namespace Horo::Physics {
         REQUIRE(world->State() == PhysicsWorldState::PreparedSolver);
         REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::Reset);
         REQUIRE_FALSE(world->LastFailure().has_value());
+        REQUIRE_FALSE(world->LastDiagnostic().has_value());
         REQUIRE_FALSE(world->Identity().IsValid());
         REQUIRE(world->PublishedTick().publicationRevision == 0);
         REQUIRE(world->TickStatistics().pendingCommands == 0);
