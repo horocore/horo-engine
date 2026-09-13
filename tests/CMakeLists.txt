@@ -1830,6 +1830,22 @@ if (HORO_BUILD_RENDER_METAL)
                 "-framework QuartzCore"
         )
 
+        add_executable(HoroMetalUploadShutdownSmoke
+                integration/renderer/MetalUploadShutdownSmoke.mm
+        )
+        target_compile_features(HoroMetalUploadShutdownSmoke PRIVATE cxx_std_20)
+        target_include_directories(HoroMetalUploadShutdownSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_link_libraries(HoroMetalUploadShutdownSmoke
+                PRIVATE
+                Catch2::Catch2WithMain
+                HoroEngine::EditorViewportMetal
+                HoroEngine::RenderFrontend
+                HoroEngine::RenderMetal
+                ${HORO_SDL3_TARGET}
+                "-framework Metal"
+                "-framework QuartzCore"
+        )
+
         if (HORO_ENABLE_GPU_SMOKE_TESTS)
             if (TARGET HoroEditor)
                 set(HORO_METAL_FIRST_FRAME_HOME "${CMAKE_CURRENT_BINARY_DIR}/first-frame-home/metal")
@@ -2018,6 +2034,12 @@ if (HORO_ENABLE_GPU_SMOKE_TESTS)
     endif ()
     if (TARGET HoroEditorViewportMetalSmoke)
         horo_register_catch_test(HoroEditorViewportMetalSmoke
+                LABELS "gpu;display;metal"
+                PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1"
+        )
+    endif ()
+    if (TARGET HoroMetalUploadShutdownSmoke)
+        horo_register_catch_test(HoroMetalUploadShutdownSmoke
                 LABELS "gpu;display;metal"
                 PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1"
         )
