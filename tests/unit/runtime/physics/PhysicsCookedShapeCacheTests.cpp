@@ -19,9 +19,9 @@ namespace Horo::Physics {
         }
 
         [[nodiscard]] PhysicsShapeCookTargetDigest Target(const std::uint8_t marker = 1) {
-            PhysicsShapeCookTargetDigest target;
-            target.digest.bytes[0] = marker;
-            return target;
+            Sha256Digest digest;
+            digest.bytes.front() = marker;
+            return PhysicsShapeCookTargetDigest{digest};
         }
 
         [[nodiscard]] PhysicsConvexHullCookResult CookCube(const char assetMarker = '2', const float extent = 1.0F) {
@@ -63,9 +63,8 @@ namespace Horo::Physics {
                 .Value();
         }
 
-        template <typename T> void RequireError(const Result<T> &result, const ErrorCodeDescriptor &descriptor) {
-            REQUIRE(result.HasError());
-            REQUIRE(result.ErrorValue().code.Value() == descriptor.code.Value());
+        template <typename T> [[nodiscard]] bool HasPhysicsError(const Result<T> &result, const ErrorCodeDescriptor &descriptor) {
+            return result.HasError() && result.ErrorValue().code.Value() == descriptor.code.Value();
         }
     }  // namespace
 
@@ -138,21 +137,21 @@ namespace Horo::Physics {
         REQUIRE(PhysicsCookedShapeCache::Create(Target(), {.maximumShapes = 0, .maximumResidentBytes = 1}).HasError());
         auto cache = PhysicsCookedShapeCache::Create(Target(), {.maximumShapes = 1, .maximumResidentBytes = 1}).Value();
         const auto cooked = CookCube();
-        RequireError(cache.Acquire(cooked.descriptor, cooked.payload), PhysicsErrors::CapacityExceeded);
+        REQUIRE(HasPhysicsError(cache.Acquire(cooked.descriptor, cooked.payload), PhysicsErrors::CapacityExceeded));
         REQUIRE(cache.Stats().residentShapes == 0);
 
         cache = PhysicsCookedShapeCache::Create(Target()).Value();
         auto corrupt = cooked.payload;
         corrupt.back() ^= 1U;
-        RequireError(cache.Acquire(cooked.descriptor, corrupt), PhysicsErrors::ShapeArtifactInvalid);
+        REQUIRE(HasPhysicsError(cache.Acquire(cooked.descriptor, corrupt), PhysicsErrors::ShapeArtifactInvalid));
 
         auto wrongTarget = cooked.descriptor;
         wrongTarget.target = Target(2);
-        RequireError(cache.Acquire(wrongTarget, cooked.payload), PhysicsErrors::ProfileUnsupported);
+        REQUIRE(HasPhysicsError(cache.Acquire(wrongTarget, cooked.payload), PhysicsErrors::ProfileUnsupported));
 
         auto unsupported = cooked.descriptor;
         unsupported.kind = PhysicsCookedShapeKind::HeightField;
-        RequireError(cache.Acquire(unsupported, cooked.payload), PhysicsErrors::OperationUnsupported);
+        REQUIRE(HasPhysicsError(cache.Acquire(unsupported, cooked.payload), PhysicsErrors::OperationUnsupported));
         REQUIRE(cache.Stats().residentShapes == 0);
     }
 
@@ -163,7 +162,7 @@ namespace Horo::Physics {
         const auto secondCook = CookCube('3', 2.0F);
         auto first = cache.Acquire(firstCook.descriptor, firstCook.payload).Value();
 
-        RequireError(cache.Acquire(secondCook.descriptor, secondCook.payload), PhysicsErrors::CapacityExceeded);
+        REQUIRE(HasPhysicsError(cache.Acquire(secondCook.descriptor, secondCook.payload), PhysicsErrors::CapacityExceeded));
         REQUIRE(cache.Stats().residentShapes == 1);
         REQUIRE(cache.Evict(firstCook.descriptor).Value());
         REQUIRE(cache.Stats().residentShapes == 0);
@@ -216,7 +215,7 @@ namespace Horo::Physics {
         REQUIRE(ownerLease);
         REQUIRE(ownerLease.Descriptor().kind == PhysicsCookedShapeKind::ConvexHull);
         workerLease.reset();
-        RequireError(cache.Acquire(cooked.descriptor, cooked.payload), PhysicsErrors::InvalidState);
-        RequireError(cache.Evict(cooked.descriptor), PhysicsErrors::InvalidState);
+        REQUIRE(HasPhysicsError(cache.Acquire(cooked.descriptor, cooked.payload), PhysicsErrors::InvalidState));
+        REQUIRE(HasPhysicsError(cache.Evict(cooked.descriptor), PhysicsErrors::InvalidState));
     }
 }  // namespace Horo::Physics

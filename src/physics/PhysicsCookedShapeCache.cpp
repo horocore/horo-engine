@@ -107,37 +107,38 @@ namespace Horo::Physics {
             return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Success(std::move(resource));
         }
 
+        template <typename Shape, typename AccountBytes>
+        [[nodiscard]] Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> FinishConstruction(
+            const PhysicsCookedShapeDescriptor &descriptor, Result<Shape> loaded, AccountBytes accountBytes) {
+            if (loaded.HasError())
+                return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(loaded.ErrorValue());
+            Shape shape = std::move(loaded).Value();
+            std::uint64_t bytes = sizeof(Detail::PhysicsCookedShapeResource);
+            if (!accountBytes(bytes, shape))
+                return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(
+                    CacheError(PhysicsErrors::CapacityExceeded, "Cooked shape resident-byte accounting overflowed."));
+            return MakeResource(descriptor, std::move(shape), bytes);
+        }
+
         [[nodiscard]] Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> ConstructConvexResource(
             const PhysicsCookedShapeDescriptor &descriptor, const PhysicsShapeCookTargetDigest &target,
             const std::span<const std::uint8_t> payload) {
-            Result<LoadedPhysicsConvexHull> loaded = LoadCookedPhysicsConvexHull(descriptor, target, payload);
-            if (loaded.HasError())
-                return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(loaded.ErrorValue());
-            LoadedPhysicsConvexHull shape = std::move(loaded).Value();
-            std::uint64_t bytes = sizeof(Detail::PhysicsCookedShapeResource);
-            if (!AddBytes(bytes, shape.vertices.size(), sizeof(Math::Vec3)) ||
-                !AddBytes(bytes, shape.triangleIndices.size(), sizeof(std::uint32_t))) {
-                return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(
-                    CacheError(PhysicsErrors::CapacityExceeded, "Convex cooked shape resident-byte accounting overflowed."));
-            }
-            return MakeResource(descriptor, std::move(shape), bytes);
+            return FinishConstruction(descriptor, LoadCookedPhysicsConvexHull(descriptor, target, payload),
+                                      [](std::uint64_t &bytes, const LoadedPhysicsConvexHull &shape) {
+                return AddBytes(bytes, shape.vertices.size(), sizeof(Math::Vec3)) &&
+                       AddBytes(bytes, shape.triangleIndices.size(), sizeof(std::uint32_t));
+            });
         }
 
         [[nodiscard]] Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> ConstructTriangleResource(
             const PhysicsCookedShapeDescriptor &descriptor, const PhysicsShapeCookTargetDigest &target,
             const std::span<const std::uint8_t> payload) {
-            Result<LoadedPhysicsTriangleMesh> loaded = LoadCookedPhysicsTriangleMesh(descriptor, target, payload);
-            if (loaded.HasError())
-                return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(loaded.ErrorValue());
-            LoadedPhysicsTriangleMesh shape = std::move(loaded).Value();
-            std::uint64_t bytes = sizeof(Detail::PhysicsCookedShapeResource);
-            if (!AddBytes(bytes, shape.vertices.size(), sizeof(Math::Vec3)) ||
-                !AddBytes(bytes, shape.materialSlots.size(), sizeof(PhysicsMaterialSlotId)) ||
-                !AddBytes(bytes, shape.triangles.size(), sizeof(LoadedPhysicsTriangle))) {
-                return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(
-                    CacheError(PhysicsErrors::CapacityExceeded, "Triangle-mesh cooked shape resident-byte accounting overflowed."));
-            }
-            return MakeResource(descriptor, std::move(shape), bytes);
+            return FinishConstruction(descriptor, LoadCookedPhysicsTriangleMesh(descriptor, target, payload),
+                                      [](std::uint64_t &bytes, const LoadedPhysicsTriangleMesh &shape) {
+                return AddBytes(bytes, shape.vertices.size(), sizeof(Math::Vec3)) &&
+                       AddBytes(bytes, shape.materialSlots.size(), sizeof(PhysicsMaterialSlotId)) &&
+                       AddBytes(bytes, shape.triangles.size(), sizeof(LoadedPhysicsTriangle));
+            });
         }
 
         [[nodiscard]] Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> ConstructResource(
