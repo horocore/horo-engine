@@ -155,12 +155,27 @@ namespace project_migration_tests {
                 .pipeline = std::move(pipeline)};
     }
 
+    [[nodiscard]] Horo::Application::ProjectMigrationDefinition ProductionCompressionDefinition() {
+        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
+        REQUIRE((catalog.HasValue()));
+        const auto definition = std::ranges::find_if(catalog.Value(), [](const auto &entry) {
+            return entry.id.value == "core.project_settings.compression_defaults";
+        });
+        REQUIRE((definition != catalog.Value().end()));
+        return *definition;
+    }
+
+    [[nodiscard]] Horo::Application::ProjectMigrationPlan ProductionCompressionPlan() {
+        auto definition = ProductionCompressionDefinition();
+        return {.source = definition.from, .target = definition.to, .definitions = {std::move(definition)}};
+    }
+
     class TemporaryProject {
     public:
         TemporaryProject() {
             const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            root = std::filesystem::current_path() / ".horo-test-artifacts" /
-                   std::format("horo-migration-test-{}-{}", stamp, sequence.fetch_add(1));
+            root = std::filesystem::temp_directory_path() / ("horo-migration-test-" + std::to_string(stamp) + "-" +
+                                                             std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)));
             std::error_code error;
             REQUIRE((std::filesystem::create_directories(root / ".horo/local", error)));
             REQUIRE_FALSE((error));
@@ -199,6 +214,30 @@ namespace project_migration_tests {
 
         std::filesystem::path root;
         inline static std::atomic<std::uint64_t> sequence{};
+    };
+
+    class ProductionMigrationFixture {
+    public:
+        ProductionMigrationFixture() : plan(ProductionCompressionPlan()), jobs({.workerCount = 2, .maxQueuedJobs = 16}) {}
+
+        ProductionMigrationFixture(const ProductionMigrationFixture &) = delete;
+        ProductionMigrationFixture &operator=(const ProductionMigrationFixture &) = delete;
+        ProductionMigrationFixture(ProductionMigrationFixture &&) = delete;
+        ProductionMigrationFixture &operator=(ProductionMigrationFixture &&) = delete;
+
+        ~ProductionMigrationFixture() {
+            jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+        }
+
+        [[nodiscard]] Horo::Result<Horo::Application::PreparedProjectMigration> Prepare(const TemporaryProject &project) {
+            return Horo::Application::ProjectMigrationExecutor::Prepare(project.root,
+                                                                        project.root.parent_path() /
+                                                                            (project.root.filename().string() + "-candidate"),
+                                                                        plan, jobs);
+        }
+
+        Horo::Application::ProjectMigrationPlan plan;
+        Horo::JobSystem jobs;
     };
 
     TEST_CASE("Pipeline Requires Terminal Validation", "[unit][application]") {
@@ -323,10 +362,7 @@ namespace project_migration_tests {
     }
 
     TEST_CASE("Built In Catalog Contains Compression Defaults Migration", "[unit][application]") {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        REQUIRE((catalog.HasValue()));
-        REQUIRE((catalog.Value().size() == 1));
-        const auto &definition = catalog.Value().front();
+        const auto definition = ProductionCompressionDefinition();
         REQUIRE((definition.id.value == "core.project_settings.compression_defaults"));
         REQUIRE((Horo::Application::FormatHoroVersion(definition.from.value) == "0.0.1"));
         REQUIRE((Horo::Application::FormatHoroVersion(definition.to.value) == "0.1.0"));
@@ -339,22 +375,13 @@ namespace project_migration_tests {
     }
 
     TEST_CASE("Production Compression Migration Preserves Unknown Json Semantics", "[unit][application]") {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1));
+        ProductionMigrationFixture fixture;
         TemporaryProject project;
         project.Write(
             ".horo/project.json",
             R"({"horoVersion":"0.0.1","persistentContract":"sha256:5ef87e96e24c0a3a5e44f4dee182dbd3bfb5402e08e07aaf3d64d4a3ff24ae6d","projectId":"migration-fixture","name":"Fixture","projectVersion":"0.2.0","createdAt":"2026-07-19T00:00:00Z","settings":{"renderBackend":"opengl","unknown":{"array":[1,true,null],"label":"kept"}},"unknownRoot":{"enabled":true}})");
 
-        Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
-                                                     .target = catalog.Value().front().to,
-                                                     .definitions = {catalog.Value().front()},
-                                                     .targetValidator = {}};
-        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 8});
-        auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(project.root,
-                                                                             project.root.parent_path() /
-                                                                                 (project.root.filename().string() + "-candidate"),
-                                                                             plan, jobs);
+        auto prepared = fixture.Prepare(project);
         REQUIRE((prepared.HasValue()));
         const auto root = prepared.Value().ReadCandidateDocument(".horo/project.json");
         REQUIRE((root.HasValue()));
@@ -364,16 +391,10 @@ namespace project_migration_tests {
         REQUIRE((migrated.find("\"unknownRoot\"") != std::string::npos));
         REQUIRE((migrated.find("\"array\"") != std::string::npos));
         REQUIRE((project.Read(".horo/project.json").find("assetCompression") == std::string::npos));
-        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
     TEST_CASE("Production Compression Migration Accepts Supported Values", "[unit][application]") {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1));
-        Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
-                                                     .target = catalog.Value().front().to,
-                                                     .definitions = {catalog.Value().front()}};
-        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16});
+        ProductionMigrationFixture fixture;
 
         constexpr std::array assetValues{"lz4", "none", "zstd"};
         constexpr std::array textureValues{"bc7", "bc5", "astc", "none"};
@@ -384,10 +405,7 @@ namespace project_migration_tests {
                               std::format(R"({{"projectId":"supported","settings":{{"assetCompression":"{}","textureCompression":"{}"}}}})"
                                           "\n",
                                           asset, texture));
-                auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(project.root,
-                                                                                     project.root.parent_path() /
-                                                                                         (project.root.filename().string() + "-candidate"),
-                                                                                     plan, jobs);
+                auto prepared = fixture.Prepare(project);
                 REQUIRE((prepared.HasValue()));
                 const auto root = prepared.Value().ReadCandidateDocument(".horo/project.json");
                 REQUIRE((root.HasValue()));
@@ -395,16 +413,10 @@ namespace project_migration_tests {
                 REQUIRE((migrated.find(std::string{"\"assetCompression\": \""} + asset + "\"") != std::string::npos));
                 REQUIRE((migrated.find(std::string{"\"textureCompression\": \""} + texture + "\"") != std::string::npos));
             }
-        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
     TEST_CASE("Production Compression Migration Rejects Invalid Values Without Mutation", "[unit][application]") {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1));
-        Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
-                                                     .target = catalog.Value().front().to,
-                                                     .definitions = {catalog.Value().front()}};
-        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16});
+        ProductionMigrationFixture fixture;
         constexpr std::array
             invalidSettings{R"({"projectId":"invalid","settings":{"assetCompression":"","textureCompression":"bc7"}})",
                             R"({"projectId":"invalid","settings":{"assetCompression":17,"textureCompression":"bc7"}})",
@@ -416,61 +428,41 @@ namespace project_migration_tests {
             TemporaryProject project;
             project.Write(".horo/project.json", invalid);
             const std::string authoritative = project.Read(".horo/project.json");
-            auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(project.root,
-                                                                                 project.root.parent_path() /
-                                                                                     (project.root.filename().string() + "-candidate"),
-                                                                                 plan, jobs);
+            auto prepared = fixture.Prepare(project);
             REQUIRE((prepared.HasError()));
             REQUIRE((prepared.ErrorValue().message.find("core.project_settings.compression_defaults") != std::string::npos));
             REQUIRE((prepared.ErrorValue().message.find("validate_compression_postconditions") != std::string::npos));
             REQUIRE((project.Read(".horo/project.json") == authoritative));
         }
-        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
     TEST_CASE("Production Compression Migration Attributes Target Validation Failure", "[unit][application]") {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
         const auto support = Horo::Application::BuildBuiltInProjectMigrationSupportDescriptor();
-        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1 && support.HasValue()));
-        Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
-                                                     .target = catalog.Value().front().to,
-                                                     .definitions = {catalog.Value().front()}};
-        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16});
+        REQUIRE((support.HasValue()));
+        ProductionMigrationFixture fixture;
         TemporaryProject finalProject;
         finalProject.Write(".horo/project.json",
                            R"({"projectId":"target-attribution","settings":{"assetCompression":"lz4","textureCompression":"bc7"}})"
                            "\n");
-        auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(finalProject.root,
-                                                                             finalProject.root.parent_path() /
-                                                                                 (finalProject.root.filename().string() + "-candidate"),
-                                                                             plan, jobs);
+        auto prepared = fixture.Prepare(finalProject);
         REQUIRE((prepared.HasValue()));
         auto candidate = std::move(prepared).Value();
         const auto finalValidation = Horo::Application::ProjectMigrationExecutor::Finalize(candidate, {}, support.Value().targetValidator);
         REQUIRE((finalValidation.HasError()));
         REQUIRE((finalValidation.ErrorValue().message.find("horo.project.target_contract") != std::string::npos));
         REQUIRE((finalValidation.ErrorValue().message.find("validate_0_1_0_target_contract") != std::string::npos));
-        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
     TEST_CASE("Production Compression Verified Dry Run Preserves Authoritative Bytes", "[unit][application]") {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1));
-        Horo::Application::ProjectMigrationPlan
-            plan{.source = catalog.Value().front().from,
-                 .target = catalog.Value().front().to,
-                 .definitions = {catalog.Value().front()},
-                 // Transaction-owned root/history overlay is intentionally absent from this definition-level dry run.
-                 .targetValidator = {}};
+        ProductionMigrationFixture fixture;
         TemporaryProject project;
         project.Write(".horo/project.json", R"({"projectId":"dry-run","settings":{"renderBackend":"opengl"},"unknown":[1,true,null]})"
                                             "\n");
         const std::string before = project.Read(".horo/project.json");
-        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 8});
-        const auto dryRun = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, plan, jobs);
+        // Transaction-owned root/history overlay is intentionally absent from this definition-level dry run.
+        const auto dryRun = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, fixture.plan, fixture.jobs);
         REQUIRE((dryRun.HasValue()));
         REQUIRE((dryRun.Value().changedFiles == std::vector<std::string>{".horo/project.json"}));
         REQUIRE((project.Read(".horo/project.json") == before));
-        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 }  // namespace project_migration_tests
