@@ -145,4 +145,27 @@ namespace Horo::Render::VulkanBackendErrors {
                                                 "Install a qualified driver version or select another adapter.",
                                                 false,
                                                 true};
+    const ErrorCodeDescriptor ResourceRequestInvalid{Domain, ErrorCode{"render.vulkan.resource_request_invalid"}, ErrorSeverity::Error,
+                                                     "A Vulkan resource request or admitted placement is invalid.",
+                                                     "Revalidate the descriptor and reserve its exact reported memory plan."};
+    const ErrorCodeDescriptor ResourceUnsupported{Domain, ErrorCode{"render.vulkan.resource_unsupported"}, ErrorSeverity::Error,
+                                                  "The selected Vulkan device cannot realize this resource policy.",
+                                                  "Use a supported format, dimension, sample count, usage, or host-access policy."};
+    const ErrorCodeDescriptor ResourceCreationFailed{Domain,
+                                                     ErrorCode{"render.vulkan.resource_creation_failed"},
+                                                     ErrorSeverity::Critical,
+                                                     "The Vulkan driver failed to realize an admitted resource.",
+                                                     "Inspect device memory pressure and driver diagnostics.",
+                                                     true,
+                                                     true};
+    const ErrorCodeDescriptor ResourceIdentityInvalid{Domain, ErrorCode{"render.vulkan.resource_identity_invalid"}, ErrorSeverity::Error,
+                                                      "A Vulkan resource references an unknown or retired backend identity.",
+                                                      "Use only ready resource generations owned by this backend."};
+    const ErrorCodeDescriptor MemoryTypeUnavailable{Domain,
+                                                    ErrorCode{"render.vulkan.memory_type_unavailable"},
+                                                    ErrorSeverity::Error,
+                                                    "No Vulkan memory type satisfies the admitted resource policy.",
+                                                    "Select a compatible device or resource access policy.",
+                                                    false,
+                                                    true};
 }  // namespace Horo::Render::VulkanBackendErrors

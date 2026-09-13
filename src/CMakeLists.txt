@@ -950,6 +950,8 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanBackendModule.cpp
             runtime/renderer/modules/vulkan/VulkanNativeIdentity.cpp
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
+            runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
     )

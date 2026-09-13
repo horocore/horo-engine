@@ -174,7 +174,7 @@ namespace Horo::Render {
         class VulkanRenderBackend final : public IRenderBackend {  // NOSONAR(cpp:S1448)
         public:
             VulkanRenderBackend(IVulkanRuntimePort &runtimePort, std::shared_ptr<VulkanRuntimeLease> lease) noexcept
-                : runtimePort_(&runtimePort), lease_(std::move(lease)) {}
+                : runtimePort_(&runtimePort), resourcePort_(dynamic_cast<IVulkanResourcePort *>(&runtimePort)), lease_(std::move(lease)) {}
 
             ~VulkanRenderBackend() override {
                 Shutdown();
@@ -198,57 +198,67 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
-            Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &) const override {
-                return Unsupported<RenderMemoryCostPlan>();
+            Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->QueryBufferMemoryCost(descriptor)
+                                                                   : Unsupported<RenderMemoryCostPlan>();
             }
 
-            Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &) const override {
-                return Unsupported<RenderMemoryCostPlan>();
+            Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->QueryTextureMemoryCost(descriptor)
+                                                                   : Unsupported<RenderMemoryCostPlan>();
             }
 
-            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
+            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> bytes,
                                                const RenderMemoryPlacement &placement) override {
-                static_cast<void>(descriptor);
-                static_cast<void>(initialData);
-                static_cast<void>(placement);
-                return Unsupported<std::uint64_t>();
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateBuffer(descriptor, bytes, placement)
+                                                                   : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
-                return Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index) override {
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateMesh(descriptor, vertex, index)
+                                                                   : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,
-                                                const RenderMemoryPlacement &) override {
-                return Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, std::span<const std::byte> bytes,
+                                                const RenderMemoryPlacement &placement) override {
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateTexture(descriptor, bytes, placement)
+                                                                   : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {
-                return Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture) override {
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateTextureView(descriptor, texture)
+                                                                   : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t) override {
-                return Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color,
+                                                     std::uint64_t depth) override {
+                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateRenderTarget(descriptor, color, depth)
+                                                                   : Unsupported<std::uint64_t>();
             }
 
-            void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
-                IgnoreUnrealizedResource(backendInstance);
+            void DestroyBuffer(std::uint64_t identity) noexcept override {
+                if (resourceBackend_ != nullptr)
+                    resourceBackend_->DestroyBuffer(identity);
             }
 
-            void DestroyMesh(const std::uint64_t backendInstance) noexcept override {
-                IgnoreUnrealizedResource(backendInstance);
+            void DestroyMesh(std::uint64_t identity) noexcept override {
+                if (resourceBackend_ != nullptr)
+                    resourceBackend_->DestroyMesh(identity);
             }
 
-            void DestroyTexture(const std::uint64_t backendInstance) noexcept override {
-                IgnoreUnrealizedResource(backendInstance);
+            void DestroyTexture(std::uint64_t identity) noexcept override {
+                if (resourceBackend_ != nullptr)
+                    resourceBackend_->DestroyTexture(identity);
             }
 
-            void DestroyTextureView(const std::uint64_t backendInstance) noexcept override {
-                IgnoreUnrealizedResource(backendInstance);
+            void DestroyTextureView(std::uint64_t identity) noexcept override {
+                if (resourceBackend_ != nullptr)
+                    resourceBackend_->DestroyTextureView(identity);
             }
 
-            void DestroyRenderTarget(const std::uint64_t backendInstance) noexcept override {
-                IgnoreUnrealizedResource(backendInstance);
+            void DestroyRenderTarget(std::uint64_t identity) noexcept override {
+                if (resourceBackend_ != nullptr)
+                    resourceBackend_->DestroyRenderTarget(identity);
             }
 
             Result<FrameToken> BeginFrame(const FrameDescriptor &) override {
@@ -284,12 +294,8 @@ namespace Horo::Render {
         private:
             void CommitInitialization(const bool presentsToWindow) noexcept {
                 capabilities_.presentsToWindow = presentsToWindow;
+                resourceBackend_ = resourcePort_ != nullptr ? resourcePort_->ResourceBackend() : nullptr;
                 initialized_ = true;
-            }
-
-            static void IgnoreUnrealizedResource(const std::uint64_t backendInstance) noexcept {
-                // Resource realization is introduced by RND-006.3; no Vulkan handle exists yet.
-                static_cast<void>(backendInstance);
             }
 
             [[nodiscard]] Result<void> PrepareInitialization(const RenderBackendConfig &config) {
@@ -435,6 +441,7 @@ namespace Horo::Render {
             }
 
             void Rollback() noexcept {
+                resourceBackend_ = nullptr;
                 if (deviceCreated_) {
                     runtimePort_->DestroyDevice();
                     deviceCreated_ = false;
@@ -454,6 +461,8 @@ namespace Horo::Render {
             }
 
             IVulkanRuntimePort *runtimePort_{nullptr};
+            IVulkanResourcePort *resourcePort_{nullptr};
+            IRenderResourceBackend *resourceBackend_{nullptr};
             std::shared_ptr<VulkanRuntimeLease> lease_;
             RenderBackendCapabilities capabilities_{.backend = RenderBackendId{"vulkan"}};
             bool initialized_{false};

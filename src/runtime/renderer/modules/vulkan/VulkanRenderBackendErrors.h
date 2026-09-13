@@ -27,4 +27,9 @@ namespace Horo::Render::VulkanBackendErrors {
     extern const ErrorCodeDescriptor RequiredFeaturesUnavailable;
     extern const ErrorCodeDescriptor GraphicsQueueUnavailable;
     extern const ErrorCodeDescriptor DriverUnsupported;
+    extern const ErrorCodeDescriptor ResourceRequestInvalid;
+    extern const ErrorCodeDescriptor ResourceUnsupported;
+    extern const ErrorCodeDescriptor ResourceCreationFailed;
+    extern const ErrorCodeDescriptor ResourceIdentityInvalid;
+    extern const ErrorCodeDescriptor MemoryTypeUnavailable;
 }  // namespace Horo::Render::VulkanBackendErrors
