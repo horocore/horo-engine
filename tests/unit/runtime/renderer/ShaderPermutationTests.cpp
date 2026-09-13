@@ -32,7 +32,7 @@ namespace {
         request.featureMask = 1;
         request.passId = RenderPassId{7};
         request.vertexLayoutCompatibility.bytes.front() = 9;
-        auto target = AssetCookTargetId::Parse("linux-x86-64");
+        auto target = AssetCookTargetId::Parse("linux-x64");
         REQUIRE(target.HasValue());
         request.target = std::move(target).Value();
         return request;
