@@ -791,6 +791,7 @@ target_include_directories(HoroRenderApi
 target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
 
 add_library(HoroShaderCompilerToolchain STATIC
+        runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
         runtime/renderer/toolchain/ShaderCompilerToolchainSupport.cpp
 )
