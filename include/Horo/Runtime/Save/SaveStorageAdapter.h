@@ -29,6 +29,7 @@ namespace Horo::Runtime {
         Copy,
         Rename,
         Delete,
+        Count, /**< Sentinel used to keep capability masks and validation in sync. */
     };
 
     /** @brief Immutable backend capability set; absence is reported before operation admission. */
@@ -40,7 +41,8 @@ namespace Horo::Runtime {
 
         /** @brief Creates a set containing every current operation. @return Complete current capability set. */
         [[nodiscard]] static constexpr SaveStorageCapabilities All() noexcept {
-            return {.bits = 0x00ffU};
+            return {.bits =
+                        static_cast<std::uint16_t>((std::uint16_t{1} << static_cast<std::uint8_t>(SaveStorageOperationKind::Count)) - 1U)};
         }
     };
 

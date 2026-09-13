@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -47,6 +48,8 @@ namespace Horo::Runtime {
         public:
             SaveStorageCapabilities capabilities = SaveStorageCapabilities::All();
             std::optional<Error> failure;
+            std::optional<SaveStorageValue> resultOverride;
+            bool throwAllocationFailure{};
 
             [[nodiscard]] SaveStorageCapabilities Capabilities() const noexcept override {
                 return capabilities;
@@ -57,10 +60,14 @@ namespace Horo::Runtime {
                 std::lock_guard lock(mutex_);
                 ++calls_;
                 lastKind_ = request.kind;
+                if (throwAllocationFailure)
+                    throw std::bad_alloc{};
                 if (cancellation.IsCancellationRequested())
                     return Result<SaveStorageValue>::Failure(MakeError(SaveErrors::OperationCancelled));
                 if (failure)
                     return Result<SaveStorageValue>::Failure(*failure);
+                if (resultOverride)
+                    return Result<SaveStorageValue>::Success(*resultOverride);
                 return SuccessfulValue(request);
             }
 
@@ -89,6 +96,8 @@ namespace Horo::Runtime {
                     case SaveStorageOperationKind::Rename:
                     case SaveStorageOperationKind::Delete:
                         return Result<SaveStorageValue>::Success(std::monostate{});
+                    case SaveStorageOperationKind::Count:
+                        break;
                 }
                 return Result<SaveStorageValue>::Failure(MakeError(SaveErrors::StorageResultInvalid));
             }
@@ -119,6 +128,15 @@ namespace Horo::Runtime {
                                      .archive = {std::make_shared<const std::vector<std::byte>>(std::vector<std::byte>{std::byte{1}})}};
             }
             return request;
+        }
+
+        void CheckInvalidProviderResult(SaveStorageAdapter &adapter, const OperationId operationId, SaveStorageRequest request) {
+            auto operation = adapter.Submit(operationId, std::move(request)).Value();
+            const auto terminal = Await(operation);
+            REQUIRE(terminal.terminalError);
+            CHECK(terminal.terminalError->code.Value() == SaveErrors::StorageResultInvalid.code.Value());
+            CHECK(terminal.commit == SaveOperationCommitOutcome::NotCommitted);
+            CHECK_FALSE(operation.Value());
         }
 
         TEST_CASE("Every accepted local slot operation completes exactly once with its typed immutable result",
@@ -195,10 +213,40 @@ namespace Horo::Runtime {
 
             JobSystem jobs;
             SaveStorageAdapter adapter(jobs, std::make_shared<ContradictoryProvider>());
+            CheckInvalidProviderResult(adapter, 1, Request(SaveStorageOperationKind::ReadArchive));
+        }
+
+        TEST_CASE("Provider list results require stable ordering and unique slot identities", "[unit][runtime][save][storage]") {
+            JobSystem jobs;
+            auto provider = std::make_shared<RecordingProvider>();
+            SaveStorageAdapter adapter(jobs, provider);
+
+            for (const auto entries :
+                 {std::vector<SaveSlotCatalogEntry>{Entry(2), Entry(1)}, std::vector<SaveSlotCatalogEntry>{Entry(1), Entry(1)}}) {
+                provider->resultOverride = ImmutableSaveSlotList{std::make_shared<const std::vector<SaveSlotCatalogEntry>>(entries)};
+                CheckInvalidProviderResult(adapter, 1, Request(SaveStorageOperationKind::List));
+            }
+        }
+
+        TEST_CASE("Provider archive results cannot exceed the configured byte bound", "[unit][runtime][save][storage]") {
+            JobSystem jobs;
+            auto provider = std::make_shared<RecordingProvider>();
+            provider->resultOverride =
+                ImmutableSaveArchive{std::make_shared<const std::vector<std::byte>>(std::vector<std::byte>{std::byte{1}, std::byte{2}})};
+            SaveStorageAdapter adapter(jobs, provider, {.maximumArchiveBytes = 1, .maximumListedSlots = 1});
+
+            CheckInvalidProviderResult(adapter, 1, Request(SaveStorageOperationKind::ReadArchive));
+        }
+
+        TEST_CASE("Provider allocation failures become stable storage allocation errors", "[unit][runtime][save][storage]") {
+            JobSystem jobs;
+            auto provider = std::make_shared<RecordingProvider>();
+            provider->throwAllocationFailure = true;
+            SaveStorageAdapter adapter(jobs, provider);
             auto operation = adapter.Submit(1, Request(SaveStorageOperationKind::ReadArchive)).Value();
             const auto terminal = Await(operation);
             REQUIRE(terminal.terminalError);
-            CHECK(terminal.terminalError->code.Value() == SaveErrors::StorageResultInvalid.code.Value());
+            CHECK(terminal.terminalError->code.Value() == SaveErrors::StorageAllocationFailed.code.Value());
             CHECK(terminal.commit == SaveOperationCommitOutcome::NotCommitted);
         }
 
