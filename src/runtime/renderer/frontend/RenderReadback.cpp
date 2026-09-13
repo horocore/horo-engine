@@ -113,6 +113,10 @@ namespace Horo::Render {
     }
 
     class RenderReadbackQueue::Impl final {
+        using RecordContainer = std::vector<ReadbackRecord>;
+        using RecordIterator = RecordContainer::iterator;
+        using ConstRecordIterator = RecordContainer::const_iterator;
+
     public:
         Impl(const RenderResourceOwnerId renderer, const RenderReadbackLimits &limits)
             : renderer_(renderer), limits_(limits), retained_(std::make_shared<RetainedAccounting>()) {
@@ -325,7 +329,7 @@ namespace Horo::Render {
             return Result<void>::Failure(ReadbackError(RenderReadbackErrors::InvalidTransition, std::move(message)));
         }
 
-        [[nodiscard]] auto FindIterator(const RenderReadbackId request) {
+        [[nodiscard]] RecordIterator FindIterator(const RenderReadbackId request) {
             if (!request.IsValid() || request.renderer != renderer_)
                 return records_.end();
             return std::find_if(records_.begin(), records_.end(), [request](const ReadbackRecord &record) {
@@ -333,7 +337,7 @@ namespace Horo::Render {
             });
         }
 
-        [[nodiscard]] auto FindIterator(const RenderReadbackId request) const {
+        [[nodiscard]] ConstRecordIterator FindIterator(const RenderReadbackId request) const {
             if (!request.IsValid() || request.renderer != renderer_)
                 return records_.end();
             return std::find_if(records_.begin(), records_.end(), [request](const ReadbackRecord &record) {
@@ -365,7 +369,7 @@ namespace Horo::Render {
         RenderResourceOwnerId renderer_;
         RenderReadbackLimits limits_;
         std::shared_ptr<RetainedAccounting> retained_;
-        std::vector<ReadbackRecord> records_;
+        RecordContainer records_;
         std::size_t pendingBytes_{0};
         std::uint64_t nextId_{1};
         std::uint64_t failedAdmissionCount_{0};
