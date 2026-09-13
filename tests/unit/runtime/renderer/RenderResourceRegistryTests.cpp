@@ -44,6 +44,14 @@ namespace {
                 .completionDrainBudget = 1};
     }
 
+    [[nodiscard]] RenderResourceIdentity ReservePublishedBuffer(RenderResourceRegistry &registry) {
+        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
+        REQUIRE(buffer.HasValue());
+        const RenderResourceIdentity identity = Identity(buffer.Value());
+        REQUIRE(registry.Publish(RenderResourceClass::Buffer, identity, 1).HasValue());
+        return identity;
+    }
+
     TEST_CASE("Resource registry publishes a pending generation and records completion", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
@@ -354,21 +362,19 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         RenderResourceRegistry registry{owner.Value(), SubmissionLimits(1, 1)};
-        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
-        REQUIRE(buffer.HasValue());
-        REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 1).HasValue());
+        const RenderResourceIdentity buffer = ReservePublishedBuffer(registry);
 
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {}).ErrorValue().code.Value() ==
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {}).ErrorValue().code.Value() ==
                 "render.frontend.resource.completion_invalid");
         REQUIRE(registry.AcknowledgeCompletion({{9}, 1}).ErrorValue().code.Value() == "render.frontend.resource.completion_unknown_queue");
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 2}).HasValue());
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 3}).ErrorValue().code.Value() ==
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{1}, 2}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{1}, 3}).ErrorValue().code.Value() ==
                 "render.frontend.resource.submission_capacity_exceeded");
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{2}, 1}).ErrorValue().code.Value() ==
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{2}, 1}).ErrorValue().code.Value() ==
                 "render.frontend.resource.submission_capacity_exceeded");
         REQUIRE(registry.AcknowledgeCompletion({{1}, 3}).Value() == 1);
         REQUIRE(registry.AcknowledgeCompletion({{1}, 2}).ErrorValue().code.Value() == "render.frontend.resource.completion_regressed");
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 2}).ErrorValue().code.Value() ==
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{1}, 2}).ErrorValue().code.Value() ==
                 "render.frontend.resource.completion_regressed");
     }
 
@@ -376,13 +382,11 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         RenderResourceRegistry registry{owner.Value(), SubmissionLimits(2, 3)};
-        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
-        REQUIRE(buffer.HasValue());
-        REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 1).HasValue());
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 1}).HasValue());
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 2}).HasValue());
-        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 3}).HasValue());
-        REQUIRE(registry.Release(RenderResourceClass::Buffer, Identity(buffer.Value())).HasValue());
+        const RenderResourceIdentity buffer = ReservePublishedBuffer(registry);
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{1}, 1}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{1}, 2}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, buffer, {{1}, 3}).HasValue());
+        REQUIRE(registry.Release(RenderResourceClass::Buffer, buffer).HasValue());
 
         REQUIRE(registry.AcknowledgeCompletion({{1}, 3}).Value() == 1);
         REQUIRE(registry.DrainRetirements() == 0);
