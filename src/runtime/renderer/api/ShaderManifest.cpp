@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/ShaderManifest.h"
 
 #include "Horo/Runtime/Render/ShaderManifestErrors.h"
+#include "ShaderValidationSupport.h"
 
 #include <algorithm>
 #include <limits>
@@ -44,16 +45,8 @@ namespace Horo::Render {
                    IsWithinBound(limits.maximumIdentityBytes, HardMaximumIdentityBytes);
         }
 
-        [[nodiscard]] bool IsIdentityCharacter(const unsigned char value) noexcept {
-            const bool alpha = (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
-            const bool digit = value >= '0' && value <= '9';
-            return alpha || digit || value == '.' || value == '_' || value == '-' || value == '/';
-        }
-
         [[nodiscard]] bool IsValidIdentity(const std::string &value, const std::size_t maximumBytes) noexcept {
-            return !value.empty() && value.size() <= maximumBytes && std::ranges::all_of(value, [](const char character) {
-                return IsIdentityCharacter(static_cast<unsigned char>(character));
-            });
+            return ShaderValidationDetail::IsValidIdentity(value, maximumBytes);
         }
 
         [[nodiscard]] bool IsValidEntryPointName(const std::string &value, const std::size_t maximumBytes) noexcept {

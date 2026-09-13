@@ -6,25 +6,11 @@
 
 namespace Horo::Render::Detail {
     /** @brief Runtime-owned Metal execution contract used to isolate native code and enable headless contract tests. */
-    class IMetalRuntime {
+    class IMetalRuntime : public IRenderResourceBackend {
     public:
-        virtual ~IMetalRuntime() = default;
+        ~IMetalRuntime() override = default;
 
         [[nodiscard]] virtual Result<void> Initialize(const MetalPresentationDescriptor &descriptor) = 0;
-        [[nodiscard]] virtual Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                                                 std::span<const std::byte> initialData) = 0;
-        [[nodiscard]] virtual Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertexBuffer,
-                                                               std::uint64_t indexBuffer) = 0;
-        [[nodiscard]] virtual Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) = 0;
-        [[nodiscard]] virtual Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor,
-                                                                      std::uint64_t texture) = 0;
-        [[nodiscard]] virtual Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor,
-                                                                       std::uint64_t colorAttachment, std::uint64_t depthAttachment) = 0;
-        virtual void DestroyBuffer(std::uint64_t backendInstance) noexcept = 0;
-        virtual void DestroyMesh(std::uint64_t backendInstance) noexcept = 0;
-        virtual void DestroyTexture(std::uint64_t backendInstance) noexcept = 0;
-        virtual void DestroyTextureView(std::uint64_t backendInstance) noexcept = 0;
-        virtual void DestroyRenderTarget(std::uint64_t backendInstance) noexcept = 0;
         [[nodiscard]] virtual Result<void> BeginFrame(FramebufferExtent extent) = 0;
         [[nodiscard]] virtual Result<void> ExecutePrimaryOutput(const PrimaryOutputAttachment &attachment) = 0;
         [[nodiscard]] virtual Result<void> Present() = 0;

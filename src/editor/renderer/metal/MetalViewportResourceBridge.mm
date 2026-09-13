@@ -39,6 +39,15 @@ namespace Horo::Editor {
         });
     }
 
+    Result<void *> MetalViewportResourceBridge::ResolveBuffer(const Render::RenderFrontend &frontend,
+                                                              const Render::RenderBufferHandle buffer) {
+        const auto instance = ResolveMetalInstance<
+            Render::Detail::MetalBufferInstance>(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, buffer));
+        if (instance.HasError())
+            return Result<void *>::Failure(instance.ErrorValue());
+        return Result<void *>::Success((__bridge void *)instance.Value()->buffer);
+    }
+
     Result<MetalViewportTargetBinding> MetalViewportResourceBridge::ResolveRenderTarget(const Render::RenderFrontend &frontend,
                                                                                         const Render::RenderTargetHandle target) {
         const auto instance = ResolveMetalInstance<

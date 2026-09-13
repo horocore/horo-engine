@@ -448,9 +448,12 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderGraphSynchronizationErrors.h
     Horo/Runtime/Render/RenderGraphLifetime.h
     Horo/Runtime/Render/RenderGraphLifetimeErrors.h
+    Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
     Horo/Runtime/Render/RenderSubmission.h
+    Horo/Runtime/Render/ShaderCompilerPipeline.h
+    Horo/Runtime/Render/ShaderCompilerPipelineErrors.h
     Horo/Runtime/Render/ShaderManifest.h
     Horo/Runtime/Render/ShaderManifestErrors.h
     Horo/Runtime/Render/TemporalHistory.h
@@ -464,6 +467,8 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/RenderFrontend.h
+    Horo/Runtime/Render/RenderMemoryBudget.h
+    Horo/Runtime/Render/RenderMemoryBudgetErrors.h
     Horo/Runtime/Render/UiRenderComposition.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS

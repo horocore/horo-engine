@@ -1270,6 +1270,13 @@ add_executable(HoroShaderManifestTests
 )
 target_compile_features(HoroShaderManifestTests PRIVATE cxx_std_20)
 target_link_libraries(HoroShaderManifestTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroShaderCompilerPipelineTests
+        unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
+        unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
+)
+target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderFrontendTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
@@ -1285,6 +1292,13 @@ target_link_libraries(HoroRenderFrontendTests
         HoroEngine::RenderFrontend
         HoroEngine::RenderNull
 )
+add_executable(HoroRenderMemoryBudgetTests
+        support/AllocationProbe.cpp
+        unit/runtime/renderer/RenderMemoryBudgetTests.cpp
+)
+target_compile_features(HoroRenderMemoryBudgetTests PRIVATE cxx_std_20)
+target_include_directories(HoroRenderMemoryBudgetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRenderMemoryBudgetTests PRIVATE HoroEngine::RenderFrontend)
 add_executable(HoroRuntimeLifecycleTests
         unit/runtime/lifecycle/RuntimeLifecycleTests.cpp
 )
@@ -1864,8 +1878,10 @@ set(HORO_CATCH_TEST_TARGETS
         HoroTemporalHistoryTests
         HoroRenderResourceDescriptorTests
         HoroShaderManifestTests
+        HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests
+        HoroRenderMemoryBudgetTests
         HoroEditorViewportResourceTests
         HoroRuntimeLifecycleTests
         HoroRuntimeSaveIdentityTests

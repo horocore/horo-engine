@@ -56,6 +56,7 @@ horo_allow_target_dependencies(TARGET HoroGameplayBuild
 horo_allow_target_dependencies(TARGET HoroGameplayLua DEPENDENCIES HoroGameplayRuntime)
 
 horo_allow_target_dependencies(TARGET HoroRenderApi DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroShaderCompilerToolchain DEPENDENCIES HoroRenderApi HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroRenderBackendRegistry DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderFrontend
     DEPENDENCIES HoroRenderApi HoroRenderBackendRegistry HoroRuntimeUi)
