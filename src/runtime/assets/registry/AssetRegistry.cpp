@@ -146,8 +146,8 @@ namespace Horo::Assets {
         }
 
         [[nodiscard]] Result<void> ValidateSourceType(const ProjectPath &sourcePath, const AssetTypeId &type) {
-            constexpr std::string_view kPrefabAssetType = "core.prefab";
-            if (IsPrefabSourcePath(sourcePath.String()) != (type.Value() == kPrefabAssetType))
+            if (constexpr std::string_view kPrefabAssetType = "core.prefab";
+                IsPrefabSourcePath(sourcePath.String()) != (type.Value() == kPrefabAssetType))
                 return Result<void>::Failure(Failure(AssetErrors::TypeMismatch));
             return Result<void>::Success();
         }
@@ -266,11 +266,12 @@ namespace Horo::Assets {
             Result<AssetRecord> record = ParseRecord(sidecarJson);
             if (record.HasError()) {
                 const std::string_view code = record.ErrorValue().code.Value();
-                const ErrorCodeDescriptor &descriptor = code == AssetErrors::IdentityInvalid.code.Value()
-                                                            ? AssetErrors::RegistryIdentityInvalid
-                                                        : code == AssetErrors::TypeMismatch.code.Value() ? AssetErrors::TypeMismatch
-                                                                                                         : AssetErrors::SidecarMalformed;
-                AddDiagnostic(diagnostics, descriptor, metadataPath, record.ErrorValue().message);
+                const ErrorCodeDescriptor *descriptor = &AssetErrors::SidecarMalformed;
+                if (code == AssetErrors::IdentityInvalid.code.Value())
+                    descriptor = &AssetErrors::RegistryIdentityInvalid;
+                else if (code == AssetErrors::TypeMismatch.code.Value())
+                    descriptor = &AssetErrors::TypeMismatch;
+                AddDiagnostic(diagnostics, *descriptor, metadataPath, record.ErrorValue().message);
                 return std::nullopt;
             }
             return std::move(record).Value();
