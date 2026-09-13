@@ -38,6 +38,20 @@ namespace Horo::Prefab {
             return Gameplay::BehaviorTypeId::Parse("game.tests.prefab_behavior").Value();
         }
 
+        Gameplay::GameAssetTypeId GameAssetType() {
+            return Gameplay::GameAssetTypeId::Parse("game.tests.prefab_asset").Value();
+        }
+
+        Assets::AssetRegistrySnapshot AssetProviders() {
+            Assets::AssetRegistry registry;
+            std::vector<Assets::AssetRecord> records;
+            records.push_back({Asset(2), Assets::AssetTypeId::Parse(GameAssetType().Value()).Value(),
+                               ProjectPath::Parse("assets/prefab/test.asset").Value(),
+                               ProjectPath::Parse("assets/prefab/test.asset.meta").Value()});
+            REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+            return registry.Snapshot();
+        }
+
         RawComponentPayload Component(const std::uint64_t instance, const std::size_t payloadBytes = 0) {
             return {
                 .instance = PrefabComponentInstanceId::Create(instance).Value(),
@@ -55,12 +69,80 @@ namespace Horo::Prefab {
             };
         }
 
+        Gameplay::ComponentDescriptor ComponentDescriptor(const std::uint32_t schemaVersion = 1) {
+            return {.typeId = ComponentType(), .schemaVersion = schemaVersion, .displayName = "Prefab Component", .category = "Tests"};
+        }
+
+        Gameplay::BehaviorDescriptor BehaviorDescriptor(const std::uint32_t schemaVersion = 1) {
+            return {.typeId = BehaviorType(),
+                    .schemaVersion = schemaVersion,
+                    .displayName = "Prefab Behavior",
+                    .category = "Tests",
+                    .fields = {{.name = "speed", .defaultValue = 1.0}}};
+        }
+
+        Gameplay::SerializedGameAsset GameAsset(const std::uint32_t schemaVersion = 1) {
+            return {.typeId = GameAssetType(),
+                    .schemaVersion = schemaVersion,
+                    .encoding = Gameplay::GameAssetPayloadEncoding::Binary,
+                    .payload = {std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}}};
+        }
+
+        Result<Gameplay::SerializedGameAsset> ImportGameAsset(void *, const Gameplay::GameAssetImportInput &, const CancellationToken &) {
+            return Result<Gameplay::SerializedGameAsset>::Success(GameAsset());
+        }
+
+        Result<Gameplay::SerializedGameAsset> SerializeGameAsset(void *, const Gameplay::GameAssetSerializationInput &,
+                                                                 const CancellationToken &) {
+            return Result<Gameplay::SerializedGameAsset>::Success(GameAsset());
+        }
+
+        Result<std::vector<std::byte>> CookGameAsset(void *, const Gameplay::GameAssetCookInput &, const CancellationToken &) {
+            return Result<std::vector<std::byte>>::Success({});
+        }
+
+        Gameplay::GameAssetTypeRegistration GameAssetRegistration(const std::uint32_t schemaVersion = 1) {
+            return {
+                .descriptor = {.typeId = GameAssetType(),
+                               .schemaVersion = schemaVersion,
+                               .sourceExtensions = {"prefabasset"},
+                               .cookTargets = {AssetCookTargetId::Parse("headless-null").Value()},
+                               .editor = {.displayName = "Prefab Asset", .category = "Tests", .iconName = "asset-test"}},
+                .handler = {.importAsset = &ImportGameAsset, .serializeAsset = &SerializeGameAsset, .cookAsset = &CookGameAsset},
+            };
+        }
+
+        Gameplay::ComponentRegistry ComponentProviders(const std::uint32_t schemaVersion = 0) {
+            Gameplay::ComponentRegistry registry;
+            if (schemaVersion != 0)
+                REQUIRE(registry.Register(ComponentDescriptor(schemaVersion)).HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            return registry;
+        }
+
+        Gameplay::GameAssetTypeRegistry GameAssetProviders(const std::uint32_t schemaVersion = 0) {
+            Gameplay::GameAssetTypeRegistry registry{"game.tests"};
+            if (schemaVersion != 0)
+                REQUIRE(registry.Register(GameAssetRegistration(schemaVersion)).HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            return registry;
+        }
+
         PrefabObjectNode Root() {
             return {.localId = {}, .parentLocalId = std::nullopt, .name = "Root"};
         }
 
         PrefabDocumentData Concrete() {
             return {.projectVersion = ProjectVersion(), .assetId = Asset(1), .objects = {Root()}};
+        }
+
+        /** @brief Builds one concrete prefab carrying the shared project-provider payload fixture. */
+        PrefabDocumentData ProviderDocumentData(std::vector<Gameplay::BehaviorComponent> behaviors, const std::size_t componentBytes = 0) {
+            PrefabDocumentData data = Concrete();
+            data.referencedAssets = {Asset(2)};
+            data.objects.front().components = {Component(1, componentBytes)};
+            data.objects.front().behaviors = std::move(behaviors);
+            return data;
         }
 
         PrefabLimitProfile Limits() {
@@ -72,10 +154,7 @@ namespace Horo::Prefab {
         }
 
         TEST_CASE("Prefab document publishes one immutable ordered portable candidate", "[unit][prefab][document]") {
-            auto data = Concrete();
-            data.referencedAssets = {Asset(2)};
-            data.objects.front().components = {Component(1)};
-            data.objects.front().behaviors = {Behavior(2)};
+            auto data = ProviderDocumentData({Behavior(2)});
             data.objects.push_back({.localId = {8}, .parentLocalId = LocalObjectId{}, .name = "Child"});
             data.composition = PrefabComposition{
                 .nestedPlacements = {{.placementLocalId = {12},
@@ -267,6 +346,86 @@ namespace Horo::Prefab {
             auto validUtf8 = Concrete();
             validUtf8.objects.front().name = std::string{"\xF0\x9F\x8C\x8D", 4};
             REQUIRE(CreateDocument(validUtf8).HasValue());
+        }
+
+        TEST_CASE("Prefab provider inspection preserves unavailable component behavior and asset payloads") {
+            auto data = ProviderDocumentData({Behavior(2)}, 3);
+            data.objects.front().components.front().component.payload = {std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}};
+            auto document = CreateDocument(data);
+            REQUIRE(document.HasValue());
+            const PrefabDocumentData originalDocument = document.Value().Data();
+            Gameplay::SerializedGameAsset gameAsset = GameAsset();
+            const Gameplay::SerializedGameAsset originalAsset = gameAsset;
+
+            Gameplay::ComponentRegistry missingComponents = ComponentProviders();
+            Gameplay::GameAssetTypeRegistry missingAssets = GameAssetProviders();
+            const Assets::AssetRegistrySnapshot assetProviders = AssetProviders();
+            const std::array referencedAssets{PrefabReferencedGameAsset{Asset(2), &gameAsset}};
+
+            const auto missing = document.Value().InspectProviders(assetProviders, missingComponents, {}, missingAssets, referencedAssets);
+            REQUIRE(missing.HasValue());
+            REQUIRE(missing.Value().IsDegraded());
+            REQUIRE(missing.Value().components.front().status == PrefabProviderStatus::Missing);
+            REQUIRE(missing.Value().behaviors.front().status == PrefabProviderStatus::Missing);
+            REQUIRE(missing.Value().assets.front().status == PrefabProviderStatus::Missing);
+            REQUIRE(document.Value().Data() == originalDocument);
+            REQUIRE(gameAsset == originalAsset);
+
+            const auto absentAssetPayloads = document.Value().InspectProviders(assetProviders, missingComponents, {}, missingAssets);
+            REQUIRE(absentAssetPayloads.HasValue());
+            REQUIRE(absentAssetPayloads.Value().IsDegraded());
+            REQUIRE(absentAssetPayloads.Value().assets.front().status == PrefabProviderStatus::Missing);
+            REQUIRE(absentAssetPayloads.Value().assets.front().type.has_value());
+
+            Gameplay::ComponentRegistry restoredComponents = ComponentProviders(1);
+            Gameplay::GameAssetTypeRegistry restoredAssets = GameAssetProviders(1);
+            const std::array behaviorDescriptors{BehaviorDescriptor()};
+
+            const auto restored = document.Value().InspectProviders(assetProviders, restoredComponents, behaviorDescriptors, restoredAssets,
+                                                                    referencedAssets);
+            REQUIRE(restored.HasValue());
+            REQUIRE_FALSE(restored.Value().IsDegraded());
+            REQUIRE(restored.Value().components.front().status == PrefabProviderStatus::Current);
+            REQUIRE(restored.Value().behaviors.front().status == PrefabProviderStatus::Current);
+            REQUIRE(restored.Value().assets.front().status == PrefabProviderStatus::Current);
+            REQUIRE(document.Value().Data() == originalDocument);
+            REQUIRE(gameAsset == originalAsset);
+        }
+
+        TEST_CASE("Prefab provider inspection rejects schema skew ambiguous behavior and foreign asset input") {
+            auto data = ProviderDocumentData({Behavior(2), Behavior(3)});
+            auto document = CreateDocument(data);
+            REQUIRE(document.HasValue());
+
+            Gameplay::ComponentDescriptor migratedDescriptor = ComponentDescriptor(2);
+            migratedDescriptor.migrations = {{.fromSchemaVersion = 1, .toSchemaVersion = 2}};
+            Gameplay::ComponentRegistry components;
+            REQUIRE(components.Register(std::move(migratedDescriptor)).HasValue());
+            REQUIRE(components.Freeze().HasValue());
+            Gameplay::GameAssetTypeRegistry assets = GameAssetProviders(2);
+            const std::array behaviorDescriptors{BehaviorDescriptor(2)};
+            Gameplay::SerializedGameAsset gameAsset = GameAsset();
+            const Assets::AssetRegistrySnapshot assetProviders = AssetProviders();
+            const std::array referencedAssets{PrefabReferencedGameAsset{Asset(2), &gameAsset}};
+
+            const auto incompatible =
+                document.Value().InspectProviders(assetProviders, components, behaviorDescriptors, assets, referencedAssets);
+            REQUIRE(incompatible.HasValue());
+            REQUIRE(incompatible.Value().IsDegraded());
+            REQUIRE(incompatible.Value().components.front().status == PrefabProviderStatus::MigrationRequired);
+            REQUIRE(incompatible.Value().behaviors.front().status == PrefabProviderStatus::IncompatibleSchema);
+            REQUIRE(incompatible.Value().behaviors.back().status == PrefabProviderStatus::IncompatibleSchema);
+            REQUIRE(incompatible.Value().assets.front().status == PrefabProviderStatus::IncompatibleSchema);
+
+            const std::array duplicateBehaviors{BehaviorDescriptor(), BehaviorDescriptor()};
+            REQUIRE(document.Value().InspectProviders(assetProviders, components, duplicateBehaviors, assets, referencedAssets).HasError());
+            Gameplay::BehaviorDescriptor invalidBehavior = BehaviorDescriptor();
+            invalidBehavior.schemaVersion = 0;
+            const std::array invalidBehaviors{invalidBehavior};
+            REQUIRE(document.Value().InspectProviders(assetProviders, components, invalidBehaviors, assets, referencedAssets).HasError());
+
+            const std::array foreignAsset{PrefabReferencedGameAsset{Asset(3), &gameAsset}};
+            REQUIRE(document.Value().InspectProviders(assetProviders, components, behaviorDescriptors, assets, foreignAsset).HasError());
         }
     }  // namespace
 }  // namespace Horo::Prefab
