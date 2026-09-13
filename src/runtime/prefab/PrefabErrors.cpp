@@ -87,4 +87,12 @@ namespace Horo::Prefab::PrefabErrors {
     const ErrorCodeDescriptor ResolutionStale =
         Describe("prefab.resolution.stale", "A completed prefab resolution is stale.",
                  "Discard the candidate and resolve again from the current registry and document revisions.");
+
+    const ErrorCodeDescriptor IdentityCollision =
+        Describe("prefab.identity.collision", "A generated prefab scene identity collides with an existing identity.",
+                 "Reject the complete expansion and report the colliding authored or expanded object provenance.");
+
+    const ErrorCodeDescriptor ReferenceRewriteInvalid =
+        Describe("prefab.reference_rewrite.invalid", "A prefab reference cannot be rewritten transactionally.",
+                 "Provide one canonical typed target whose owner and referenced object belong to the complete candidate.");
 }  // namespace Horo::Prefab::PrefabErrors
