@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MetalBackendModule.h"
+#include "MetalDeviceCapabilities.h"
 
 #include <memory>
 
@@ -10,7 +11,8 @@ namespace Horo::Render::Detail {
     public:
         ~IMetalRuntime() override = default;
 
-        [[nodiscard]] virtual Result<void> Initialize(const MetalPresentationDescriptor &descriptor) = 0;
+        [[nodiscard]] virtual Result<MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
+                                                                         const MetalDeviceAdmissionRequest &request) = 0;
         [[nodiscard]] virtual Result<void> BeginFrame(FramebufferExtent extent) = 0;
         [[nodiscard]] virtual Result<void> ExecutePrimaryOutput(const PrimaryOutputAttachment &attachment) = 0;
         [[nodiscard]] virtual Result<void> Present() = 0;

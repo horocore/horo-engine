@@ -7,6 +7,8 @@
 
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
 
+#include <memory>
+
 namespace Horo::Render {
     namespace Detail {
         struct MetalEditorGraphicsAccess;
@@ -21,6 +23,15 @@ namespace Horo::Render {
 
     /** @brief Returns immutable native-free metadata used before creating the host window. */
     [[nodiscard]] const RenderBackendModuleInfo &GetMetalRenderBackendModuleInfo() noexcept;
+
+    /**
+     * @brief Creates a bounded synchronous discovery owner for native Metal adapters.
+     * @return Discovery service or a typed platform initialization failure.
+     *
+     * Discovery performs no surface, command queue, or render-device activation. The
+     * returned owner must be stopped before the host unloads the Metal module.
+     */
+    [[nodiscard]] Result<std::unique_ptr<IRenderAdapterDiscovery>> CreateMetalAdapterDiscovery();
 
     /**
      * @brief Platform surface attachment borrowed by the Metal runtime.
@@ -43,7 +54,7 @@ namespace Horo::Render {
          * @brief Returns the borrowed platform layer as an editor-private opaque pointer.
          * @return Current CAMetalLayer pointer, or nullptr when no surface exists.
          */
-        [[nodiscard]] virtual void *Layer() const noexcept = 0;
+        [[nodiscard]] virtual void *Layer() const noexcept = 0;  // NOSONAR(cpp:S5008) Required opaque platform seam.
 
         /** @brief Releases the host Metal view and layer attachment; repeated calls are safe. */
         virtual void DestroySurface() noexcept = 0;
