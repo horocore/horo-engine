@@ -6,9 +6,9 @@
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
-#include <cstring>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <vector>
 
@@ -44,7 +44,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] bool CanEnqueue(const std::size_t byteCount) const noexcept {
-            if (!acceptingRequests_ || requests_.size() >= limits_.maximumPendingRequests)
+            if (!acceptingRequests_ || PendingRequestCount() >= limits_.maximumPendingRequests)
                 return false;
             if (byteCount == 0)
                 return true;
@@ -98,15 +98,15 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] bool Empty() const noexcept {
-            return requests_.empty();
+            return readIndex_ == requests_.size();
         }
 
         [[nodiscard]] const Request &Front() const noexcept {
-            return requests_.front();
+            return requests_[readIndex_];
         }
 
         [[nodiscard]] std::span<const std::byte> FrontInitialData() const noexcept {
-            const Request &request = requests_.front();
+            const Request &request = requests_[readIndex_];
             return std::span<const std::byte>{stagingStorage_.data(), stagingStorage_.size()}.subspan(request.stagingOffset,
                                                                                                       request.stagingByteCount);
         }
@@ -116,19 +116,20 @@ namespace Horo::Render::Detail {
                 return true;
             }
             return completedRequests > 0 && (completedBytes >= limits_.maximumBytesPerDrain ||
-                                             requests_.front().stagingByteCount > limits_.maximumBytesPerDrain - completedBytes);
+                                             requests_[readIndex_].stagingByteCount > limits_.maximumBytesPerDrain - completedBytes);
         }
 
         Request Pop() {
-            Request request = std::move(requests_.front());
-            requests_.erase(requests_.begin());
+            Request request = std::move(requests_[readIndex_]);
+            ++readIndex_;
             pendingPayloadBytes_ -= request.stagingByteCount;
-            Repack();
             return request;
         }
 
         [[nodiscard]] std::optional<Request> Cancel(const RenderResourceIdentity identity) {
-            const auto found = std::ranges::find(requests_, identity, &Request::identity);
+            const auto found =
+                std::ranges::find(std::ranges::subrange{requests_.begin() + static_cast<std::ptrdiff_t>(readIndex_), requests_.end()},
+                                  identity, &Request::identity);
             if (found == requests_.end())
                 return std::nullopt;
             Request request = std::move(*found);
@@ -149,12 +150,13 @@ namespace Horo::Render::Detail {
             ++completedBatchCount_;
             lastBatchRequestCount_ = static_cast<std::uint32_t>(requestCount);
             lastBatchPayloadBytes_ = payloadBytes;
+            Repack();
         }
 
         [[nodiscard]] RenderResourceUploadSnapshot Snapshot() const noexcept {
             return {.pendingPayloadBytes = pendingPayloadBytes_,
                     .occupiedStagingBytes = occupiedStagingBytes_,
-                    .pendingRequests = static_cast<std::uint32_t>(requests_.size()),
+                    .pendingRequests = static_cast<std::uint32_t>(PendingRequestCount()),
                     .completedBatchCount = completedBatchCount_,
                     .cancelledRequestCount = cancelledRequestCount_,
                     .lastBatchPayloadBytes = lastBatchPayloadBytes_,
@@ -175,14 +177,16 @@ namespace Horo::Render::Detail {
             if (initialData.empty())
                 return;
             stagingStorage_.resize(request.stagingOffset + request.stagingByteCount);
-            std::memcpy(stagingStorage_.data() + request.stagingOffset, initialData.data(), initialData.size());
+            std::ranges::copy(initialData, stagingStorage_.begin() + static_cast<std::ptrdiff_t>(request.stagingOffset));
             pendingPayloadBytes_ += initialData.size();
             occupiedStagingBytes_ = request.stagingOffset + initialData.size();
         }
 
         void Repack() noexcept {
             std::size_t nextOffset = 0;
-            for (Request &request : requests_) {
+            auto pending = requests_.begin() + static_cast<std::ptrdiff_t>(readIndex_);
+            for (auto current = pending; current != requests_.end(); ++current) {
+                Request &request = *current;
                 if (request.stagingByteCount == 0) {
                     request.stagingOffset = 0;
                     continue;
@@ -197,10 +201,17 @@ namespace Horo::Render::Detail {
             }
             occupiedStagingBytes_ = nextOffset;
             stagingStorage_.resize(occupiedStagingBytes_);
+            requests_.erase(requests_.begin(), pending);
+            readIndex_ = 0;
+        }
+
+        [[nodiscard]] std::size_t PendingRequestCount() const noexcept {
+            return requests_.size() - readIndex_;
         }
 
         RenderResourceUploadLimits limits_;
         std::vector<Request> requests_;
+        std::size_t readIndex_{0};
         std::vector<std::byte> stagingStorage_;
         std::size_t pendingPayloadBytes_{0};
         std::size_t occupiedStagingBytes_{0};
