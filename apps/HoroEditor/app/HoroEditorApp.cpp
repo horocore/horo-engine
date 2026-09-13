@@ -48,6 +48,7 @@
 #include "editor/input/EditorScrollSmoother.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/renderer/EditorGuiRenderer.h"
+#include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "runtime/input/sdl/SdlInputBackend.h"
 
@@ -620,6 +621,19 @@ namespace Horo::Editor {
                          .message = std::move(message)};
         }
 
+        /** @brief Initializes and installs the GUI and viewport renderer pair atomically. */
+        template <typename GuiRenderer, typename ViewportRenderer>
+        [[nodiscard]] Result<void> InstallEditorRenderers(EditorRenderComposition &composition, std::unique_ptr<GuiRenderer> guiRenderer,
+                                                          std::unique_ptr<ViewportRenderer> viewportRenderer) {
+            if (const Result<void> initialized = guiRenderer->Initialize(); initialized.HasError())
+                return initialized;
+            if (const Result<void> initialized = viewportRenderer->Initialize(); initialized.HasError())
+                return initialized;
+            composition.guiRenderer = std::move(guiRenderer);
+            composition.viewportRenderer = std::move(viewportRenderer);
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<EditorRenderComposition> CreateEditorRenderComposition(SDL_Window &window, const EditorGuiOptions &options) {
             EditorRenderComposition composition;
             Render::RenderBackendRegistry registry;
@@ -666,7 +680,13 @@ namespace Horo::Editor {
                                                                            .presentMode =
                                                                                options.exitAfterFirstFrame || options.exitAfterFrames > 0
                                                                                    ? Render::PresentMode::Immediate
-                                                                                   : Render::PresentMode::Fifo});
+                                                                                   : Render::PresentMode::Fifo},
+                                               Render::RenderResourceUploadLimits{},
+                                               Render::RenderFrontendMemoryConfig{.budget = {.hardCapBytes = 1024U * 1024U * 1024U,
+                                                                                             .defaultBlockBytes = 16U * 1024U * 1024U,
+                                                                                             .maximumBlockBytes = 128U * 1024U * 1024U},
+                                                                                  .defaultResourceScope =
+                                                                                      RenderMemoryScopes::HostResources});
             if (frontendResult.HasError()) {
                 return Result<EditorRenderComposition>::Failure(frontendResult.ErrorValue());
             }
@@ -675,30 +695,24 @@ namespace Horo::Editor {
             if (options.rendererBackend == "opengl") {
 #if defined(HORO_HAS_RENDER_OPENGL)
                 const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
-                auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context());
-                if (const Result<void> initialized = guiRenderer->Initialize(); initialized.HasError()) {
-                    return Result<EditorRenderComposition>::Failure(initialized.ErrorValue());
-                }
+                auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererOpenGL>(*composition.frontend);
-                if (const Result<void> initialized = viewportRenderer->Initialize(); initialized.HasError()) {
+                if (const Result<void> initialized =
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                    initialized.HasError()) {
                     return Result<EditorRenderComposition>::Failure(initialized.ErrorValue());
                 }
-                composition.guiRenderer = std::move(guiRenderer);
-                composition.viewportRenderer = std::move(viewportRenderer);
 #endif
             } else {
 #if defined(HORO_HAS_RENDER_METAL)
                 auto &graphicsBridge = *composition.metalGraphicsBridge;
-                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge);
-                if (const Result<void> initialized = guiRenderer->Initialize(); initialized.HasError()) {
-                    return Result<EditorRenderComposition>::Failure(initialized.ErrorValue());
-                }
+                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
                 auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
-                if (const Result<void> initialized = viewportRenderer->Initialize(); initialized.HasError()) {
+                if (const Result<void> initialized =
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                    initialized.HasError()) {
                     return Result<EditorRenderComposition>::Failure(initialized.ErrorValue());
                 }
-                composition.guiRenderer = std::move(guiRenderer);
-                composition.viewportRenderer = std::move(viewportRenderer);
 #endif
             }
 

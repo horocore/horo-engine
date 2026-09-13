@@ -71,12 +71,26 @@ namespace Horo::Render {
                 return capabilities_;
             }
 
+            /** @copydoc IRenderBackend::QueryBufferMemoryCost */
+            Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+                return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [&] {
+                    return runtime_->QueryBufferMemoryCost(descriptor);
+                });
+            }
+
+            /** @copydoc IRenderBackend::QueryTextureMemoryCost */
+            Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+                return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [&] {
+                    return runtime_->QueryTextureMemoryCost(descriptor);
+                });
+            }
+
             /** @copydoc IRenderBackend::CreateBuffer */
-            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                               const std::span<const std::byte> initialData) override {
+            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                               const RenderMemoryPlacement &placement) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal buffer creation requires an initialized backend.");
-                return runtime_->CreateBuffer(descriptor, initialData);
+                return runtime_->CreateBuffer(descriptor, initialData, placement);
             }
 
             /** @copydoc IRenderBackend::CreateMesh */
@@ -87,10 +101,11 @@ namespace Horo::Render {
                 return runtime_->CreateMesh(descriptor, vertexBuffer, indexBuffer);
             }
 
-            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) override {
+            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                                const RenderMemoryPlacement &placement) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal texture creation requires an initialized backend.");
-                return runtime_->CreateTexture(descriptor);
+                return runtime_->CreateTexture(descriptor, initialData, placement);
             }
 
             Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
@@ -239,6 +254,12 @@ namespace Horo::Render {
             }
 
         private:
+            template <typename Query> [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const char *message, Query &&query) const {
+                if (!initialized_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));
+                return std::forward<Query>(query)();
+            }
+
             [[nodiscard]] static Result<std::uint64_t> ResourceNotInitialized(std::string message) {
                 return Result<std::uint64_t>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, std::move(message)));
             }

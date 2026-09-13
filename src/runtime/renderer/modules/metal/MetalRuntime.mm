@@ -100,9 +100,17 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
-            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                               const std::span<const std::byte> initialData) override {
-                return resources_.CreateBuffer(descriptor, initialData);
+            Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+                return resources_.QueryBufferMemoryCost(descriptor);
+            }
+
+            Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+                return resources_.QueryTextureMemoryCost(descriptor);
+            }
+
+            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                               const RenderMemoryPlacement &placement) override {
+                return resources_.CreateBuffer(descriptor, initialData, placement);
             }
 
             Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
@@ -110,8 +118,9 @@ namespace Horo::Render::Detail {
                 return resources_.CreateMesh(descriptor, vertexBuffer, indexBuffer);
             }
 
-            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) override {
-                return resources_.CreateTexture(descriptor);
+            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                                const RenderMemoryPlacement &placement) override {
+                return resources_.CreateTexture(descriptor, initialData, placement);
             }
 
             Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
