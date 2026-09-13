@@ -90,7 +90,7 @@ namespace Horo::Render {
         PreparedShaderPermutationModel &operator=(PreparedShaderPermutationModel &&) noexcept = default;
 
     private:
-        PreparedShaderPermutationModel(ShaderManifest manifest, ShaderPermutationModel model, ShaderPermutationLimits limits)
+        PreparedShaderPermutationModel(ShaderManifest manifest, ShaderPermutationModel model, const ShaderPermutationLimits &limits)
             : m_manifest(std::move(manifest)), m_model(std::move(model)), m_limits(limits) {}
 
         ShaderManifest m_manifest;

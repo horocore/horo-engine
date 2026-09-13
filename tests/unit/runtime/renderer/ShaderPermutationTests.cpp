@@ -5,7 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <utility>
 
-namespace {
+namespace {  // NOSONAR(cpp:S1000) File-local permutation fixtures intentionally have internal linkage.
     using namespace Horo;
     using namespace Horo::Render;
     using Tests::RequireError;

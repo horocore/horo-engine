@@ -54,11 +54,13 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] bool IsValidValue(const ShaderSpecializationValue &value) noexcept {
-            if (value.type == ShaderValueType::Bool32)
+            using enum ShaderValueType;
+
+            if (value.type == Bool32)
                 return value.valueBits <= 1;
-            if (value.type == ShaderValueType::Float32)
+            if (value.type == Float32)
                 return std::isfinite(std::bit_cast<float>(value.valueBits));
-            return value.type == ShaderValueType::Int32 || value.type == ShaderValueType::Uint32;
+            return value.type == Int32 || value.type == Uint32;
         }
 
         [[nodiscard]] Result<void> ValidateSpecializationOverrides(const ShaderManifest &manifest, const ShaderPermutationRequest &request,
@@ -95,10 +97,10 @@ namespace Horo::Render {
                 return Failure(ShaderPermutationErrors::InvalidModel);
             if (index > 0 && model.features[index - 1].bitIndex >= feature.bitIndex)
                 return Failure(ShaderPermutationErrors::NonCanonicalInput);
-            const auto duplicateName =
-                std::ranges::find(model.features.begin(), model.features.begin() + static_cast<std::ptrdiff_t>(index), feature.defineName,
-                                  &ShaderPermutationFeature::defineName);
-            if (duplicateName != model.features.begin() + static_cast<std::ptrdiff_t>(index))
+            if (const auto duplicateName =
+                    std::ranges::find(model.features.begin(), model.features.begin() + static_cast<std::ptrdiff_t>(index),
+                                      feature.defineName, &ShaderPermutationFeature::defineName);
+                duplicateName != model.features.begin() + static_cast<std::ptrdiff_t>(index))
                 return Failure(ShaderPermutationErrors::NonCanonicalInput);
             declaredBits |= std::uint64_t{1} << feature.bitIndex;
         }
