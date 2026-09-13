@@ -158,9 +158,9 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<RenderFrontend>> Create(const RenderBackendRegistry &registry,
                                                                             const RenderBackendId &backendId,
                                                                             const RenderBackendConfig &config,
-                                                                             const RenderResourceUploadLimits &uploadLimits = {},
-                                                                             const RenderFrontendMemoryConfig &memoryConfig = {},
-                                                                             const RenderResourceRetirementLimits &retirementLimits = {});
+                                                                            const RenderResourceUploadLimits &uploadLimits = {},
+                                                                            const RenderFrontendMemoryConfig &memoryConfig = {},
+                                                                            const RenderResourceRetirementLimits &retirementLimits = {});
 
         /** @brief Shuts down and releases the owned backend. */
         ~RenderFrontend();
@@ -331,9 +331,9 @@ namespace Horo::Render {
 
     public:
         RenderFrontend(std::unique_ptr<IRenderBackend> backend, RenderResourceOwnerId resourceOwner,
-                        const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
-                        const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
-                        ConstructionKey);
+                       const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                       const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
+                       ConstructionKey);
 
     private:
         [[nodiscard]] bool IsLiveTarget(RenderTargetHandle target, FramebufferExtent extent) const noexcept;
