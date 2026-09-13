@@ -60,6 +60,20 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor CaptureAllocationFailed;
     /** @brief A participant violated the scoped sink, omission, or one-shot capture contract. */
     extern const ErrorCodeDescriptor CaptureAdapterContractInvalid;
+    /** @brief Restore operation, generation, registry, or capacity evidence is invalid or stale. */
+    extern const ErrorCodeDescriptor RestoreContextInvalid;
+    /** @brief Detached restore input is missing, duplicated, unknown, or mismatched with its registry binding. */
+    extern const ErrorCodeDescriptor RestoreParticipantInvalid;
+    /** @brief One required participant or required prepared dependency is absent. */
+    extern const ErrorCodeDescriptor RestoreParticipantIncomplete;
+    /** @brief A restore receipt violated its inactive-candidate or prepared-state contract. */
+    extern const ErrorCodeDescriptor RestoreAdapterContractInvalid;
+    /** @brief Restore bookkeeping or bounded trace storage could not be allocated. */
+    extern const ErrorCodeDescriptor RestoreAllocationFailed;
+    /** @brief A restore transaction method was invoked from an incompatible ownership state. */
+    extern const ErrorCodeDescriptor RestoreTransitionInvalid;
+    /** @brief Session or Scene generation changed before aggregate restore activation. */
+    extern const ErrorCodeDescriptor RestoreActivationStale;
     /** @brief Save header JSON was malformed, noncanonical, or had an invalid exact shape. */
     extern const ErrorCodeDescriptor ArchiveHeaderInvalid;
     /** @brief Save manifest JSON was malformed, noncanonical, duplicated, or out of order. */

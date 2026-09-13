@@ -1383,6 +1383,13 @@ add_executable(HoroRuntimeSaveCaptureSnapshotTests
 )
 target_compile_features(HoroRuntimeSaveCaptureSnapshotTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveCaptureSnapshotTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveRestoreTransactionTests
+        support/AllocationProbe.cpp
+        unit/runtime/save/SaveRestoreTransactionTests.cpp
+)
+target_compile_features(HoroRuntimeSaveRestoreTransactionTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSaveRestoreTransactionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroRuntimeSaveRestoreTransactionTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeUiIdentityTests
         unit/runtime/ui/UiIdentityTests.cpp
 )
@@ -1987,6 +1994,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveNamespaceTests
         HoroRuntimeSaveParticipantRegistryTests
         HoroRuntimeSaveCaptureSnapshotTests
+        HoroRuntimeSaveRestoreTransactionTests
         HoroRuntimeUiIdentityTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiCanvasSpaceTests

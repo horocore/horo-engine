@@ -93,6 +93,32 @@ namespace Horo::Runtime::SaveErrors {
         CaptureAdapterContractInvalid{kDomain, ErrorCode{"save.capture.adapter_contract_invalid"}, kError,
                                       "A runtime save participant violated its scoped capture contract.",
                                       "Fix the adapter to honor its exact context, sink failures, and omission disposition."};
+    const ErrorCodeDescriptor RestoreContextInvalid{kDomain, ErrorCode{"save.restore.context_invalid"}, kError,
+                                                    "Staged restore operation or generation evidence is invalid.",
+                                                    "Restart restore with the current load operation, registry, session, and Scene."};
+    const ErrorCodeDescriptor RestoreParticipantInvalid{kDomain, ErrorCode{"save.restore.participant_invalid"}, kError,
+                                                        "Detached restore input contradicts its participant registration.",
+                                                        "Supply each registered restore participant once with its exact schema and scope."};
+    const ErrorCodeDescriptor
+        RestoreParticipantIncomplete{kDomain, ErrorCode{"save.restore.participant_incomplete"}, kError,
+                                     "Staged restore is missing required participant state.",
+                                     "Decode every required participant and required restore dependency before staging."};
+    const ErrorCodeDescriptor
+        RestoreAdapterContractInvalid{kDomain, ErrorCode{"save.restore.adapter_contract_invalid"}, kError,
+                                      "A restore participant violated its inactive candidate contract.",
+                                      "Keep fallible work private and expose prepared state before aggregate activation."};
+    const ErrorCodeDescriptor RestoreAllocationFailed{kDomain,
+                                                      ErrorCode{"save.restore.allocation_failed"},
+                                                      kError,
+                                                      "Bounded staged restore bookkeeping could not be allocated.",
+                                                      "Release admitted restore memory and retry at a later lifecycle boundary.",
+                                                      true};
+    const ErrorCodeDescriptor RestoreTransitionInvalid{kDomain, ErrorCode{"save.restore.transition_invalid"}, kError,
+                                                       "A staged restore transaction transition is invalid.",
+                                                       "Prepare once, then activate or roll back the unpublished candidate bundle."};
+    const ErrorCodeDescriptor RestoreActivationStale{kDomain, ErrorCode{"save.restore.activation_stale"}, kError,
+                                                     "The runtime session or Scene changed before restore activation.",
+                                                     "Discard the candidate bundle and restart against the current runtime generation."};
     const ErrorCodeDescriptor ArchiveHeaderInvalid{kDomain, ErrorCode{"save.archive.header_invalid"}, kError,
                                                    "Save archive header metadata is invalid.",
                                                    "Use the exact bounded canonical header schema and required fields."};
