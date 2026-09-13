@@ -1,6 +1,6 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "RenderMemoryTestSupport.h"
 #include "renderer/RenderBackendContractSuite.h"
-#include "renderer/RenderMemoryTestSupport.h"
 #include "runtime/renderer/modules/metal/MetalBackendInternal.h"
 
 #include <array>
