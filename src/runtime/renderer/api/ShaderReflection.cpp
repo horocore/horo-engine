@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/ShaderReflection.h"
 
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
+#include "ShaderValidationSupport.h"
 
 #include <algorithm>
 #include <limits>
@@ -14,6 +15,10 @@
 
 namespace Horo::Render {
     namespace {
+        using ShaderValidationDetail::FindSorted;
+        using ShaderValidationDetail::IsKnown;
+        using ShaderValidationDetail::IsValidIdentity;
+        using ShaderValidationDetail::SameTargetRequirement;
         constexpr std::size_t HardMaximumBindings = 1'024;
         constexpr std::size_t HardMaximumParameters = 4'096;
         constexpr std::size_t HardMaximumStageInterfaceVariables = 2'048;
@@ -40,24 +45,8 @@ namespace Horo::Render {
             return Result<NormalizedShaderReflection>::Failure(MakeError(descriptor));
         }
 
-        template <typename EnumT> [[nodiscard]] constexpr bool IsKnown(const EnumT value, const EnumT last) noexcept {
-            return static_cast<std::underlying_type_t<EnumT>>(value) <= static_cast<std::underlying_type_t<EnumT>>(last);
-        }
-
-        [[nodiscard]] bool IsIdentityCharacter(const unsigned char value) noexcept {
-            const bool alpha = (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
-            const bool digit = value >= '0' && value <= '9';
-            return alpha || digit || value == '.' || value == '_' || value == '-' || value == '/' || value == '+';
-        }
-
-        [[nodiscard]] bool IsValidIdentity(const std::string &value, const std::size_t maximumBytes) noexcept {
-            return !value.empty() && value.size() <= maximumBytes && std::ranges::all_of(value, [](const char character) {
-                return IsIdentityCharacter(static_cast<unsigned char>(character));
-            });
-        }
-
         [[nodiscard]] bool IsValidOptionalIdentity(const std::string &value, const std::size_t maximumBytes) noexcept {
-            return value.empty() || IsValidIdentity(value, maximumBytes);
+            return value.empty() || IsValidIdentity(value, maximumBytes, true);
         }
 
         [[nodiscard]] bool IsValidNativeName(const std::string &value, const std::size_t maximumBytes) noexcept {
@@ -67,13 +56,6 @@ namespace Horo::Render {
                 const bool digit = byte >= '0' && byte <= '9';
                 return alpha || digit || byte == '.' || byte == '_' || byte == '-' || byte == '[' || byte == ']' || byte == '$';
             });
-        }
-
-        [[nodiscard]] constexpr bool SameTarget(const ShaderTargetRequirement &left, const ShaderTargetRequirement &right) noexcept {
-            return left.backend == right.backend && left.payloadFormat == right.payloadFormat &&
-                   left.descriptorVersion == right.descriptorVersion && left.interfaceSchemaVersion == right.interfaceSchemaVersion &&
-                   left.maximumBindings == right.maximumBindings && left.maximumInlineConstantBytes == right.maximumInlineConstantBytes &&
-                   left.supportsCompute == right.supportsCompute && left.supportsStorageResources == right.supportsStorageResources;
         }
 
         [[nodiscard]] constexpr bool SameBinding(const ShaderResourceBinding &declared, const ShaderReflectedBinding &reflected) noexcept {
@@ -88,13 +70,11 @@ namespace Horo::Render {
 
         [[nodiscard]] const ShaderReflectedBinding *FindReflectedBinding(const ShaderReflectionCandidate &candidate,
                                                                          const ShaderBindingId id) noexcept {
-            const auto found = std::ranges::lower_bound(candidate.bindings, id, {}, &ShaderReflectedBinding::id);
-            return found != candidate.bindings.end() && found->id == id ? std::to_address(found) : nullptr;
+            return FindSorted(candidate.bindings, id, &ShaderReflectedBinding::id);
         }
 
         [[nodiscard]] const ShaderResourceBinding *FindDeclaredBinding(const ShaderManifest &manifest, const ShaderBindingId id) noexcept {
-            const auto found = std::ranges::lower_bound(manifest.bindings, id, {}, &ShaderResourceBinding::id);
-            return found != manifest.bindings.end() && found->id == id ? std::to_address(found) : nullptr;
+            return FindSorted(manifest.bindings, id, &ShaderResourceBinding::id);
         }
 
         [[nodiscard]] Result<void> ValidateBindings(const ShaderManifest &manifest, const ShaderReflectionCandidate &candidate,
@@ -366,7 +346,7 @@ namespace Horo::Render {
                                                      const std::vector<std::string> &admittedIncludeIdentities,
                                                      const ShaderReflectionCandidate &candidate, const ShaderReflectionLimits &limits) {
             for (std::size_t index = 0; index < admittedIncludeIdentities.size(); ++index) {
-                if (!IsValidIdentity(admittedIncludeIdentities[index], limits.maximumIdentityBytes) ||
+                if (!IsValidIdentity(admittedIncludeIdentities[index], limits.maximumIdentityBytes, true) ||
                     admittedIncludeIdentities[index] == manifest.sourceIdentity ||
                     (index > 0 && admittedIncludeIdentities[index - 1] >= admittedIncludeIdentities[index]))
                     return Result<void>::Failure(MakeError(ShaderReflectionErrors::SourceMapInvalid));
@@ -375,8 +355,8 @@ namespace Horo::Render {
                 return Result<void>::Failure(MakeError(ShaderReflectionErrors::SourceMapInvalid));
             for (std::size_t index = 0; index < candidate.sourceMap.size(); ++index) {
                 const ShaderSourceMapEntry &entry = candidate.sourceMap[index];
-                if (!IsValidIdentity(entry.generatedSourceIdentity, limits.maximumIdentityBytes) ||
-                    !IsValidIdentity(entry.sourceIdentity, limits.maximumIdentityBytes) || entry.generatedLineBegin == 0 ||
+                if (!IsValidIdentity(entry.generatedSourceIdentity, limits.maximumIdentityBytes, true) ||
+                    !IsValidIdentity(entry.sourceIdentity, limits.maximumIdentityBytes, true) || entry.generatedLineBegin == 0 ||
                     entry.generatedLineEnd < entry.generatedLineBegin || entry.sourceLineBegin == 0 ||
                     !IsValidOptionalIdentity(entry.graphNodeIdentity, limits.maximumIdentityBytes) ||
                     !IsValidOptionalIdentity(entry.graphPinIdentity, limits.maximumIdentityBytes) ||
@@ -409,7 +389,7 @@ namespace Horo::Render {
             return Result<NormalizedShaderReflection>::Failure(WrapError(ShaderReflectionErrors::ManifestMismatch, validated.ErrorValue()));
         if (candidate.backend != target.backend || candidate.interfaceSchemaVersion != target.interfaceSchemaVersion ||
             std::ranges::none_of(manifest.targets, [&](const ShaderTargetRequirement &declared) {
-            return SameTarget(declared, target);
+            return SameTargetRequirement(declared, target);
         }))
             return Failure(ShaderReflectionErrors::ManifestMismatch);
         if (auto validated = ValidateBindings(manifest, candidate, limits); validated.HasError())

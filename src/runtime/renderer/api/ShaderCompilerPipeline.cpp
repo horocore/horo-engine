@@ -14,6 +14,7 @@
 
 namespace Horo::Render {
     namespace {
+        using ShaderValidationDetail::SameTargetRequirement;
         constexpr std::size_t HardMaximumSourceBytes = 64U * 1024U * 1024U;
         constexpr std::size_t HardMaximumDependencies = 1'024;
         constexpr std::size_t HardMaximumDependencyBytes = 16U * 1024U * 1024U;
@@ -87,13 +88,6 @@ namespace Horo::Render {
                 const auto byte = static_cast<unsigned char>(character);
                 return byte >= 0x20U && byte <= 0x7eU;
             });
-        }
-
-        [[nodiscard]] constexpr bool SameRequirement(const ShaderTargetRequirement &left, const ShaderTargetRequirement &right) noexcept {
-            return left.backend == right.backend && left.payloadFormat == right.payloadFormat &&
-                   left.descriptorVersion == right.descriptorVersion && left.interfaceSchemaVersion == right.interfaceSchemaVersion &&
-                   left.maximumBindings == right.maximumBindings && left.maximumInlineConstantBytes == right.maximumInlineConstantBytes &&
-                   left.supportsCompute == right.supportsCompute && left.supportsStorageResources == right.supportsStorageResources;
         }
 
         [[nodiscard]] std::span<const ShaderCompilerTool> RequiredTools(const ShaderTargetBackend backend) noexcept {
@@ -189,7 +183,7 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ValidateTargets(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
             for (std::size_t index = 0; index < request.targets.size(); ++index) {
                 const auto &target = request.targets[index];
-                if (!SameRequirement(target.requirement, request.manifest.targets[index]) ||
+                if (!SameTargetRequirement(target.requirement, request.manifest.targets[index]) ||
                     !IsValidIdentity(target.platformTriple, limits.maximumIdentityBytes))
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
                 if (index > 0 && request.targets[index - 1].requirement.backend >= target.requirement.backend)
