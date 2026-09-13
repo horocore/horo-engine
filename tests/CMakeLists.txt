@@ -1271,6 +1271,12 @@ add_executable(HoroShaderManifestTests
 target_compile_features(HoroShaderManifestTests PRIVATE cxx_std_20)
 target_include_directories(HoroShaderManifestTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderManifestTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroShaderPermutationTests
+        unit/runtime/renderer/ShaderPermutationTests.cpp
+)
+target_compile_features(HoroShaderPermutationTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderPermutationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroShaderPermutationTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroPipelineCacheTests
         unit/runtime/renderer/PipelineCacheTests.cpp
 )
@@ -1899,6 +1905,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRenderResourceDescriptorTests
         HoroPipelineCacheTests
         HoroShaderManifestTests
+        HoroShaderPermutationTests
         HoroShaderReflectionTests
         HoroStandardPbrMaterialTests
         HoroShaderCompilerPipelineTests

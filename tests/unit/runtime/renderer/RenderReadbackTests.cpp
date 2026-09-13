@@ -8,7 +8,7 @@
 #include <memory>
 #include <utility>
 
-namespace {
+namespace RenderReadbackTests {
     using namespace Horo;
     using namespace Horo::Render;
     using namespace std::chrono_literals;
@@ -175,4 +175,4 @@ namespace {
         REQUIRE(result.Bytes().size() == mapped.size());
         CHECK(result.Bytes().back() == std::byte{1});
     }
-}  // namespace
+}  // namespace RenderReadbackTests

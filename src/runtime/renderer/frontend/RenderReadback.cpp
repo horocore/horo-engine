@@ -31,8 +31,8 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] bool IsTerminal(const RenderReadbackState state) noexcept {
-            return state == RenderReadbackState::Failed || state == RenderReadbackState::Cancelled ||
-                   state == RenderReadbackState::TimedOut;
+            using enum RenderReadbackState;
+            return state == Failed || state == Cancelled || state == TimedOut;
         }
 
         struct RetainedAccounting {
@@ -48,6 +48,11 @@ namespace Horo::Render {
             ~RetainedPayload() {
                 accounting->bytes.fetch_sub(bytes.size(), std::memory_order_relaxed);
             }
+
+            RetainedPayload(const RetainedPayload &) = delete;
+            RetainedPayload &operator=(const RetainedPayload &) = delete;
+            RetainedPayload(RetainedPayload &&) = delete;
+            RetainedPayload &operator=(RetainedPayload &&) = delete;
 
             std::shared_ptr<RetainedAccounting> accounting;
             std::vector<std::byte> bytes;
@@ -68,6 +73,15 @@ namespace Horo::Render {
             RenderTimelinePoint completion;
             std::shared_ptr<const RetainedPayload> payload;
         };
+
+        template <typename Records>
+        [[nodiscard]] auto FindReadbackRecord(Records &records, const RenderResourceOwnerId renderer, const RenderReadbackId request) {
+            if (!request.IsValid() || request.renderer != renderer)
+                return records.end();
+            return std::ranges::find_if(records, [request](const ReadbackRecord &record) {
+                return record.id == request;
+            });
+        }
     }  // namespace
 
     /** @copydoc RenderReadbackDescriptor::IsValid */
@@ -118,8 +132,7 @@ namespace Horo::Render {
         using ConstRecordIterator = RecordContainer::const_iterator;
 
     public:
-        Impl(const RenderResourceOwnerId renderer, const RenderReadbackLimits &limits)
-            : renderer_(renderer), limits_(limits), retained_(std::make_shared<RetainedAccounting>()) {
+        Impl(const RenderResourceOwnerId renderer, const RenderReadbackLimits &limits) : renderer_(renderer), limits_(limits) {
             records_.reserve(limits.maximumRequests);
         }
 
@@ -132,9 +145,9 @@ namespace Horo::Render {
                     ReadbackError(RenderReadbackErrors::InvalidDescriptor,
                                   "Readback descriptor exceeds the configured byte or alignment bounds."));
             }
-            const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed);
-            const std::size_t retainedAndPending = retainedBytes + pendingBytes_;
-            if (records_.size() >= limits_.maximumRequests || descriptor.byteCount > limits_.maximumPendingBytes - pendingBytes_ ||
+            if (const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed),
+                retainedAndPending = retainedBytes + pendingBytes_;
+                records_.size() >= limits_.maximumRequests || descriptor.byteCount > limits_.maximumPendingBytes - pendingBytes_ ||
                 retainedAndPending > limits_.maximumRetainedResultBytes ||
                 descriptor.byteCount > limits_.maximumRetainedResultBytes - retainedAndPending) {
                 ++failedAdmissionCount_;
@@ -165,14 +178,14 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] Result<void> Complete(const RenderReadbackId request, const std::span<const std::byte> mappedBytes) {
+            using enum RenderReadbackState;
             ReadbackRecord *record = Find(request);
             if (record == nullptr)
                 return InvalidRequest();
-            if (record->state != RenderReadbackState::Submitted && record->state != RenderReadbackState::Cancelled &&
-                record->state != RenderReadbackState::TimedOut) {
+            if (record->state != Submitted && record->state != Cancelled && record->state != TimedOut) {
                 return InvalidTransition("Only submitted, cancelled, or timed-out backend work may complete.");
             }
-            if (record->state == RenderReadbackState::Cancelled || record->state == RenderReadbackState::TimedOut) {
+            if (record->state == Cancelled || record->state == TimedOut) {
                 ReleasePending(*record);
                 return Result<void>::Success();
             }
@@ -180,8 +193,8 @@ namespace Horo::Render {
                 return Result<void>::Failure(ReadbackError(RenderReadbackErrors::MappingSizeMismatch,
                                                            "Mapped readback bytes do not match the exact admitted request size."));
             }
-            const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed);
-            if (mappedBytes.size() > limits_.maximumRetainedResultBytes - std::min(retainedBytes, limits_.maximumRetainedResultBytes))
+            if (const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed);
+                mappedBytes.size() > limits_.maximumRetainedResultBytes - std::min(retainedBytes, limits_.maximumRetainedResultBytes))
                 return Result<void>::Failure(
                     ReadbackError(RenderReadbackErrors::CapacityExceeded, "Consumer-retained readback results leave no result capacity."));
             try {
@@ -200,14 +213,15 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] Result<void> Fail(const RenderReadbackId request, const Error &error) {
+            using enum RenderReadbackState;
             ReadbackRecord *record = Find(request);
             if (record == nullptr)
                 return InvalidRequest();
-            if (record->state == RenderReadbackState::Cancelled || record->state == RenderReadbackState::TimedOut) {
+            if (record->state == Cancelled || record->state == TimedOut) {
                 ReleasePending(*record);
                 return Result<void>::Success();
             }
-            if (record->state != RenderReadbackState::Pending && record->state != RenderReadbackState::Submitted)
+            if (record->state != Pending && record->state != Submitted)
                 return InvalidTransition("Only pending or submitted readback work may fail.");
             ReleasePending(*record);
             record->failure = error;
@@ -216,30 +230,32 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] Result<void> Cancel(const RenderReadbackId request) {
+            using enum RenderReadbackState;
             ReadbackRecord *record = Find(request);
             if (record == nullptr)
                 return InvalidRequest();
-            if (record->state == RenderReadbackState::Cancelled)
+            if (record->state == Cancelled)
                 return Result<void>::Success();
-            if (record->state != RenderReadbackState::Pending && record->state != RenderReadbackState::Submitted)
+            if (record->state != Pending && record->state != Submitted)
                 return InvalidTransition("Only pending or submitted readback work may be cancelled.");
-            if (record->state == RenderReadbackState::Pending)
+            if (record->state == Pending)
                 ReleasePending(*record);
-            record->state = RenderReadbackState::Cancelled;
+            record->state = Cancelled;
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> Timeout(const RenderReadbackId request) {
+            using enum RenderReadbackState;
             ReadbackRecord *record = Find(request);
             if (record == nullptr)
                 return InvalidRequest();
-            if (record->state == RenderReadbackState::TimedOut)
+            if (record->state == TimedOut)
                 return Result<void>::Success();
-            if (record->state != RenderReadbackState::Pending && record->state != RenderReadbackState::Submitted)
+            if (record->state != Pending && record->state != Submitted)
                 return InvalidTransition("Only pending or submitted readback work may time out.");
-            if (record->state == RenderReadbackState::Pending)
+            if (record->state == Pending)
                 ReleasePending(*record);
-            record->state = RenderReadbackState::TimedOut;
+            record->state = TimedOut;
             return Result<void>::Success();
         }
 
@@ -299,9 +315,12 @@ namespace Horo::Render {
                                             .failedAdmissionCount = failedAdmissionCount_,
                                             .acceptingRequests = accepting_};
             for (const ReadbackRecord &record : records_) {
-                snapshot.submittedCount += record.state == RenderReadbackState::Submitted;
-                snapshot.readyCount += record.state == RenderReadbackState::Ready;
-                snapshot.terminalCount += IsTerminal(record.state);
+                if (record.state == RenderReadbackState::Submitted)
+                    ++snapshot.submittedCount;
+                if (record.state == RenderReadbackState::Ready)
+                    ++snapshot.readyCount;
+                if (IsTerminal(record.state))
+                    ++snapshot.terminalCount;
             }
             return snapshot;
         }
@@ -329,31 +348,22 @@ namespace Horo::Render {
             return Result<void>::Failure(ReadbackError(RenderReadbackErrors::InvalidTransition, std::move(message)));
         }
 
-        template <typename Records>
-        [[nodiscard]] static auto FindRecord(Records &records, const RenderResourceOwnerId renderer, const RenderReadbackId request) {
-            if (!request.IsValid() || request.renderer != renderer)
-                return records.end();
-            return std::find_if(records.begin(), records.end(), [request](const ReadbackRecord &record) {
-                return record.id == request;
-            });
-        }
-
         [[nodiscard]] RecordIterator FindIterator(const RenderReadbackId request) {
-            return FindRecord(records_, renderer_, request);
+            return FindReadbackRecord(records_, renderer_, request);
         }
 
         [[nodiscard]] ConstRecordIterator FindIterator(const RenderReadbackId request) const {
-            return FindRecord(records_, renderer_, request);
+            return FindReadbackRecord(records_, renderer_, request);
         }
 
         [[nodiscard]] ReadbackRecord *Find(const RenderReadbackId request) {
             const auto found = FindIterator(request);
-            return found == records_.end() ? nullptr : &*found;
+            return found == records_.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] const ReadbackRecord *Find(const RenderReadbackId request) const {
             const auto found = FindIterator(request);
-            return found == records_.end() ? nullptr : &*found;
+            return found == records_.end() ? nullptr : std::to_address(found);
         }
 
         void ReleasePending(ReadbackRecord &record) noexcept {
@@ -365,7 +375,7 @@ namespace Horo::Render {
 
         RenderResourceOwnerId renderer_;
         RenderReadbackLimits limits_;
-        std::shared_ptr<RetainedAccounting> retained_;
+        std::shared_ptr<RetainedAccounting> retained_{std::make_shared<RetainedAccounting>()};
         RecordContainer records_;
         std::size_t pendingBytes_{0};
         std::uint64_t nextId_{1};
@@ -380,8 +390,9 @@ namespace Horo::Render {
             return Result<std::unique_ptr<RenderReadbackQueue>>::Failure(
                 ReadbackError(RenderReadbackErrors::InvalidConfiguration, "Readback owner identity or finite limits are invalid."));
         try {
+            // std::make_unique cannot access RenderReadbackQueue's private constructor.
             return Result<std::unique_ptr<RenderReadbackQueue>>::Success(
-                std::unique_ptr<RenderReadbackQueue>(new RenderReadbackQueue(std::make_unique<Impl>(renderer, limits))));
+                std::unique_ptr<RenderReadbackQueue>(new RenderReadbackQueue(std::make_unique<Impl>(renderer, limits))));  // NOSONAR
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<RenderReadbackQueue>>::Failure(
                 ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback queue allocation failed."));
