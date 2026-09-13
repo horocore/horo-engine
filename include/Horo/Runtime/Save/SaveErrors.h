@@ -132,6 +132,14 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotDisplayMetadataInvalid;
     /** @brief A replacement changed logical slot identity or reused the committed generation. */
     extern const ErrorCodeDescriptor SlotGenerationConflict;
+    /** @brief A slot-index schema, revision, state transition, or rebuild argument is invalid. */
+    extern const ErrorCodeDescriptor SlotIndexInvalid;
+    /** @brief A decoded slot index is malformed, unordered, duplicated, or contains invalid metadata. */
+    extern const ErrorCodeDescriptor SlotIndexCorrupt;
+    /** @brief Slot-index entries, observations, or diagnostics exceed a trusted operation bound. */
+    extern const ErrorCodeDescriptor SlotIndexLimitExceeded;
+    /** @brief Private slot-index candidate or diagnostic storage could not be allocated. */
+    extern const ErrorCodeDescriptor SlotIndexAllocationFailed;
     /** @brief An asynchronous save operation descriptor or handle is invalid. */
     extern const ErrorCodeDescriptor OperationInvalid;
     /** @brief Asynchronous save operation state or callback storage could not be allocated. */

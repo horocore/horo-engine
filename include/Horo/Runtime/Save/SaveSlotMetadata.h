@@ -93,6 +93,8 @@ namespace Horo::Runtime {
     struct SaveSlotCatalogEntry final {
         SaveSlotPublicationMetadata publication; /**< Trusted committed publication facts. */
         SaveSlotDisplayMetadata display;         /**< Non-authoritative caller-owned presentation. */
+
+        [[nodiscard]] auto operator<=>(const SaveSlotCatalogEntry &) const noexcept = default;
     };
 
     /**

@@ -209,6 +209,21 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor SlotGenerationConflict{kDomain, ErrorCode{"save.slot.generation_conflict"}, kError,
                                                      "A save-slot replacement does not advance the same logical slot.",
                                                      "Keep the slot identity and allocate a new publication generation."};
+    const ErrorCodeDescriptor SlotIndexInvalid{kDomain, ErrorCode{"save.slot_index.invalid"}, kError,
+                                               "The save-slot index operation or revision is invalid.",
+                                               "Use the current index schema, a non-zero revision, and a fresh rebuild operation."};
+    const ErrorCodeDescriptor SlotIndexCorrupt{kDomain, ErrorCode{"save.slot_index.corrupt"}, kError,
+                                               "The derived save-slot index is corrupt.",
+                                               "Rebuild the index from bounded validation of committed slot artifacts."};
+    const ErrorCodeDescriptor SlotIndexLimitExceeded{kDomain, ErrorCode{"save.slot_index.limit_exceeded"}, kError,
+                                                     "The save-slot index exceeds a trusted rebuild bound.",
+                                                     "Increase an explicit product limit or remove unexpected storage artifacts."};
+    const ErrorCodeDescriptor SlotIndexAllocationFailed{kDomain,
+                                                        ErrorCode{"save.slot_index.allocation_failed"},
+                                                        kError,
+                                                        "Private save-slot index reconstruction storage could not be allocated.",
+                                                        "Keep the previous index and retry after reducing memory pressure.",
+                                                        true};
     const ErrorCodeDescriptor OperationInvalid{kDomain, ErrorCode{"save.operation.invalid"}, kError,
                                                "An asynchronous save operation descriptor or handle is invalid.",
                                                "Use a non-zero application operation identity and finite callback capacity."};
