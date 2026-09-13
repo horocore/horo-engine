@@ -39,18 +39,17 @@ namespace Horo::Physics {
 
         [[nodiscard]] Result<void> ValidateRequestIdentity(const PhysicsTriangleMeshCookRequest &request,
                                                            const CancellationToken &cancellation) {
-            if (!request.asset.IsValid() || !request.subresource.IsValid())
-                return Result<void>::Failure(MakeError(PhysicsErrors::ShapeCookSourceInvalid,
-                                                       SourceMessage(request, "asset and subresource identities must be non-zero.")));
-            if (request.sourceContext.size() > MaximumSourceContextBytes)
-                return Result<void>::Failure(MakeError(PhysicsErrors::ShapeCookSourceInvalid,
-                                                       SourceMessage(request, "diagnostic source context exceeds 256 bytes.")));
-            if (!KnownSettings(request.settings))
-                return Result<void>::Failure(MakeError(PhysicsErrors::ProfileUnsupported,
-                                                       SourceMessage(request, "cook settings or fail-only limit policy are unsupported.")));
             if (cancellation.IsCancellationRequested())
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::ShapeCookCancelled, SourceMessage(request, "cook was cancelled before validation.")));
+                return Failure<void>(PhysicsErrors::ShapeCookCancelled, SourceMessage(request, "cook was cancelled before validation."));
+            if (request.sourceContext.size() > MaximumSourceContextBytes)
+                return Failure<void>(PhysicsErrors::ShapeCookSourceInvalid,
+                                     SourceMessage(request, "diagnostic source context exceeds 256 bytes."));
+            if (!KnownSettings(request.settings))
+                return Failure<void>(PhysicsErrors::ProfileUnsupported,
+                                     SourceMessage(request, "cook settings or fail-only limit policy are unsupported."));
+            if (!request.asset.IsValid() || !request.subresource.IsValid())
+                return Failure<void>(PhysicsErrors::ShapeCookSourceInvalid,
+                                     SourceMessage(request, "asset and subresource identities must be non-zero."));
             return Result<void>::Success();
         }
 
@@ -217,8 +216,7 @@ namespace Horo::Physics {
                     MakeError(PhysicsErrors::ShapeCookSourceInvalid,
                               SourceMessage(request, std::format("triangle {} is degenerate at the cook tolerance.",
                                                                  sourceTriangle.subshape.Value()))));
-            mesh.triangles.emplace_back(
-                LoadedPhysicsTriangle{CanonicalRotation(indices), sourceTriangle.subshape, sourceTriangle.materialSlot});
+            mesh.triangles.emplace_back(CanonicalRotation(indices), sourceTriangle.subshape, sourceTriangle.materialSlot);
             return Result<void>::Success();
         }
 
@@ -291,20 +289,28 @@ namespace Horo::Physics {
             return Result<CanonicalMesh>::Success(std::move(mesh));
         }
 
-        [[nodiscard]] Sha256Digest ComputeCookKey(const PhysicsTriangleMeshCookRequest &request, const Sha256Digest &sourceDigest) {
-            Writer writer;
+        void WriteCookKeyIdentity(Writer &writer, const PhysicsTriangleMeshCookRequest &request, const Sha256Digest &sourceDigest) {
             writer.Bytes(CookKeyMagic);
             writer.U32(1);
             writer.Bytes(request.asset.Bytes());
             writer.U64(request.subresource.Value());
             writer.Bytes(sourceDigest.bytes);
-            writer.U32(request.settings.schemaVersion);
-            writer.U32(request.settings.algorithmVersion);
-            writer.U8(static_cast<std::uint8_t>(request.settings.limitPolicy));
-            writer.U32(request.settings.limits.maxSourceVertices);
-            writer.U32(request.settings.limits.maxTriangles);
-            writer.U32(request.settings.limits.maxMaterialSlots);
-            writer.U64(request.settings.limits.maxPayloadBytes);
+        }
+
+        void WriteCookKeySettings(Writer &writer, const PhysicsTriangleMeshCookSettings &settings) {
+            writer.U32(settings.schemaVersion);
+            writer.U32(settings.algorithmVersion);
+            writer.U8(static_cast<std::uint8_t>(settings.limitPolicy));
+            writer.U32(settings.limits.maxSourceVertices);
+            writer.U32(settings.limits.maxTriangles);
+            writer.U32(settings.limits.maxMaterialSlots);
+            writer.U64(settings.limits.maxPayloadBytes);
+        }
+
+        [[nodiscard]] Sha256Digest ComputeCookKey(const PhysicsTriangleMeshCookRequest &request, const Sha256Digest &sourceDigest) {
+            Writer writer;
+            WriteCookKeyIdentity(writer, request, sourceDigest);
+            WriteCookKeySettings(writer, request.settings);
             writer.Bytes(request.target.digest.bytes);
             return DigestWriter(writer);
         }

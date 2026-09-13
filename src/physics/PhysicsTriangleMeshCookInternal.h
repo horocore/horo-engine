@@ -44,7 +44,7 @@ namespace Horo::Physics::Detail {
                 return left.first < right.first;
             if (left.second != right.second)
                 return left.second < right.second;
-            return left.forward < right.forward;
+            return !left.forward && right.forward;
         });
         for (auto first = edges.begin(); first != edges.end();) {
             const auto last = std::find_if(first, edges.end(), [first](const TriangleMeshEdgeUse &edge) {
