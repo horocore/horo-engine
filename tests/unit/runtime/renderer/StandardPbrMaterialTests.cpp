@@ -141,6 +141,21 @@ TEST_CASE("Standard PBR accepts only explicit quality fallback and required feat
     RequireError(PrepareStandardPbrMaterial(descriptor, Reflection(), missingRequired), StandardPbrMaterialErrors::UnsupportedQuality);
 }
 
+TEST_CASE("Standard PBR admits an explicitly reduced effective feature set", "[runtime][renderer][material]") {
+    auto descriptor = Descriptor();
+    descriptor.features = StandardPbrFeature::AlbedoTexture | StandardPbrFeature::NormalTexture;
+    descriptor.quality.requiredFeatures = StandardPbrFeature::AlbedoTexture;
+    const std::array textures{StandardPbrTextureBinding{StandardPbrTextureRole::Albedo, {Owner(), 3, 2}, {Owner(), 8, 1}}};
+    auto inputs = Inputs(textures);
+    inputs.effectiveFeatures = StandardPbrFeature::AlbedoTexture;
+
+    const auto prepared = PrepareStandardPbrMaterial(descriptor, Reflection(), inputs);
+    REQUIRE(prepared.HasValue());
+    CHECK(prepared.Value().features == StandardPbrFeature::AlbedoTexture);
+    REQUIRE(prepared.Value().textures.size() == 1);
+    CHECK(prepared.Value().textures.front().role == StandardPbrTextureRole::Albedo);
+}
+
 TEST_CASE("Standard PBR texture roles are exact, unique, valid, and canonically owned", "[runtime][renderer][material]") {
     auto descriptor = Descriptor();
     descriptor.features = StandardPbrFeature::AlbedoTexture | StandardPbrFeature::NormalTexture;

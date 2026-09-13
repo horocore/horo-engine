@@ -121,7 +121,8 @@ namespace Horo::Render {
                 seen[index] = true;
                 boundFeatures = boundFeatures | FeatureForRole(binding.role);
             }
-            if (boundFeatures != descriptor.features || inputs.effectiveFeatures != descriptor.features)
+            if (!IsKnownFeatureMask(inputs.effectiveFeatures) || boundFeatures != inputs.effectiveFeatures ||
+                !HasStandardPbrFeatures(descriptor.features, inputs.effectiveFeatures))
                 return Result<void>::Failure(MakeError(StandardPbrMaterialErrors::TextureBindingMismatch));
             return Result<void>::Success();
         }
@@ -143,6 +144,8 @@ namespace Horo::Render {
                 return Result<std::size_t>::Failure(MakeError(StandardPbrMaterialErrors::ReflectionMismatch));
 
             std::array<std::pair<std::size_t, std::size_t>, 8> occupied{};
+            if (values.size() > occupied.size())
+                return Result<std::size_t>::Failure(MakeError(StandardPbrMaterialErrors::ReflectionMismatch));
             std::size_t occupiedCount = 0;
             std::size_t byteCount = 0;
             for (const auto &value : values) {
@@ -172,6 +175,37 @@ namespace Horo::Render {
             const auto bits = std::bit_cast<std::uint32_t>(value);
             for (std::size_t byte = 0; byte < sizeof(bits); ++byte)
                 bytes[offset + byte] = static_cast<std::byte>((bits >> (byte * 8U)) & 0xffU);
+        }
+
+        [[nodiscard]] Result<ResidentStandardPbrMaterial> StageParameterValues(const StandardPbrMaterialDescriptor &descriptor,
+                                                                               const NormalizedShaderReflection &reflection,
+                                                                               const StandardPbrResidentInputs &inputs,
+                                                                               const std::span<const ParameterValue> values,
+                                                                               const std::size_t byteCount) {
+            try {
+                std::vector<std::byte> parameterBytes(byteCount);
+                for (const auto &value : values) {
+                    const auto *parameter = FindParameter(reflection, value.id);
+                    for (std::size_t component = 0; component < value.values.size(); ++component)
+                        StoreFloat(parameterBytes, parameter->byteOffset + component * sizeof(float), value.values[component]);
+                }
+                std::vector<StandardPbrTextureBinding> textures(inputs.textures.begin(), inputs.textures.end());
+                std::ranges::sort(textures, {}, &StandardPbrTextureBinding::role);
+                return Result<ResidentStandardPbrMaterial>::Success({
+                    .id = descriptor.id,
+                    .sourceRevision = descriptor.sourceRevision,
+                    .generation = inputs.generation,
+                    .alphaMode = descriptor.alphaMode,
+                    .selectedProfile = inputs.selectedProfile,
+                    .features = inputs.effectiveFeatures,
+                    .shaderInterface = reflection.interfaceCompatibility,
+                    .pipeline = inputs.pipeline,
+                    .textures = std::move(textures),
+                    .parameterBytes = std::move(parameterBytes),
+                });
+            } catch (const std::bad_alloc &) {
+                return Result<ResidentStandardPbrMaterial>::Failure(MakeError(StandardPbrMaterialErrors::AllocationFailed));
+            }
         }
     }  // namespace
 
@@ -214,29 +248,6 @@ namespace Horo::Render {
         if (byteCount.HasError())
             return Result<ResidentStandardPbrMaterial>::Failure(byteCount.ErrorValue());
 
-        try {
-            std::vector<std::byte> parameterBytes(byteCount.Value());
-            for (const auto &value : values) {
-                const auto *parameter = FindParameter(reflection, value.id);
-                for (std::size_t component = 0; component < value.values.size(); ++component)
-                    StoreFloat(parameterBytes, parameter->byteOffset + component * sizeof(float), value.values[component]);
-            }
-            std::vector<StandardPbrTextureBinding> textures(inputs.textures.begin(), inputs.textures.end());
-            std::ranges::sort(textures, {}, &StandardPbrTextureBinding::role);
-            return Result<ResidentStandardPbrMaterial>::Success({
-                .id = descriptor.id,
-                .sourceRevision = descriptor.sourceRevision,
-                .generation = inputs.generation,
-                .alphaMode = descriptor.alphaMode,
-                .selectedProfile = inputs.selectedProfile,
-                .features = descriptor.features,
-                .shaderInterface = reflection.interfaceCompatibility,
-                .pipeline = inputs.pipeline,
-                .textures = std::move(textures),
-                .parameterBytes = std::move(parameterBytes),
-            });
-        } catch (const std::bad_alloc &) {
-            return Result<ResidentStandardPbrMaterial>::Failure(MakeError(StandardPbrMaterialErrors::AllocationFailed));
-        }
+        return StageParameterValues(descriptor, reflection, inputs, values, byteCount.Value());
     }
 }  // namespace Horo::Render
