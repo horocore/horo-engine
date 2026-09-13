@@ -1271,6 +1271,7 @@ add_executable(HoroShaderPermutationTests
         unit/runtime/renderer/ShaderPermutationTests.cpp
 )
 target_compile_features(HoroShaderPermutationTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderPermutationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderPermutationTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp

@@ -1,6 +1,6 @@
 #include "Horo/Runtime/Render/ShaderPermutation.h"
 #include "Horo/Runtime/Render/ShaderPermutationErrors.h"
-#include "RendererTestSupport.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <utility>
@@ -8,7 +8,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
-    using Testing::RequireError;
+    using Tests::RequireError;
 
     [[nodiscard]] ShaderManifest Manifest() {
         return {.schemaVersion = 1,
