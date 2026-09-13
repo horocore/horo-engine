@@ -172,13 +172,13 @@ namespace Horo::Render {
                 record->state != RenderReadbackState::TimedOut) {
                 return InvalidTransition("Only submitted, cancelled, or timed-out backend work may complete.");
             }
-            if (!record->completion.IsValid() || mappedBytes.size() != record->descriptor.byteCount) {
-                return Result<void>::Failure(ReadbackError(RenderReadbackErrors::MappingSizeMismatch,
-                                                           "Mapped readback bytes do not match the exact admitted request size."));
-            }
             if (record->state == RenderReadbackState::Cancelled || record->state == RenderReadbackState::TimedOut) {
                 ReleasePending(*record);
                 return Result<void>::Success();
+            }
+            if (!record->completion.IsValid() || mappedBytes.size() != record->descriptor.byteCount) {
+                return Result<void>::Failure(ReadbackError(RenderReadbackErrors::MappingSizeMismatch,
+                                                           "Mapped readback bytes do not match the exact admitted request size."));
             }
             const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed);
             if (mappedBytes.size() > limits_.maximumRetainedResultBytes - std::min(retainedBytes, limits_.maximumRetainedResultBytes))
@@ -351,11 +351,7 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] const ReadbackRecord *Find(const RenderReadbackId request) const {
-            if (!request.IsValid() || request.renderer != renderer_)
-                return nullptr;
-            const auto found = std::find_if(records_.begin(), records_.end(), [request](const ReadbackRecord &record) {
-                return record.id == request;
-            });
+            const auto found = FindIterator(request);
             return found == records_.end() ? nullptr : &*found;
         }
 
