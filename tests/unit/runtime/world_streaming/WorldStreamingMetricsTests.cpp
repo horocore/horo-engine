@@ -11,6 +11,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -21,51 +22,51 @@ namespace Horo::WorldStreaming {
         using TestSupport::IdentityFrom;
         using TestSupport::World;
 
-        class CollectingSink final : public Telemetry::ISink {
+        struct CapturedMetric {
+            Telemetry::Record record;
+            Telemetry::InstrumentDescriptor descriptor;
+        };
+
+        class MetricCaptureSink final : public Telemetry::ISink {
         public:
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
                 std::lock_guard lock(mutex_);
-                records_.push_back(record);
-                descriptors_.push_back(*descriptor);
+                captured_.push_back({record, *descriptor});
             }
 
             void Flush() override {}
 
-            [[nodiscard]] std::vector<Telemetry::Record> Records() const {
+            [[nodiscard]] std::vector<CapturedMetric> Snapshot() const {
                 std::lock_guard lock(mutex_);
-                return records_;
-            }
-
-            [[nodiscard]] std::vector<Telemetry::InstrumentDescriptor> Descriptors() const {
-                std::lock_guard lock(mutex_);
-                return descriptors_;
+                return captured_;
             }
 
         private:
             mutable std::mutex mutex_;
-            std::vector<Telemetry::Record> records_;
-            std::vector<Telemetry::InstrumentDescriptor> descriptors_;
+            std::vector<CapturedMetric> captured_;
         };
 
-        class TelemetryGuard final {
+        class MetricsSession final {
         public:
-            explicit TelemetryGuard(const Telemetry::MetricCollectionLevel level, const std::size_t capacity = 1024)
-                : sink(std::make_shared<CollectingSink>()) {
+            explicit MetricsSession(const Telemetry::MetricCollectionLevel level, const std::size_t capacity = 1024) {
                 static_cast<void>(Telemetry::Runtime::Shutdown());
+                sink = std::make_shared<MetricCaptureSink>();
                 REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = capacity, .metricCollectionLevel = level}, sink));
             }
 
-            ~TelemetryGuard() {
+            ~MetricsSession() {
                 static_cast<void>(Telemetry::Runtime::Shutdown());
             }
 
-            std::shared_ptr<CollectingSink> sink;
+            std::shared_ptr<MetricCaptureSink> sink;
         };
 
         [[nodiscard]] StreamingRuntimeOwnerToken Owner(const std::uint64_t owner = 7, const std::uint64_t epoch = 3) {
-            return {.partition = World(),
-                    .epoch = IdentityFrom<PartitionEpoch>(epoch),
-                    .owner = IdentityFrom<StreamingRuntimeOwnerId>(owner)};
+            StreamingRuntimeOwnerToken token;
+            token.partition = World();
+            token.epoch = IdentityFrom<PartitionEpoch>(epoch);
+            token.owner = IdentityFrom<StreamingRuntimeOwnerId>(owner);
+            return token;
         }
 
         [[nodiscard]] StreamingMetricBounds Bounds(const std::uint64_t maximum = 100) {
@@ -119,8 +120,9 @@ namespace Horo::WorldStreaming {
         }
 
         template <typename T> void RequireError(const Result<T> &result, const ErrorCodeDescriptor &expected) {
-            REQUIRE(result.HasError());
-            REQUIRE(result.ErrorValue().code.Value() == expected.code.Value());
+            REQUIRE_FALSE(result.HasValue());
+            const std::string_view actualCode = result.ErrorValue().code.Value();
+            CHECK(actualCode == expected.code.Value());
         }
     }  // namespace
 
@@ -163,7 +165,7 @@ namespace Horo::WorldStreaming {
 
     TEST_CASE("World Streaming metric samples reject malformed stale and over-capacity values before emission",
               "[unit][world_streaming][metrics][failure]") {
-        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Detailed};
+        MetricsSession telemetry{Telemetry::MetricCollectionLevel::Detailed};
         auto binding = OwnedAvailableBinding(Telemetry::MetricCollectionLevel::Detailed);
         const auto revision = IdentityFrom<StreamingMetricBindingRevision>(3);
         const auto accepted = Telemetry::Runtime::GetStatistics().acceptedRecords;
@@ -201,18 +203,16 @@ namespace Horo::WorldStreaming {
 
     TEST_CASE("World Streaming publishes the complete bounded metric family without identity dimensions",
               "[unit][world_streaming][metrics][cardinality]") {
-        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Detailed};
+        MetricsSession telemetry{Telemetry::MetricCollectionLevel::Detailed};
         auto binding = OwnedAvailableBinding(Telemetry::MetricCollectionLevel::Detailed);
         const auto before = Telemetry::Runtime::GetStatistics();
         PublishSampleSequence(binding);
         REQUIRE(Telemetry::Runtime::Flush(std::chrono::seconds{2}));
 
-        const auto records = telemetry.sink->Records();
-        const auto descriptors = telemetry.sink->Descriptors();
-        REQUIRE(descriptors.size() == records.size());
+        const auto captured = telemetry.sink->Snapshot();
         std::set<std::tuple<std::string, std::uint16_t>> series;
-        for (std::size_t index = 0; index < records.size(); ++index) {
-            const auto &descriptor = descriptors[index];
+        for (const CapturedMetric &entry : captured) {
+            const auto &descriptor = entry.descriptor;
             REQUIRE(descriptor.subsystem == "world_streaming");
             REQUIRE(descriptor.dimensions.size() <= 1);
             REQUIRE(descriptor.maxSeries <= StreamingMetricFailureReasonCount);
@@ -220,7 +220,7 @@ namespace Horo::WorldStreaming {
                 const auto &key = descriptor.dimensions.front().key;
                 REQUIRE((key == "stage" || key == "flow" || key == "queue" || key == "state" || key == "reason"));
             }
-            const auto &metric = std::get<Telemetry::MetricRecord>(records[index].payload);
+            const auto &metric = std::get<Telemetry::MetricRecord>(entry.record.payload);
             series.emplace(descriptor.name, metric.dimensionCount == 0 ? 0 : metric.dimensionValueIds[0]);
         }
         REQUIRE(series.size() == 22);
@@ -229,7 +229,7 @@ namespace Horo::WorldStreaming {
     }
 
     TEST_CASE("Core collection omits detailed stages while retaining all aggregate streaming health", "[unit][world_streaming][metrics]") {
-        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Core};
+        MetricsSession telemetry{Telemetry::MetricCollectionLevel::Core};
         auto binding = OwnedAvailableBinding(Telemetry::MetricCollectionLevel::Core);
         const auto before = Telemetry::Runtime::GetStatistics();
         PublishSampleSequence(binding);
@@ -237,19 +237,18 @@ namespace Horo::WorldStreaming {
         const auto after = Telemetry::Runtime::GetStatistics();
         REQUIRE(after.acceptedRecords - before.acceptedRecords + after.droppedRecords - before.droppedRecords == 32 * 17);
         std::set<std::tuple<std::string, std::uint16_t>> series;
-        const auto records = telemetry.sink->Records();
-        const auto descriptors = telemetry.sink->Descriptors();
-        for (std::size_t index = 0; index < records.size(); ++index) {
-            const auto &metric = std::get<Telemetry::MetricRecord>(records[index].payload);
-            series.emplace(descriptors[index].name, metric.dimensionCount == 0 ? 0 : metric.dimensionValueIds[0]);
+        const auto captured = telemetry.sink->Snapshot();
+        for (const CapturedMetric &entry : captured) {
+            const auto &metric = std::get<Telemetry::MetricRecord>(entry.record.payload);
+            series.emplace(entry.descriptor.name, metric.dimensionCount == 0 ? 0 : metric.dimensionValueIds[0]);
         }
         REQUIRE(series.size() == 17);
-        for (const auto &descriptor : telemetry.sink->Descriptors())
-            REQUIRE(descriptor.name != "horo.world_streaming.stage.duration");
+        for (const CapturedMetric &entry : captured)
+            REQUIRE(entry.descriptor.name != "horo.world_streaming.stage.duration");
     }
 
     TEST_CASE("Metric binding replacement is revision fenced and transactional", "[unit][world_streaming][metrics][replacement]") {
-        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Core};
+        MetricsSession telemetry{Telemetry::MetricCollectionLevel::Core};
         auto binding = OwnedAvailableBinding(Telemetry::MetricCollectionLevel::Core);
         const auto current = IdentityFrom<StreamingMetricBindingRevision>(3);
         const auto successor = IdentityFrom<StreamingMetricBindingRevision>(5);
@@ -279,7 +278,7 @@ namespace Horo::WorldStreaming {
 
     TEST_CASE("Metric binding cancellation shutdown move and thread affinity preserve unique ownership",
               "[unit][world_streaming][metrics][lifecycle]") {
-        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Core};
+        MetricsSession telemetry{Telemetry::MetricCollectionLevel::Core};
         auto binding = OwnedAvailableBinding(Telemetry::MetricCollectionLevel::Core);
         bool foreignRejected{};
         std::thread foreign([&binding, &foreignRejected] {
