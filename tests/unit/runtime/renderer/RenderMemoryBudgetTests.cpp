@@ -91,10 +91,17 @@ namespace {
         CHECK(placement.Value().attempt == ResourceOperationId{21});
         CHECK(placement.Value().offsetBytes == 0);
         CHECK(placement.Value().backingBytes == 64);
+        auto secondReservation = budget->Reserve(FirstScope, ResourceOperationId{22}, Suballocated(15, 16, 16));
+        REQUIRE(secondReservation.HasValue());
+        const auto secondPlacement = budget->Placement(secondReservation.Value());
+        REQUIRE(secondPlacement.HasValue());
+        CHECK(secondPlacement.Value().pool == placement.Value().pool);
+        CHECK(secondPlacement.Value().offsetBytes == 32);
         const auto reserved = budget->Snapshot();
         CHECK(reserved.reservedUnallocatedBytes == 64);
-        CHECK(reserved.reservedPayloadBytes == 20);
+        CHECK(reserved.reservedPayloadBytes == 35);
         CHECK(reserved.committedBackingBytes == 0);
+        CHECK(reserved.blockCount == 1);
 
         auto first = budget->Commit(firstReservation.Value());
         REQUIRE(first.HasValue());
@@ -106,8 +113,6 @@ namespace {
         CHECK(first.Value().backingBytes == 64);
         CHECK(first.Value().allocationClass == RenderMemoryAllocationClass::Suballocated);
 
-        auto secondReservation = budget->Reserve(FirstScope, ResourceOperationId{22}, Suballocated(15, 16, 16));
-        REQUIRE(secondReservation.HasValue());
         auto second = budget->Commit(secondReservation.Value());
         REQUIRE(second.HasValue());
         CHECK(second.Value().pool == first.Value().pool);

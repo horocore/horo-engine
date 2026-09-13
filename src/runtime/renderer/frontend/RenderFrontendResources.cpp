@@ -66,6 +66,11 @@ namespace Horo::Render {
             RenderMemoryPlacement placement;
         };
 
+        struct AdmittedResource {
+            Detail::ResourceReservation resource;
+            AdmittedMemory memory;
+        };
+
         [[nodiscard]] Result<AdmittedMemory> AdmitMemory(RenderMemoryBudget &budget, const RenderMemoryScopeId scope,
                                                          const ResourceOperationId operation, const Result<RenderMemoryCostPlan> &queried) {
             if (queried.HasError())
@@ -80,6 +85,38 @@ namespace Horo::Render {
                 return Result<AdmittedMemory>::Failure(error);
             }
             return Result<AdmittedMemory>::Success({reserved.Value(), placement.Value()});
+        }
+
+        template <typename QueryCost>
+        [[nodiscard]] Result<AdmittedResource> ReserveAdmittedResource(Detail::RenderResourceRegistry &registry,
+                                                                       RenderMemoryBudget &memoryBudget, const RenderMemoryScopeId scope,
+                                                                       const Detail::RenderResourceClass resourceClass,
+                                                                       QueryCost &&queryCost) {
+            auto reserved = registry.Reserve(resourceClass);
+            if (reserved.HasError())
+                return Result<AdmittedResource>::Failure(reserved.ErrorValue());
+
+            Result<RenderMemoryCostPlan> cost = Result<RenderMemoryCostPlan>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceBackendException, "Renderer backend memory requirement query threw."));
+            try {
+                cost = std::forward<QueryCost>(queryCost)();
+            } catch (...) {  // NOSONAR(cpp:S2738)
+            }
+            auto admitted = AdmitMemory(memoryBudget, scope, reserved.Value().operation, cost);
+            if (admitted.HasError()) {
+                const Error error = admitted.ErrorValue();
+                static_cast<void>(registry.CancelPending(resourceClass, reserved.Value().identity));
+                static_cast<void>(registry.DrainRetirements());
+                return Result<AdmittedResource>::Failure(error);
+            }
+            return Result<AdmittedResource>::Success({reserved.Value(), admitted.Value()});
+        }
+
+        void CancelAdmittedResource(Detail::RenderResourceRegistry &registry, RenderMemoryBudget &memoryBudget,
+                                    const Detail::RenderResourceClass resourceClass, const AdmittedResource &admitted) noexcept {
+            static_cast<void>(memoryBudget.Cancel(admitted.memory.reservation));
+            static_cast<void>(registry.CancelPending(resourceClass, admitted.resource.identity));
+            static_cast<void>(registry.DrainRetirements());
         }
 
         [[nodiscard]] Result<void> ReleaseOrCancelResource(Detail::RenderResourceRegistry &registry,
@@ -198,34 +235,22 @@ namespace Horo::Render {
                                   "The bounded upload arena has insufficient staging-byte or request capacity."));
         }
 
-        auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::Buffer);
-        if (reserved.HasError()) {
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(reserved.ErrorValue());
-        }
-        const Detail::ResourceReservation reservation = reserved.Value();
-        Result<RenderMemoryCostPlan> cost = Result<RenderMemoryCostPlan>::Failure(
-            MakeFrontendError(FrontendErrors::ResourceBackendException, "Renderer backend memory requirement query threw."));
-        try {
-            cost = backend_->QueryBufferMemoryCost(descriptor);
-        } catch (...) {  // NOSONAR(cpp:S2738)
-        }
-        auto admitted = AdmitMemory(*memoryBudget_, scope, reservation.operation, cost);
+        auto admitted =
+            ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Buffer, [this, &descriptor] {
+            return backend_->QueryBufferMemoryCost(descriptor);
+        });
         if (admitted.HasError()) {
-            const Error error = admitted.ErrorValue();
-            static_cast<void>(resourceRegistry_->CancelPending(Detail::RenderResourceClass::Buffer, reservation.identity));
-            static_cast<void>(resourceRegistry_->DrainRetirements());
-            return Result<ResourceCreation<RenderBufferHandle>>::Failure(error);
+            return Result<ResourceCreation<RenderBufferHandle>>::Failure(admitted.ErrorValue());
         }
+        const Detail::ResourceReservation &reservation = admitted.Value().resource;
         try {
             if (reservation.identity.slot >= buffers_.size())
                 buffers_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
             buffers_[reservation.identity.slot] = {.generation = reservation.identity.generation, .descriptor = descriptor};
-            resourceUploadQueue_->EnqueueBuffer(reservation.identity, descriptor, initialData, admitted.Value().reservation,
-                                                admitted.Value().placement);
+            resourceUploadQueue_->EnqueueBuffer(reservation.identity, descriptor, initialData, admitted.Value().memory.reservation,
+                                                admitted.Value().memory.placement);
         } catch (...) {  // NOSONAR(cpp:S2738)
-            static_cast<void>(memoryBudget_->Cancel(admitted.Value().reservation));
-            static_cast<void>(resourceRegistry_->CancelPending(Detail::RenderResourceClass::Buffer, reservation.identity));
-            static_cast<void>(resourceRegistry_->DrainRetirements());
+            CancelAdmittedResource(*resourceRegistry_, *memoryBudget_, Detail::RenderResourceClass::Buffer, admitted.Value());
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceCapacityExhausted,
                                   "Buffer request metadata or upload storage allocation failed."));
@@ -312,33 +337,22 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
                                   "The bounded upload arena has insufficient staging-byte or request capacity."));
         }
-        auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::Texture);
-        if (reserved.HasError())
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(reserved.ErrorValue());
-        const Detail::ResourceReservation reservation = reserved.Value();
-        Result<RenderMemoryCostPlan> cost = Result<RenderMemoryCostPlan>::Failure(
-            MakeFrontendError(FrontendErrors::ResourceBackendException, "Renderer backend memory requirement query threw."));
-        try {
-            cost = backend_->QueryTextureMemoryCost(descriptor);
-        } catch (...) {  // NOSONAR(cpp:S2738)
-        }
-        auto admitted = AdmitMemory(*memoryBudget_, scope, reservation.operation, cost);
+        auto admitted =
+            ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Texture, [this, &descriptor] {
+            return backend_->QueryTextureMemoryCost(descriptor);
+        });
         if (admitted.HasError()) {
-            const Error error = admitted.ErrorValue();
-            static_cast<void>(resourceRegistry_->CancelPending(Detail::RenderResourceClass::Texture, reservation.identity));
-            static_cast<void>(resourceRegistry_->DrainRetirements());
-            return Result<ResourceCreation<RenderTextureHandle>>::Failure(error);
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(admitted.ErrorValue());
         }
+        const Detail::ResourceReservation &reservation = admitted.Value().resource;
         try {
             if (reservation.identity.slot >= textures_.size())
                 textures_.resize(static_cast<std::size_t>(reservation.identity.slot) + 1);
             textures_[reservation.identity.slot] = {.generation = reservation.identity.generation, .descriptor = descriptor};
-            resourceUploadQueue_->EnqueueTexture(reservation.identity, descriptor, initialData, admitted.Value().reservation,
-                                                 admitted.Value().placement);
+            resourceUploadQueue_->EnqueueTexture(reservation.identity, descriptor, initialData, admitted.Value().memory.reservation,
+                                                 admitted.Value().memory.placement);
         } catch (...) {  // NOSONAR(cpp:S2738)
-            static_cast<void>(memoryBudget_->Cancel(admitted.Value().reservation));
-            static_cast<void>(resourceRegistry_->CancelPending(Detail::RenderResourceClass::Texture, reservation.identity));
-            static_cast<void>(resourceRegistry_->DrainRetirements());
+            CancelAdmittedResource(*resourceRegistry_, *memoryBudget_, Detail::RenderResourceClass::Texture, admitted.Value());
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceCapacityExhausted,
                                   "Texture request metadata or upload storage allocation failed."));
