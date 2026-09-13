@@ -324,7 +324,9 @@ namespace Horo::Physics {
 
         /** @brief Dispatches one validated solver-neutral batch and drains it before the tick may continue. */
         [[nodiscard]] Result<void> RunSolverJobs(JobSystem &jobs, const PhysicsSolverJobBatch &batch) {
-            TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast);
+            // Admit the complete bounded batch before observing failures so a fast
+            // child cannot make later admission depend on worker scheduling.
+            TaskGroup group(jobs, TaskGroupFailurePolicy::CollectAll);
             for (std::uint32_t index = 0; index < batch.jobCount; ++index) {
                 const PhysicsSolverJob job = batch.jobs[index];
                 const auto spawned = group.Spawn({}, [job](const CancellationToken &cancellation) {

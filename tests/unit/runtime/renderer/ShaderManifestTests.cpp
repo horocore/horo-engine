@@ -1,13 +1,16 @@
 #include "Horo/Runtime/Render/ShaderManifest.h"
 #include "Horo/Runtime/Render/ShaderManifestErrors.h"
+#include "support/ShaderTestSupport.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 
-namespace {
+namespace ShaderManifestTests {
     using namespace Horo;
     using namespace Horo::Render;
+    using Tests::RequireError;
 
     [[nodiscard]] ShaderTargetRequirement Target(const ShaderTargetBackend backend, const ShaderPayloadFormat payload) {
         return {.backend = backend,
@@ -23,12 +26,7 @@ namespace {
                 .sourceIdentity = "shaders.standard.surface",
                 .sourceRevision = 7,
                 .entryPoints = {{ShaderStage::Vertex, "VertexMain"}, {ShaderStage::Fragment, "FragmentMain"}},
-                .bindings = {{ShaderBindingId{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1,
-                              ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment},
-                             {ShaderBindingId{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1,
-                              ShaderStageVisibility::Fragment},
-                             {ShaderBindingId{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1,
-                              ShaderStageVisibility::Fragment}},
+                .bindings = Tests::StandardSurfaceBindings(),
                 .parameters = {{ShaderParameterId{1}, ShaderBindingId{1}, ShaderValueType::Float32, 1, 4, 1}},
                 .inlineConstants = {{0, 16, ShaderStageVisibility::Vertex}},
                 .specializationInputs = {{ShaderSpecializationId{1}, ShaderValueType::Bool32, 0, ShaderStageVisibility::Fragment}},
@@ -36,11 +34,28 @@ namespace {
                             Target(ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410)}};
     }
 
-    void RequireError(const Result<void> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
-    }
-}  // namespace
+}  // namespace ShaderManifestTests
+
+using Horo::FormatSha256;
+using Horo::Render::ComputeShaderInterfaceCompatibilityId;
+using Horo::Render::ShaderBindingId;
+using Horo::Render::ShaderManifest;
+using Horo::Render::ShaderManifestLimits;
+using Horo::Render::ShaderParameterId;
+using Horo::Render::ShaderPayloadFormat;
+using Horo::Render::ShaderResourceAccess;
+using Horo::Render::ShaderResourceKind;
+using Horo::Render::ShaderSpecializationId;
+using Horo::Render::ShaderStage;
+using Horo::Render::ShaderStageVisibility;
+using Horo::Render::ShaderTargetBackend;
+using Horo::Render::ShaderValueType;
+using Horo::Render::ValidateShaderManifest;
+using Horo::Tests::RequireError;
+using ShaderManifestTests::Target;
+using ShaderManifestTests::ValidManifest;
+
+namespace ShaderManifestErrors = Horo::Render::ShaderManifestErrors;
 
 TEST_CASE("Shader manifest accepts a canonical backend-neutral interface", "[runtime][renderer][shader-manifest]") {
     const ShaderManifest manifest = ValidManifest();

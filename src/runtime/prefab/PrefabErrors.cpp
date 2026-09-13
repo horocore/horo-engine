@@ -67,4 +67,31 @@ namespace Horo::Prefab::PrefabErrors {
     const ErrorCodeDescriptor CompositionInvalid =
         Describe("prefab.composition.invalid", "Prefab composition data is invalid.",
                  "Use unique bounded placements for concrete prefabs or one exclusive variant parent.");
+
+    const ErrorCodeDescriptor DependencyGraphInvalid =
+        Describe("prefab.dependency_graph.invalid", "A prefab dependency graph candidate is invalid.",
+                 "Provide each prefab source once with a canonical revision matching its document and registry record.");
+
+    const ErrorCodeDescriptor DependencyUnavailable =
+        Describe("prefab.dependency.unavailable", "A prefab dependency is unavailable.",
+                 "Include the registered asset and every referenced prefab source in the pinned graph candidate.");
+
+    const ErrorCodeDescriptor DependencyTypeMismatch =
+        Describe("prefab.dependency.type_mismatch", "A prefab dependency has an incompatible asset type.",
+                 "Register prefab graph sources and composition targets as core.prefab assets.");
+
+    const ErrorCodeDescriptor DependencyRevisionMismatch =
+        Describe("prefab.dependency.revision_mismatch", "A prefab dependency source revision does not match.",
+                 "Reload the dependency graph from one coherent immutable source and Asset Registry snapshot.");
+    const ErrorCodeDescriptor ResolutionStale =
+        Describe("prefab.resolution.stale", "A completed prefab resolution is stale.",
+                 "Discard the candidate and resolve again from the current registry and document revisions.");
+
+    const ErrorCodeDescriptor IdentityCollision =
+        Describe("prefab.identity.collision", "A generated prefab scene identity collides with an existing identity.",
+                 "Reject the complete expansion and report the colliding authored or expanded object provenance.");
+
+    const ErrorCodeDescriptor ReferenceRewriteInvalid =
+        Describe("prefab.reference_rewrite.invalid", "A prefab reference cannot be rewritten transactionally.",
+                 "Provide one canonical typed target whose owner and referenced object belong to the complete candidate.");
 }  // namespace Horo::Prefab::PrefabErrors
