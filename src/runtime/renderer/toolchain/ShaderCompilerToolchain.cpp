@@ -241,24 +241,45 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
-            [[nodiscard]] Result<void> CompileOpenGLRoute(const ShaderEntryPoint &entry, const std::string &stem,
-                                                          const std::filesystem::path &spirvPath) {
+            template <typename ValidatorT>
+            [[nodiscard]] Result<std::vector<std::uint8_t>> ReadValidatedPayload(const std::filesystem::path &path,
+                                                                                 const std::size_t maximumBytes,
+                                                                                 ValidatorT validator) const {
+                auto payload = ReadBoundedFile(path, maximumBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (payload.HasError())
+                    return payload;
+                if (!validator(payload.Value()))
+                    return Result<std::vector<std::uint8_t>>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+                return payload;
+            }
+
+            [[nodiscard]] Result<void> TranslateSpirv(const ShaderEntryPoint &entry, const std::filesystem::path &spirvPath,
+                                                      const std::filesystem::path &nativePath, const bool metal) {
                 const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
                 if (translator == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+                std::vector<std::string> arguments{spirvPath.string(),
+                                                   "--output",
+                                                   nativePath.string(),
+                                                   "--entry",
+                                                   entry.name,
+                                                   "--stage",
+                                                   std::string{StageName(entry.stage)}};
+                if (metal)
+                    arguments.insert(arguments.end(), {"--msl", "--msl-version", "20400"});
+                else
+                    arguments.insert(arguments.end(), {"--version", "410", "--no-es", "--no-420pack-extension"});
+                return Run(*translator, std::move(arguments));
+            }
+
+            [[nodiscard]] Result<void> CompileOpenGLRoute(const ShaderEntryPoint &entry, const std::string &stem,
+                                                          const std::filesystem::path &spirvPath) {
                 const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
-                if (auto translated =
-                        Run(*translator, {spirvPath.string(), "--output", nativePath.string(), "--entry", entry.name, "--stage",
-                                          std::string{StageName(entry.stage)}, "--version", "410", "--no-es", "--no-420pack-extension"});
-                    translated.HasError())
+                if (auto translated = TranslateSpirv(entry, spirvPath, nativePath, false); translated.HasError())
                     return translated;
-                if (auto native = ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes,
-                                                  ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                    native.HasError()) {
+                if (auto native = ReadValidatedPayload(nativePath, invocation_.limits.maximumPayloadBytes, IsGlsl410); native.HasError()) {
                     return Result<void>::Failure(std::move(native).ErrorValue());
                 } else {
-                    if (!IsGlsl410(native.Value()))
-                        return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
                     payloadStages_.emplace_back(entry.stage, entry.name, std::move(native).Value());
                 }
                 return Result<void>::Success();
@@ -266,14 +287,11 @@ namespace Horo::Render {
 
             [[nodiscard]] Result<void> CompileMetalRoute(const ShaderEntryPoint &entry, const std::string &stem,
                                                          const std::filesystem::path &spirvPath) {
-                const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
                 const ShaderCompilerToolInstallation *metal = Lookup(ShaderCompilerTool::AppleMetal);
-                if (translator == nullptr || metal == nullptr)
+                if (metal == nullptr)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
                 const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
-                if (auto translated = Run(*translator, {spirvPath.string(), "--output", nativePath.string(), "--entry", entry.name,
-                                                        "--stage", std::string{StageName(entry.stage)}, "--msl", "--msl-version", "20400"});
-                    translated.HasError())
+                if (auto translated = TranslateSpirv(entry, spirvPath, nativePath, true); translated.HasError())
                     return translated;
                 if (auto native = ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes,
                                                   ShaderCompilerPipelineErrors::ToolOutputInvalid);
@@ -288,13 +306,12 @@ namespace Horo::Render {
                 if (auto linked = Run(*metal, {"-sdk", "macosx", "metallib", airPath.string(), "-o", libraryPath.string()});
                     linked.HasError())
                     return linked;
-                auto library =
-                    ReadBoundedFile(libraryPath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                auto library = ReadValidatedPayload(libraryPath, invocation_.limits.maximumPayloadBytes,
+                                                    [](const std::span<const std::uint8_t> bytes) {
+                    return bytes.size() >= 4U && bytes[0] == 'M' && bytes[1] == 'T' && bytes[2] == 'L' && bytes[3] == 'B';
+                });
                 if (library.HasError())
                     return Result<void>::Failure(std::move(library).ErrorValue());
-                if (library.Value().size() < 4U || library.Value()[0] != 'M' || library.Value()[1] != 'T' || library.Value()[2] != 'L' ||
-                    library.Value()[3] != 'B')
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
                 payloadStages_.emplace_back(entry.stage, entry.name, std::move(library).Value());
                 return Result<void>::Success();
             }
@@ -314,12 +331,9 @@ namespace Horo::Render {
                 arguments.insert(arguments.end() - 3, {"-Zi", "-Qembed_debug"});
                 if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
                     return compiled;
-                auto debug = ReadBoundedFile(debugPath, invocation_.limits.maximumDebugPayloadBytes,
-                                             ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                auto debug = ReadValidatedPayload(debugPath, invocation_.limits.maximumDebugPayloadBytes, IsSpirV);
                 if (debug.HasError())
                     return Result<void>::Failure(std::move(debug).ErrorValue());
-                if (!IsSpirV(debug.Value()))
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
                 debugStages_.emplace_back(entry.stage, entry.name, std::move(debug).Value());
                 return Result<void>::Success();
             }
@@ -335,12 +349,9 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
                 if (auto validated = Run(*validator, {nativePath.string()}); validated.HasError())
                     return validated;
-                auto native =
-                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                auto native = ReadValidatedPayload(nativePath, invocation_.limits.maximumPayloadBytes, IsDxil);
                 if (native.HasError())
                     return Result<void>::Failure(std::move(native).ErrorValue());
-                if (!IsDxil(native.Value()))
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
                 payloadStages_.emplace_back(entry.stage, entry.name, std::move(native).Value());
                 return CompileD3D12Debug(dxc, entry, stem);
             }
