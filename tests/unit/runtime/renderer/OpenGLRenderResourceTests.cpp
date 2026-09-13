@@ -4,6 +4,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <memory>
 
 namespace Horo::Render::OpenGLResourceTests {
@@ -63,7 +64,9 @@ namespace Horo::Render::OpenGLResourceTests {
         int uploads{0};
         std::size_t emptyBufferBytes{0};
         int attachments{0};
+        std::array<std::uint32_t, 2> attachedTextures{};
         bool framebufferComplete{true};
+        bool failBufferAllocation{false};
     };
 
     ResourceCommandState resourceCommandState;
@@ -82,8 +85,10 @@ namespace Horo::Render::OpenGLResourceTests {
 
     void ProbeGenerateBuffers(const std::int32_t count, std::uint32_t *objects) {
         resourceCommandState.generatedBuffers += count;
-        for (std::int32_t index = 0; index < count; ++index)
-            objects[index] = resourceCommandState.nextObject++;
+        for (std::int32_t index = 0; index < count; ++index) {
+            objects[index] = resourceCommandState.failBufferAllocation ? 0 : resourceCommandState.nextObject++;
+            resourceCommandState.failBufferAllocation = false;
+        }
     }
 
     void ProbeDeleteBuffers(const std::int32_t count, const std::uint32_t *) {
@@ -146,8 +151,10 @@ namespace Horo::Render::OpenGLResourceTests {
         // Texture uploads are outside this resource test's scope.
     }
 
-    void ProbeFramebufferTexture(std::uint32_t, std::uint32_t, std::uint32_t, std::int32_t) {
-        ++resourceCommandState.attachments;
+    void ProbeFramebufferTexture(std::uint32_t, std::uint32_t, const std::uint32_t texture, std::int32_t) {
+        const auto slot = static_cast<std::size_t>(resourceCommandState.attachments++);
+        if (slot < resourceCommandState.attachedTextures.size())
+            resourceCommandState.attachedTextures[slot] = texture;
     }
 
     std::uint32_t ProbeCheckFramebuffer(std::uint32_t) {
@@ -193,6 +200,13 @@ namespace Horo::Render::OpenGLResourceTests {
         return std::move(created).Value();
     }
 
+    /** @brief Creates and initializes one resource-capable backend for a test case. */
+    [[nodiscard]] std::unique_ptr<IRenderBackend> CreateInitializedResourceBackend(ResourcePresentationPort &port) {
+        auto backend = CreateResourceBackend(port);
+        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        return backend;
+    }
+
     struct ResourceInstances {
         std::uint64_t vertex{0};
         std::uint64_t index{0};
@@ -203,6 +217,27 @@ namespace Horo::Render::OpenGLResourceTests {
         std::uint64_t depthView{0};
         std::uint64_t target{0};
     };
+
+    /** @brief Builds the canonical triangle descriptor shared by success and rejection checks. */
+    [[nodiscard]] RenderMeshDescriptor TriangleMeshDescriptor() noexcept {
+        return {.vertexBuffer = {{1}, 1, 1},
+                .indexBuffer = {{1}, 2, 1},
+                .vertexStride = sizeof(MeshVertex),
+                .vertexCount = 3,
+                .indexCount = 3,
+                .localBounds = {{-1, -1, -1}, {1, 1, 1}}};
+    }
+
+    /** @brief Builds a full-range texture-view descriptor for the requested test identity. */
+    [[nodiscard]] RenderTextureViewDescriptor TextureViewDescriptor(const std::uint32_t identity, const RenderTextureFormat format,
+                                                                    const RenderTextureAspect aspect) noexcept {
+        return {.texture = {{1}, identity, 1}, .format = format, .aspect = aspect};
+    }
+
+    /** @brief Extracts the native texture object encoded in an opaque OpenGL texture-view identity. */
+    [[nodiscard]] std::uint32_t NativeTexture(const std::uint64_t view) noexcept {
+        return static_cast<std::uint32_t>(view);
+    }
 
     /** @brief Creates one triangle's generic buffer and mesh resources. */
     void CreateMeshResources(IRenderBackend &backend, ResourceInstances &resources) {
@@ -219,13 +254,7 @@ namespace Horo::Render::OpenGLResourceTests {
         auto vertex = backend.CreateBuffer(vertexDescriptor, {}, TestSupport::PlacementFor(vertexPlan, 1, 1));
         auto index = backend.CreateBuffer(indexDescriptor, indices, TestSupport::PlacementFor(indexPlan, 2, 2));
         Check(vertex.HasValue() && index.HasValue());
-        auto mesh = backend.CreateMesh({.vertexBuffer = {{1}, 1, 1},
-                                        .indexBuffer = {{1}, 2, 1},
-                                        .vertexStride = sizeof(MeshVertex),
-                                        .vertexCount = 3,
-                                        .indexCount = 3,
-                                        .localBounds = {{-1, -1, -1}, {1, 1, 1}}},
-                                       vertex.Value(), index.Value());
+        auto mesh = backend.CreateMesh(TriangleMeshDescriptor(), vertex.Value(), index.Value());
         Check(mesh.HasValue());
         resources.vertex = vertex.Value();
         resources.index = index.Value();
@@ -245,15 +274,20 @@ namespace Horo::Render::OpenGLResourceTests {
         auto color = backend.CreateTexture(colorDescriptor, {}, TestSupport::PlacementFor(colorPlan, 3, 3));
         auto depth = backend.CreateTexture(depthDescriptor, {}, TestSupport::PlacementFor(depthPlan, 4, 4));
         Check(color.HasValue() && depth.HasValue());
-        auto colorView = backend.CreateTextureView({.texture = {{1}, 3, 1},
-                                                    .format = RenderTextureFormat::Rgba8Unorm,
-                                                    .aspect = RenderTextureAspect::Color},
-                                                   color.Value());
-        auto depthView = backend.CreateTextureView({.texture = {{1}, 4, 1},
-                                                    .format = RenderTextureFormat::Depth24Stencil8,
-                                                    .aspect = RenderTextureAspect::DepthStencil},
-                                                   depth.Value());
+        auto colorView =
+            backend.CreateTextureView(TextureViewDescriptor(3, RenderTextureFormat::Rgba8Unorm, RenderTextureAspect::Color), color.Value());
+        auto depthView =
+            backend.CreateTextureView(TextureViewDescriptor(4, RenderTextureFormat::Depth24Stencil8, RenderTextureAspect::DepthStencil),
+                                      depth.Value());
         Check(colorView.HasValue() && depthView.HasValue());
+        auto duplicateColorView =
+            backend.CreateTextureView(TextureViewDescriptor(3, RenderTextureFormat::Rgba8Unorm, RenderTextureAspect::Color), color.Value());
+        Check(duplicateColorView.HasValue());
+        Check(duplicateColorView.Value() == colorView.Value());
+        backend.DestroyTextureView(duplicateColorView.Value());
+        Check(NativeTexture(colorView.Value()) == color.Value());
+        Check(NativeTexture(depthView.Value()) == depth.Value());
+        Check(colorView.Value() != depthView.Value());
         const RenderTargetDescriptor descriptor{.colorAttachment = {{1}, 5, 1}, .depthAttachment = {{1}, 6, 1}, .extent = {64, 32}};
         auto target = backend.CreateRenderTarget(descriptor, colorView.Value(), depthView.Value());
         Check(target.HasValue());
@@ -274,11 +308,47 @@ namespace Horo::Render::OpenGLResourceTests {
         Check(resourceCommandState.uploads == 2);
         Check(resourceCommandState.emptyBufferBytes == sizeof(MeshVertex) * 3);
         Check(resourceCommandState.attachments == 2);
+        Check(resourceCommandState.attachedTextures[0] == resources.color);
+        Check(resourceCommandState.attachedTextures[1] == resources.depth);
         resourceCommandState.framebufferComplete = false;
         auto incomplete = backend.CreateRenderTarget(descriptor, resources.colorView, resources.depthView);
         Check(incomplete.HasError());
-        Check(incomplete.ErrorValue().code.Value() == "render.opengl.unsupported_resource_operation");
+        Check(incomplete.ErrorValue().code.Value() == "render.opengl.resource_creation_failed");
         Check(resourceCommandState.deletedFramebuffers == 1);
+    }
+
+    /** @brief Verifies that native dependency identities and compatibility remain backend-owned. */
+    void CheckDependencyValidation(IRenderBackend &backend, const ResourceInstances &resources, const RenderTargetDescriptor &descriptor) {
+        const auto foreignMesh = backend.CreateMesh(TriangleMeshDescriptor(), 900, 901);
+        Check(foreignMesh.HasError());
+        Check(foreignMesh.ErrorValue().code.Value() == "render.opengl.resource_identity_invalid");
+
+        auto mismatchedTarget = descriptor;
+        mismatchedTarget.extent.width += 1;
+        const auto target = backend.CreateRenderTarget(mismatchedTarget, resources.colorView, resources.depthView);
+        Check(target.HasError());
+        Check(target.ErrorValue().code.Value() == "render.opengl.resource_identity_invalid");
+
+        const RenderTextureDescriptor unsupportedTexture{.extent = {64, 64},
+                                                         .format = RenderTextureFormat::Rgba8Unorm,
+                                                         .mipCount = 2,
+                                                         .usage = RenderTextureUsage::Sampled};
+        const auto unsupported = backend.QueryTextureMemoryCost(unsupportedTexture);
+        Check(unsupported.HasError());
+        Check(unsupported.ErrorValue().code.Value() == "render.opengl.unsupported_resource_operation");
+    }
+
+    /** @brief Verifies native allocation failure remains distinct from unsupported policy. */
+    void CheckAllocationFailure(IRenderBackend &backend) {
+        const RenderBufferDescriptor descriptor{.byteSize = 16,
+                                                .usage = RenderBufferUsage::Vertex,
+                                                .access = RenderBufferAccess::DeviceLocal};
+        const auto cost = backend.QueryBufferMemoryCost(descriptor);
+        Check(cost.HasValue());
+        resourceCommandState.failBufferAllocation = true;
+        const auto failed = backend.CreateBuffer(descriptor, {}, TestSupport::PlacementFor(cost.Value(), 20));
+        Check(failed.HasError());
+        Check(failed.ErrorValue().code.Value() == "render.opengl.resource_creation_failed");
     }
 
     /** @brief Destroys resources in dependency order and verifies native release accounting. */
@@ -297,11 +367,31 @@ namespace Horo::Render::OpenGLResourceTests {
         Check(resourceCommandState.deletedBuffers == 2);
     }
 
+    /** @brief Verifies recycled native texture names do not retain stale view metadata. */
+    void CheckRecycledTexture(IRenderBackend &backend, const std::uint64_t recycledTexture) {
+        resourceCommandState.nextObject = static_cast<std::uint32_t>(recycledTexture);
+        const RenderTextureDescriptor colorDescriptor{.extent = {16, 16},
+                                                      .format = RenderTextureFormat::Rgba8Unorm,
+                                                      .usage = RenderTextureUsage::Sampled};
+        const auto colorPlan = backend.QueryTextureMemoryCost(colorDescriptor);
+        Check(colorPlan.HasValue());
+        const auto color = backend.CreateTexture(colorDescriptor, {}, TestSupport::PlacementFor(colorPlan.Value(), 31));
+        Check(color.HasValue());
+        Check(color.Value() == recycledTexture);
+        const auto colorView =
+            backend.CreateTextureView(TextureViewDescriptor(32, RenderTextureFormat::Rgba8Unorm, RenderTextureAspect::Color),
+                                      color.Value());
+        Check(colorView.HasValue());
+        Check(NativeTexture(colorView.Value()) == color.Value());
+        backend.DestroyTextureView(colorView.Value());
+        backend.DestroyTexture(color.Value());
+        Check(resourceCommandState.deletedTextures == 2);
+    }
+
     TEST_CASE("OpenGL Generic Resources Realize And Roll Back Through Typed Contracts", "[unit][runtime][renderer][resource]") {
         resourceCommandState = {};
         ResourcePresentationPort port;
-        std::unique_ptr<IRenderBackend> backend = CreateResourceBackend(port);
-        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedResourceBackend(port);
         Check(backend->Capabilities().supportsBufferResources);
         Check(backend->Capabilities().supportsMeshResources);
         Check(backend->Capabilities().supportsTextureResources);
@@ -316,8 +406,57 @@ namespace Horo::Render::OpenGLResourceTests {
         ResourceInstances resources;
         CreateMeshResources(*backend, resources);
         const RenderTargetDescriptor targetDescriptor = CreateTargetResources(*backend, resources);
+        CheckDependencyValidation(*backend, resources, targetDescriptor);
         CheckCreationAndRollback(*backend, resources, targetDescriptor);
+        CheckAllocationFailure(*backend);
         DestroyResources(*backend, resources);
+        backend->Shutdown();
+    }
+
+    TEST_CASE("OpenGL Texture Views Preserve Parent Lifetime And Distinct Properties", "[unit][runtime][renderer][resource]") {
+        resourceCommandState = {};
+        ResourcePresentationPort port;
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedResourceBackend(port);
+
+        const RenderTextureDescriptor depthDescriptor{.extent = {32, 32},
+                                                      .format = RenderTextureFormat::Depth24Stencil8,
+                                                      .usage = RenderTextureUsage::RenderAttachment};
+        const auto depthPlan = backend->QueryTextureMemoryCost(depthDescriptor);
+        Check(depthPlan.HasValue());
+        const auto depth = backend->CreateTexture(depthDescriptor, {}, TestSupport::PlacementFor(depthPlan.Value(), 30));
+        Check(depth.HasValue());
+        const auto depthView =
+            backend->CreateTextureView(TextureViewDescriptor(30, RenderTextureFormat::Depth24Stencil8, RenderTextureAspect::Depth),
+                                       depth.Value());
+        const auto duplicateDepthView =
+            backend->CreateTextureView(TextureViewDescriptor(30, RenderTextureFormat::Depth24Stencil8, RenderTextureAspect::Depth),
+                                       depth.Value());
+        const auto depthStencilView =
+            backend->CreateTextureView(TextureViewDescriptor(30, RenderTextureFormat::Depth24Stencil8, RenderTextureAspect::DepthStencil),
+                                       depth.Value());
+        Check(depthView.HasValue() && duplicateDepthView.HasValue() && depthStencilView.HasValue());
+        Check(depthView.Value() == duplicateDepthView.Value());
+        Check(depthView.Value() != depthStencilView.Value());
+        Check(NativeTexture(depthView.Value()) == depth.Value());
+        Check(NativeTexture(depthStencilView.Value()) == depth.Value());
+
+        backend->DestroyTexture(std::numeric_limits<std::uint64_t>::max());
+        Check(resourceCommandState.deletedTextures == 0);
+        backend->DestroyTexture(depth.Value());
+        Check(resourceCommandState.deletedTextures == 0);
+        const auto lateView =
+            backend->CreateTextureView(TextureViewDescriptor(31, RenderTextureFormat::Depth24Stencil8, RenderTextureAspect::Depth),
+                                       depth.Value());
+        Check(lateView.HasError());
+        Check(lateView.ErrorValue().code.Value() == "render.opengl.resource_identity_invalid");
+
+        backend->DestroyTextureView(depthView.Value());
+        backend->DestroyTextureView(duplicateDepthView.Value());
+        Check(resourceCommandState.deletedTextures == 0);
+        backend->DestroyTextureView(depthStencilView.Value());
+        Check(resourceCommandState.deletedTextures == 1);
+
+        CheckRecycledTexture(*backend, depth.Value());
         backend->Shutdown();
     }
 

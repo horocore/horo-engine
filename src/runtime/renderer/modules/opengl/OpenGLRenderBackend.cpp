@@ -33,6 +33,17 @@ namespace Horo::Render {
                    placement.offsetBytes == 0;
         }
 
+        [[nodiscard]] RenderMemoryCostPlan MemoryCostPlan(const std::uint64_t compatibility, const std::size_t payload,
+                                                          const std::size_t required) noexcept {
+            return {.memoryClass = RenderMemoryClass::PersistentDevice,
+                    .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                    .provenance = RenderMemoryCostProvenance::Estimated,
+                    .compatibility = RenderMemoryCompatibilityId{compatibility},
+                    .payloadBytes = payload,
+                    .requiredBytes = required,
+                    .alignment = 256};
+        }
+
         /** @brief Serializes ownership of the single context retained by one presentation port. */
         struct OpenGLContextLease {
             bool claimed{false};
@@ -42,6 +53,23 @@ namespace Horo::Render {
             std::int32_t internal;
             std::uint32_t external;
             std::uint32_t type;
+        };
+
+        /** @brief Backend-private metadata for one logical view over a native texture. */
+        struct OpenGLTextureView {
+            std::uint32_t texture{0};
+            FramebufferExtent extent;
+            RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm};
+            RenderTextureAspect aspect{RenderTextureAspect::Color};
+            RenderTextureUsage usage{RenderTextureUsage::None};
+            std::uint32_t sampleCount{1};
+            std::uint32_t references{1};
+        };
+
+        /** @brief Native texture descriptor plus deferred parent-release state. */
+        struct OpenGLTrackedTexture {
+            RenderTextureDescriptor descriptor;
+            bool destroyRequested{false};
         };
 
         [[nodiscard]] OpenGLTextureFormat TextureFormat(const RenderTextureFormat format) noexcept {
@@ -71,16 +99,31 @@ namespace Horo::Render {
             return {};
         }
 
-        [[nodiscard]] bool IsValidRenderTargetRequest(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                                      const std::uint64_t depthAttachment) noexcept {
-            constexpr auto maximumObject = static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max());
-            const std::array valid{
-                descriptor.IsValid(),
-                colorAttachment != 0 || depthAttachment != 0,
-                colorAttachment <= maximumObject,
-                depthAttachment <= maximumObject,
-            };
-            return std::ranges::all_of(valid, std::identity{});
+        [[nodiscard]] bool IsSupportedTextureDescriptor(const RenderTextureDescriptor &descriptor) noexcept {
+            using enum RenderTextureUsage;
+            constexpr std::byte supportedUsage =
+                std::byte{static_cast<std::uint8_t>(Sampled)} | std::byte{static_cast<std::uint8_t>(RenderAttachment)};
+            const auto requestedUsage = static_cast<std::byte>(descriptor.usage);
+            return descriptor.IsValid() && descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 &&
+                   descriptor.mipCount == 1 && descriptor.layerCount == 1 && descriptor.sampleCount == 1 &&
+                   TextureFormat(descriptor.format).internal != 0 && (requestedUsage & ~supportedUsage) == std::byte{};
+        }
+
+        [[nodiscard]] bool AspectMatches(const RenderTextureFormat format, const RenderTextureAspect aspect) noexcept {
+            using enum RenderTextureAspect;
+            using enum RenderTextureFormat;
+            if (format == Rgba8Unorm)
+                return aspect == Color;
+            if (format == Depth24Stencil8)
+                return aspect == Depth || aspect == DepthStencil;
+            return format == Depth32Float && aspect == Depth;
+        }
+
+        [[nodiscard]] bool IsCompatibleAttachment(const OpenGLTextureView &view, const RenderTargetDescriptor &target,
+                                                  const bool colorView) noexcept {
+            const bool aspectMatches = colorView ? view.aspect == RenderTextureAspect::Color : view.aspect != RenderTextureAspect::Color;
+            return aspectMatches && view.extent == target.extent && view.sampleCount == target.sampleCount &&
+                   HasTextureUsage(view.usage, RenderTextureUsage::RenderAttachment);
         }
 
         [[nodiscard]] bool VersionAtLeast(const OpenGLContextFacts &facts, const std::uint16_t major, const std::uint16_t minor) noexcept {
@@ -163,39 +206,6 @@ namespace Horo::Render {
             }
 
 #include "OpenGLRenderBackendResources.inl"
-
-            /** @copydoc IRenderBackend::DestroyBuffer */
-            void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
-                if (!IsOwnerThread())
-                    return;
-                DeleteTrackedObject(functions_.buffers.deleteBuffers, buffers_, backendInstance);
-            }
-
-            /** @copydoc IRenderBackend::DestroyMesh */
-            void DestroyMesh(const std::uint64_t backendInstance) noexcept override {
-                if (!IsOwnerThread())
-                    return;
-                DeleteTrackedObject(functions_.vertexArrays.deleteVertexArrays, meshes_, backendInstance);
-            }
-
-            void DestroyTexture(const std::uint64_t backendInstance) noexcept override {
-                if (!IsOwnerThread())
-                    return;
-                textureFormats_.erase(static_cast<std::uint32_t>(backendInstance));
-                DeleteTrackedObject(functions_.textures.deleteTextures, textures_, backendInstance);
-            }
-
-            void DestroyTextureView(const std::uint64_t backendInstance) noexcept override {
-                if (!IsOwnerThread())
-                    return;
-                textureViewFormats_.erase(static_cast<std::uint32_t>(backendInstance));
-            }
-
-            void DestroyRenderTarget(const std::uint64_t backendInstance) noexcept override {
-                if (!IsOwnerThread())
-                    return;
-                DeleteTrackedObject(functions_.framebuffers.deleteFramebuffers, renderTargets_, backendInstance);
-            }
 
             /** @copydoc IRenderBackend::BeginFrame */
             Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
@@ -375,6 +385,14 @@ namespace Horo::Render {
                 return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation, std::move(message)));
             }
 
+            [[nodiscard]] std::optional<Result<std::uint64_t>> ResourceCreationFailure() const {
+                if (!IsOwnerThread())
+                    return WrongThread<std::uint64_t>();
+                if (!initialized_ || !functions_.HasResourceFunctions())
+                    return ResourceUnavailable("OpenGL resource creation is unavailable in the current backend state.");
+                return std::nullopt;
+            }
+
             template <typename Destroy> static void DeleteObject(const Destroy destroy, const std::uint64_t backendInstance) noexcept {
                 if (destroy != nullptr && backendInstance != 0 && backendInstance <= std::numeric_limits<std::uint32_t>::max()) {
                     const auto object = static_cast<std::uint32_t>(backendInstance);
@@ -390,6 +408,20 @@ namespace Horo::Render {
                     DeleteObject(destroy, backendInstance);
             }
 
+            void TryDestroyPendingTexture(const std::uint32_t texture) noexcept {
+                const auto tracked = textureDescriptors_.find(texture);
+                if (tracked == textureDescriptors_.end() || !tracked->second.destroyRequested)
+                    return;
+                if (const bool hasViews = std::ranges::any_of(textureViews_,
+                                                              [texture](const auto &entry) {
+                    return entry.second.texture == texture;
+                });
+                    hasViews)
+                    return;
+                textureDescriptors_.erase(tracked);
+                DeleteTrackedObject(functions_.textures.deleteTextures, textures_, texture);
+            }
+
             void DestroyRemainingResources() noexcept {
                 const auto destroyAll = [](const auto destroy, std::unordered_set<std::uint32_t> &objects) {
                     for (const std::uint32_t object : objects)
@@ -402,8 +434,9 @@ namespace Horo::Render {
                     destroyAll(functions_.textures.deleteTextures, textures_);
                     destroyAll(functions_.buffers.deleteBuffers, buffers_);
                 }
-                textureViewFormats_.clear();
-                textureFormats_.clear();
+                textureViews_.clear();
+                textureDescriptors_.clear();
+                bufferDescriptors_.clear();
             }
 
             [[nodiscard]] Result<void> ValidateActiveFrame(const FrameToken frame) const {
@@ -481,8 +514,10 @@ namespace Horo::Render {
             OpenGLBackendOptions options_{};
             Detail::OpenGLCommandFunctions functions_{};
             std::shared_ptr<OpenGLContextLease> contextLease_;
-            std::unordered_map<std::uint32_t, RenderTextureFormat> textureFormats_;
-            std::unordered_map<std::uint32_t, RenderTextureFormat> textureViewFormats_;
+            std::unordered_map<std::uint32_t, RenderBufferDescriptor> bufferDescriptors_;
+            std::unordered_map<std::uint32_t, OpenGLTrackedTexture> textureDescriptors_;
+            std::unordered_map<std::uint64_t, OpenGLTextureView> textureViews_;
+            std::uint32_t nextTextureViewIdentity_{1};
             std::unordered_set<std::uint32_t> buffers_;
             std::unordered_set<std::uint32_t> meshes_;
             std::unordered_set<std::uint32_t> textures_;

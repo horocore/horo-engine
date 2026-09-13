@@ -173,4 +173,21 @@ namespace Horo::Render::OpenGLBackendErrors {
                                                                "Use a backend version that implements generic renderer resources.",
                                                            .retryable = false,
                                                            .userActionable = false};
+
+    const ErrorCodeDescriptor ResourceCreationFailed{.domain = Domain,
+                                                     .code = ErrorCode{"render.opengl.resource_creation_failed"},
+                                                     .defaultSeverity = ErrorSeverity::Error,
+                                                     .summary = "OpenGL failed to realize a resident resource.",
+                                                     .remediationHint =
+                                                         "Release unused resources or reduce the requested resource footprint.",
+                                                     .retryable = true,
+                                                     .userActionable = false};
+
+    const ErrorCodeDescriptor ResourceIdentityInvalid{.domain = Domain,
+                                                      .code = ErrorCode{"render.opengl.resource_identity_invalid"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "An OpenGL resource dependency is unknown or incompatible.",
+                                                      .remediationHint = "Use live dependency instances created by this OpenGL backend.",
+                                                      .retryable = false,
+                                                      .userActionable = false};
 }  // namespace Horo::Render::OpenGLBackendErrors
