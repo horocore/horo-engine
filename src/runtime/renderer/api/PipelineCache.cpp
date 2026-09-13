@@ -21,7 +21,7 @@ namespace Horo::Render {
 
         [[nodiscard]] bool IsValidIdentity(const std::string_view value, const std::size_t maximumBytes) noexcept {
             return !value.empty() && value.size() <= maximumBytes && std::ranges::all_of(value, [](const unsigned char character) {
-                return character >= 0x21U && character <= 0x7eU;
+                return character >= 0x20U && character <= 0x7eU;
             });
         }
 
@@ -44,11 +44,11 @@ namespace Horo::Render {
                    HasValue(compatibility.shaderInterface.digest) && HasValue(compatibility.pipelineDescriptorDigest);
         }
 
-        template <typename ValueT> void AppendInteger(std::vector<std::byte> &output, ValueT value) {
+        template <typename OutputByteT, typename ValueT> void AppendInteger(std::vector<OutputByteT> &output, ValueT value) {
             using UnsignedT = std::make_unsigned_t<ValueT>;
             UnsignedT bits = static_cast<UnsignedT>(value);
             for (std::size_t index = 0; index < sizeof(UnsignedT); ++index) {
-                output.push_back(static_cast<std::byte>(bits & 0xffU));
+                output.push_back(static_cast<OutputByteT>(bits & 0xffU));
                 if constexpr (sizeof(UnsignedT) > 1U)
                     bits >>= 8U;
             }
@@ -60,23 +60,9 @@ namespace Horo::Render {
                           reinterpret_cast<const std::byte *>(value.data() + value.size()));
         }
 
-        void AppendDigest(std::vector<std::byte> &output, const Sha256Digest &digest) {
+        template <typename OutputByteT> void AppendDigest(std::vector<OutputByteT> &output, const Sha256Digest &digest) {
             for (const std::uint8_t byte : digest.bytes)
-                output.push_back(static_cast<std::byte>(byte));
-        }
-
-        template <typename ValueT> void AppendInteger(std::vector<std::uint8_t> &output, ValueT value) {
-            using UnsignedT = std::make_unsigned_t<ValueT>;
-            UnsignedT bits = static_cast<UnsignedT>(value);
-            for (std::size_t index = 0; index < sizeof(UnsignedT); ++index) {
-                output.push_back(static_cast<std::uint8_t>(bits & 0xffU));
-                if constexpr (sizeof(UnsignedT) > 1U)
-                    bits >>= 8U;
-            }
-        }
-
-        void AppendDigest(std::vector<std::uint8_t> &output, const Sha256Digest &digest) {
-            output.insert(output.end(), digest.bytes.begin(), digest.bytes.end());
+                output.push_back(static_cast<OutputByteT>(byte));
         }
 
         template <typename ValueT> [[nodiscard]] ValueT ReadInteger(const std::span<const std::uint8_t> input, std::size_t &offset) {

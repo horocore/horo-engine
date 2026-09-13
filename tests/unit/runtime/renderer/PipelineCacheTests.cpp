@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/PipelineCache.h"
 #include "Horo/Runtime/Render/PipelineCacheErrors.h"
+#include "RendererTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <span>
@@ -9,6 +10,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+    using Testing::RequireError;
 
     [[nodiscard]] Sha256Digest Digest(const std::string_view text) {
         return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));
@@ -29,11 +31,6 @@ namespace {
                 .pipelineDescriptorDigest = Digest("pipeline-descriptor")};
     }
 
-    template <typename ValueT> void RequireError(const Result<ValueT> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
-    }
 }  // namespace
 
 TEST_CASE("Pipeline cache identity includes backend device driver shader and descriptor compatibility",
@@ -103,4 +100,14 @@ TEST_CASE("Pipeline cache rejects incomplete compatibility and invalid limits", 
     PipelineCacheLimits invalid;
     invalid.maximumIdentityBytes = 0;
     RequireError(ComputePipelineCacheKey(Compatibility(), invalid), PipelineCacheErrors::InvalidLimits);
+}
+
+TEST_CASE("Pipeline cache admits printable driver identities and rejects control bytes", "[runtime][renderer][pipeline-cache]") {
+    auto printable = Compatibility("NVIDIA 551.86");
+    printable.driverIdentity = "NVIDIA Proprietary";
+    CHECK(ComputePipelineCacheKey(printable).HasValue());
+
+    auto controlByte = printable;
+    controlByte.driverVersion = "Mesa\t23.2";
+    RequireError(ComputePipelineCacheKey(controlByte), PipelineCacheErrors::InvalidCompatibility);
 }
