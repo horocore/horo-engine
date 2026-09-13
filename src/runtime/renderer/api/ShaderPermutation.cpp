@@ -93,8 +93,12 @@ namespace Horo::Render {
             const ShaderPermutationFeature &feature = model.features[index];
             if (feature.bitIndex >= HardMaximumFeatures || !IsValidDefineName(feature.defineName, limits.maximumDefineNameBytes))
                 return Failure(ShaderPermutationErrors::InvalidModel);
-            if (index > 0 &&
-                (model.features[index - 1].bitIndex >= feature.bitIndex || model.features[index - 1].defineName >= feature.defineName))
+            if (index > 0 && model.features[index - 1].bitIndex >= feature.bitIndex)
+                return Failure(ShaderPermutationErrors::NonCanonicalInput);
+            const auto duplicateName =
+                std::ranges::find(model.features.begin(), model.features.begin() + static_cast<std::ptrdiff_t>(index), feature.defineName,
+                                  &ShaderPermutationFeature::defineName);
+            if (duplicateName != model.features.begin() + static_cast<std::ptrdiff_t>(index))
                 return Failure(ShaderPermutationErrors::NonCanonicalInput);
             declaredBits |= std::uint64_t{1} << feature.bitIndex;
         }
@@ -108,17 +112,26 @@ namespace Horo::Render {
         return Result<void>::Success();
     }
 
-    /** @copydoc ResolveShaderPermutation */
-    Result<ResolvedShaderPermutation> ResolveShaderPermutation(const ShaderManifest &manifest, const ShaderPermutationModel &model,
-                                                               const ShaderPermutationRequest &request,
-                                                               const ShaderPermutationLimits &limits) {
+    /** @copydoc PrepareShaderPermutationModel */
+    Result<PreparedShaderPermutationModel> PrepareShaderPermutationModel(ShaderManifest manifest, ShaderPermutationModel model,
+                                                                         const ShaderPermutationLimits &limits) {
         if (const Result<void> validation = ValidateShaderPermutationModel(manifest, model, limits); validation.HasError())
-            return Result<ResolvedShaderPermutation>::Failure(validation.ErrorValue());
+            return Result<PreparedShaderPermutationModel>::Failure(validation.ErrorValue());
+        return Result<PreparedShaderPermutationModel>::Success(
+            PreparedShaderPermutationModel{std::move(manifest), std::move(model), limits});
+    }
+
+    /** @copydoc ResolveShaderPermutation */
+    Result<ResolvedShaderPermutation> ResolveShaderPermutation(const PreparedShaderPermutationModel &prepared,
+                                                               const ShaderPermutationRequest &request) {
+        const ShaderManifest &manifest = prepared.m_manifest;
+        const ShaderPermutationModel &model = prepared.m_model;
         if (!request.passId.IsValid() || IsZeroDigest(request.vertexLayoutCompatibility) || !request.target.IsValid())
             return Result<ResolvedShaderPermutation>::Failure(MakeError(ShaderPermutationErrors::InvalidRequest));
         if (!std::ranges::binary_search(model.admittedFeatureMasks, request.featureMask))
             return Result<ResolvedShaderPermutation>::Failure(MakeError(ShaderPermutationErrors::UnsupportedPermutation));
-        if (const Result<void> specialization = ValidateSpecializationOverrides(manifest, request, limits); specialization.HasError())
+        if (const Result<void> specialization = ValidateSpecializationOverrides(manifest, request, prepared.m_limits);
+            specialization.HasError())
             return Result<ResolvedShaderPermutation>::Failure(specialization.ErrorValue());
 
         try {

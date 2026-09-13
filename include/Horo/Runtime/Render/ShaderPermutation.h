@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Horo::Render {
@@ -80,6 +81,28 @@ namespace Horo::Render {
         std::vector<ShaderSpecializationValue> specializationValues;
     };
 
+    /** @brief Immutable, validated manifest and permutation model prepared outside runtime selection. */
+    class PreparedShaderPermutationModel final {
+    public:
+        PreparedShaderPermutationModel(const PreparedShaderPermutationModel &) = default;
+        PreparedShaderPermutationModel(PreparedShaderPermutationModel &&) noexcept = default;
+        PreparedShaderPermutationModel &operator=(const PreparedShaderPermutationModel &) = default;
+        PreparedShaderPermutationModel &operator=(PreparedShaderPermutationModel &&) noexcept = default;
+
+    private:
+        PreparedShaderPermutationModel(ShaderManifest manifest, ShaderPermutationModel model, ShaderPermutationLimits limits)
+            : m_manifest(std::move(manifest)), m_model(std::move(model)), m_limits(limits) {}
+
+        ShaderManifest m_manifest;
+        ShaderPermutationModel m_model;
+        ShaderPermutationLimits m_limits;
+
+        friend Result<PreparedShaderPermutationModel> PrepareShaderPermutationModel(ShaderManifest, ShaderPermutationModel,
+                                                                                    const ShaderPermutationLimits &);
+        friend Result<ResolvedShaderPermutation> ResolveShaderPermutation(const PreparedShaderPermutationModel &,
+                                                                          const ShaderPermutationRequest &);
+    };
+
     /**
      * @brief Validates an explicit finite permutation model against a shader manifest.
      * @param manifest Validated shader interface declaring specialization inputs.
@@ -91,15 +114,22 @@ namespace Horo::Render {
                                                               const ShaderPermutationLimits &limits = {});
 
     /**
+     * @brief Validates and owns an immutable manifest/model snapshot for repeated runtime selection.
+     * @param manifest Shader interface and specialization declarations to validate and own.
+     * @param model Finite permutation model to validate and own.
+     * @param limits Finite validation and subsequent request envelope.
+     * @return Prepared immutable model, or a stable ShaderPermutationErrors failure.
+     */
+    [[nodiscard]] Result<PreparedShaderPermutationModel> PrepareShaderPermutationModel(ShaderManifest manifest,
+                                                                                       ShaderPermutationModel model,
+                                                                                       const ShaderPermutationLimits &limits = {});
+
+    /**
      * @brief Resolves one declared compile-time variant and its runtime specialization values.
-     * @param manifest Validated shader interface and specialization declarations.
-     * @param model Validated finite permutation model.
+     * @param prepared Immutable manifest/model snapshot validated at its loading boundary.
      * @param request Requested feature mask, logical identities, and canonical overrides.
-     * @param limits Finite validation and output envelope.
      * @return Admitted key plus complete values, or a typed failure without fallback or compilation.
      */
-    [[nodiscard]] Result<ResolvedShaderPermutation> ResolveShaderPermutation(const ShaderManifest &manifest,
-                                                                             const ShaderPermutationModel &model,
-                                                                             const ShaderPermutationRequest &request,
-                                                                             const ShaderPermutationLimits &limits = {});
+    [[nodiscard]] Result<ResolvedShaderPermutation> ResolveShaderPermutation(const PreparedShaderPermutationModel &prepared,
+                                                                             const ShaderPermutationRequest &request);
 }  // namespace Horo::Render

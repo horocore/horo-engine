@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/ShaderPermutation.h"
 #include "Horo/Runtime/Render/ShaderPermutationErrors.h"
+#include "RendererTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <utility>
@@ -7,6 +8,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+    using Testing::RequireError;
 
     [[nodiscard]] ShaderManifest Manifest() {
         return {.schemaVersion = 1,
@@ -36,9 +38,10 @@ namespace {
         return request;
     }
 
-    template <typename T> void RequireError(const Result<T> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
+    [[nodiscard]] PreparedShaderPermutationModel Prepared() {
+        auto prepared = PrepareShaderPermutationModel(Manifest(), Model());
+        REQUIRE(prepared.HasValue());
+        return std::move(prepared).Value();
     }
 }  // namespace
 
@@ -46,7 +49,7 @@ TEST_CASE("Shader permutations resolve only an explicit finite variant", "[runti
     ShaderPermutationRequest request = Request();
     request.specializationValues = {{ShaderSpecializationId{1}, ShaderValueType::Bool32, 1}};
 
-    const auto result = ResolveShaderPermutation(Manifest(), Model(), request);
+    const auto result = ResolveShaderPermutation(Prepared(), request);
 
     REQUIRE(result.HasValue());
     CHECK(result.Value().key.shaderIdentity == "shaders.standard.surface");
@@ -62,8 +65,9 @@ TEST_CASE("Runtime specialization values do not alter the compile-time key", "[r
     ShaderPermutationRequest second = first;
     second.specializationValues.front().valueBits = 16;
 
-    const auto firstResult = ResolveShaderPermutation(Manifest(), Model(), first);
-    const auto secondResult = ResolveShaderPermutation(Manifest(), Model(), second);
+    const PreparedShaderPermutationModel prepared = Prepared();
+    const auto firstResult = ResolveShaderPermutation(prepared, first);
+    const auto secondResult = ResolveShaderPermutation(prepared, second);
 
     REQUIRE(firstResult.HasValue());
     REQUIRE(secondResult.HasValue());
@@ -71,10 +75,22 @@ TEST_CASE("Runtime specialization values do not alter the compile-time key", "[r
     CHECK(firstResult.Value().specializationValues != secondResult.Value().specializationValues);
 }
 
+TEST_CASE("Prepared permutations own their validated loading snapshot", "[runtime][renderer][shader-permutation]") {
+    ShaderManifest manifest = Manifest();
+    ShaderPermutationModel model = Model();
+    auto prepared = PrepareShaderPermutationModel(manifest, model);
+    REQUIRE(prepared.HasValue());
+
+    manifest.specializationInputs.clear();
+    model.admittedFeatureMasks.clear();
+
+    CHECK(ResolveShaderPermutation(prepared.Value(), Request()).HasValue());
+}
+
 TEST_CASE("Undeclared feature combinations fail without implicit fallback", "[runtime][renderer][shader-permutation]") {
     ShaderPermutationRequest request = Request();
     request.featureMask = 2;
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::UnsupportedPermutation);
+    RequireError(ResolveShaderPermutation(Prepared(), request), ShaderPermutationErrors::UnsupportedPermutation);
 }
 
 TEST_CASE("Permutation models enforce declared bounds and canonical records", "[runtime][renderer][shader-permutation]") {
@@ -84,6 +100,14 @@ TEST_CASE("Permutation models enforce declared bounds and canonical records", "[
 
     model = Model();
     std::swap(model.features[0], model.features[1]);
+    RequireError(ValidateShaderPermutationModel(Manifest(), model), ShaderPermutationErrors::NonCanonicalInput);
+
+    model = Model();
+    model.features[0].defineName = "USE_SKINNING";
+    model.features[1].defineName = "USE_NORMAL_MAP";
+    CHECK(ValidateShaderPermutationModel(Manifest(), model).HasValue());
+
+    model.features[1].defineName = "USE_SKINNING";
     RequireError(ValidateShaderPermutationModel(Manifest(), model), ShaderPermutationErrors::NonCanonicalInput);
 
     model = Model();
@@ -98,25 +122,26 @@ TEST_CASE("Permutation models enforce declared bounds and canonical records", "[
 TEST_CASE("Permutation requests require stable logical identities", "[runtime][renderer][shader-permutation]") {
     ShaderPermutationRequest request = Request();
     request.passId = {};
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::InvalidRequest);
+    RequireError(ResolveShaderPermutation(Prepared(), request), ShaderPermutationErrors::InvalidRequest);
 
     request = Request();
     request.vertexLayoutCompatibility = {};
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::InvalidRequest);
+    RequireError(ResolveShaderPermutation(Prepared(), request), ShaderPermutationErrors::InvalidRequest);
 }
 
 TEST_CASE("Specialization overrides are declared typed canonical and finite", "[runtime][renderer][shader-permutation]") {
     ShaderPermutationRequest request = Request();
     request.specializationValues = {{ShaderSpecializationId{3}, ShaderValueType::Uint32, 1}};
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::InvalidSpecialization);
+    const PreparedShaderPermutationModel prepared = Prepared();
+    RequireError(ResolveShaderPermutation(prepared, request), ShaderPermutationErrors::InvalidSpecialization);
 
     request.specializationValues = {{ShaderSpecializationId{1}, ShaderValueType::Uint32, 1}};
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::InvalidSpecialization);
+    RequireError(ResolveShaderPermutation(prepared, request), ShaderPermutationErrors::InvalidSpecialization);
 
     request.specializationValues = {{ShaderSpecializationId{1}, ShaderValueType::Bool32, 2}};
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::InvalidSpecialization);
+    RequireError(ResolveShaderPermutation(prepared, request), ShaderPermutationErrors::InvalidSpecialization);
 
     request.specializationValues = {{ShaderSpecializationId{2}, ShaderValueType::Uint32, 1},
                                     {ShaderSpecializationId{1}, ShaderValueType::Bool32, 1}};
-    RequireError(ResolveShaderPermutation(Manifest(), Model(), request), ShaderPermutationErrors::NonCanonicalInput);
+    RequireError(ResolveShaderPermutation(prepared, request), ShaderPermutationErrors::NonCanonicalInput);
 }

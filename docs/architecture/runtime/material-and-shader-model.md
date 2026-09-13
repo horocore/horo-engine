@@ -305,8 +305,12 @@ is not permission to invent a runtime variant.
 It publishes a canonical feature-bit table and an explicit, finite list of
 admitted masks; the engine never expands the feature table into an implicit
 Cartesian product. Both the model's own cap and the caller's hard validation
-envelope apply before selection. `ResolveShaderPermutation` accepts only a listed
-mask and never invents or compiles a fallback.
+envelope apply at the loading boundary. `PrepareShaderPermutationModel` owns the
+validated manifest/model snapshot, and the frame-hot `ResolveShaderPermutation`
+path accepts only that immutable prepared value. Resolution validates only the
+bounded request, accepts only a listed mask, and never invents or compiles a
+fallback. Callers migrate by preparing once when a manifest/model generation is
+loaded and reusing that value until the generation is retired.
 
 `ShaderSpecializationValue` is deliberately separate from
 `ShaderPermutationKey`. Values must match manifest-declared specialization IDs
