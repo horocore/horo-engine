@@ -270,6 +270,21 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor OperationAbandoned{kDomain, ErrorCode{"save.operation.abandoned"}, kError,
                                                  "The asynchronous save operation producer ended without a terminal result.",
                                                  "Keep the producer alive until it completes, fails, or observes cancellation."};
+    const ErrorCodeDescriptor OperationInProgress{kDomain,
+                                                  ErrorCode{"save.operation.in_progress"},
+                                                  kError,
+                                                  "An incompatible save-domain operation is already admitted.",
+                                                  "Wait for the reported operation or select an explicit queue/coalescing policy.",
+                                                  true};
+    const ErrorCodeDescriptor ArbiterInvalid{kDomain, ErrorCode{"save.arbiter.invalid"}, kError,
+                                             "A save operation arbiter limit, request, or transition is invalid.",
+                                             "Supply bounded limits, a valid typed target, and an allowed lifecycle transition."};
+    const ErrorCodeDescriptor ArbiterCapacityExceeded{kDomain,
+                                                      ErrorCode{"save.arbiter.capacity_exceeded"},
+                                                      kError,
+                                                      "The save operation arbiter cannot retain another request.",
+                                                      "Acknowledge terminal operations or revise the explicit session capacity.",
+                                                      true};
     const ErrorCodeDescriptor LifecycleInvalid{kDomain, ErrorCode{"save.lifecycle.invalid"}, kError,
                                                "Runtime Save lifecycle evidence is invalid.",
                                                "Supply a non-zero operation and exact runtime, scene, and registry generations."};

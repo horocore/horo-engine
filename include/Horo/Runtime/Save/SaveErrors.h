@@ -164,6 +164,12 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor OperationDeadlineExceeded;
     /** @brief The operation producer was released without publishing a terminal result. */
     extern const ErrorCodeDescriptor OperationAbandoned;
+    /** @brief An incompatible save-domain operation is already admitted for the session or slot. */
+    extern const ErrorCodeDescriptor OperationInProgress;
+    /** @brief Save operation arbitration limits or a submitted request are malformed. */
+    extern const ErrorCodeDescriptor ArbiterInvalid;
+    /** @brief The bounded save operation arbiter cannot retain another request. */
+    extern const ErrorCodeDescriptor ArbiterCapacityExceeded;
     /** @brief A save lifecycle coordinator, operation descriptor, or generation is malformed. */
     extern const ErrorCodeDescriptor LifecycleInvalid;
     /** @brief Save lifecycle mutation or safe-point execution was attempted from a non-owner thread. */
