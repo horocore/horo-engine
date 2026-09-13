@@ -207,33 +207,27 @@ namespace Horo::Render {
     Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateBuffer(const RenderMemoryScopeId scope,
                                                                               const RenderBufferDescriptor &descriptor,
                                                                               const std::span<const std::byte> initialData) {
-        if (activeFrameScope_ != nullptr) {
+        if (activeFrameScope_ != nullptr)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be created during an active frame."));
-        }
-        if (ValidateRenderBufferDescriptor(descriptor).HasError()) {
+        if (ValidateRenderBufferDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor, "The buffer descriptor is structurally invalid."));
-        }
-        if (AdmitCurrentBufferDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported) {
+        if (AdmitCurrentBufferDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this buffer usage combination."));
-        }
-        if (!backend_->Capabilities().supportsBufferResources) {
+        if (!backend_->Capabilities().supportsBufferResources)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic buffers."));
-        }
-        if (ValidateRenderBufferInitialData(descriptor, RenderBufferInitialDataView{initialData}).HasError()) {
+        if (ValidateRenderBufferInitialData(descriptor, RenderBufferInitialDataView{initialData}).HasError())
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceBufferUploadSizeMismatch,
                                   "The initial-data byte count must equal the buffer descriptor size."));
-        }
-        if (!resourceUploadQueue_->CanEnqueue(initialData.size())) {
+        if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
                                   "The bounded upload arena has insufficient staging-byte or request capacity."));
-        }
 
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Buffer, [this, &descriptor] {
@@ -309,34 +303,28 @@ namespace Horo::Render {
     Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateTexture(const RenderMemoryScopeId scope,
                                                                                 const RenderTextureDescriptor &descriptor,
                                                                                 const std::span<const std::byte> initialData) {
-        if (activeFrameScope_ != nullptr) {
+        if (activeFrameScope_ != nullptr)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be created during an active frame."));
-        }
-        if (ValidateRenderTextureDescriptor(descriptor).HasError()) {
+        if (ValidateRenderTextureDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureDescriptor, "The texture descriptor is structurally invalid."));
-        }
-        if (AdmitCurrentTextureDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported) {
+        if (AdmitCurrentTextureDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                   "The current renderer frontend does not implement this texture descriptor combination."));
-        }
-        if (!backend_->Capabilities().supportsTextureResources) {
+        if (!backend_->Capabilities().supportsTextureResources)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic textures."));
-        }
-        const auto baseLevelBytes = RenderTextureBaseLevelByteSize(descriptor);
-        if (!baseLevelBytes.has_value() || (!initialData.empty() && initialData.size() != *baseLevelBytes)) {
+        if (const auto baseLevelBytes = RenderTextureBaseLevelByteSize(descriptor);
+            !baseLevelBytes.has_value() || (!initialData.empty() && initialData.size() != *baseLevelBytes))
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
                                   "Texture initial data must be empty or contain one complete tightly packed base level."));
-        }
-        if (!resourceUploadQueue_->CanEnqueue(initialData.size())) {
+        if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
                                   "The bounded upload arena has insufficient staging-byte or request capacity."));
-        }
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Texture, [this, &descriptor] {
             return backend_->QueryTextureMemoryCost(descriptor);

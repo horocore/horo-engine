@@ -71,7 +71,7 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    EditorViewportResources::EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig config) noexcept
+    EditorViewportResources::EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept
         : frontend_(&frontend), config_(config) {}
 
     Result<std::optional<Render::RenderTargetHandle>> EditorViewportResources::Prepare(const Render::RenderSceneView &scene,

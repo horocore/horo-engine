@@ -91,7 +91,7 @@ namespace Horo::Render {
          * @return Owned ledger or a typed configuration/identity failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<RenderMemoryBudget>> Create(RenderResourceOwnerId renderer,
-                                                                                RenderMemoryBudgetConfig config);
+                                                                                const RenderMemoryBudgetConfig &config);
 
         /** @brief Releases all CPU-side accounting state after the backend has completed its shutdown contract. */
         ~RenderMemoryBudget();
