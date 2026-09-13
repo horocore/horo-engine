@@ -180,12 +180,12 @@ namespace Horo::Runtime {
         [[nodiscard]] bool HasBackgroundIntentWork() const noexcept;
 
     private:
-        CookedSaveProjectPolicy(SaveProjectPolicy project, std::uint8_t enabledMask, std::uint8_t capabilityDisabledMask,
-                                std::uint8_t backgroundMask) noexcept;
+        CookedSaveProjectPolicy(SaveProjectPolicy project, std::uint32_t enabledMask, std::uint32_t capabilityDisabledMask,
+                                std::uint32_t backgroundMask) noexcept;
 
         SaveProjectPolicy project_;
-        std::uint8_t enabledMask_{};
-        std::uint8_t capabilityDisabledMask_{};
-        std::uint8_t backgroundMask_{};
+        std::uint32_t enabledMask_{};
+        std::uint32_t capabilityDisabledMask_{};
+        std::uint32_t backgroundMask_{};
     };
 }  // namespace Horo::Runtime

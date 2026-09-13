@@ -16,8 +16,8 @@ namespace Horo::Runtime {
             return static_cast<std::size_t>(mode);
         }
 
-        [[nodiscard]] constexpr std::uint8_t Bit(const SavePolicyMode mode) noexcept {
-            return static_cast<std::uint8_t>(1U << Index(mode));
+        [[nodiscard]] constexpr std::uint32_t Bit(const SavePolicyMode mode) noexcept {
+            return 1U << Index(mode);
         }
 
         [[nodiscard]] constexpr bool IsKnown(const SaveModeEligibility value) noexcept {
@@ -49,7 +49,8 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] constexpr bool IsBackgroundMode(const SavePolicyMode mode) noexcept {
-            return mode == SavePolicyMode::Auto || mode == SavePolicyMode::Checkpoint || mode == SavePolicyMode::Suspend;
+            using enum SavePolicyMode;
+            return mode == Auto || mode == Checkpoint || mode == Suspend;
         }
 
         [[nodiscard]] constexpr const char *ModeName(const SavePolicyMode mode) noexcept {
@@ -97,8 +98,8 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateLoadPolicy(const SavePolicyMode mode, const SaveModeProjectPolicy &policy) {
-            const SaveRotationPolicy &rotation = policy.rotation;
-            if (rotation.strategy != SaveRotationStrategy::None || rotation.maximumRetainedSlots != 0 || rotation.preserveLastSuccessful ||
+            if (const SaveRotationPolicy &rotation = policy.rotation;
+                rotation.strategy != SaveRotationStrategy::None || rotation.maximumRetainedSlots != 0 || rotation.preserveLastSuccessful ||
                 policy.cooldown.minimumIntervalMilliseconds != 0 || policy.cooldown.coalesceWhenBusy ||
                 policy.presentation.thumbnail != SaveThumbnailPolicy::Disabled)
                 return Result<void>::Failure(
@@ -113,13 +114,13 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateReplacementContract(const SavePolicyMode mode, const SaveRotationPolicy &rotation) {
-            if (rotation.strategy == SaveRotationStrategy::ReplaceSingle && rotation.maximumRetainedSlots != 1)
+            using enum SaveRotationStrategy;
+            if (rotation.strategy == ReplaceSingle && rotation.maximumRetainedSlots != 1)
                 return Result<void>::Failure(InvalidPolicy(mode, "single replacement requires exactly one retained slot"));
-            if (rotation.strategy == SaveRotationStrategy::ReplaceOldest &&
-                (rotation.maximumRetainedSlots < 2 || !rotation.preserveLastSuccessful))
+            if (rotation.strategy == ReplaceOldest && (rotation.maximumRetainedSlots < 2 || !rotation.preserveLastSuccessful))
                 return Result<void>::Failure(
                     InvalidPolicy(mode, "oldest-slot rotation requires at least two slots and last-success preservation"));
-            if (rotation.strategy == SaveRotationStrategy::None && rotation.preserveLastSuccessful)
+            if (rotation.strategy == None && rotation.preserveLastSuccessful)
                 return Result<void>::Failure(InvalidPolicy(mode, "last-success preservation requires a replacement strategy"));
             return Result<void>::Success();
         }
@@ -202,9 +203,9 @@ namespace Horo::Runtime {
         if (const Result<void> validation = ValidateSaveProjectPolicy(project); validation.HasError())
             return Result<CookedSaveProjectPolicy>::Failure(validation.ErrorValue());
 
-        std::uint8_t enabledMask{};
-        std::uint8_t capabilityDisabledMask{};
-        std::uint8_t backgroundMask{};
+        std::uint32_t enabledMask{};
+        std::uint32_t capabilityDisabledMask{};
+        std::uint32_t backgroundMask{};
         for (std::size_t index = 0; index < project.modes.size(); ++index) {
             const auto mode = static_cast<SavePolicyMode>(index);
             SaveModeProjectPolicy &policy = project.modes[index];
@@ -218,7 +219,7 @@ namespace Horo::Runtime {
                                   std::string{"Save policy mode '"} + ModeName(mode) +
                                       "' is enabled but unavailable in the selected runtime composition."));
                 policy = {};
-                capabilityDisabledMask = static_cast<std::uint8_t>(capabilityDisabledMask | Bit(mode));
+                capabilityDisabledMask |= Bit(mode);
                 continue;
             }
 
@@ -231,17 +232,18 @@ namespace Horo::Runtime {
                 policy.presentation.thumbnail = SaveThumbnailPolicy::Disabled;
             }
 
-            enabledMask = static_cast<std::uint8_t>(enabledMask | Bit(mode));
+            enabledMask |= Bit(mode);
             if (IsBackgroundMode(mode))
-                backgroundMask = static_cast<std::uint8_t>(backgroundMask | Bit(mode));
+                backgroundMask |= Bit(mode);
         }
         return Result<CookedSaveProjectPolicy>::Success(
             CookedSaveProjectPolicy{std::move(project), enabledMask, capabilityDisabledMask, backgroundMask});
     }
 
     /** @copydoc CookedSaveProjectPolicy::CookedSaveProjectPolicy */
-    CookedSaveProjectPolicy::CookedSaveProjectPolicy(SaveProjectPolicy project, const std::uint8_t enabledMask,
-                                                     const std::uint8_t capabilityDisabledMask, const std::uint8_t backgroundMask) noexcept
+    CookedSaveProjectPolicy::CookedSaveProjectPolicy(SaveProjectPolicy project, const std::uint32_t enabledMask,
+                                                     const std::uint32_t capabilityDisabledMask,
+                                                     const std::uint32_t backgroundMask) noexcept
         : project_(std::move(project)), enabledMask_(enabledMask), capabilityDisabledMask_(capabilityDisabledMask),
           backgroundMask_(backgroundMask) {}
 
