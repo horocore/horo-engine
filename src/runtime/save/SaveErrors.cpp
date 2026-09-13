@@ -286,6 +286,21 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor LifecycleReentrant{kDomain, ErrorCode{"save.lifecycle.reentrant"}, kError,
                                                  "Runtime Save lifecycle mutation re-entered an active safe-point drain.",
                                                  "Queue follow-up work and apply it after the current safe point returns."};
+    const ErrorCodeDescriptor PolicyInvalid{kDomain,
+                                            ErrorCode{"save.policy.invalid"},
+                                            kError,
+                                            "The project save policy is contradictory or invalid.",
+                                            "Correct the named save mode in project settings and recook the project.",
+                                            false,
+                                            true};
+    const ErrorCodeDescriptor
+        PolicyCapabilityUnsupported{kDomain,
+                                    ErrorCode{"save.policy.capability_unsupported"},
+                                    kError,
+                                    "The project save policy requires an unavailable runtime capability.",
+                                    "Choose a supported composition or declare an explicit safe fallback for the named mode.",
+                                    false,
+                                    true};
     const ErrorCodeDescriptor CompositionUnsupported{kDomain, ErrorCode{"save.composition.unsupported"}, kError,
                                                      "The selected save composition does not support persistence.",
                                                      "Select a save-capable product composition before admission."};

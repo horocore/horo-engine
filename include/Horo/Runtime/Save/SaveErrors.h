@@ -176,6 +176,10 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor LifecycleCallbackFailed;
     /** @brief Lifecycle mutation attempted to re-enter an active save safe-point drain. */
     extern const ErrorCodeDescriptor LifecycleReentrant;
+    /** @brief Project-authored save mode policy is contradictory, malformed, or outside portable limits. */
+    extern const ErrorCodeDescriptor PolicyInvalid;
+    /** @brief Enabled project policy requires a runtime capability without an admitted fallback. */
+    extern const ErrorCodeDescriptor PolicyCapabilityUnsupported;
     /** @brief The selected save composition explicitly does not support persistence. */
     extern const ErrorCodeDescriptor CompositionUnsupported;
     /** @brief Deterministic composition limits or a submitted request are malformed. */
