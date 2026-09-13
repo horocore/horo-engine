@@ -509,6 +509,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
+        unit/runtime/prefab/PrefabSourceResolverTests.cpp
 )
 target_compile_features(HoroPrefabTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTests PRIVATE HoroEngine::PrefabAuthoring)
@@ -1267,7 +1268,14 @@ add_executable(HoroShaderManifestTests
         unit/runtime/renderer/ShaderManifestTests.cpp
 )
 target_compile_features(HoroShaderManifestTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderManifestTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderManifestTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroShaderReflectionTests
+        unit/runtime/renderer/ShaderReflectionTests.cpp
+)
+target_compile_features(HoroShaderReflectionTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderReflectionTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroShaderReflectionTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
@@ -1876,6 +1884,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroTemporalHistoryTests
         HoroRenderResourceDescriptorTests
         HoroShaderManifestTests
+        HoroShaderReflectionTests
         HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests

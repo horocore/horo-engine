@@ -743,6 +743,7 @@ target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Asset
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabDocument.cpp
+        runtime/prefab/PrefabSourceResolver.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
@@ -779,6 +780,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
         runtime/renderer/api/ShaderManifestErrors.cpp
+        runtime/renderer/api/ShaderReflection.cpp
+        runtime/renderer/api/ShaderReflectionErrors.cpp
         runtime/renderer/api/TemporalHistory.cpp
         runtime/renderer/api/TemporalHistoryErrors.cpp
 )
