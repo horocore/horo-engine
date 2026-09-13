@@ -7,7 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 
-namespace {
+namespace ShaderManifestTests {
     using namespace Horo;
     using namespace Horo::Render;
     using Tests::RequireError;
@@ -34,7 +34,27 @@ namespace {
                             Target(ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410)}};
     }
 
-}  // namespace
+}  // namespace ShaderManifestTests
+
+using Horo::FormatSha256;
+using Horo::Render::ComputeShaderInterfaceCompatibilityId;
+using Horo::Render::ShaderBindingId;
+using Horo::Render::ShaderManifest;
+using Horo::Render::ShaderManifestErrors;
+using Horo::Render::ShaderManifestLimits;
+using Horo::Render::ShaderParameterId;
+using Horo::Render::ShaderPayloadFormat;
+using Horo::Render::ShaderResourceAccess;
+using Horo::Render::ShaderResourceKind;
+using Horo::Render::ShaderSpecializationId;
+using Horo::Render::ShaderStage;
+using Horo::Render::ShaderStageVisibility;
+using Horo::Render::ShaderTargetBackend;
+using Horo::Render::ShaderValueType;
+using Horo::Render::ValidateShaderManifest;
+using Horo::Tests::RequireError;
+using ShaderManifestTests::Target;
+using ShaderManifestTests::ValidManifest;
 
 TEST_CASE("Shader manifest accepts a canonical backend-neutral interface", "[runtime][renderer][shader-manifest]") {
     const ShaderManifest manifest = ValidManifest();
