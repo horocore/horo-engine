@@ -13,6 +13,30 @@ namespace Horo::Render::MetalBackendErrors {
                                                  .retryable = false,
                                                  .userActionable = false};
 
+    const ErrorCodeDescriptor AdapterNotFound{.domain = Domain,
+                                              .code = ErrorCode{"render.metal.adapter_not_found"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The selected Metal adapter was not found.",
+                                              .remediationHint = "Refresh adapter discovery and select an available device.",
+                                              .retryable = true,
+                                              .userActionable = true};
+
+    const ErrorCodeDescriptor AdapterUnavailable{.domain = Domain,
+                                                 .code = ErrorCode{"render.metal.adapter_unavailable"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "The selected Metal adapter is unavailable.",
+                                                 .remediationHint = "Refresh adapter discovery or inspect system GPU availability.",
+                                                 .retryable = true,
+                                                 .userActionable = true};
+
+    const ErrorCodeDescriptor CommandQueueCreationFailed{.domain = Domain,
+                                                         .code = ErrorCode{"render.metal.command_queue_creation_failed"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "Metal command queue creation failed.",
+                                                         .remediationHint = "Inspect Metal diagnostics and retry device initialization.",
+                                                         .retryable = true,
+                                                         .userActionable = false};
+
     const ErrorCodeDescriptor FrameActive{.domain = Domain,
                                           .code = ErrorCode{"render.backend.frame_active"},
                                           .defaultSeverity = ErrorSeverity::Error,
@@ -52,6 +76,14 @@ namespace Horo::Render::MetalBackendErrors {
                                             .remediationHint = "Use a supported frames-in-flight and presentation configuration.",
                                             .retryable = false,
                                             .userActionable = false};
+
+    const ErrorCodeDescriptor InvalidDeviceFacts{.domain = Domain,
+                                                 .code = ErrorCode{"render.metal.invalid_device_facts"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "Metal device facts are incomplete.",
+                                                 .remediationHint = "Inspect native device queries and driver diagnostics.",
+                                                 .retryable = false,
+                                                 .userActionable = false};
 
     const ErrorCodeDescriptor InvalidExecutionPlan{.domain = Domain,
                                                    .code = ErrorCode{"render.backend.invalid_execution_plan"},
@@ -101,6 +133,23 @@ namespace Horo::Render::MetalBackendErrors {
                                                 .retryable = true,
                                                 .userActionable = false};
 
+    const ErrorCodeDescriptor PresentationUnsupported{.domain = Domain,
+                                                      .code = ErrorCode{"render.metal.presentation_unsupported"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "Metal presentation is unsupported by the selected adapter.",
+                                                      .remediationHint = "Select an adapter that can present to the host display.",
+                                                      .retryable = false,
+                                                      .userActionable = true};
+
+    const ErrorCodeDescriptor RequiredFormatUnsupported{.domain = Domain,
+                                                        .code = ErrorCode{"render.metal.required_format_unsupported"},
+                                                        .defaultSeverity = ErrorSeverity::Error,
+                                                        .summary = "A required Metal format combination is unsupported.",
+                                                        .remediationHint =
+                                                            "Select a qualified adapter or inspect device capability diagnostics.",
+                                                        .retryable = false,
+                                                        .userActionable = true};
+
     const ErrorCodeDescriptor ResourceCreationFailed{.domain = Domain,
                                                      .code = ErrorCode{"render.metal.resource_creation_failed"},
                                                      .defaultSeverity = ErrorSeverity::Error,
@@ -126,6 +175,23 @@ namespace Horo::Render::MetalBackendErrors {
                                                         .retryable = false,
                                                         .userActionable = false};
 
+    const ErrorCodeDescriptor UnsupportedDeviceFamily{.domain = Domain,
+                                                      .code = ErrorCode{"render.metal.unsupported_device_family"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "The Metal GPU family is unsupported.",
+                                                      .remediationHint =
+                                                          "Use an Apple7-or-newer Apple GPU or a Mac2-capable Intel Mac GPU.",
+                                                      .retryable = false,
+                                                      .userActionable = true};
+
+    const ErrorCodeDescriptor UnsupportedHost{.domain = Domain,
+                                              .code = ErrorCode{"render.metal.unsupported_host"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The host does not satisfy the Metal platform baseline.",
+                                              .remediationHint = "Use native macOS 14.0 or later on a supported architecture.",
+                                              .retryable = false,
+                                              .userActionable = true};
+
     const ErrorCodeDescriptor UnsupportedPassKind{.domain = Domain,
                                                   .code = ErrorCode{"render.metal.unsupported_pass_kind"},
                                                   .defaultSeverity = ErrorSeverity::Error,
@@ -142,4 +208,12 @@ namespace Horo::Render::MetalBackendErrors {
                                                                "Use a backend version that implements generic renderer resources.",
                                                            .retryable = false,
                                                            .userActionable = false};
+
+    const ErrorCodeDescriptor StaleAdapterSnapshot{.domain = Domain,
+                                                   .code = ErrorCode{"render.metal.stale_adapter_snapshot"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "The Metal adapter discovery snapshot is stale.",
+                                                   .remediationHint = "Refresh adapter discovery before initializing the backend.",
+                                                   .retryable = true,
+                                                   .userActionable = false};
 }  // namespace Horo::Render::MetalBackendErrors

@@ -1,12 +1,24 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "MetalDeviceCapabilityTestSupport.h"
 #include "RenderMemoryTestSupport.h"
 #include "renderer/RenderBackendContractSuite.h"
 #include "runtime/renderer/modules/metal/MetalBackendInternal.h"
+#include "runtime/renderer/modules/metal/MetalRenderBackendErrors.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <string>
+
+#if !defined(__APPLE__)
+namespace Horo::Render::Detail {
+    /** @brief Linux-only contract-test stub for the unavailable native Metal runtime. */
+    Result<std::unique_ptr<IMetalRuntime>> CreateMetalRuntime(IMetalPresentationPort &, MetalEditorGraphicsBridge &) {
+        return Result<std::unique_ptr<IMetalRuntime>>::Failure(
+            MakeError(MetalBackendErrors::UnsupportedHost, "Native Metal runtime is unavailable in Linux contract tests."));
+    }
+}  // namespace Horo::Render::Detail
+#endif
 
 namespace {
     using namespace Horo;
@@ -60,8 +72,8 @@ namespace {
             return Result<void>::Success();
         }
 
-        void *Layer() const noexcept override {
-            return state_->presentationCreated ? reinterpret_cast<void *>(1) : nullptr;
+        void *Layer() const noexcept override {  // NOSONAR(cpp:S5008) Required opaque platform seam.
+            return state_->presentationCreated ? state_ : nullptr;
         }
 
         void DestroySurface() noexcept override {
@@ -80,11 +92,20 @@ namespace {
         FakeMetalRuntime(IMetalPresentationPort &presentationPort, PortState &state) noexcept
             : presentationPort_(&presentationPort), state_(&state) {}
 
-        Result<void> Initialize(const MetalPresentationDescriptor &descriptor) override {
+        Result<Detail::MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
+                                                           const Detail::MetalDeviceAdmissionRequest &request) override {
             state_->descriptor = descriptor;
             const Result<void> created = presentationPort_->CreateSurface();
             initialized_ = created.HasValue();
-            return created;
+            if (created.HasError()) {
+                return Result<Detail::MetalDeviceCapabilities>::Failure(created.ErrorValue());
+            }
+            Detail::MetalDeviceCapabilities capabilities = Test::MakeMetalCapabilities();
+            if (request.adapter && (*request.adapter != capabilities.adapter.id || request.discoveryRevision != 1)) {
+                return Result<Detail::MetalDeviceCapabilities>::Failure(
+                    MakePortError("render.test.adapter_mismatch", "Injected Metal adapter selection mismatch."));
+            }
+            return Result<Detail::MetalDeviceCapabilities>::Success(std::move(capabilities));
         }
 
         Result<void> BeginFrame(const FramebufferExtent extent) override {
@@ -112,23 +133,24 @@ namespace {
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {  // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,
-                                            const RenderMemoryPlacement &) override {
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,  // NOSONAR(cpp:S4144)
+                                            const RenderMemoryPlacement &) override {                     // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {  // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t,  // NOSONAR(cpp:S4144)
+                                                 std::uint64_t) override {                       // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
@@ -223,6 +245,13 @@ namespace {
         return std::move(created).Value();
     }
 
+    [[nodiscard]] std::unique_ptr<IRenderBackend> CreateInitializedBackend(FakePresentationPort &port, PortState &state,
+                                                                           MetalEditorGraphicsBridge &bridge) {
+        std::unique_ptr<IRenderBackend> backend = CreateBackend(port, state, bridge);
+        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        return backend;
+    }
+
     struct GenericResourceIdentities {
         std::uint64_t vertex{0};
         std::uint64_t index{0};
@@ -234,8 +263,7 @@ namespace {
         std::uint64_t target{0};
     };
 
-    [[nodiscard]] GenericResourceIdentities CreateGenericResources(IRenderBackend &backend) {
-        GenericResourceIdentities identities;
+    void CreateGenericBuffersAndMesh(IRenderBackend &backend, GenericResourceIdentities &identities) {
         constexpr std::array<std::byte, 12> bytes{};
         const RenderBufferDescriptor vertexDescriptor{.byteSize = bytes.size(),
                                                       .usage = RenderBufferUsage::Vertex,
@@ -259,6 +287,9 @@ namespace {
                                              identities.vertex, identities.index);
         Check(mesh.HasValue());
         identities.mesh = mesh.Value();
+    }
+
+    void CreateGenericTexturesAndTarget(IRenderBackend &backend, GenericResourceIdentities &identities) {
         const RenderTextureDescriptor colorDescriptor{.extent = {64, 64},
                                                       .format = RenderTextureFormat::Rgba8Unorm,
                                                       .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment};
@@ -287,6 +318,12 @@ namespace {
                                                        identities.colorView, identities.depthView);
         Check(target.HasValue());
         identities.target = target.Value();
+    }
+
+    [[nodiscard]] GenericResourceIdentities CreateGenericResources(IRenderBackend &backend) {
+        GenericResourceIdentities identities;
+        CreateGenericBuffersAndMesh(backend, identities);
+        CreateGenericTexturesAndTarget(backend, identities);
         return identities;
     }
 
@@ -299,6 +336,36 @@ namespace {
         backend.DestroyMesh(resources.mesh);
         backend.DestroyBuffer(resources.index);
         backend.DestroyBuffer(resources.vertex);
+    }
+
+    void ExerciseFrameLifecycle(IRenderBackend &backend, const PortState &state) {
+        Check(backend.Resize(FramebufferExtent{1920, 1080}).HasValue());
+        Check(state.resizeCount == 1);
+        Check(state.resizedExtent.width == 1920 && state.resizedExtent.height == 1080);
+
+        auto begun = backend.BeginFrame(FrameDescriptor{.frameNumber = 7, .outputExtent = {1280, 720}});
+        Check(begun.HasValue());
+        const FrameToken frame = begun.Value();
+        Check(state.beginCount == 1);
+        Check(state.frameExtent.width == 1280 && state.frameExtent.height == 720);
+
+        const std::array passes{RenderPassDescriptor{
+            .id = RenderPassId{1},
+            .kind = RenderPassKind::Graphics,
+            .primaryOutput =
+                PrimaryOutputAttachment{
+                    .loadOperation = AttachmentLoadOperation::Clear,
+                    .storeOperation = AttachmentStoreOperation::Store,
+                    .clearColor = ClearColor{0.1F, 0.2F, 0.3F, 1.0F},
+                },
+        }};
+        Check(backend.Execute(RenderExecutionPlan{.frame = frame, .orderedPasses = passes}).HasValue());
+        Check(state.executeCount == 1);
+        Check(state.attachment.clearColor.red == 0.1F);
+        Check(state.attachment.clearColor.green == 0.2F);
+        Check(state.attachment.clearColor.blue == 0.3F);
+        Check(backend.Present(frame).HasValue());
+        Check(state.presentCount == 1);
     }
 
     TEST_CASE("Provider Is Inert And Backend Owns Presentation Lifecycle", "[unit][runtime][renderer]") {
@@ -330,37 +397,36 @@ namespace {
         Check(backend->Capabilities().backend == RenderBackendId{"metal"});
         Check(backend->Capabilities().presentsToWindow);
 
-        Check(backend->Resize(FramebufferExtent{1920, 1080}).HasValue());
-        Check(state.resizeCount == 1);
-        Check(state.resizedExtent.width == 1920 && state.resizedExtent.height == 1080);
-
-        auto begun = backend->BeginFrame(FrameDescriptor{.frameNumber = 7, .outputExtent = {1280, 720}});
-        Check(begun.HasValue());
-        const FrameToken frame = begun.Value();
-        Check(state.beginCount == 1);
-        Check(state.frameExtent.width == 1280 && state.frameExtent.height == 720);
-
-        const std::array passes{RenderPassDescriptor{
-            .id = RenderPassId{1},
-            .kind = RenderPassKind::Graphics,
-            .primaryOutput =
-                PrimaryOutputAttachment{
-                    .loadOperation = AttachmentLoadOperation::Clear,
-                    .storeOperation = AttachmentStoreOperation::Store,
-                    .clearColor = ClearColor{0.1F, 0.2F, 0.3F, 1.0F},
-                },
-        }};
-        Check(backend->Execute(RenderExecutionPlan{.frame = frame, .orderedPasses = passes}).HasValue());
-        Check(state.executeCount == 1);
-        Check(state.attachment.clearColor.red == 0.1F);
-        Check(state.attachment.clearColor.green == 0.2F);
-        Check(state.attachment.clearColor.blue == 0.3F);
-        Check(backend->Present(frame).HasValue());
-        Check(state.presentCount == 1);
+        ExerciseFrameLifecycle(*backend, state);
 
         backend->Shutdown();
         backend->Shutdown();
         Check(state.destroyCount == 1);
+        Check(!backend->Capabilities().presentsToWindow);
+    }
+
+    TEST_CASE("Explicit Metal Adapter Selection Is Revalidated Without Fallback", "[unit][runtime][renderer]") {
+        PortState state;
+        FakePresentationPort port{state};
+        MetalEditorGraphicsBridge bridge;
+        std::unique_ptr<IRenderBackend> backend = CreateBackend(port, state, bridge);
+        Check(backend
+                  ->Initialize(RenderBackendConfig{
+                      .adapter = RenderAdapterId{"metal:test"},
+                      .adapterDiscoveryRevision = 1,
+                      .requirePresentation = true,
+                  })
+                  .HasValue());
+        backend->Shutdown();
+
+        const Result<void> stale = backend->Initialize(RenderBackendConfig{
+            .adapter = RenderAdapterId{"metal:test"},
+            .adapterDiscoveryRevision = 2,
+            .requirePresentation = true,
+        });
+        Check(stale.HasError());
+        Check(stale.ErrorValue().code.Value() == "render.test.adapter_mismatch");
+        Check(state.destroyCount == 2);
     }
 
     TEST_CASE("Failures Preserve Typed Errors And Frame Recovery", "[unit][runtime][renderer]") {
@@ -433,8 +499,7 @@ namespace {
         PortState state;
         FakePresentationPort port{state};
         MetalEditorGraphicsBridge bridge;
-        std::unique_ptr<IRenderBackend> backend = CreateBackend(port, state, bridge);
-        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedBackend(port, state, bridge);
         auto begun = backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {640, 480}});
         Check(begun.HasValue());
 
@@ -454,8 +519,7 @@ namespace {
         PortState state;
         FakePresentationPort port{state};
         MetalEditorGraphicsBridge bridge;
-        std::unique_ptr<IRenderBackend> backend = CreateBackend(port, state, bridge);
-        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedBackend(port, state, bridge);
         Check(backend->Capabilities().supportsBufferResources);
         Check(backend->Capabilities().supportsMeshResources);
         Check(backend->Capabilities().supportsTextureResources);

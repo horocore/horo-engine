@@ -918,6 +918,7 @@ endif ()
 
 if (HORO_BUILD_RENDER_METAL)
     add_library(HoroRenderMetal STATIC
+            runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
             runtime/renderer/modules/metal/MetalRenderBackend.cpp
             runtime/renderer/modules/metal/MetalRenderBackendErrors.cpp
             runtime/renderer/modules/metal/MetalResourceRuntime.mm

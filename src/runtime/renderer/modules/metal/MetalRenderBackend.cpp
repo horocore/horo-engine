@@ -50,11 +50,17 @@ namespace Horo::Render {
                 // Claim cleanup before entering platform code. Typed failure guarantees no
                 // retained resources; an exception may occur after native acquisition.
                 runtimeInitialized_ = true;
-                const Result<void> created = runtime_->Initialize(MetalPresentationDescriptor{
-                    .enableValidation = config.enableValidation,
-                    .maxFramesInFlight = config.maxFramesInFlight,
-                    .presentMode = config.presentMode,
-                });
+                const Result<Detail::MetalDeviceCapabilities> created = runtime_->Initialize(
+                    MetalPresentationDescriptor{
+                        .enableValidation = config.enableValidation,
+                        .maxFramesInFlight = config.maxFramesInFlight,
+                        .presentMode = config.presentMode,
+                    },
+                    Detail::MetalDeviceAdmissionRequest{
+                        .adapter = config.adapter,
+                        .discoveryRevision = config.adapterDiscoveryRevision,
+                        .requirePresentation = config.requirePresentation,
+                    });
                 if (created.HasError()) {
                     runtime_->Shutdown();
                     runtimeInitialized_ = false;
@@ -62,6 +68,7 @@ namespace Horo::Render {
                     return Result<void>::Failure(created.ErrorValue());
                 }
 
+                capabilities_ = created.Value().implemented;
                 initialized_ = true;
                 return Result<void>::Success();
             }
@@ -73,14 +80,14 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
-                return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [&] {
+                return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [this, &descriptor] {
                     return runtime_->QueryBufferMemoryCost(descriptor);
                 });
             }
 
             /** @copydoc IRenderBackend::QueryTextureMemoryCost */
             Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
-                return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [&] {
+                return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [this, &descriptor] {
                     return runtime_->QueryTextureMemoryCost(descriptor);
                 });
             }
@@ -167,8 +174,7 @@ namespace Horo::Render {
                         MakeMetalError(MetalBackendErrors::FrameTokenExhausted, "Frame token space is exhausted."));
                 }
 
-                const Result<void> begun = runtime_->BeginFrame(descriptor.outputExtent);
-                if (begun.HasError()) {
+                if (const Result<void> begun = runtime_->BeginFrame(descriptor.outputExtent); begun.HasError()) {
                     return Result<FrameToken>::Failure(begun.ErrorValue());
                 }
 
@@ -179,8 +185,7 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::Execute */
             Result<void> Execute(const RenderExecutionPlan &plan) override {
-                const Result<void> valid = ValidatePlan(plan);
-                if (valid.HasError()) {
+                if (const Result<void> valid = ValidatePlan(plan); valid.HasError()) {
                     return valid;
                 }
 
@@ -198,13 +203,11 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::Present */
             Result<void> Present(const FrameToken frame) override {
-                const Result<void> state = ValidateActiveFrame(frame);
-                if (state.HasError()) {
+                if (const Result<void> state = ValidateActiveFrame(frame); state.HasError()) {
                     return state;
                 }
 
-                const Result<void> presented = runtime_->Present();
-                if (presented.HasError()) {
+                if (const Result<void> presented = runtime_->Present(); presented.HasError()) {
                     return Result<void>::Failure(presented.ErrorValue());
                 }
 
@@ -251,6 +254,7 @@ namespace Horo::Render {
                 AbortActiveFrame();
                 initialized_ = false;
                 DestroyRuntime();
+                capabilities_ = RenderBackendCapabilities{.backend = RenderBackendId{"metal"}};
             }
 
         private:
@@ -280,8 +284,7 @@ namespace Horo::Render {
             }
 
             [[nodiscard]] Result<void> ValidatePlan(const RenderExecutionPlan &plan) const {
-                const Result<void> state = ValidateActiveFrame(plan.frame);
-                if (state.HasError()) {
+                if (const Result<void> state = ValidateActiveFrame(plan.frame); state.HasError()) {
                     return state;
                 }
 
@@ -326,19 +329,7 @@ namespace Horo::Render {
 
             std::unique_ptr<Detail::IMetalRuntime> runtime_;
             std::shared_ptr<MetalPresentationLease> presentationLease_;
-            RenderBackendCapabilities capabilities_{
-                .backend = RenderBackendId{"metal"},
-                .presentsToWindow = true,
-                .supportsOffscreenTargets = true,
-                .supportsTimestampQueries = false,
-                .supportsCompute = false,
-                .supportsBindlessResources = false,
-                .supportsRayTracing = false,
-                .supportsBufferResources = true,
-                .supportsMeshResources = true,
-                .supportsTextureResources = true,
-                .supportsRenderTargetResources = true,
-            };
+            RenderBackendCapabilities capabilities_{.backend = RenderBackendId{"metal"}};
             FrameToken activeFrame_{};
             std::uint64_t nextFrameToken_{1};
             bool initialized_{false};
@@ -351,8 +342,7 @@ namespace Horo::Render {
         public:
             MetalBackendProvider(IMetalPresentationPort &presentationPort, MetalEditorGraphicsBridge &editorGraphicsBridge,
                                  const Detail::IMetalRuntimeFactory &runtimeFactory)
-                : presentationPort_(&presentationPort), editorGraphicsBridge_(&editorGraphicsBridge), runtimeFactory_(&runtimeFactory),
-                  presentationLease_(std::make_shared<MetalPresentationLease>()) {}
+                : presentationPort_(&presentationPort), editorGraphicsBridge_(&editorGraphicsBridge), runtimeFactory_(&runtimeFactory) {}
 
             /** @copydoc IRenderBackendProvider::Create */
             Result<std::unique_ptr<IRenderBackend>> Create() const override {
@@ -368,7 +358,7 @@ namespace Horo::Render {
             IMetalPresentationPort *presentationPort_{nullptr};
             MetalEditorGraphicsBridge *editorGraphicsBridge_{nullptr};
             const Detail::IMetalRuntimeFactory *runtimeFactory_{nullptr};
-            std::shared_ptr<MetalPresentationLease> presentationLease_;
+            std::shared_ptr<MetalPresentationLease> presentationLease_{std::make_shared<MetalPresentationLease>()};
         };
 
         class MetalRuntimeFactory final : public Detail::IMetalRuntimeFactory {
@@ -397,27 +387,27 @@ namespace Horo::Render {
     }
 
     /** @copydoc MetalEditorGraphicsBridge::Device */
-    void *MetalEditorGraphicsBridge::Device() const noexcept {
+    void *MetalEditorGraphicsBridge::Device() const noexcept {  // NOSONAR(cpp:S5008) Native-free private bridge.
         return device_;
     }
 
     /** @copydoc MetalEditorGraphicsBridge::CommandQueue */
-    void *MetalEditorGraphicsBridge::CommandQueue() const noexcept {
+    void *MetalEditorGraphicsBridge::CommandQueue() const noexcept {  // NOSONAR(cpp:S5008) Native-free private bridge.
         return commandQueue_;
     }
 
     /** @copydoc MetalEditorGraphicsBridge::CurrentCommandBuffer */
-    void *MetalEditorGraphicsBridge::CurrentCommandBuffer() const noexcept {
+    void *MetalEditorGraphicsBridge::CurrentCommandBuffer() const noexcept {  // NOSONAR(cpp:S5008) Native-free private bridge.
         return commandBuffer_;
     }
 
     /** @copydoc MetalEditorGraphicsBridge::CurrentRenderPassDescriptor */
-    void *MetalEditorGraphicsBridge::CurrentRenderPassDescriptor() const noexcept {
+    void *MetalEditorGraphicsBridge::CurrentRenderPassDescriptor() const noexcept {  // NOSONAR(cpp:S5008) Native-free private bridge.
         return renderPassDescriptor_;
     }
 
     /** @copydoc MetalEditorGraphicsBridge::CurrentRenderEncoder */
-    void *MetalEditorGraphicsBridge::CurrentRenderEncoder() const noexcept {
+    void *MetalEditorGraphicsBridge::CurrentRenderEncoder() const noexcept {  // NOSONAR(cpp:S5008) Native-free private bridge.
         return renderEncoder_;
     }
 
@@ -436,17 +426,19 @@ namespace Horo::Render {
     }
 
     namespace Detail {
-        void MetalEditorGraphicsAccess::PublishPersistent(MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue,
-                                                          void *waitContext,
-                                                          MetalEditorGraphicsBridge::WaitUntilIdleFunction wait) noexcept {
+        void MetalEditorGraphicsAccess::PublishPersistent(
+            MetalEditorGraphicsBridge &bridge, void *device, void *commandQueue,  // NOSONAR
+            void *waitContext,                                                    // NOSONAR(cpp:S5008)
+            MetalEditorGraphicsBridge::WaitUntilIdleFunction wait) noexcept {     // NOSONAR(cpp:S5205)
             bridge.device_ = device;
             bridge.commandQueue_ = commandQueue;
             bridge.waitContext_ = waitContext;
             bridge.waitUntilIdle_ = wait;
         }
 
-        void MetalEditorGraphicsAccess::PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer, void *renderPassDescriptor,
-                                                     void *renderEncoder) noexcept {
+        void MetalEditorGraphicsAccess::PublishFrame(MetalEditorGraphicsBridge &bridge, void *commandBuffer,  // NOSONAR(cpp:S5008)
+                                                     void *renderPassDescriptor,                              // NOSONAR(cpp:S5008)
+                                                     void *renderEncoder) noexcept {                          // NOSONAR(cpp:S5008)
             bridge.commandBuffer_ = commandBuffer;
             bridge.renderPassDescriptor_ = renderPassDescriptor;
             bridge.renderEncoder_ = renderEncoder;
