@@ -85,6 +85,12 @@ namespace Horo::Physics {
         REQUIRE(first.Value().TriangleMesh() == nullptr);
         REQUIRE(cache.Stats().residentShapes == 1);
         REQUIRE(cache.Stats().residentBytes == first.Value().ResidentBytes());
+
+        auto irrelevantOnHit = cooked.payload;
+        irrelevantOnHit.back() ^= 1U;
+        auto hit = cache.Acquire(cooked.descriptor, irrelevantOnHit);
+        REQUIRE(hit.HasValue());
+        REQUIRE(first.Value().SharesResourceWith(hit.Value()));
     }
 
     TEST_CASE("Concurrent cold acquisition publishes only one shared resource", "[unit][physics][shape_cache][thread]") {

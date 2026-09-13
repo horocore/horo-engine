@@ -19,7 +19,8 @@
 namespace Horo::Physics {
     namespace Detail {
         struct PhysicsCookedShapeResource;
-    }
+        struct PhysicsCookedShapeCacheState;
+    }  // namespace Detail
 
     /** @brief Process/profile limits for cache-owned immutable cooked shape resources. */
     struct PhysicsCookedShapeCacheLimits final {
@@ -50,9 +51,9 @@ namespace Horo::Physics {
         PhysicsCookedShapeLease() noexcept = default;
         PhysicsCookedShapeLease(const PhysicsCookedShapeLease &) = delete;
         PhysicsCookedShapeLease &operator=(const PhysicsCookedShapeLease &) = delete;
-        PhysicsCookedShapeLease(PhysicsCookedShapeLease &&) noexcept = default;
-        PhysicsCookedShapeLease &operator=(PhysicsCookedShapeLease &&) noexcept = default;
-        ~PhysicsCookedShapeLease() = default;
+        PhysicsCookedShapeLease(PhysicsCookedShapeLease &&other) noexcept;
+        PhysicsCookedShapeLease &operator=(PhysicsCookedShapeLease &&other) noexcept;
+        ~PhysicsCookedShapeLease();
 
         /** @brief Checks whether this lease pins an immutable resource. @return True for an active lease. */
         [[nodiscard]] explicit operator bool() const noexcept;
@@ -69,9 +70,12 @@ namespace Horo::Physics {
 
     private:
         friend class PhysicsCookedShapeCache;
-        explicit PhysicsCookedShapeLease(std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource) noexcept;
+        PhysicsCookedShapeLease(std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource,
+                                std::shared_ptr<Detail::PhysicsCookedShapeCacheState> state) noexcept;
+        void Release() noexcept;
 
         std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource_;
+        std::shared_ptr<Detail::PhysicsCookedShapeCacheState> state_;
     };
 
     /**
@@ -101,7 +105,7 @@ namespace Horo::Physics {
         /**
          * @brief Acquires an existing exact resource or verifies, constructs and publishes one cache entry.
          * @param descriptor Exact immutable cooked-shape reference.
-         * @param payload Exact cooked artifact bytes matching descriptor.payloadDigest.
+         * @param payload Candidate cooked bytes used only on a cache miss; an exact resident key ignores them.
          * @return Move-only resource lease, or a stable validation, compatibility, capacity or lifecycle error.
          * @post Failure publishes no partial entry. Concurrent success for one key shares one published resource.
          */

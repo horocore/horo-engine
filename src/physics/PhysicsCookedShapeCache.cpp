@@ -73,11 +73,7 @@ namespace Horo::Physics {
         }
 
         [[nodiscard]] Result<void> ValidatePayloadIdentity(const PhysicsCookedShapeDescriptor &descriptor,
-                                                           const PhysicsShapeCookTargetDigest &target,
                                                            const std::span<const std::uint8_t> payload) {
-            Result<void> descriptorValidation = ValidatePhysicsCookedShapeDescriptor(descriptor, target);
-            if (descriptorValidation.HasError())
-                return descriptorValidation;
             if (payload.empty())
                 return Result<void>::Failure(CacheError(PhysicsErrors::ShapeArtifactInvalid,
                                                         "Cooked shape cache acquisition requires a non-empty artifact payload."));
@@ -158,62 +154,98 @@ namespace Horo::Physics {
         }
     }  // namespace
 
-    struct PhysicsCookedShapeCache::Impl final {
-        struct Entry final {
-            CacheKey key;
-            std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource;
-            std::uint64_t lastUse{};
+    namespace Detail {
+        struct PhysicsCookedShapeCacheState final {
+            struct Entry final {
+                CacheKey key;
+                std::shared_ptr<const PhysicsCookedShapeResource> resource;
+                std::uint64_t leaseCount{};
+            };
+
+            PhysicsShapeCookTargetDigest target;
+            PhysicsCookedShapeCacheLimits limits;
+            std::list<Entry> activeEntries;
+            std::list<Entry> evictableEntries;
+            std::unordered_map<CacheKey, std::list<Entry>::iterator, CacheKeyHash> byKey;
+            std::uint64_t residentBytes{};
+            bool admissionClosed{};
+            mutable std::mutex mutex;
+
+            [[nodiscard]] std::shared_ptr<const PhysicsCookedShapeResource> FindAndPin(const CacheKey &key) {
+                const auto found = byKey.find(key);
+                if (found == byKey.end())
+                    return {};
+                auto entry = found->second;
+                if (entry->leaseCount == 0)
+                    activeEntries.splice(activeEntries.end(), evictableEntries, entry);
+                ++entry->leaseCount;
+                return entry->resource;
+            }
+
+            void Release(const std::shared_ptr<const PhysicsCookedShapeResource> &resource) noexcept {
+                const CacheKey key = MakeCacheKey(resource->descriptor);
+                std::scoped_lock lock{mutex};
+                const auto found = byKey.find(key);
+                if (found == byKey.end() || found->second->resource != resource || found->second->leaseCount == 0)
+                    return;
+                auto entry = found->second;
+                --entry->leaseCount;
+                if (entry->leaseCount == 0)
+                    evictableEntries.splice(evictableEntries.end(), activeEntries, entry);
+            }
+
+            [[nodiscard]] Result<void> MakeRoom(const std::uint64_t incomingBytes, std::list<Entry> &retired) {
+                while (byKey.size() >= limits.maximumShapes || incomingBytes > limits.maximumResidentBytes - residentBytes) {
+                    if (evictableEntries.empty())
+                        return Result<void>::Failure(
+                            CacheError(PhysicsErrors::CapacityExceeded,
+                                       "Active cooked shape leases prevent eviction needed by the configured cache budget."));
+                    auto victim = evictableEntries.begin();
+                    residentBytes -= victim->resource->residentBytes;
+                    byKey.erase(victim->key);
+                    retired.splice(retired.end(), evictableEntries, victim);
+                }
+                return Result<void>::Success();
+            }
+
+            void InsertPinned(CacheKey key, std::shared_ptr<const PhysicsCookedShapeResource> resource) {
+                residentBytes += resource->residentBytes;
+                activeEntries.push_back({std::move(key), std::move(resource), 1});
+                byKey.emplace(activeEntries.back().key, std::prev(activeEntries.end()));
+            }
         };
+    }  // namespace Detail
 
-        PhysicsShapeCookTargetDigest target;
-        PhysicsCookedShapeCacheLimits limits;
-        std::list<Entry> entries;
-        std::unordered_map<CacheKey, std::list<Entry>::iterator, CacheKeyHash> byKey;
-        std::uint64_t residentBytes{};
-        std::uint64_t useClock{};
-        bool admissionClosed{};
-        mutable std::mutex mutex;
-
-        [[nodiscard]] std::shared_ptr<const Detail::PhysicsCookedShapeResource> FindAndTouch(const CacheKey &key) {
-            const auto found = byKey.find(key);
-            if (found == byKey.end())
-                return {};
-            found->second->lastUse = ++useClock;
-            return found->second->resource;
-        }
-
-        [[nodiscard]] std::list<Entry>::iterator FindEvictionVictim() noexcept {
-            auto victim = entries.end();
-            for (auto candidate = entries.begin(); candidate != entries.end(); ++candidate) {
-                if (candidate->resource.use_count() == 1 && (victim == entries.end() || candidate->lastUse < victim->lastUse))
-                    victim = candidate;
-            }
-            return victim;
-        }
-
-        [[nodiscard]] Result<void> MakeRoom(const std::uint64_t incomingBytes, std::list<Entry> &retired) {
-            while (entries.size() >= limits.maximumShapes || incomingBytes > limits.maximumResidentBytes - residentBytes) {
-                const auto victim = FindEvictionVictim();
-                if (victim == entries.end())
-                    return Result<void>::Failure(
-                        CacheError(PhysicsErrors::CapacityExceeded,
-                                   "Active cooked shape leases prevent eviction needed by the configured cache budget."));
-                residentBytes -= victim->resource->residentBytes;
-                byKey.erase(victim->key);
-                retired.splice(retired.end(), entries, victim);
-            }
-            return Result<void>::Success();
-        }
-
-        void Insert(CacheKey key, std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource) {
-            residentBytes += resource->residentBytes;
-            entries.push_back({std::move(key), std::move(resource), ++useClock});
-            byKey.emplace(entries.back().key, std::prev(entries.end()));
-        }
+    struct PhysicsCookedShapeCache::Impl final {
+        std::shared_ptr<Detail::PhysicsCookedShapeCacheState> state;
     };
 
-    PhysicsCookedShapeLease::PhysicsCookedShapeLease(std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource) noexcept
-        : resource_(std::move(resource)) {}
+    PhysicsCookedShapeLease::PhysicsCookedShapeLease(std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource,
+                                                     std::shared_ptr<Detail::PhysicsCookedShapeCacheState> state) noexcept
+        : resource_(std::move(resource)), state_(std::move(state)) {}
+
+    PhysicsCookedShapeLease::PhysicsCookedShapeLease(PhysicsCookedShapeLease &&other) noexcept
+        : resource_(std::move(other.resource_)), state_(std::move(other.state_)) {}
+
+    PhysicsCookedShapeLease &PhysicsCookedShapeLease::operator=(PhysicsCookedShapeLease &&other) noexcept {
+        if (this != &other) {
+            Release();
+            resource_ = std::move(other.resource_);
+            state_ = std::move(other.state_);
+        }
+        return *this;
+    }
+
+    PhysicsCookedShapeLease::~PhysicsCookedShapeLease() {
+        Release();
+    }
+
+    void PhysicsCookedShapeLease::Release() noexcept {
+        if (resource_ != nullptr && state_ != nullptr)
+            state_->Release(resource_);
+        state_.reset();
+        resource_.reset();
+    }
 
     PhysicsCookedShapeLease::operator bool() const noexcept {
         return resource_ != nullptr;
@@ -248,8 +280,20 @@ namespace Horo::Physics {
     PhysicsCookedShapeCache::PhysicsCookedShapeCache(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     PhysicsCookedShapeCache::PhysicsCookedShapeCache(PhysicsCookedShapeCache &&) noexcept = default;
-    PhysicsCookedShapeCache &PhysicsCookedShapeCache::operator=(PhysicsCookedShapeCache &&) noexcept = default;
-    PhysicsCookedShapeCache::~PhysicsCookedShapeCache() = default;
+
+    PhysicsCookedShapeCache &PhysicsCookedShapeCache::operator=(PhysicsCookedShapeCache &&other) noexcept {
+        if (this != &other) {
+            if (impl_ != nullptr)
+                (void)Shutdown();
+            impl_ = std::move(other.impl_);
+        }
+        return *this;
+    }
+
+    PhysicsCookedShapeCache::~PhysicsCookedShapeCache() {
+        if (impl_ != nullptr)
+            (void)Shutdown();
+    }
 
     Result<PhysicsCookedShapeCache> PhysicsCookedShapeCache::Create(const PhysicsShapeCookTargetDigest target,
                                                                     const PhysicsCookedShapeCacheLimits &limits) {
@@ -257,93 +301,105 @@ namespace Horo::Physics {
         if (validation.HasError())
             return Result<PhysicsCookedShapeCache>::Failure(validation.ErrorValue());
         auto impl = std::make_unique<Impl>();
-        impl->target = target;
-        impl->limits = limits;
+        impl->state = std::make_shared<Detail::PhysicsCookedShapeCacheState>();
+        impl->state->target = target;
+        impl->state->limits = limits;
         return Result<PhysicsCookedShapeCache>::Success(PhysicsCookedShapeCache{std::move(impl)});
     }
 
     Result<PhysicsCookedShapeLease> PhysicsCookedShapeCache::Acquire(const PhysicsCookedShapeDescriptor &descriptor,
                                                                      const std::span<const std::uint8_t> payload) {
-        Result<void> identity = ValidatePayloadIdentity(descriptor, impl_->target, payload);
-        if (identity.HasError())
-            return Result<PhysicsCookedShapeLease>::Failure(identity.ErrorValue());
+        const auto state = impl_->state;
+        Result<void> descriptorValidation = ValidatePhysicsCookedShapeDescriptor(descriptor, state->target);
+        if (descriptorValidation.HasError())
+            return Result<PhysicsCookedShapeLease>::Failure(descriptorValidation.ErrorValue());
         const CacheKey key = MakeCacheKey(descriptor);
         {
-            std::scoped_lock lock{impl_->mutex};
-            if (impl_->admissionClosed)
+            std::scoped_lock lock{state->mutex};
+            if (state->admissionClosed)
                 return Result<PhysicsCookedShapeLease>::Failure(
                     CacheError(PhysicsErrors::InvalidState,
                                "Cooked shape cache admission is closed after shutdown; create a new runtime cache."));
-            if (auto resident = impl_->FindAndTouch(key))
-                return Result<PhysicsCookedShapeLease>::Success(PhysicsCookedShapeLease{std::move(resident)});
+            if (auto resident = state->FindAndPin(key))
+                return Result<PhysicsCookedShapeLease>::Success(PhysicsCookedShapeLease{std::move(resident), state});
         }
 
+        Result<void> payloadValidation = ValidatePayloadIdentity(descriptor, payload);
+        if (payloadValidation.HasError())
+            return Result<PhysicsCookedShapeLease>::Failure(payloadValidation.ErrorValue());
         Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> constructed =
-            ConstructResource(descriptor, impl_->target, payload);
+            ConstructResource(descriptor, state->target, payload);
         if (constructed.HasError())
             return Result<PhysicsCookedShapeLease>::Failure(constructed.ErrorValue());
         std::shared_ptr<const Detail::PhysicsCookedShapeResource> resource = std::move(constructed).Value();
-        if (resource->residentBytes > impl_->limits.maximumResidentBytes)
+        if (resource->residentBytes > state->limits.maximumResidentBytes)
             return Result<PhysicsCookedShapeLease>::Failure(
                 CacheError(PhysicsErrors::CapacityExceeded,
                            "Cooked shape resource cannot fit within the configured resident-byte budget."));
 
-        std::list<Impl::Entry> retired;
-        std::unique_lock lock{impl_->mutex};
-        if (impl_->admissionClosed)
+        std::list<Detail::PhysicsCookedShapeCacheState::Entry> retired;
+        std::unique_lock lock{state->mutex};
+        if (state->admissionClosed)
             return Result<PhysicsCookedShapeLease>::Failure(
                 CacheError(PhysicsErrors::InvalidState, "Cooked shape cache admission closed while the resource was being constructed."));
-        if (auto resident = impl_->FindAndTouch(key))
-            return Result<PhysicsCookedShapeLease>::Success(PhysicsCookedShapeLease{std::move(resident)});
-        Result<void> room = impl_->MakeRoom(resource->residentBytes, retired);
+        if (auto resident = state->FindAndPin(key))
+            return Result<PhysicsCookedShapeLease>::Success(PhysicsCookedShapeLease{std::move(resident), state});
+        Result<void> room = state->MakeRoom(resource->residentBytes, retired);
         if (room.HasError())
             return Result<PhysicsCookedShapeLease>::Failure(room.ErrorValue());
-        impl_->Insert(key, resource);
+        state->InsertPinned(key, resource);
         lock.unlock();
         retired.clear();
-        return Result<PhysicsCookedShapeLease>::Success(PhysicsCookedShapeLease{std::move(resource)});
+        return Result<PhysicsCookedShapeLease>::Success(PhysicsCookedShapeLease{std::move(resource), state});
     }
 
     Result<bool> PhysicsCookedShapeCache::Evict(const PhysicsCookedShapeDescriptor &descriptor) {
-        Result<void> validation = ValidatePhysicsCookedShapeDescriptor(descriptor, impl_->target);
+        const auto state = impl_->state;
+        Result<void> validation = ValidatePhysicsCookedShapeDescriptor(descriptor, state->target);
         if (validation.HasError())
             return Result<bool>::Failure(validation.ErrorValue());
         const CacheKey key = MakeCacheKey(descriptor);
         std::shared_ptr<const Detail::PhysicsCookedShapeResource> retired;
-        std::unique_lock lock{impl_->mutex};
-        if (impl_->admissionClosed)
+        std::unique_lock lock{state->mutex};
+        if (state->admissionClosed)
             return Result<bool>::Failure(
                 CacheError(PhysicsErrors::InvalidState, "Cooked shape cache eviction is unavailable after shutdown."));
-        const auto found = impl_->byKey.find(key);
-        if (found == impl_->byKey.end())
+        const auto found = state->byKey.find(key);
+        if (found == state->byKey.end())
             return Result<bool>::Success(false);
         const auto entry = found->second;
-        impl_->residentBytes -= entry->resource->residentBytes;
+        state->residentBytes -= entry->resource->residentBytes;
         retired = std::move(entry->resource);
-        impl_->byKey.erase(found);
-        impl_->entries.erase(entry);
+        state->byKey.erase(found);
+        if (entry->leaseCount == 0)
+            state->evictableEntries.erase(entry);
+        else
+            state->activeEntries.erase(entry);
         lock.unlock();
         retired.reset();
         return Result<bool>::Success(true);
     }
 
     Result<void> PhysicsCookedShapeCache::Shutdown() noexcept {
-        std::list<Impl::Entry> retired;
+        const auto state = impl_->state;
+        std::list<Detail::PhysicsCookedShapeCacheState::Entry> retired;
         {
-            std::scoped_lock lock{impl_->mutex};
-            if (impl_->admissionClosed)
+            std::scoped_lock lock{state->mutex};
+            if (state->admissionClosed)
                 return Result<void>::Success();
-            impl_->admissionClosed = true;
-            retired.splice(retired.end(), impl_->entries);
-            impl_->byKey.clear();
-            impl_->residentBytes = 0;
+            state->admissionClosed = true;
+            retired.splice(retired.end(), state->activeEntries);
+            retired.splice(retired.end(), state->evictableEntries);
+            state->byKey.clear();
+            state->residentBytes = 0;
         }
         retired.clear();
         return Result<void>::Success();
     }
 
     PhysicsCookedShapeCacheStats PhysicsCookedShapeCache::Stats() const noexcept {
-        std::scoped_lock lock{impl_->mutex};
-        return {static_cast<std::uint32_t>(impl_->entries.size()), impl_->residentBytes, impl_->admissionClosed};
+        const auto state = impl_->state;
+        std::scoped_lock lock{state->mutex};
+        return {static_cast<std::uint32_t>(state->byKey.size()), state->residentBytes, state->admissionClosed};
     }
 }  // namespace Horo::Physics
