@@ -82,6 +82,7 @@ namespace Horo::Runtime {
             Apply,
             Fixup,
             Throw,
+            ThrowNonStandard,
         };
 
         struct ParticipantLog final {
@@ -162,6 +163,8 @@ namespace Horo::Runtime {
                 log_.phases.push_back(requirement_.participant.Value() + ":" + std::string{phase});
                 if (failure_ == InjectedFailure::Throw && phase == "apply")
                     throw std::runtime_error{"participant contract violation"};
+                if (failure_ == InjectedFailure::ThrowNonStandard && phase == "apply")
+                    throw 1392;  // NOSONAR -- Exercises defensive containment of a foreign non-standard exception.
                 if (failure_ == phaseFailure)
                     return Result<void>::Failure(MakeError(SaveErrors::CompositionInjectedFailure));
                 return Result<void>::Success();
@@ -261,8 +264,9 @@ namespace Horo::Runtime {
         TEST_CASE("Every fallible restore phase rolls inactive candidates back in reverse dependency order",
                   "[unit][save][restore][rollback]") {
             const auto registry = DependencyRegistry();
-            for (const InjectedFailure failure : {InjectedFailure::Decode, InjectedFailure::Validate, InjectedFailure::Instantiate,
-                                                  InjectedFailure::Apply, InjectedFailure::Fixup, InjectedFailure::Throw}) {
+            for (const InjectedFailure failure :
+                 {InjectedFailure::Decode, InjectedFailure::Validate, InjectedFailure::Instantiate, InjectedFailure::Apply,
+                  InjectedFailure::Fixup, InjectedFailure::Throw, InjectedFailure::ThrowNonStandard}) {
                 ParticipantLog log;
                 std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged;
                 staged.push_back(Candidate("horo.test.provider", log));
@@ -282,8 +286,9 @@ namespace Horo::Runtime {
                 CHECK(terminal.state == SaveOperationState::Failed);
                 CHECK(terminal.commit == SaveOperationCommitOutcome::NotCommitted);
                 REQUIRE(terminal.terminalError.has_value());
+                const bool adapterException = failure == InjectedFailure::Throw || failure == InjectedFailure::ThrowNonStandard;
                 const auto &expected =
-                    failure == InjectedFailure::Throw ? SaveErrors::RestoreAdapterContractInvalid : SaveErrors::CompositionInjectedFailure;
+                    adapterException ? SaveErrors::RestoreAdapterContractInvalid : SaveErrors::CompositionInjectedFailure;
                 CHECK(terminal.terminalError->code.Value() == expected.code.Value());
                 CHECK(transaction.Trace().back().phase == StagedRestorePhase::Rollback);
             }
