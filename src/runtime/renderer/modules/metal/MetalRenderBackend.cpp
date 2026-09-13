@@ -73,20 +73,16 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
-                if (!initialized_)
-                    return Result<RenderMemoryCostPlan>::Failure(
-                        MakeMetalError(MetalBackendErrors::NotInitialized,
-                                       "Metal buffer memory requirements require an initialized backend."));
-                return runtime_->QueryBufferMemoryCost(descriptor);
+                return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [&] {
+                    return runtime_->QueryBufferMemoryCost(descriptor);
+                });
             }
 
             /** @copydoc IRenderBackend::QueryTextureMemoryCost */
             Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
-                if (!initialized_)
-                    return Result<RenderMemoryCostPlan>::Failure(
-                        MakeMetalError(MetalBackendErrors::NotInitialized,
-                                       "Metal texture memory requirements require an initialized backend."));
-                return runtime_->QueryTextureMemoryCost(descriptor);
+                return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [&] {
+                    return runtime_->QueryTextureMemoryCost(descriptor);
+                });
             }
 
             /** @copydoc IRenderBackend::CreateBuffer */
@@ -258,6 +254,12 @@ namespace Horo::Render {
             }
 
         private:
+            template <typename Query> [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const char *message, Query &&query) const {
+                if (!initialized_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));
+                return std::forward<Query>(query)();
+            }
+
             [[nodiscard]] static Result<std::uint64_t> ResourceNotInitialized(std::string message) {
                 return Result<std::uint64_t>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, std::move(message)));
             }
