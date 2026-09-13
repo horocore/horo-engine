@@ -83,4 +83,8 @@ namespace Horo::Prefab::PrefabErrors {
     const ErrorCodeDescriptor DependencyRevisionMismatch =
         Describe("prefab.dependency.revision_mismatch", "A prefab dependency source revision does not match.",
                  "Reload the dependency graph from one coherent immutable source and Asset Registry snapshot.");
+
+    const ErrorCodeDescriptor ResolutionStale =
+        Describe("prefab.resolution.stale", "A completed prefab resolution is stale.",
+                 "Discard the candidate and resolve again from the current registry and document revisions.");
 }  // namespace Horo::Prefab::PrefabErrors
