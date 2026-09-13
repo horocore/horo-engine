@@ -126,7 +126,10 @@ namespace Horo::Render::Detail {
         Registry<View> views;
         Registry<Mesh> meshes;
         Registry<Target> targets;
+        std::uint64_t maximumIdentity{0};
         std::uint64_t nextIdentity{1};
+
+        explicit Impl(const std::uint64_t identityLimit) noexcept : maximumIdentity(identityLimit) {}
 
         [[nodiscard]] bool DispatchComplete() const noexcept {
             const std::array availability{
@@ -156,7 +159,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] std::optional<std::uint64_t> IssueIdentity() noexcept {
-            if (nextIdentity == 0)
+            if (nextIdentity == 0 || nextIdentity > maximumIdentity)
                 return std::nullopt;
             return nextIdentity++;
         }
@@ -279,7 +282,8 @@ namespace Horo::Render::Detail {
         }
     };
 
-    VulkanResourceRuntime::VulkanResourceRuntime() : impl_(std::make_unique<Impl>()) {}
+    /** @copydoc VulkanResourceRuntime::VulkanResourceRuntime */
+    VulkanResourceRuntime::VulkanResourceRuntime(const std::uint64_t maximumIdentity) : impl_(std::make_unique<Impl>(maximumIdentity)) {}
 
     VulkanResourceRuntime::~VulkanResourceRuntime() {
         ShutdownResources();

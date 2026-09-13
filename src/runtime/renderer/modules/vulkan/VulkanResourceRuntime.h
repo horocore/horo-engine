@@ -2,14 +2,20 @@
 
 #include "VulkanBackendModule.h"
 
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 
 namespace Horo::Render::Detail {
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
     class VulkanResourceRuntime final : public IRenderResourceBackend {
     public:
-        VulkanResourceRuntime();
+        /**
+         * @brief Creates an inert resource runtime with a bounded backend-private identity range.
+         * @param maximumIdentity Largest non-zero identity that may be published.
+         */
+        explicit VulkanResourceRuntime(std::uint64_t maximumIdentity = std::numeric_limits<std::uint64_t>::max());
         ~VulkanResourceRuntime() override;
         VulkanResourceRuntime(const VulkanResourceRuntime &) = delete;
         VulkanResourceRuntime &operator=(const VulkanResourceRuntime &) = delete;
