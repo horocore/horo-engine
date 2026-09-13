@@ -1,5 +1,8 @@
 #include "EditorGuiRendererMetal.h"
 
+#include "editor/renderer/EditorRenderMemoryScopes.h"
+#include "editor/renderer/metal/MetalViewportResourceBridge.h"
+
 #import <Metal/Metal.h>
 #include <algorithm>
 #include <imgui.h>
@@ -20,20 +23,29 @@ namespace Horo::Editor {
     }  // namespace
 
     struct EditorGuiRendererMetal::Impl {
-        Impl(SDL_Window &borrowedWindow, Render::MetalEditorGraphicsBridge &borrowedGraphicsBridge) noexcept
-            : window(&borrowedWindow), graphicsBridge(&borrowedGraphicsBridge) {}
+        Impl(SDL_Window &borrowedWindow, Render::MetalEditorGraphicsBridge &borrowedGraphicsBridge,
+             Render::RenderFrontend &borrowedFrontend) noexcept
+            : window(&borrowedWindow), graphicsBridge(&borrowedGraphicsBridge), frontend(&borrowedFrontend) {}
+
+        struct TextureRecord {
+            std::uintptr_t imageIdentity{0};
+            Render::RenderTextureHandle texture;
+            Render::RenderTextureViewHandle view;
+        };
 
         SDL_Window *window{nullptr};
         Render::MetalEditorGraphicsBridge *graphicsBridge{nullptr};
+        Render::RenderFrontend *frontend{nullptr};
         __strong id<MTLDevice> device{nil};
-        std::vector<__strong id<MTLTexture>> textures;
+        std::vector<TextureRecord> textures;
         bool platformInitialized{false};
         bool rendererInitialized{false};
     };
 
     /** @copydoc EditorGuiRendererMetal::EditorGuiRendererMetal */
-    EditorGuiRendererMetal::EditorGuiRendererMetal(SDL_Window &window, Render::MetalEditorGraphicsBridge &graphicsBridge) noexcept
-        : impl_(std::make_unique<Impl>(window, graphicsBridge)) {}
+    EditorGuiRendererMetal::EditorGuiRendererMetal(SDL_Window &window, Render::MetalEditorGraphicsBridge &graphicsBridge,
+                                                   Render::RenderFrontend &frontend) noexcept
+        : impl_(std::make_unique<Impl>(window, graphicsBridge, frontend)) {}
 
     /** @copydoc EditorGuiRendererMetal::~EditorGuiRendererMetal */
     EditorGuiRendererMetal::~EditorGuiRendererMetal() {
@@ -100,32 +112,59 @@ namespace Horo::Editor {
             return Result<std::uintptr_t>::Failure(
                 MakeGuiRendererError("editor.gui.metal.invalid_texture", "Metal GUI texture upload is invalid."));
         }
-        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                                              width:image.width
-                                                                                             height:image.height
-                                                                                          mipmapped:NO];
-        descriptor.usage = MTLTextureUsageShaderRead;
-        descriptor.storageMode = MTLStorageModeShared;
-        id<MTLTexture> texture = [impl_->device newTextureWithDescriptor:descriptor];
-        if (texture == nil) {
-            return Result<std::uintptr_t>::Failure(
-                MakeGuiRendererError("editor.gui.metal.texture_creation_failed", "Failed to create Metal GUI texture."));
+        auto texture = impl_->frontend->CreateTexture(RenderMemoryScopes::GuiResources,
+                                                      {.extent = {image.width, image.height},
+                                                       .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                       .usage = Render::RenderTextureUsage::Sampled},
+                                                      std::as_bytes(image.pixels));
+        if (texture.HasError())
+            return Result<std::uintptr_t>::Failure(texture.ErrorValue());
+        if (const auto processed = impl_->frontend->ProcessResourceRequests(); processed.HasError()) {
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(processed.ErrorValue());
         }
-        [texture replaceRegion:MTLRegionMake2D(0, 0, image.width, image.height)
-                   mipmapLevel:0
-                     withBytes:image.pixels.data()
-                   bytesPerRow:static_cast<NSUInteger>(image.width) * 4U];
-        impl_->textures.push_back(texture);
-        return Result<std::uintptr_t>::Success(reinterpret_cast<std::uintptr_t>((__bridge void *)texture));
+        if (const auto completed = impl_->frontend->ResourceOperationResult(texture.Value().operation); completed.HasError()) {
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(completed.ErrorValue());
+        }
+        auto view = impl_->frontend->CreateTextureView({.texture = texture.Value().handle,
+                                                        .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                        .aspect = Render::RenderTextureAspect::Color});
+        if (view.HasError()) {
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(view.ErrorValue());
+        }
+        const auto processed = impl_->frontend->ProcessResourceRequests();
+        const auto completed = impl_->frontend->ResourceOperationResult(view.Value().operation);
+        if (processed.HasError() || completed.HasError()) {
+            const Error error = processed.HasError() ? processed.ErrorValue() : completed.ErrorValue();
+            static_cast<void>(impl_->frontend->ReleaseTextureView(view.Value().handle));
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(error);
+        }
+        auto identity = MetalViewportResourceBridge::EditorImageIdentity(*impl_->frontend, view.Value().handle);
+        if (identity.HasError()) {
+            static_cast<void>(impl_->frontend->ReleaseTextureView(view.Value().handle));
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(identity.ErrorValue());
+        }
+        try {
+            impl_->textures.push_back({identity.Value(), texture.Value().handle, view.Value().handle});
+        } catch (...) {  // NOSONAR(cpp:S2738)
+            static_cast<void>(impl_->frontend->ReleaseTextureView(view.Value().handle));
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.Value().handle));
+            return Result<std::uintptr_t>::Failure(MakeGuiRendererError("editor.gui.metal.texture_record_allocation_failed",
+                                                                        "Metal GUI texture ownership record allocation failed."));
+        }
+        return Result<std::uintptr_t>::Success(identity.Value());
     }
 
     /** @copydoc EditorGuiRendererMetal::DestroyTexture */
     void EditorGuiRendererMetal::DestroyTexture(const std::uintptr_t textureId) noexcept {
-        const void *target = reinterpret_cast<const void *>(textureId);
-        const auto found = std::find_if(impl_->textures.begin(), impl_->textures.end(), [target](id<MTLTexture> texture) {
-            return (__bridge const void *)texture == target;
-        });
+        const auto found = std::ranges::find(impl_->textures, textureId, &Impl::TextureRecord::imageIdentity);
         if (found != impl_->textures.end()) {
+            static_cast<void>(impl_->frontend->ReleaseTextureView(found->view));
+            static_cast<void>(impl_->frontend->ReleaseTexture(found->texture));
             impl_->textures.erase(found);
         }
     }
@@ -133,6 +172,10 @@ namespace Horo::Editor {
     /** @copydoc EditorGuiRendererMetal::Shutdown */
     void EditorGuiRendererMetal::Shutdown() noexcept {
         impl_->graphicsBridge->WaitUntilIdle();
+        for (const Impl::TextureRecord &texture : impl_->textures) {
+            static_cast<void>(impl_->frontend->ReleaseTextureView(texture.view));
+            static_cast<void>(impl_->frontend->ReleaseTexture(texture.texture));
+        }
         impl_->textures.clear();
         if (impl_->rendererInitialized) {
             ImGui_ImplMetal_Shutdown();

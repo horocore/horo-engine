@@ -425,6 +425,7 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
+    Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDocument.h
 )
 
@@ -447,6 +448,7 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderGraphSynchronizationErrors.h
     Horo/Runtime/Render/RenderGraphLifetime.h
     Horo/Runtime/Render/RenderGraphLifetimeErrors.h
+    Horo/Runtime/Render/RenderMemoryTypes.h
     Horo/Runtime/Render/RenderResourceDescriptorErrors.h
     Horo/Runtime/Render/RenderResourceDescriptors.h
     Horo/Runtime/Render/RenderSubmission.h
@@ -467,6 +469,8 @@ horo_configure_target_header_boundary(HoroRenderBackendRegistry PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/RenderFrontend.h
+    Horo/Runtime/Render/RenderMemoryBudget.h
+    Horo/Runtime/Render/RenderMemoryBudgetErrors.h
     Horo/Runtime/Render/UiRenderComposition.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS

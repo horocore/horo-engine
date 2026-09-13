@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
+#include "RenderMemoryTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -54,6 +56,7 @@ namespace {
         int destroyTextureViewCount{0};
         int destroyRenderTargetCount{0};
         std::vector<std::byte> lastBufferInitialData;
+        std::vector<std::byte> lastTextureInitialData;
         bool failPresentation{false};
         bool throwDuringInitialize{false};
         bool throwDuringResize{false};
@@ -96,7 +99,17 @@ namespace {
             return capabilities_;
         }
 
-        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, const std::span<const std::byte> initialData) override {
+        Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+            return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(descriptor.byteSize, 1));
+        }
+
+        Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);
+            return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(bytes, 2));
+        }
+
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, const std::span<const std::byte> initialData,
+                                           const RenderMemoryPlacement &) override {
             ++lifecycleState.createBufferCount;
             lifecycleState.lastBufferInitialData.assign(initialData.begin(), initialData.end());
             if (lifecycleState.throwDuringResourceCreation) {
@@ -127,8 +140,10 @@ namespace {
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
 
-        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &) override {
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, const std::span<const std::byte> initialData,
+                                            const RenderMemoryPlacement &) override {
             ++lifecycleState.createTextureCount;
+            lifecycleState.lastTextureInitialData.assign(initialData.begin(), initialData.end());
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
 
@@ -271,14 +286,7 @@ namespace {
         return std::make_unique<TrackingBackendProvider>();
     }
 
-    static_assert(!std::is_copy_constructible_v<RenderFrameScope>);
-    static_assert(!std::is_copy_assignable_v<RenderFrameScope>);
-    static_assert(std::is_nothrow_move_constructible_v<RenderFrameScope>);
-    static_assert(std::is_nothrow_move_assignable_v<RenderFrameScope>);
-    static_assert(!std::is_same_v<RenderMeshHandle, RenderMeshSourceHandle>);
-
-    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend() {
-        RenderBackendRegistry registry;
+    void RegisterTrackingBackend(RenderBackendRegistry &registry) {
         Check(registry
                   .Register(RenderBackendDescriptor{
                       .id = RenderBackendId{"tracking"},
@@ -287,7 +295,18 @@ namespace {
                   })
                   .HasValue());
         Check(registry.Seal().HasValue());
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
+    }
+
+    static_assert(!std::is_copy_constructible_v<RenderFrameScope>);
+    static_assert(!std::is_copy_assignable_v<RenderFrameScope>);
+    static_assert(std::is_nothrow_move_constructible_v<RenderFrameScope>);
+    static_assert(std::is_nothrow_move_assignable_v<RenderFrameScope>);
+    static_assert(!std::is_same_v<RenderMeshHandle, RenderMeshSourceHandle>);
+
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend(const RenderFrontendMemoryConfig memoryConfig = {}) {
+        RenderBackendRegistry registry;
+        RegisterTrackingBackend(registry);
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, memoryConfig);
         Check(created.HasValue());
         return std::move(created).Value();
     }
@@ -355,6 +374,103 @@ namespace {
         Check(frontend->ReleaseMesh(mesh.Value().handle).HasValue());
         Check(lifecycleState.destroyMeshCount == 1);
         Check(lifecycleState.destroyBufferCount == 2);
+    }
+
+    TEST_CASE("Frontend admits native backing by explicit scope and reclaims it after destruction",
+              "[unit][runtime][renderer][resource][memory]") {
+        lifecycleState = {};
+        RenderFrontendMemoryConfig memoryConfig;
+        memoryConfig.budget = {.hardCapBytes = 64,
+                               .defaultBlockBytes = 64,
+                               .maximumBlockBytes = 64,
+                               .maximumAlignment = 32,
+                               .maximumPools = 4,
+                               .maximumBlocks = 4,
+                               .maximumReservations = 4,
+                               .maximumAllocations = 4};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend(memoryConfig);
+        const std::array<std::byte, 12> bytes{};
+        auto first = frontend->CreateBuffer({11, 1},
+                                            {.byteSize = bytes.size(),
+                                             .usage = RenderBufferUsage::Vertex,
+                                             .access = RenderBufferAccess::DeviceLocal},
+                                            bytes);
+        auto second =
+            frontend->CreateBuffer({12, 1},
+                                   {.byteSize = bytes.size(), .usage = RenderBufferUsage::Index, .access = RenderBufferAccess::DeviceLocal},
+                                   bytes);
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 24);
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        const auto committed = frontend->MemorySnapshot();
+        CHECK(committed.committedBackingBytes == 24);
+        CHECK(committed.livePayloadBytes == 24);
+        CHECK(committed.poolCount == 2);
+
+        REQUIRE(frontend->ReleaseBuffer(first.Value().handle).HasValue());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 12);
+        REQUIRE(frontend->ReleaseBuffer(second.Value().handle).HasValue());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+        CHECK(lifecycleState.destroyBufferCount == 2);
+    }
+
+    TEST_CASE("Frontend memory denial and pending cancellation never reach native allocation",
+              "[unit][runtime][renderer][resource][memory]") {
+        lifecycleState = {};
+        RenderFrontendMemoryConfig memoryConfig;
+        memoryConfig.budget = {.hardCapBytes = 8,
+                               .defaultBlockBytes = 8,
+                               .maximumBlockBytes = 8,
+                               .maximumAlignment = 8,
+                               .maximumPools = 2,
+                               .maximumBlocks = 2,
+                               .maximumReservations = 2,
+                               .maximumAllocations = 2};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend(memoryConfig);
+        const std::array<std::byte, 12> tooLarge{};
+        const auto denied = frontend->CreateBuffer({11, 1},
+                                                   {.byteSize = tooLarge.size(),
+                                                    .usage = RenderBufferUsage::Vertex,
+                                                    .access = RenderBufferAccess::DeviceLocal},
+                                                   tooLarge);
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == RenderMemoryBudgetErrors::BudgetExceeded.code.Value());
+        CHECK(lifecycleState.createBufferCount == 0);
+        CHECK(frontend->MemorySnapshot().reservationCount == 0);
+
+        const std::array<std::byte, 4> admittedBytes{};
+        auto admitted = frontend->CreateBuffer({11, 1},
+                                               {.byteSize = admittedBytes.size(),
+                                                .usage = RenderBufferUsage::Vertex,
+                                                .access = RenderBufferAccess::DeviceLocal},
+                                               admittedBytes);
+        REQUIRE(admitted.HasValue());
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 4);
+        REQUIRE(frontend->ReleaseBuffer(admitted.Value().handle).HasValue());
+        CHECK(frontend->MemorySnapshot().reservedUnallocatedBytes == 0);
+        CHECK(frontend->ProcessResourceRequests().Value() == 0);
+        CHECK(lifecycleState.createBufferCount == 0);
+    }
+
+    TEST_CASE("Frontend native allocation failure cancels its exact memory claim", "[unit][runtime][renderer][resource][memory]") {
+        lifecycleState = {};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend();
+        const std::array<std::byte, 12> bytes{};
+        auto buffer = frontend->CreateBuffer({11, 1},
+                                             {.byteSize = bytes.size(),
+                                              .usage = RenderBufferUsage::Vertex,
+                                              .access = RenderBufferAccess::DeviceLocal},
+                                             bytes);
+        REQUIRE(buffer.HasValue());
+        lifecycleState.failResourceCreation = true;
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(frontend->ResourceOperationResult(buffer.Value().operation).HasError());
+        const auto snapshot = frontend->MemorySnapshot();
+        CHECK(snapshot.reservedUnallocatedBytes == 0);
+        CHECK(snapshot.committedBackingBytes == 0);
+        CHECK(snapshot.reservationCount == 0);
+        CHECK(snapshot.allocationCount == 0);
     }
 
     TEST_CASE("Frontend Accepts Absent Buffer Initial Data And Copies Present Bytes", "[unit][runtime][renderer][resource]") {
@@ -429,6 +545,28 @@ namespace {
         Check(lifecycleState.destroyTextureCount == 2);
     }
 
+    TEST_CASE("Frontend validates and preserves complete texture base-level uploads", "[unit][runtime][renderer][resource][memory]") {
+        lifecycleState = {};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend();
+        const RenderTextureDescriptor descriptor{.extent = {2, 2},
+                                                 .format = RenderTextureFormat::Rgba8Unorm,
+                                                 .usage = RenderTextureUsage::Sampled};
+        const std::array<std::byte, 16> pixels{std::byte{0x2a}};
+        const auto truncated = frontend->CreateTexture(descriptor, std::span{pixels}.first<15>());
+        REQUIRE(truncated.HasError());
+        CHECK(truncated.ErrorValue().code.Value() == "render.frontend.resource.invalid_texture_descriptor");
+
+        auto texture = frontend->CreateTexture({102, 1}, descriptor, pixels);
+        REQUIRE(texture.HasValue());
+        CHECK(frontend->MemorySnapshot().reservedPayloadBytes == pixels.size());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(texture.Value().operation).HasValue());
+        CHECK(lifecycleState.lastTextureInitialData == std::vector<std::byte>(pixels.begin(), pixels.end()));
+        CHECK(frontend->MemorySnapshot().livePayloadBytes == pixels.size());
+        REQUIRE(frontend->ReleaseTexture(texture.Value().handle).HasValue());
+        CHECK(frontend->MemorySnapshot().committedBackingBytes == 0);
+    }
+
     TEST_CASE("Frontend Cancels Pending Resource Generations Without Leaking Late Realization", "[unit][runtime][renderer][resource]") {
         lifecycleState = {};
         std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend();
@@ -442,9 +580,9 @@ namespace {
         const Result<void> completion = frontend->ResourceOperationResult(buffer.Value().operation);
         Check(completion.HasError());
         Check(completion.ErrorValue().code.Value() == "render.frontend.resource.operation_cancelled");
-        Check(frontend->ProcessResourceRequests().Value() == 1);
-        Check(lifecycleState.createBufferCount == 1);
-        Check(lifecycleState.destroyBufferCount == 1);
+        Check(frontend->ProcessResourceRequests().Value() == 0);
+        Check(lifecycleState.createBufferCount == 0);
+        Check(lifecycleState.destroyBufferCount == 0);
         Check(frontend->ResourceState(buffer.Value().handle).ErrorValue().code.Value() == "render.frontend.resource.stale");
     }
 
@@ -481,18 +619,18 @@ namespace {
     TEST_CASE("Frontend Enforces Upload Byte And Drain Budgets", "[unit][runtime][renderer][resource]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
         auto invalid = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
                                               {.maximumPendingBytes = 8, .maximumBytesPerDrain = 16, .maximumRequestsPerDrain = 1});
         Check(invalid.HasError());
         Check(invalid.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
+
+        RenderFrontendMemoryConfig invalidMemory;
+        invalidMemory.budget.hardCapBytes = 0;
+        const auto invalidMemoryFrontend =
+            RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, invalidMemory);
+        Check(invalidMemoryFrontend.HasError());
+        Check(invalidMemoryFrontend.ErrorValue().code.Value() == "render.frontend.memory.invalid_config");
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
                                               {.maximumPendingBytes = 16, .maximumBytesPerDrain = 8, .maximumRequestsPerDrain = 4});
@@ -887,14 +1025,7 @@ namespace {
     TEST_CASE("Frontend Initializes And Owns Selected Backend Lifetime", "[unit][runtime][renderer]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -937,14 +1068,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.failPresentation = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -966,14 +1090,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.throwDuringInitialize = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasError());
@@ -988,14 +1105,7 @@ namespace {
             lifecycleState = {};
             lifecycleState.frameThrowPoint = throwPoint;
             RenderBackendRegistry registry;
-            Check(registry
-                      .Register(RenderBackendDescriptor{
-                          .id = RenderBackendId{"tracking"},
-                          .displayName = "Tracking",
-                          .provider = MakeTrackingBackendProvider(),
-                      })
-                      .HasValue());
-            Check(registry.Seal().HasValue());
+            RegisterTrackingBackend(registry);
 
             auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
             Check(created.HasValue());
@@ -1017,14 +1127,7 @@ namespace {
     TEST_CASE("Frontend Owns Resize Boundary And Contains Backend Exceptions", "[unit][runtime][renderer]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1054,14 +1157,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.returnInvalidFrameToken = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1083,14 +1179,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.failBeginAfterActivation = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1113,12 +1202,7 @@ namespace {
     TEST_CASE("Frontend Owns Static Mesh Executor Attachment And Rejects Missing Execution", "[unit][runtime][renderer]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{.id = RenderBackendId{"tracking"},
-                                                    .displayName = "Tracking",
-                                                    .provider = MakeTrackingBackendProvider()})
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
         std::unique_ptr<RenderFrontend> frontend = std::move(created).Value();
