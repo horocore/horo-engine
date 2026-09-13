@@ -694,4 +694,39 @@ namespace Horo::Render {
                                                                                 const RenderTargetHandle target) {
         return frontend.BackendInstance(target);
     }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderBufferHandle buffer,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Buffer, Identity(buffer), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderMeshHandle mesh,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Mesh, Identity(mesh), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTextureHandle texture,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Texture, Identity(texture), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTextureViewHandle view,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::TextureView, Identity(view), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTargetHandle target,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::RenderTarget, Identity(target), completion);
+    }
+
+    Result<std::size_t> Detail::RenderFrontendResourceAccess::AcknowledgeCompletion(RenderFrontend &frontend,
+                                                                                    const RenderTimelinePoint completion) {
+        auto acknowledged = frontend.resourceRegistry_->AcknowledgeCompletion(completion);
+        if (acknowledged.HasError()) {
+            return acknowledged;
+        }
+        static_cast<void>(frontend.resourceRegistry_->DrainRetirements());
+        return acknowledged;
+    }
 }  // namespace Horo::Render

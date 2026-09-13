@@ -158,7 +158,8 @@ namespace Horo::Render {
     Result<std::unique_ptr<RenderFrontend>> RenderFrontend::Create(const RenderBackendRegistry &registry, const RenderBackendId &backendId,
                                                                    const RenderBackendConfig &config,
                                                                    const RenderResourceUploadLimits uploadLimits,
-                                                                   const RenderFrontendMemoryConfig memoryConfig) {
+                                                                   const RenderFrontendMemoryConfig memoryConfig,
+                                                                   const RenderResourceRetirementLimits retirementLimits) {
         if (!uploadLimits.IsValid()) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidResourceUploadLimits, "Renderer resource upload limits are invalid."));
@@ -166,6 +167,11 @@ namespace Horo::Render {
         if (!memoryConfig.IsValid()) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidMemoryConfig, "Renderer memory admission limits or scope are invalid."));
+        }
+        if (!retirementLimits.IsValid()) {
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(
+                MakeFrontendError(FrontendErrors::InvalidResourceRetirementLimits, "Renderer resource retirement limits must use finite "
+                                                                                   "non-zero completion, queue, and destruction bounds."));
         }
         auto createdBackend = registry.Create(backendId);
         if (createdBackend.HasError()) {
@@ -197,7 +203,7 @@ namespace Horo::Render {
         try {
             return Result<std::unique_ptr<RenderFrontend>>::Success(
                 std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, std::move(memoryBudget).Value(),
-                                                 memoryConfig, ConstructionKey{}));
+                                                 memoryConfig, retirementLimits, ConstructionKey{}));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceCapacityExhausted, "Renderer frontend bounded queue storage allocation failed."));
@@ -210,33 +216,46 @@ namespace Horo::Render {
 
     RenderFrontend::RenderFrontend(std::unique_ptr<IRenderBackend> backend, const RenderResourceOwnerId resourceOwner,
                                    const RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
-                                   const RenderFrontendMemoryConfig memoryConfig, ConstructionKey)
+                                   const RenderFrontendMemoryConfig memoryConfig, const RenderResourceRetirementLimits retirementLimits,
+                                   ConstructionKey)
         : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
           resourceRegistry_(
-              std::make_unique<Detail::RenderResourceRegistry>(resourceOwner, Detail::RenderResourceRegistryLimits{},
-                                                               [this](const Detail::RenderResourceClass resourceClass,
-                                                                      const std::uint64_t backendInstance,
-                                                                      const std::optional<RenderMemoryAllocationId> memoryAllocation) {
-                                                                   using enum Detail::RenderResourceClass;
-                                                                   if (resourceClass == Buffer) {
-                                                                       backend_->DestroyBuffer(backendInstance);
-                                                                   } else if (resourceClass == Mesh) {
-                                                                       backend_->DestroyMesh(backendInstance);
-                                                                   } else if (resourceClass == Texture) {
-                                                                       backend_->DestroyTexture(backendInstance);
-                                                                   } else if (resourceClass == TextureView) {
-                                                                       backend_->DestroyTextureView(backendInstance);
-                                                                   } else if (resourceClass == RenderTarget) {
-                                                                       backend_->DestroyRenderTarget(backendInstance);
-                                                                   }
-                                                                   if (memoryAllocation.has_value()) {
-                                                                       static_cast<void>(memoryBudget_->BeginRetire(*memoryAllocation));
-                                                                       static_cast<void>(
-                                                                           memoryBudget_->AcknowledgeRetirement(*memoryAllocation));
-                                                                       static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(
-                                                                           memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
-                                                                   }
-                                                               })),
+              std::make_unique<
+                  Detail::RenderResourceRegistry>(resourceOwner,
+                                                  Detail::RenderResourceRegistryLimits{.retirementDrainBudget =
+                                                                                           retirementLimits.maximumRetirementsPerDrain,
+                                                                                       .maximumSubmissionPins =
+                                                                                           retirementLimits.maximumSubmissionPins,
+                                                                                       .maximumTrackedQueues =
+                                                                                           retirementLimits.maximumTrackedQueues,
+                                                                                       .completionDrainBudget =
+                                                                                           retirementLimits.maximumCompletionsPerDrain},
+                                                  [this](const Detail::RenderResourceClass resourceClass,
+                                                         const std::uint64_t backendInstance,
+                                                         const std::optional<RenderMemoryAllocationId> memoryAllocation,
+                                                         const Detail::BackendResourceReleaseMode releaseMode) {
+                                                      using enum Detail::RenderResourceClass;
+                                                      if (releaseMode == Detail::BackendResourceReleaseMode::DestroyNative) {
+                                                          if (resourceClass == Buffer) {
+                                                              backend_->DestroyBuffer(backendInstance);
+                                                          } else if (resourceClass == Mesh) {
+                                                              backend_->DestroyMesh(backendInstance);
+                                                          } else if (resourceClass == Texture) {
+                                                              backend_->DestroyTexture(backendInstance);
+                                                          } else if (resourceClass == TextureView) {
+                                                              backend_->DestroyTextureView(backendInstance);
+                                                          } else if (resourceClass == RenderTarget) {
+                                                              backend_->DestroyRenderTarget(backendInstance);
+                                                          }
+                                                      }
+                                                      if (memoryAllocation.has_value() &&
+                                                          releaseMode != Detail::BackendResourceReleaseMode::NativeUnavailable) {
+                                                          static_cast<void>(memoryBudget_->BeginRetire(*memoryAllocation));
+                                                          static_cast<void>(memoryBudget_->AcknowledgeRetirement(*memoryAllocation));
+                                                          static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(
+                                                              memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
+                                                      }
+                                                  })),
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
@@ -250,8 +269,8 @@ namespace Horo::Render {
             if (request.memoryReservation.IsValid())
                 static_cast<void>(memoryBudget_->Cancel(request.memoryReservation));
         }
-        resourceRegistry_->Shutdown();
         backend_->Shutdown();
+        resourceRegistry_->Shutdown(Detail::BackendResourceReleaseMode::NativeAlreadyReleased);
         while (memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks) != 0) {
         }
         memoryBudget_->Shutdown();

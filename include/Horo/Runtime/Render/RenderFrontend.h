@@ -62,6 +62,20 @@ namespace Horo::Render {
         }
     };
 
+    /** @brief Host-composed bounds for GPU-completion pins and owner-thread native destruction. */
+    struct RenderResourceRetirementLimits {
+        std::uint32_t maximumSubmissionPins{4'096};    /**< Maximum accepted resource uses awaiting GPU completion. */
+        std::uint32_t maximumTrackedQueues{8};         /**< Maximum logical queue timelines tracked by one frontend. */
+        std::uint32_t maximumCompletionsPerDrain{128}; /**< Maximum submission pins inspected at one safe point. */
+        std::uint32_t maximumRetirementsPerDrain{64};  /**< Maximum native instances destroyed at one safe point. */
+
+        /** @brief Reports whether every completion and destruction bound is finite and non-zero. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return maximumSubmissionPins > 0 && maximumTrackedQueues > 0 && maximumCompletionsPerDrain > 0 &&
+                   maximumRetirementsPerDrain > 0;
+        }
+    };
+
     /**
      * @brief Move-only owner of one begun backend frame until presentation or abort.
      *
@@ -138,13 +152,15 @@ namespace Horo::Render {
          * @param config Backend-neutral initialization policy.
          * @param uploadLimits Finite initial-upload queue and per-safe-point work limits.
          * @param memoryConfig Finite host envelope, default resource scope, and reclaim bound.
+         * @param retirementLimits Finite completion-pin, queue, and owner-thread destruction limits.
          * @return Owned frontend, or the backend creation/initialization failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<RenderFrontend>> Create(const RenderBackendRegistry &registry,
                                                                             const RenderBackendId &backendId,
                                                                             const RenderBackendConfig &config,
                                                                             RenderResourceUploadLimits uploadLimits = {},
-                                                                            RenderFrontendMemoryConfig memoryConfig = {});
+                                                                            RenderFrontendMemoryConfig memoryConfig = {},
+                                                                            RenderResourceRetirementLimits retirementLimits = {});
 
         /** @brief Shuts down and releases the owned backend. */
         ~RenderFrontend();
@@ -316,7 +332,7 @@ namespace Horo::Render {
     public:
         RenderFrontend(std::unique_ptr<IRenderBackend> backend, RenderResourceOwnerId resourceOwner,
                        RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
-                       RenderFrontendMemoryConfig memoryConfig, ConstructionKey);
+                       RenderFrontendMemoryConfig memoryConfig, RenderResourceRetirementLimits retirementLimits, ConstructionKey);
 
     private:
         [[nodiscard]] bool IsLiveTarget(RenderTargetHandle target, FramebufferExtent extent) const noexcept;

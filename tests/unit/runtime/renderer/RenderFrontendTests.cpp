@@ -656,6 +656,13 @@ namespace {
         Check(invalidMemoryFrontend.HasError());
         Check(invalidMemoryFrontend.ErrorValue().code.Value() == "render.frontend.memory.invalid_config");
 
+        RenderResourceRetirementLimits invalidRetirement;
+        invalidRetirement.maximumTrackedQueues = 0;
+        const auto invalidRetirementFrontend =
+            RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, {}, invalidRetirement);
+        Check(invalidRetirementFrontend.HasError());
+        Check(invalidRetirementFrontend.ErrorValue().code.Value() == "render.frontend.resource.invalid_retirement_limits");
+
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
                                               {.maximumPendingBytes = 16, .maximumBytesPerDrain = 8, .maximumRequestsPerDrain = 4});
         Check(created.HasValue());

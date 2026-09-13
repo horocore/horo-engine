@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderMemoryTypes.h"
 #include "Horo/Runtime/Render/RenderResource.h"
+#include "Horo/Runtime/Render/RenderSubmission.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -42,12 +43,23 @@ namespace Horo::Render::Detail {
         std::uint32_t maximumPendingRequests{1'024};
         std::uint32_t retirementDrainBudget{64};
         std::uint32_t maximumOperationResults{4'096};
+        std::uint32_t maximumSubmissionPins{4'096};
+        std::uint32_t maximumTrackedQueues{8};
+        std::uint32_t completionDrainBudget{128};
 
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
-    using BackendResourceRelease = std::function<void(RenderResourceClass resourceClass, std::uint64_t backendInstance,
-                                                      std::optional<RenderMemoryAllocationId> memoryAllocation)>;
+    /** @brief Native-resource disposition established before registry shutdown or retirement. */
+    enum class BackendResourceReleaseMode : std::uint8_t {
+        DestroyNative,         /**< Invoke the backend's matching native destruction operation. */
+        NativeAlreadyReleased, /**< Invalidate accounting after backend shutdown already released the instance. */
+        NativeUnavailable,     /**< Abandon the instance after loss without calling an unavailable native API. */
+    };
+
+    using BackendResourceRelease =
+        std::function<void(RenderResourceClass resourceClass, std::uint64_t backendInstance,
+                           std::optional<RenderMemoryAllocationId> memoryAllocation, BackendResourceReleaseMode mode)>;
 
     /** @brief Frontend-private owner of resident identity, state, pins, and retirement. */
     class RenderResourceRegistry final {
@@ -75,8 +87,15 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] Result<void> AddSubmissionPin(RenderResourceClass resourceClass, RenderResourceIdentity identity);
         [[nodiscard]] Result<void> ReleaseSubmissionPin(RenderResourceClass resourceClass, RenderResourceIdentity identity);
-        [[nodiscard]] std::size_t DrainRetirements();
-        void Shutdown() noexcept;
+        /** @brief Pins a ready generation until the accepted queue timeline reaches completion. */
+        [[nodiscard]] Result<void> TrackSubmission(RenderResourceClass resourceClass, RenderResourceIdentity identity,
+                                                   RenderTimelinePoint completion);
+        /** @brief Advances one queue monotonically and releases a bounded number of completed pins. */
+        [[nodiscard]] Result<std::size_t> AcknowledgeCompletion(RenderTimelinePoint completion);
+        /** @brief Destroys a bounded number of dependency- and submission-free retiring generations. */
+        [[nodiscard]] std::size_t DrainRetirements(BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative);
+        /** @brief Stops admission and invalidates all generations under an explicit native-resource disposition. */
+        void Shutdown(BackendResourceReleaseMode releaseMode) noexcept;
 
         [[nodiscard]] RenderResourceOwnerId Owner() const noexcept;
 
@@ -101,6 +120,18 @@ namespace Horo::Render::Detail {
             std::optional<Error> error;
         };
 
+        struct SubmissionPin {
+            RenderResourceClass resourceClass{RenderResourceClass::Buffer};
+            RenderResourceIdentity identity;
+            RenderTimelinePoint completion;
+        };
+
+        struct QueueProgress {
+            RenderQueueId queue;
+            std::uint64_t submitted{0};
+            std::uint64_t completed{0};
+        };
+
         [[nodiscard]] Result<std::size_t> Validate(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> ValidateReservationAdmission() const;
         [[nodiscard]] Result<void> ValidateDependencies(std::span<const RenderResourceIdentity> dependencies) const;
@@ -109,7 +140,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] const Entry *FindExact(RenderResourceIdentity identity) const noexcept;
         void CompleteOperation(ResourceOperationId operation, std::optional<Error> error);
         void QueueRetirementIfEligible(std::size_t slot);
-        void Retire(std::size_t slot) noexcept;
+        void Retire(std::size_t slot, BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
 
         RenderResourceOwnerId owner_;
         RenderResourceRegistryLimits limits_;
@@ -119,6 +150,9 @@ namespace Horo::Render::Detail {
         std::size_t retirementQueueHead_{0};
         std::size_t retirementQueueCount_{0};
         std::deque<OperationRecord> operations_;
+        std::vector<SubmissionPin> submissionPins_;
+        std::vector<QueueProgress> queueProgress_;
+        std::size_t completionScanCursor_{0};
         std::uint64_t nextOperation_{1};
         std::uint32_t pendingRequests_{0};
         bool acceptingRequests_{true};

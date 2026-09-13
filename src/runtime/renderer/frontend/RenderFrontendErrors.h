@@ -17,6 +17,7 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor InvalidRenderTargetDescriptor;
     extern const ErrorCodeDescriptor InvalidMemoryConfig;
     extern const ErrorCodeDescriptor InvalidResourceUploadLimits;
+    extern const ErrorCodeDescriptor InvalidResourceRetirementLimits;
     extern const ErrorCodeDescriptor InvalidStaticMeshPass;
     extern const ErrorCodeDescriptor InvalidTargetExtent;
     extern const ErrorCodeDescriptor InvalidTextureDescriptor;
@@ -29,6 +30,9 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor ResourceChangeDuringFrame;
     extern const ErrorCodeDescriptor ResourceBackendInstanceInvalid;
     extern const ErrorCodeDescriptor ResourceCapacityExhausted;
+    extern const ErrorCodeDescriptor ResourceCompletionInvalid;
+    extern const ErrorCodeDescriptor ResourceCompletionRegressed;
+    extern const ErrorCodeDescriptor ResourceCompletionUnknownQueue;
     extern const ErrorCodeDescriptor ResourceDependencyNotReady;
     extern const ErrorCodeDescriptor ResourceHandleMalformed;
     extern const ErrorCodeDescriptor ResourceNotPending;
@@ -42,6 +46,7 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor ResourceUploadCapacityExceeded;
     extern const ErrorCodeDescriptor ResourceUnsupported;
     extern const ErrorCodeDescriptor ResourceSlotOutOfRange;
+    extern const ErrorCodeDescriptor ResourceSubmissionCapacityExceeded;
     extern const ErrorCodeDescriptor ResourceStale;
     extern const ErrorCodeDescriptor ResourceWrongOwner;
     extern const ErrorCodeDescriptor ResourceWrongType;
