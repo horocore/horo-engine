@@ -63,6 +63,26 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> AppendEntryGroup(const std::span<const SaveSlotCatalogEntry> group,
+                                                    std::vector<SaveSlotCatalogEntry> &unique,
+                                                    std::vector<SaveSlotIndexDiagnostic> &diagnostics, const SaveSlotIndexLimits &limits) {
+            if (group.size() == 1) {
+                if (unique.size() == limits.maximumEntries)
+                    return Result<void>::Failure(MakeError(SaveErrors::SlotIndexLimitExceeded));
+                unique.push_back(group.front());
+                return Result<void>::Success();
+            }
+            for (const auto &entry : group) {
+                if (auto added = AddDiagnostic(diagnostics, limits,
+                                               {.kind = SaveSlotIndexDiagnosticKind::Duplicate,
+                                                .slot = Slot(entry),
+                                                .generation = entry.publication.generation});
+                    added.HasError())
+                    return added;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<std::vector<SaveSlotCatalogEntry>> SelectUniqueEntries(const std::vector<SaveSlotCatalogEntry> &committed,
                                                                                     std::vector<SaveSlotIndexDiagnostic> &diagnostics,
                                                                                     const SaveSlotIndexLimits &limits) {
@@ -77,19 +97,10 @@ namespace Horo::Runtime {
                 std::size_t groupEnd = position + 1;
                 while (groupEnd < committed.size() && Slot(committed[groupEnd]) == Slot(committed[position]))
                     ++groupEnd;
-                if (groupEnd - position == 1) {
-                    if (unique.size() == limits.maximumEntries)
-                        return Result<std::vector<SaveSlotCatalogEntry>>::Failure(MakeError(SaveErrors::SlotIndexLimitExceeded));
-                    unique.push_back(committed[position]);
-                } else {
-                    for (std::size_t duplicatePosition = position; duplicatePosition < groupEnd; ++duplicatePosition) {
-                        auto duplicate = SaveSlotIndexDiagnostic{.kind = SaveSlotIndexDiagnosticKind::Duplicate,
-                                                                 .slot = Slot(committed[duplicatePosition]),
-                                                                 .generation = committed[duplicatePosition].publication.generation};
-                        if (auto added = AddDiagnostic(diagnostics, limits, std::move(duplicate)); added.HasError())
-                            return Result<std::vector<SaveSlotCatalogEntry>>::Failure(added.ErrorValue());
-                    }
-                }
+                if (auto appended =
+                        AppendEntryGroup(std::span{committed}.subspan(position, groupEnd - position), unique, diagnostics, limits);
+                    appended.HasError())
+                    return Result<std::vector<SaveSlotCatalogEntry>>::Failure(appended.ErrorValue());
                 position = groupEnd;
             }
             return Result<std::vector<SaveSlotCatalogEntry>>::Success(std::move(unique));
@@ -104,15 +115,57 @@ namespace Horo::Runtime {
         [[nodiscard]] IndexEntryRelation NextRelation(const std::span<const SaveSlotCatalogEntry> previous,
                                                       const std::span<const SaveSlotCatalogEntry> rebuilt, const std::size_t oldPosition,
                                                       const std::size_t newPosition) noexcept {
+            using enum IndexEntryRelation;
             if (oldPosition == previous.size())
-                return IndexEntryRelation::Missing;
+                return Missing;
             if (newPosition == rebuilt.size())
-                return IndexEntryRelation::Orphaned;
+                return Orphaned;
             if (Slot(rebuilt[newPosition]) < Slot(previous[oldPosition]))
-                return IndexEntryRelation::Missing;
+                return Missing;
             if (Slot(previous[oldPosition]) < Slot(rebuilt[newPosition]))
-                return IndexEntryRelation::Orphaned;
-            return IndexEntryRelation::Matched;
+                return Orphaned;
+            return Matched;
+        }
+
+        struct IndexEntryAdvance final {
+            std::size_t previous{};
+            std::size_t rebuilt{};
+        };
+
+        [[nodiscard]] Result<IndexEntryAdvance> CompareIndexEntry(const std::span<const SaveSlotCatalogEntry> previous,
+                                                                  const std::span<const SaveSlotCatalogEntry> rebuilt,
+                                                                  const std::size_t oldPosition, const std::size_t newPosition,
+                                                                  std::vector<SaveSlotIndexDiagnostic> &diagnostics,
+                                                                  const SaveSlotIndexLimits &limits) {
+            using enum IndexEntryRelation;
+            const IndexEntryRelation relation = NextRelation(previous, rebuilt, oldPosition, newPosition);
+            if (relation == Missing) {
+                auto added = AddDiagnostic(diagnostics, limits,
+                                           {.kind = SaveSlotIndexDiagnosticKind::Missing,
+                                            .slot = Slot(rebuilt[newPosition]),
+                                            .generation = rebuilt[newPosition].publication.generation});
+                if (added.HasError())
+                    return Result<IndexEntryAdvance>::Failure(added.ErrorValue());
+                return Result<IndexEntryAdvance>::Success({.rebuilt = 1});
+            }
+            if (relation == Orphaned) {
+                auto added = AddDiagnostic(diagnostics, limits,
+                                           {.kind = SaveSlotIndexDiagnosticKind::Orphaned,
+                                            .slot = Slot(previous[oldPosition]),
+                                            .generation = previous[oldPosition].publication.generation});
+                if (added.HasError())
+                    return Result<IndexEntryAdvance>::Failure(added.ErrorValue());
+                return Result<IndexEntryAdvance>::Success({.previous = 1});
+            }
+            if (previous[oldPosition].publication.generation != rebuilt[newPosition].publication.generation) {
+                auto added = AddDiagnostic(diagnostics, limits,
+                                           {.kind = SaveSlotIndexDiagnosticKind::Stale,
+                                            .slot = Slot(rebuilt[newPosition]),
+                                            .generation = rebuilt[newPosition].publication.generation});
+                if (added.HasError())
+                    return Result<IndexEntryAdvance>::Failure(added.ErrorValue());
+            }
+            return Result<IndexEntryAdvance>::Success({.previous = 1, .rebuilt = 1});
         }
 
         [[nodiscard]] Result<void> CompareIndexEntries(const std::span<const SaveSlotCatalogEntry> previous,
@@ -122,38 +175,11 @@ namespace Horo::Runtime {
             std::size_t oldPosition = 0;
             std::size_t newPosition = 0;
             while (oldPosition < previous.size() || newPosition < rebuilt.size()) {
-                switch (NextRelation(previous, rebuilt, oldPosition, newPosition)) {
-                    case IndexEntryRelation::Missing:
-                        if (auto added = AddDiagnostic(diagnostics, limits,
-                                                       {.kind = SaveSlotIndexDiagnosticKind::Missing,
-                                                        .slot = Slot(rebuilt[newPosition]),
-                                                        .generation = rebuilt[newPosition].publication.generation});
-                            added.HasError())
-                            return added;
-                        ++newPosition;
-                        break;
-                    case IndexEntryRelation::Orphaned:
-                        if (auto added = AddDiagnostic(diagnostics, limits,
-                                                       {.kind = SaveSlotIndexDiagnosticKind::Orphaned,
-                                                        .slot = Slot(previous[oldPosition]),
-                                                        .generation = previous[oldPosition].publication.generation});
-                            added.HasError())
-                            return added;
-                        ++oldPosition;
-                        break;
-                    case IndexEntryRelation::Matched:
-                        if (previous[oldPosition].publication.generation != rebuilt[newPosition].publication.generation) {
-                            if (auto added = AddDiagnostic(diagnostics, limits,
-                                                           {.kind = SaveSlotIndexDiagnosticKind::Stale,
-                                                            .slot = Slot(rebuilt[newPosition]),
-                                                            .generation = rebuilt[newPosition].publication.generation});
-                                added.HasError())
-                                return added;
-                        }
-                        ++oldPosition;
-                        ++newPosition;
-                        break;
-                }
+                auto compared = CompareIndexEntry(previous, rebuilt, oldPosition, newPosition, diagnostics, limits);
+                if (compared.HasError())
+                    return Result<void>::Failure(compared.ErrorValue());
+                oldPosition += compared.Value().previous;
+                newPosition += compared.Value().rebuilt;
             }
             return Result<void>::Success();
         }
