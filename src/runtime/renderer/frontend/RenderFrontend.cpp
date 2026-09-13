@@ -17,9 +17,9 @@ namespace Horo::Render {
             return MakeError(descriptor, std::move(message));
         }
 
-        [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits uploadLimits,
-                                                                 const RenderFrontendMemoryConfig memoryConfig,
-                                                                 const RenderResourceRetirementLimits retirementLimits) {
+        [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits &uploadLimits,
+                                                                 const RenderFrontendMemoryConfig &memoryConfig,
+                                                                 const RenderResourceRetirementLimits &retirementLimits) {
             if (!uploadLimits.IsValid()) {
                 return Result<void>::Failure(
                     MakeFrontendError(FrontendErrors::InvalidResourceUploadLimits, "Renderer resource upload limits are invalid."));
@@ -56,6 +56,34 @@ namespace Horo::Render {
                     MakeFrontendError(FrontendErrors::InitializeException, "Renderer backend initialization threw."));
             }
             return Result<std::unique_ptr<IRenderBackend>>::Success(std::move(backend));
+        }
+
+        /** @brief Releases one native backend instance for a retiring frontend resource. */
+        void DestroyNativeResource(IRenderBackend &backend, const Detail::RenderResourceClass resourceClass,
+                                   const std::uint64_t backendInstance) {
+            using enum Detail::RenderResourceClass;
+            if (resourceClass == Buffer)
+                backend.DestroyBuffer(backendInstance);
+            else if (resourceClass == Mesh)
+                backend.DestroyMesh(backendInstance);
+            else if (resourceClass == Texture)
+                backend.DestroyTexture(backendInstance);
+            else if (resourceClass == TextureView)
+                backend.DestroyTextureView(backendInstance);
+            else if (resourceClass == RenderTarget)
+                backend.DestroyRenderTarget(backendInstance);
+        }
+
+        /** @brief Applies backend-release disposition and retires admitted memory when it remains valid. */
+        void ReleaseResource(IRenderBackend &backend, RenderMemoryBudget &memoryBudget, const Detail::RenderResourceClass resourceClass,
+                             const std::uint64_t backendInstance, const std::optional<RenderMemoryAllocationId> memoryAllocation,
+                             const Detail::BackendResourceReleaseMode releaseMode) {
+            if (releaseMode == Detail::BackendResourceReleaseMode::DestroyNative)
+                DestroyNativeResource(backend, resourceClass, backendInstance);
+            if (!memoryAllocation.has_value() || releaseMode == Detail::BackendResourceReleaseMode::NativeUnavailable)
+                return;
+            static_cast<void>(memoryBudget.BeginRetire(*memoryAllocation));
+            static_cast<void>(memoryBudget.AcknowledgeRetirement(*memoryAllocation));
         }
 
     }  // namespace
@@ -199,8 +227,8 @@ namespace Horo::Render {
     Result<std::unique_ptr<RenderFrontend>> RenderFrontend::Create(const RenderBackendRegistry &registry, const RenderBackendId &backendId,
                                                                    const RenderBackendConfig &config,
                                                                    const RenderResourceUploadLimits uploadLimits,
-                                                                   const RenderFrontendMemoryConfig memoryConfig,
-                                                                   const RenderResourceRetirementLimits retirementLimits) {
+                                                                   const RenderFrontendMemoryConfig &memoryConfig,
+                                                                   const RenderResourceRetirementLimits &retirementLimits) {
         if (const Result<void> valid = ValidateFrontendConfiguration(uploadLimits, memoryConfig, retirementLimits); valid.HasError()) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(valid.ErrorValue());
         }
@@ -236,7 +264,7 @@ namespace Horo::Render {
 
     RenderFrontend::RenderFrontend(std::unique_ptr<IRenderBackend> backend, const RenderResourceOwnerId resourceOwner,
                                    const RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
-                                   const RenderFrontendMemoryConfig memoryConfig, const RenderResourceRetirementLimits retirementLimits,
+                                   const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
                                    ConstructionKey)
         : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
           resourceRegistry_(
@@ -254,25 +282,8 @@ namespace Horo::Render {
                                                          const std::uint64_t backendInstance,
                                                          const std::optional<RenderMemoryAllocationId> memoryAllocation,
                                                          const Detail::BackendResourceReleaseMode releaseMode) {
-                                                      using enum Detail::RenderResourceClass;
-                                                      if (releaseMode == Detail::BackendResourceReleaseMode::DestroyNative) {
-                                                          if (resourceClass == Buffer) {
-                                                              backend_->DestroyBuffer(backendInstance);
-                                                          } else if (resourceClass == Mesh) {
-                                                              backend_->DestroyMesh(backendInstance);
-                                                          } else if (resourceClass == Texture) {
-                                                              backend_->DestroyTexture(backendInstance);
-                                                          } else if (resourceClass == TextureView) {
-                                                              backend_->DestroyTextureView(backendInstance);
-                                                          } else if (resourceClass == RenderTarget) {
-                                                              backend_->DestroyRenderTarget(backendInstance);
-                                                          }
-                                                      }
-                                                      if (memoryAllocation.has_value() &&
-                                                          releaseMode != Detail::BackendResourceReleaseMode::NativeUnavailable) {
-                                                          static_cast<void>(memoryBudget_->BeginRetire(*memoryAllocation));
-                                                          static_cast<void>(memoryBudget_->AcknowledgeRetirement(*memoryAllocation));
-                                                      }
+                                                      ReleaseResource(*backend_, *memoryBudget_, resourceClass, backendInstance,
+                                                                      memoryAllocation, releaseMode);
                                                   })),
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)) {}
 
@@ -290,6 +301,7 @@ namespace Horo::Render {
         backend_->Shutdown();
         resourceRegistry_->Shutdown(Detail::BackendResourceReleaseMode::NativeAlreadyReleased);
         while (memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks) != 0) {
+            // Drain every now-empty backing block before invalidating the ledger.
         }
         memoryBudget_->Shutdown();
     }

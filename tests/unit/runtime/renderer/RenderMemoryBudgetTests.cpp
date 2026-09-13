@@ -54,6 +54,26 @@ namespace {
         return std::move(created).Value();
     }
 
+    void VerifySharedBlockSnapshot(const RenderMemoryBudget &budget, const RenderMemoryPoolId poolId) {
+        const auto snapshot = budget.Snapshot();
+        CHECK(snapshot.committedBackingBytes == 64);
+        CHECK(snapshot.livePayloadBytes == 35);
+        CHECK(snapshot.reusableSlackBytes == 24);
+        CHECK(snapshot.peakChargedBytes == 64);
+        CHECK(snapshot.reservationCount == 0);
+        CHECK(snapshot.allocationCount == 2);
+        CHECK(snapshot.externalFragmentationBasisPoints == 3333);
+
+        const auto pool = budget.PoolSnapshot(poolId);
+        REQUIRE(pool.HasValue());
+        CHECK(pool.Value().scope == FirstScope);
+        CHECK(pool.Value().compatibility == RenderMemoryCompatibilityId{1});
+        CHECK(pool.Value().committedBackingBytes == 64);
+        CHECK(pool.Value().livePayloadBytes == 35);
+        CHECK(pool.Value().reusableSlackBytes == 24);
+        CHECK(pool.Value().externalFragmentationBasisPoints == 3333);
+    }
+
     TEST_CASE("Render memory configuration rejects invalid and inconsistent bounds", "[unit][runtime][renderer][memory]") {
         REQUIRE(Config().IsValid());
         REQUIRE_FALSE(RenderMemoryBudgetConfig{.hardCapBytes = 0}.IsValid());
@@ -118,23 +138,7 @@ namespace {
         CHECK(second.Value().pool == first.Value().pool);
         CHECK(second.Value().offsetBytes == 32);
 
-        const auto snapshot = budget->Snapshot();
-        CHECK(snapshot.committedBackingBytes == 64);
-        CHECK(snapshot.livePayloadBytes == 35);
-        CHECK(snapshot.reusableSlackBytes == 24);
-        CHECK(snapshot.peakChargedBytes == 64);
-        CHECK(snapshot.reservationCount == 0);
-        CHECK(snapshot.allocationCount == 2);
-        CHECK(snapshot.externalFragmentationBasisPoints == 3333);
-
-        const auto pool = budget->PoolSnapshot(first.Value().pool);
-        REQUIRE(pool.HasValue());
-        CHECK(pool.Value().scope == FirstScope);
-        CHECK(pool.Value().compatibility == RenderMemoryCompatibilityId{1});
-        CHECK(pool.Value().committedBackingBytes == 64);
-        CHECK(pool.Value().livePayloadBytes == 35);
-        CHECK(pool.Value().reusableSlackBytes == 24);
-        CHECK(pool.Value().externalFragmentationBasisPoints == 3333);
+        VerifySharedBlockSnapshot(*budget, first.Value().pool);
     }
 
     TEST_CASE("Render memory ledger separates compatible pools and excludes dedicated backing from reusable slack",

@@ -1,103 +1,22 @@
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
 
 #include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
+#include "RenderMemoryBudgetInternals.h"
 
 #include <algorithm>
-#include <limits>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace Horo::Render {
-    namespace {
-        enum class RegionState : std::uint8_t {
-            Reserved,
-            Live,
-            Retiring,
-        };
-
-        struct Region {
-            bool active{false};
-            std::uint64_t block{0};
-            RenderMemoryPoolId pool;
-            std::uint64_t reservation{0};
-            std::uint64_t allocation{0};
-            ResourceOperationId attempt;
-            std::uint64_t budgetRevision{0};
-            std::size_t offset{0};
-            std::size_t requiredBytes{0};
-            std::size_t payloadBytes{0};
-            RenderMemoryCostProvenance provenance{RenderMemoryCostProvenance::Exact};
-            RegionState state{RegionState::Reserved};
-        };
-
-        struct Pool {
-            RenderMemoryPoolId id;
-            RenderMemoryScopeId scope;
-            RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice};
-            RenderMemoryCompatibilityId compatibility;
-        };
-
-        struct Block {
-            std::uint64_t id{0};
-            RenderMemoryPoolId pool;
-            std::size_t capacity{0};
-            bool dedicated{false};
-            bool committed{false};
-        };
-
-        [[nodiscard]] Error MemoryError(const ErrorCodeDescriptor &descriptor, const char *message) {
-            return MakeError(descriptor, message);
-        }
-
-        [[nodiscard]] std::optional<std::size_t> CheckedAdd(const std::size_t left, const std::size_t right) noexcept {
-            if (right > std::numeric_limits<std::size_t>::max() - left)
-                return std::nullopt;
-            return left + right;
-        }
-
-        [[nodiscard]] std::optional<std::size_t> AlignUp(const std::size_t value, const std::size_t alignment) noexcept {
-            const std::size_t mask = alignment - 1U;
-            const auto sum = CheckedAdd(value, mask);
-            if (!sum.has_value())
-                return std::nullopt;
-            return *sum & ~mask;
-        }
-
-        [[nodiscard]] std::optional<std::size_t> FindFirstFit(const Block &block, const std::vector<Region> &regions,
-                                                              const std::size_t size, const std::size_t alignment) noexcept {
-            std::size_t cursor = 0;
-            while (cursor <= block.capacity) {
-                const auto aligned = AlignUp(cursor, alignment);
-                if (!aligned.has_value())
-                    return std::nullopt;
-
-                const Region *next = nullptr;
-                for (const Region &region : regions) {
-                    if (region.active && region.block == block.id && region.offset >= cursor &&
-                        (next == nullptr || region.offset < next->offset))
-                        next = &region;
-                }
-                const std::size_t gapEnd = next == nullptr ? block.capacity : next->offset;
-                const auto end = CheckedAdd(*aligned, size);
-                if (end.has_value() && *end <= gapEnd)
-                    return aligned;
-                if (next == nullptr)
-                    return std::nullopt;
-                const auto nextCursor = CheckedAdd(next->offset, next->requiredBytes);
-                if (!nextCursor.has_value() || *nextCursor <= cursor)
-                    return std::nullopt;
-                cursor = *nextCursor;
-            }
-            return std::nullopt;
-        }
-    }  // namespace
+    using namespace Detail;
 
     class RenderMemoryBudget::Impl final {
     public:
-        Impl(const RenderResourceOwnerId renderer, const RenderMemoryBudgetConfig config) : renderer_(renderer), config_(config) {
+        Impl(const RenderResourceOwnerId renderer, const RenderMemoryBudgetConfig &config) : renderer_(renderer), config_(config) {
             pools_.reserve(config.maximumPools);
             blocks_.reserve(config.maximumBlocks);
             regions_.resize(config.maximumAllocations);
@@ -106,8 +25,7 @@ namespace Horo::Render {
 
         [[nodiscard]] Result<RenderMemoryReservationId> Reserve(const RenderMemoryScopeId scope, const ResourceOperationId attempt,
                                                                 const RenderMemoryCostPlan &plan) {
-            const Result<void> validation = ValidateReservationRequest(scope, attempt, plan);
-            if (validation.HasError())
+            if (const Result<void> validation = ValidateReservationRequest(scope, attempt, plan); validation.HasError())
                 return Result<RenderMemoryReservationId>::Failure(validation.ErrorValue());
 
             Pool *pool = FindPool(scope, plan.memoryClass, plan.compatibility);
@@ -121,7 +39,7 @@ namespace Horo::Render {
             if (!found.has_value())
                 return Failure<void>(RenderMemoryBudgetErrors::InvalidReservation,
                                      "Reservation is malformed, foreign, stale, or already consumed.");
-            Block &block = blocks_[found->block];
+            const Block &block = blocks_[found->block];
             regions_[found->region] = {};
             --reservationCount_;
             if (!block.committed && !HasRegions(block.id))
@@ -249,7 +167,7 @@ namespace Horo::Render {
                 else
                     snapshot.retiringPayloadBytes += region.payloadBytes;
             }
-            const SortedRegions &sortedRegions = SortActiveRegions();
+            const std::span<const Region *const> sortedRegions = SortActiveRegions();
             for (const Pool &pool : pools_) {
                 const RenderMemoryPoolSnapshot poolSnapshot = MakePoolSnapshot(pool, sortedRegions);
                 snapshot.reusableSlackBytes += poolSnapshot.reusableSlackBytes;
@@ -284,13 +202,8 @@ namespace Horo::Render {
         }
 
     private:
-        struct Location {
-            std::size_t block{0};
-            std::size_t region{0};
-        };
-
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, const char *message) const {
-            return Result<T>::Failure(MemoryError(descriptor, message));
+            return Result<T>::Failure(MemoryBudgetError(descriptor, message));
         }
 
         template <typename T> [[nodiscard]] Result<T> CapacityFailure() {
@@ -317,7 +230,7 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] std::optional<Result<RenderMemoryReservationId>> TryReserveExistingBlock(Pool *pool,
+        [[nodiscard]] std::optional<Result<RenderMemoryReservationId>> TryReserveExistingBlock(const Pool *pool,
                                                                                                const ResourceOperationId attempt,
                                                                                                const RenderMemoryCostPlan &plan) {
             if (plan.allocationClass != RenderMemoryAllocationClass::Suballocated)
@@ -330,20 +243,20 @@ namespace Horo::Render {
             for (Block &block : blocks_) {
                 if (block.pool != pool->id || block.dedicated)
                     continue;
-                if (const auto offset = FindFirstFit(block, regions_, plan.requiredBytes, plan.alignment); offset.has_value())
+                if (const auto offset = Detail::FindFirstMemoryFit(block, regions_, plan.requiredBytes, plan.alignment); offset.has_value())
                     return AddReservation(block, *offset, attempt, plan);
             }
             return std::nullopt;
         }
 
-        [[nodiscard]] Result<RenderMemoryReservationId> ReserveNewBlock(Pool *pool, const RenderMemoryScopeId scope,
+        [[nodiscard]] Result<RenderMemoryReservationId> ReserveNewBlock(const Pool *pool, const RenderMemoryScopeId scope,
                                                                         const ResourceOperationId attempt,
                                                                         const RenderMemoryCostPlan &plan) {
             if (blocks_.size() >= config_.maximumBlocks)
                 return CapacityFailure<RenderMemoryReservationId>();
             std::size_t backingBytes = plan.requiredBytes;
             if (plan.allocationClass == RenderMemoryAllocationClass::Suballocated) {
-                const auto aligned = AlignUp(std::max(config_.defaultBlockBytes, plan.requiredBytes), plan.alignment);
+                const auto aligned = Detail::AlignMemoryUp(std::max(config_.defaultBlockBytes, plan.requiredBytes), plan.alignment);
                 if (!aligned.has_value() || *aligned > config_.maximumBlockBytes)
                     return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::UnsupportedAllocation,
                                                               "Aligned suballocation block exceeds the configured maximum block size.");
@@ -378,7 +291,7 @@ namespace Horo::Render {
                                  "Allocation is malformed, foreign, stale, or not in the required lifecycle state.");
         }
 
-        [[nodiscard]] Result<RenderMemoryReservationId> AddReservation(Block &block, const std::size_t offset,
+        [[nodiscard]] Result<RenderMemoryReservationId> AddReservation(const Block &block, const std::size_t offset,
                                                                        const ResourceOperationId attempt,
                                                                        const RenderMemoryCostPlan &plan) {
             const std::uint64_t reservation = nextReservation_++;
@@ -422,15 +335,15 @@ namespace Horo::Render {
             const auto found = std::ranges::find_if(pools_, [scope, memoryClass, compatibility](const Pool &pool) {
                 return pool.scope == scope && pool.memoryClass == memoryClass && pool.compatibility == compatibility;
             });
-            return found == pools_.end() ? nullptr : &*found;
+            return found == pools_.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] const Pool *FindPool(const RenderMemoryPoolId id) const noexcept {
             const auto found = std::ranges::find(pools_, id, &Pool::id);
-            return found == pools_.end() ? nullptr : &*found;
+            return found == pools_.end() ? nullptr : std::to_address(found);
         }
 
-        [[nodiscard]] std::optional<Location> FindReservation(const RenderMemoryReservationId id) const noexcept {
+        [[nodiscard]] std::optional<MemoryLocation> FindReservation(const RenderMemoryReservationId id) const noexcept {
             if (!id.IsValid() || id.renderer != renderer_)
                 return std::nullopt;
             for (std::size_t regionIndex = 0; regionIndex < regions_.size(); ++regionIndex) {
@@ -438,13 +351,13 @@ namespace Horo::Render {
                 if (region.active && region.state == RegionState::Reserved && region.reservation == id.value) {
                     const auto block = std::ranges::find(blocks_, region.block, &Block::id);
                     if (block != blocks_.end())
-                        return Location{static_cast<std::size_t>(block - blocks_.begin()), regionIndex};
+                        return MemoryLocation{static_cast<std::size_t>(block - blocks_.begin()), regionIndex};
                 }
             }
             return std::nullopt;
         }
 
-        [[nodiscard]] std::optional<Location> FindAllocationLocation(const RenderMemoryAllocationId id) noexcept {
+        [[nodiscard]] std::optional<MemoryLocation> FindAllocationLocation(const RenderMemoryAllocationId id) noexcept {
             if (!id.IsValid() || id.renderer != renderer_)
                 return std::nullopt;
             for (std::size_t regionIndex = 0; regionIndex < regions_.size(); ++regionIndex) {
@@ -452,7 +365,7 @@ namespace Horo::Render {
                 if (region.active && region.state != RegionState::Reserved && region.allocation == id.value) {
                     const auto block = std::ranges::find(blocks_, region.block, &Block::id);
                     if (block != blocks_.end())
-                        return Location{static_cast<std::size_t>(block - blocks_.begin()), regionIndex};
+                        return MemoryLocation{static_cast<std::size_t>(block - blocks_.begin()), regionIndex};
                 }
             }
             return std::nullopt;
@@ -474,9 +387,7 @@ namespace Horo::Render {
                 });
         }
 
-        using SortedRegions = std::vector<const Region *>;
-
-        [[nodiscard]] const SortedRegions &SortActiveRegions() const noexcept {
+        [[nodiscard]] std::span<const Region *const> SortActiveRegions() const noexcept {
             sortedRegionsScratch_.clear();
             for (const Region &region : regions_) {
                 if (region.active)
@@ -501,7 +412,8 @@ namespace Horo::Render {
                 snapshot.retiringPayloadBytes += region.payloadBytes;
         }
 
-        [[nodiscard]] RenderMemoryPoolSnapshot MakePoolSnapshot(const Pool &pool, const SortedRegions &sortedRegions) const noexcept {
+        [[nodiscard]] RenderMemoryPoolSnapshot MakePoolSnapshot(const Pool &pool,
+                                                                const std::span<const Region *const> sortedRegions) const noexcept {
             RenderMemoryPoolSnapshot snapshot{.pool = pool.id,
                                               .scope = pool.scope,
                                               .memoryClass = pool.memoryClass,
@@ -540,8 +452,8 @@ namespace Horo::Render {
                 }
             }
             if (snapshot.reusableSlackBytes != 0) {
-                const long double fragmented = static_cast<long double>(snapshot.reusableSlackBytes - largestFreeRegion);
-                const long double total = static_cast<long double>(snapshot.reusableSlackBytes);
+                const auto fragmented = static_cast<long double>(snapshot.reusableSlackBytes - largestFreeRegion);
+                const auto total = static_cast<long double>(snapshot.reusableSlackBytes);
                 snapshot.externalFragmentationBasisPoints = static_cast<std::uint32_t>((fragmented * 10'000.0L) / total);
             }
             return snapshot;
@@ -552,7 +464,7 @@ namespace Horo::Render {
         std::vector<Pool> pools_;
         std::vector<Block> blocks_;
         std::vector<Region> regions_;
-        mutable SortedRegions sortedRegionsScratch_;
+        mutable SortedMemoryRegions sortedRegionsScratch_;
         std::size_t peakChargedBytes_{0};
         std::uint64_t failedReservationCount_{0};
         std::uint32_t reservationCount_{0};
@@ -566,23 +478,23 @@ namespace Horo::Render {
 
     /** @copydoc RenderMemoryBudget::Create */
     Result<std::unique_ptr<RenderMemoryBudget>> RenderMemoryBudget::Create(const RenderResourceOwnerId renderer,
-                                                                           const RenderMemoryBudgetConfig config) {
+                                                                           const RenderMemoryBudgetConfig &config) {
         if (!renderer.IsValid() || !config.IsValid()) {
             return Result<std::unique_ptr<RenderMemoryBudget>>::Failure(
-                MemoryError(RenderMemoryBudgetErrors::InvalidConfiguration,
-                            "Renderer owner identity or finite memory configuration is invalid."));
+                MemoryBudgetError(RenderMemoryBudgetErrors::InvalidConfiguration,
+                                  "Renderer owner identity or finite memory configuration is invalid."));
         }
         try {
             return Result<std::unique_ptr<RenderMemoryBudget>>::Success(
-                std::unique_ptr<RenderMemoryBudget>{new RenderMemoryBudget{std::make_unique<Impl>(renderer, config)}});
+                std::unique_ptr<RenderMemoryBudget>{new RenderMemoryBudget{std::make_unique<Impl>(renderer, config)}});  // NOSONAR
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<RenderMemoryBudget>>::Failure(
-                MemoryError(RenderMemoryBudgetErrors::CapacityExceeded,
-                            "Renderer memory metadata tables cannot be allocated within host memory."));
+                MemoryBudgetError(RenderMemoryBudgetErrors::CapacityExceeded,
+                                  "Renderer memory metadata tables cannot be allocated within host memory."));
         } catch (const std::length_error &) {
             return Result<std::unique_ptr<RenderMemoryBudget>>::Failure(
-                MemoryError(RenderMemoryBudgetErrors::CapacityExceeded,
-                            "Renderer memory metadata table limits exceed the platform container capacity."));
+                MemoryBudgetError(RenderMemoryBudgetErrors::CapacityExceeded,
+                                  "Renderer memory metadata table limits exceed the platform container capacity."));
         }
     }
 

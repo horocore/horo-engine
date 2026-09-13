@@ -93,9 +93,11 @@ namespace Horo::Editor {
         const auto completed = frontend_->ResourceOperationResult(gridBuffer.Value().operation);
         const auto nativeBuffer = OpenGLViewportResourceBridge::ResolveBuffer(*frontend_, gridVertexBufferHandle_);
         if (processed.HasError() || completed.HasError() || nativeBuffer.HasError()) {
-            const Error error = processed.HasError()   ? processed.ErrorValue()
-                                : completed.HasError() ? completed.ErrorValue()
-                                                       : nativeBuffer.ErrorValue();
+            Error error = nativeBuffer.ErrorValue();
+            if (processed.HasError())
+                error = processed.ErrorValue();
+            else if (completed.HasError())
+                error = completed.ErrorValue();
             Shutdown();
             return Result<void>::Failure(error);
         }
