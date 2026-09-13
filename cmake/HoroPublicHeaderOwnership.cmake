@@ -123,6 +123,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveSlotIndex.h
     Horo/Runtime/Save/SaveStorageAdapter.h
     Horo/Runtime/Save/SaveOperation.h
+    Horo/Runtime/Save/SaveOperationArbiter.h
     Horo/Runtime/Save/SaveProjectPolicy.h
     Horo/Runtime/Save/SaveSafePointCoordinator.h
     Horo/Runtime/Save/SaveTestCompositions.h
