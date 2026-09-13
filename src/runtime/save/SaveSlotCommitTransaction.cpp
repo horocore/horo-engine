@@ -15,8 +15,8 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] bool ValidPhase(const SaveSlotCommitPhase phase) noexcept {
-            return phase == SaveSlotCommitPhase::Preparing || phase == SaveSlotCommitPhase::Prepared ||
-                   phase == SaveSlotCommitPhase::Publishing || phase == SaveSlotCommitPhase::Published;
+            using enum SaveSlotCommitPhase;
+            return phase == Preparing || phase == Prepared || phase == Publishing || phase == Published;
         }
 
         [[nodiscard]] Result<void> ValidateJournalIdentity(const SaveSlotCommitJournal &journal) {
@@ -150,18 +150,19 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<SaveSlotRecoveryAction> RecoverObserved(ISaveSlotCommitStore &store, SaveSlotCommitJournal journal,
                                                                      const SaveSlotCommitObservation &observation) {
+            using enum SaveSlotCommitPhase;
             const bool candidatePublished = IsPublishedCandidate(journal, observation);
-            if (journal.phase == SaveSlotCommitPhase::Published && !candidatePublished)
+            if (journal.phase == Published && !candidatePublished)
                 return Result<SaveSlotRecoveryAction>::Failure(
                     Invalid("A published journal does not match the catalog's selected generation."));
-            if (journal.phase == SaveSlotCommitPhase::Published)
+            if (journal.phase == Published)
                 return RemovePublishedJournal(store, journal, SaveSlotRecoveryAction::FinalizedPublished);
             if (candidatePublished)
                 return RemovePublishedJournal(store, journal, SaveSlotRecoveryAction::PublishedCandidate);
             if (!IsPreviousOrEmpty(journal, observation))
                 return Result<SaveSlotRecoveryAction>::Failure(
                     Invalid("Slot recovery found an unrelated catalog generation and will not overwrite it."));
-            if (journal.phase == SaveSlotCommitPhase::Preparing || journal.phase == SaveSlotCommitPhase::Prepared)
+            if (journal.phase == Preparing || journal.phase == Prepared)
                 return RecoverUnpublished(store, journal, observation);
             return RecoverPublishing(store, std::move(journal), observation);
         }
