@@ -2,7 +2,7 @@
 
 /**
  * @file PrefabErrors.h
- * @brief Stable prefab authoring identity and document validation errors.
+ * @brief Stable prefab identity, authoring document and dependency graph errors.
  */
 
 #include "Horo/Foundation/ErrorCode.h"
@@ -36,4 +36,12 @@ namespace Horo::Prefab::PrefabErrors {
     extern const ErrorCodeDescriptor PayloadTooLarge;
     /** @brief Optional prefab composition data violates concrete or variant invariants. */
     extern const ErrorCodeDescriptor CompositionInvalid;
+    /** @brief A prefab dependency graph candidate contains duplicate or inconsistent source data. */
+    extern const ErrorCodeDescriptor DependencyGraphInvalid;
+    /** @brief A dependency required by the prefab graph is absent from its pinned inputs. */
+    extern const ErrorCodeDescriptor DependencyUnavailable;
+    /** @brief A dependency's registered asset type conflicts with its prefab graph role. */
+    extern const ErrorCodeDescriptor DependencyTypeMismatch;
+    /** @brief A prefab dependency edge was authored against a different source revision. */
+    extern const ErrorCodeDescriptor DependencyRevisionMismatch;
 }  // namespace Horo::Prefab::PrefabErrors
