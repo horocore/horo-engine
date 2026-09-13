@@ -1,12 +1,17 @@
 #include "MetalResourceRuntime.h"
 
 #include "MetalRenderBackendErrors.h"
+#include "MetalResourceFormats.h"
 #include "MetalResourceInstances.h"
+#include "MetalResourcePolicy.h"
 
 #import <Metal/Metal.h>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <new>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -17,30 +22,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] MTLPixelFormat PixelFormat(const RenderTextureFormat format) noexcept {
-            using enum RenderTextureFormat;
-            switch (format) {
-                case Rgba8Unorm:
-                    return MTLPixelFormatRGBA8Unorm;
-                case Depth24Stencil8:
-                    return MTLPixelFormatDepth24Unorm_Stencil8;
-                case Depth32Float:
-                    return MTLPixelFormatDepth32Float;
-                case R8Unorm:
-                case Rg8Unorm:
-                case Rgba8UnormSrgb:
-                case Bgra8Unorm:
-                case Bgra8UnormSrgb:
-                case R16Float:
-                case Rg16Float:
-                case Rgba16Float:
-                case R32Float:
-                case Rg32Float:
-                case Rgba32Float:
-                case Depth16Unorm:
-                case Depth32FloatStencil8:
-                    return MTLPixelFormatInvalid;
-            }
-            return MTLPixelFormatInvalid;
+            return static_cast<MTLPixelFormat>(MetalPixelFormatValue(format));
         }
 
         [[nodiscard]] MTLTextureUsage TextureUsage(const RenderTextureUsage usage) noexcept {
@@ -49,28 +31,33 @@ namespace Horo::Render::Detail {
                 nativeUsage |= MTLTextureUsageShaderRead;
             if (HasTextureUsage(usage, RenderTextureUsage::RenderAttachment))
                 nativeUsage |= MTLTextureUsageRenderTarget;
+            if (HasTextureUsage(usage, RenderTextureUsage::Storage))
+                nativeUsage |= MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
             return nativeUsage;
         }
 
-        [[nodiscard]] MTLStorageMode TextureStorageMode(const RenderTextureDescriptor &descriptor) noexcept {
-            return HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment) ? MTLStorageModePrivate : MTLStorageModeShared;
+        [[nodiscard]] MTLStorageMode NativeStorageMode(const MetalResourceStorage storage) noexcept {
+            return storage == MetalResourceStorage::Shared ? MTLStorageModeShared : MTLStorageModePrivate;
+        }
+
+        [[nodiscard]] MTLResourceOptions NativeResourceOptions(const MetalResourceStorage storage) noexcept {
+            return storage == MetalResourceStorage::Shared ? MTLResourceStorageModeShared : MTLResourceStorageModePrivate;
         }
 
         [[nodiscard]] MTLTextureDescriptor *NativeTextureDescriptor(const RenderTextureDescriptor &descriptor) noexcept {
             MTLTextureDescriptor *native = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:PixelFormat(descriptor.format)
                                                                                               width:descriptor.extent.width
                                                                                              height:descriptor.extent.height
-                                                                                          mipmapped:NO];
+                                                                                          mipmapped:descriptor.mipCount > 1];
+            native.textureType = descriptor.layerCount > 1 ? MTLTextureType2DArray : MTLTextureType2D;
+            if (descriptor.sampleCount > 1)
+                native.textureType = descriptor.layerCount > 1 ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample;
+            native.mipmapLevelCount = descriptor.mipCount;
+            native.arrayLength = descriptor.layerCount;
+            native.sampleCount = descriptor.sampleCount;
             native.usage = TextureUsage(descriptor.usage);
-            native.storageMode = TextureStorageMode(descriptor);
+            native.storageMode = NativeStorageMode(MetalTextureStorage(descriptor));
             return native;
-        }
-
-        [[nodiscard]] bool MatchesPlacement(const RenderMemoryCostPlan &plan, const RenderMemoryPlacement &placement) noexcept {
-            return placement.IsValid() && placement.memoryClass == plan.memoryClass && placement.allocationClass == plan.allocationClass &&
-                   placement.provenance == plan.provenance && placement.compatibility == plan.compatibility &&
-                   placement.payloadBytes == plan.payloadBytes && placement.requiredBytes == plan.requiredBytes &&
-                   placement.offsetBytes == 0;
         }
 
         template <typename Instance> [[nodiscard]] Instance *Decode(const std::uint64_t identity) noexcept {
@@ -95,12 +82,12 @@ namespace Horo::Render::Detail {
             instances.clear();
         }
 
-        [[nodiscard]] bool AspectMatches(const RenderTextureFormat format, const RenderTextureAspect aspect) noexcept {
-            if (format == RenderTextureFormat::Rgba8Unorm)
-                return aspect == RenderTextureAspect::Color;
-            if (format == RenderTextureFormat::Depth24Stencil8)
-                return aspect == RenderTextureAspect::Depth || aspect == RenderTextureAspect::DepthStencil;
-            return format == RenderTextureFormat::Depth32Float && aspect == RenderTextureAspect::Depth;
+        /** @brief Reports whether Metal can bind a requested view over its source texture. */
+        [[nodiscard]] bool SupportsTextureView(const RenderTextureDescriptor &source, const RenderTextureViewDescriptor &view) {
+            const bool supportedDimension =
+                view.dimension == RenderTextureViewDimension::TwoD || view.dimension == RenderTextureViewDimension::TwoDArray;
+            return supportedDimension && ValidateRenderTextureViewCompatibility(source, view).HasValue() &&
+                   MetalTextureAspectMatches(view.format, view.aspect);
         }
 
         enum class AttachmentKind : std::uint8_t {
@@ -113,28 +100,240 @@ namespace Horo::Render::Detail {
             if (identity == 0)
                 return Result<MetalTextureViewInstance *>::Success(nullptr);
             MetalTextureViewInstance *instance = Decode<MetalTextureViewInstance>(identity);
-            const bool aspectMatches =
-                instance != nullptr && (kind == AttachmentKind::Color ? instance->aspect == RenderTextureAspect::Color
-                                                                      : instance->aspect != RenderTextureAspect::Color);
-            if (!aspectMatches || !instances.contains(instance)) {
+            if (instance == nullptr || !instances.contains(instance)) {
                 return Result<MetalTextureViewInstance *>::Failure(
                     ResourceError(MetalBackendErrors::ResourceIdentityInvalid, "Metal render target attachment is invalid."));
             }
+            const bool aspectMatches = kind == AttachmentKind::Color ? instance->aspect == RenderTextureAspect::Color
+                                                                     : instance->aspect != RenderTextureAspect::Color;
+            if (!aspectMatches || !HasTextureUsage(instance->usage, RenderTextureUsage::RenderAttachment))
+                return Result<MetalTextureViewInstance *>::Failure(
+                    ResourceError(MetalBackendErrors::ResourceIdentityInvalid,
+                                  "Metal render target attachment lacks a compatible render-attachment binding."));
             return Result<MetalTextureViewInstance *>::Success(instance);
         }
 
         [[nodiscard]] bool ExtentMatches(const MetalTextureViewInstance *attachment, const FramebufferExtent extent) noexcept {
             return attachment == nullptr || (attachment->texture.width == extent.width && attachment->texture.height == extent.height);
         }
+
+        /** @brief Validates one Metal buffer creation request against its queried plan. */
+        [[nodiscard]] bool ValidBufferRequest(const bool deviceAvailable, const RenderBufferDescriptor &descriptor,
+                                              const std::span<const std::byte> initialData, const RenderMemoryPlacement &placement,
+                                              const Result<RenderMemoryCostPlan> &cost) {
+            if (!deviceAvailable || !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) ||
+                cost.HasError())
+                return false;
+            return ValidateMetalResourcePlacement(cost.Value(), placement).HasValue();
+        }
+
+        /** @brief Validates one Metal texture creation request against its queried plan. */
+        [[nodiscard]] bool ValidTextureRequest(const bool deviceAvailable, const RenderTextureDescriptor &descriptor,
+                                               const std::span<const std::byte> initialData, const RenderMemoryPlacement &placement,
+                                               const Result<RenderMemoryCostPlan> &cost) {
+            const auto payload = RenderTextureBaseLevelByteSize(descriptor);
+            const bool initialDataValid = payload.has_value() && (initialData.empty() || initialData.size() == *payload) &&
+                                          (initialData.empty() || descriptor.sampleCount == 1);
+            if (!deviceAvailable || !descriptor.IsValid() || !initialDataValid || cost.HasError())
+                return false;
+            return ValidateMetalResourcePlacement(cost.Value(), placement).HasValue();
+        }
     }  // namespace
 
     struct MetalResourceRuntime::Impl {
+        struct PoolKey {
+            std::uint64_t renderer{0};
+            std::uint64_t pool{0};
+
+            [[nodiscard]] bool operator==(const PoolKey &) const noexcept = default;
+        };
+
+        struct PoolKeyHash {
+            [[nodiscard]] std::size_t operator()(const PoolKey &key) const noexcept {
+                return std::hash<std::uint64_t>{}(key.renderer) ^ (std::hash<std::uint64_t>{}(key.pool) << 1U);
+            }
+        };
+
+        struct HeapRecord {
+            __strong id<MTLHeap> heap{nil};
+            MetalHeapState state;
+        };
+
+        struct StagingBlit {
+            __strong id<MTLBuffer> staging{nil};
+            __strong id<MTLCommandBuffer> commands{nil};
+            __strong id<MTLBlitCommandEncoder> blit{nil};
+        };
+
         __strong id<MTLDevice> device{nil};
+        __strong id<MTLCommandQueue> commandQueue{nil};
+        std::unordered_map<PoolKey, HeapRecord, PoolKeyHash> heaps;
         std::unordered_set<MetalBufferInstance *> buffers;
         std::unordered_set<MetalMeshInstance *> meshes;
         std::unordered_set<MetalTextureInstance *> textures;
         std::unordered_set<MetalTextureViewInstance *> textureViews;
         std::unordered_set<MetalRenderTargetInstance *> renderTargets;
+
+        [[nodiscard]] PoolKey Key(const RenderMemoryPoolId pool) const noexcept {
+            return {.renderer = pool.renderer.value, .pool = pool.value};
+        }
+
+        [[nodiscard]] PoolKey Key(const RenderMemoryPlacement &placement) const noexcept {
+            return Key(placement.pool);
+        }
+
+        [[nodiscard]] Result<HeapRecord *> CreateHeap(const PoolKey key, const RenderMemoryPlacement &placement,
+                                                      const MetalResourceStorage storage) {
+            MTLHeapDescriptor *descriptor = [[MTLHeapDescriptor alloc] init];
+            descriptor.size = placement.backingBytes;
+            descriptor.storageMode = NativeStorageMode(storage);
+            descriptor.type = MTLHeapTypePlacement;
+            id<MTLHeap> heap = [device newHeapWithDescriptor:descriptor];
+            if (heap == nil)
+                return Result<HeapRecord *>::Failure(
+                    ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resource backing heap."));
+            auto inserted = heaps.emplace(key, HeapRecord{.heap = heap,
+                                                          .state = {.storage = storage,
+                                                                    .compatibility = placement.compatibility,
+                                                                    .backingBytes = placement.backingBytes}});
+            return Result<HeapRecord *>::Success(&inserted.first->second);
+        }
+
+        [[nodiscard]] Result<HeapRecord *> AcquireHeap(const RenderMemoryPlacement &placement, const MetalResourceStorage storage) {
+            const PoolKey key = Key(placement);
+            auto found = heaps.find(key);
+            Result<HeapRecord *> acquired =
+                found == heaps.end() ? CreateHeap(key, placement, storage) : Result<HeapRecord *>::Success(&found->second);
+            if (acquired.HasError())
+                return acquired;
+            if (ValidateMetalHeapReuse(acquired.Value()->state, placement, storage).HasError()) {
+                if (acquired.Value()->state.liveResources == 0)
+                    heaps.erase(key);
+                return Result<HeapRecord *>::Failure(
+                    ResourceError(MetalBackendErrors::InvalidConfig, "Metal resource placement conflicts with its existing backing heap."));
+            }
+            return acquired;
+        }
+
+        void DiscardEmptyHeap(const RenderMemoryPlacement &placement) {
+            const auto found = heaps.find(Key(placement));
+            if (found != heaps.end() && found->second.state.liveResources == 0)
+                heaps.erase(found);
+        }
+
+        [[nodiscard]] Result<StagingBlit> BeginStagingBlit(const NSUInteger bytes) const {
+            StagingBlit transfer{.staging = [device newBufferWithLength:bytes options:MTLResourceStorageModeShared],
+                                 .commands = [commandQueue commandBuffer]};
+            transfer.blit = [transfer.commands blitCommandEncoder];
+            if (transfer.staging == nil || transfer.commands == nil || transfer.blit == nil)
+                return Result<StagingBlit>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed,
+                                                                  "Metal failed to create a private-resource staging command."));
+            return Result<StagingBlit>::Success(std::move(transfer));
+        }
+
+        [[nodiscard]] Result<MetalTextureUploadLayout> PlanTextureUpload(const RenderTextureDescriptor &descriptor) const {
+            const auto texelBytes = RenderTextureTexelBytes(descriptor.format);
+            return PlanMetalTextureUpload(descriptor, texelBytes.value_or(0));
+        }
+
+        void CommitStagingBlit(const StagingBlit &transfer) const {
+            [transfer.blit endEncoding];
+            [transfer.commands commit];
+        }
+
+        [[nodiscard]] Result<void> UploadBuffer(id<MTLBuffer> buffer, const std::span<const std::byte> data,
+                                                const MetalResourceStorage storage) const {
+            if (data.empty())
+                return Result<void>::Success();
+            if (storage == MetalResourceStorage::Shared) {
+                std::memcpy(buffer.contents, data.data(), data.size());
+                return Result<void>::Success();
+            }
+            auto transfer = BeginStagingBlit(data.size());
+            if (!transfer.HasValue()) {
+                Error error = std::move(transfer).ErrorValue();
+                return Result<void>::Failure(std::move(error));
+            }
+            std::memcpy(transfer.Value().staging.contents, data.data(), data.size());
+            [transfer.Value().blit copyFromBuffer:transfer.Value().staging
+                                     sourceOffset:0
+                                         toBuffer:buffer
+                                destinationOffset:0
+                                             size:data.size()];
+            CommitStagingBlit(transfer.Value());
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> UploadTexture(id<MTLTexture> texture, const RenderTextureDescriptor &descriptor,
+                                                 const std::span<const std::byte> data) const {
+            if (data.empty())
+                return Result<void>::Success();
+            auto layout = PlanTextureUpload(descriptor);
+            if (layout.HasError())
+                return Result<void>::Failure(std::move(layout).ErrorValue());
+            auto transfer = BeginStagingBlit(static_cast<NSUInteger>(layout.Value().stagingBytes));
+            if (transfer.HasError())
+                return Result<void>::Failure(std::move(transfer).ErrorValue());
+            auto *destination = static_cast<std::byte *>(transfer.Value().staging.contents);
+            for (std::size_t layer = 0; layer < descriptor.layerCount; ++layer) {
+                for (std::size_t row = 0; row < descriptor.extent.height; ++row) {
+                    std::memcpy(destination + layer * layout.Value().paddedImageBytes + row * layout.Value().paddedRowBytes,
+                                data.data() + layer * layout.Value().tightImageBytes + row * layout.Value().tightRowBytes,
+                                layout.Value().tightRowBytes);
+                }
+            }
+            for (std::size_t layer = 0; layer < descriptor.layerCount; ++layer) {
+                [transfer.Value().blit copyFromBuffer:transfer.Value().staging
+                                         sourceOffset:static_cast<NSUInteger>(layer * layout.Value().paddedImageBytes)
+                                    sourceBytesPerRow:static_cast<NSUInteger>(layout.Value().paddedRowBytes)
+                                  sourceBytesPerImage:static_cast<NSUInteger>(layout.Value().paddedImageBytes)
+                                           sourceSize:MTLSizeMake(descriptor.extent.width, descriptor.extent.height, 1)
+                                            toTexture:texture
+                                     destinationSlice:static_cast<NSUInteger>(layer)
+                                     destinationLevel:0
+                                    destinationOrigin:MTLOriginMake(0, 0, 0)];
+            }
+            CommitStagingBlit(transfer.Value());
+            return Result<void>::Success();
+        }
+
+        template <typename Instance>
+        [[nodiscard]] Result<std::uint64_t> FinishResident(Result<void> uploaded, Instance *instance, HeapRecord &heap,
+                                                           const RenderMemoryPlacement &placement,
+                                                           std::unordered_set<Instance *> &instances, const char *identityError,
+                                                           const char *trackingError) {
+            if (uploaded.HasError()) {
+                delete instance;
+                DiscardEmptyHeap(placement);
+                return Result<std::uint64_t>::Failure(std::move(uploaded).ErrorValue());
+            }
+            if (instance == nullptr) {
+                DiscardEmptyHeap(placement);
+                return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, identityError));
+            }
+            if (RetainMetalHeapResource(heap.state).HasError()) {
+                delete instance;
+                DiscardEmptyHeap(placement);
+                return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
+            }
+            instances.insert(instance);
+            return Result<std::uint64_t>::Success(Identity(instance));
+        }
+
+        template <typename Instance, typename Resource>
+        void DestroyResident(std::unordered_set<Instance *> &instances, const std::uint64_t identity,
+                             Resource Instance::*resource) noexcept {
+            Instance *instance = Decode<Instance>(identity);
+            if (instance == nullptr || !instances.contains(instance))
+                return;
+            const PoolKey key = Key(instance->pool);
+            instances.erase(instance);
+            [(instance->*resource) makeAliasable];
+            delete instance;
+            auto heap = heaps.find(key);
+            if (heap != heaps.end() && ReleaseMetalHeapResource(heap->second.state))
+                heaps.erase(heap);
+        }
     };
 
     MetalResourceRuntime::MetalResourceRuntime() : impl_(std::make_unique<Impl>()) {}
@@ -143,81 +342,67 @@ namespace Horo::Render::Detail {
         Shutdown();
     }
 
-    void MetalResourceRuntime::Initialize(void *device) noexcept {
+    void MetalResourceRuntime::Initialize(void *device, void *commandQueue) noexcept {
         impl_->device = (__bridge id<MTLDevice>)device;
+        impl_->commandQueue = (__bridge id<MTLCommandQueue>)commandQueue;
     }
 
     Result<RenderMemoryCostPlan> MetalResourceRuntime::QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const {
         if (impl_->device == nil || !descriptor.IsValid())
             return Result<RenderMemoryCostPlan>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal buffer memory requirement request is invalid."));
-        const MTLSizeAndAlign native = [impl_->device heapBufferSizeAndAlignWithLength:descriptor.byteSize
-                                                                               options:MTLResourceStorageModeShared];
-        if (native.size < descriptor.byteSize || native.align == 0)
-            return Result<RenderMemoryCostPlan>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal returned invalid buffer memory requirements."));
-        return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
-                                                      .allocationClass = RenderMemoryAllocationClass::Dedicated,
-                                                      .provenance = RenderMemoryCostProvenance::Exact,
-                                                      .compatibility = RenderMemoryCompatibilityId{1},
-                                                      .payloadBytes = descriptor.byteSize,
-                                                      .requiredBytes = native.size,
-                                                      .alignment = native.align});
+        const MTLSizeAndAlign native =
+            [impl_->device heapBufferSizeAndAlignWithLength:descriptor.byteSize
+                                                    options:NativeResourceOptions(MetalBufferStorage(descriptor))];
+        return PlanMetalBufferMemory(descriptor, {.size = native.size, .alignment = native.align});
     }
 
     Result<RenderMemoryCostPlan> MetalResourceRuntime::QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const {
         const auto payload = RenderTextureBaseLevelByteSize(descriptor);
-        if (impl_->device == nil || !payload.has_value() || PixelFormat(descriptor.format) == MTLPixelFormatInvalid)
+        if (impl_->device == nil || !payload.has_value() || descriptor.dimension != RenderTextureDimension::TwoD ||
+            PixelFormat(descriptor.format) == MTLPixelFormatInvalid)
             return Result<RenderMemoryCostPlan>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal texture memory requirement request is invalid."));
         MTLTextureDescriptor *nativeDescriptor = NativeTextureDescriptor(descriptor);
         const MTLSizeAndAlign native = [impl_->device heapTextureSizeAndAlignWithDescriptor:nativeDescriptor];
-        if (native.size < *payload || native.align == 0)
-            return Result<RenderMemoryCostPlan>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal returned invalid texture memory requirements."));
-        const std::uint64_t compatibility = TextureStorageMode(descriptor) == MTLStorageModePrivate ? 3 : 2;
-        return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
-                                                      .allocationClass = RenderMemoryAllocationClass::Dedicated,
-                                                      .provenance = RenderMemoryCostProvenance::Exact,
-                                                      .compatibility = RenderMemoryCompatibilityId{compatibility},
-                                                      .payloadBytes = *payload,
-                                                      .requiredBytes = native.size,
-                                                      .alignment = native.align});
+        return PlanMetalTextureMemory(descriptor, {.size = native.size, .alignment = native.align});
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateBuffer(const RenderBufferDescriptor &descriptor,
                                                              const std::span<const std::byte> initialData,
                                                              const RenderMemoryPlacement &placement) {
         const auto cost = QueryBufferMemoryCost(descriptor);
-        if (impl_->device == nil || !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) ||
-            cost.HasError() || !MatchesPlacement(cost.Value(), placement))
+        if (!ValidBufferRequest(impl_->device != nil, descriptor, initialData, placement, cost))
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal buffer creation request is invalid."));
-        id<MTLBuffer> buffer = initialData.empty()
-                                   ? [impl_->device newBufferWithLength:descriptor.byteSize options:MTLResourceStorageModeShared]
-                                   : [impl_->device newBufferWithBytes:initialData.data()
-                                                                length:initialData.size()
-                                                               options:MTLResourceStorageModeShared];
-        if (buffer == nil)
+        const MetalResourceStorage storage = MetalBufferStorage(descriptor);
+        auto heap = impl_->AcquireHeap(placement, storage);
+        if (heap.HasError())
+            return Result<std::uint64_t>::Failure(std::move(heap).ErrorValue());
+        id<MTLBuffer> buffer = [heap.Value()->heap newBufferWithLength:descriptor.byteSize
+                                                               options:NativeResourceOptions(storage)
+                                                                offset:placement.offsetBytes];
+        if (buffer == nil) {
+            impl_->DiscardEmptyHeap(placement);
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident buffer."));
-        auto *instance = new (std::nothrow) MetalBufferInstance{.buffer = buffer};
-        if (instance == nullptr)
-            return Result<std::uint64_t>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal buffer identity allocation failed."));
-        impl_->buffers.insert(instance);
-        return Result<std::uint64_t>::Success(Identity(instance));
+        }
+        auto *instance = new (std::nothrow) MetalBufferInstance{.buffer = buffer, .usage = descriptor.usage, .pool = placement.pool};
+        return impl_->FinishResident(impl_->UploadBuffer(buffer, initialData, storage), instance, *heap.Value(), placement, impl_->buffers,
+                                     "Metal buffer identity allocation failed.", "Metal buffer heap tracking capacity is exhausted.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
                                                            const std::uint64_t indexBuffer) {
         MetalBufferInstance *vertex = Decode<MetalBufferInstance>(vertexBuffer);
         MetalBufferInstance *index = Decode<MetalBufferInstance>(indexBuffer);
-        if (!descriptor.IsValid() || vertex == nullptr || index == nullptr || !impl_->buffers.contains(vertex) ||
-            !impl_->buffers.contains(index)) {
+        if (vertex == nullptr || index == nullptr || !impl_->buffers.contains(vertex) || !impl_->buffers.contains(index)) {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceIdentityInvalid, "Metal mesh references unknown buffer instances."));
         }
+        const Result<void> validBindings = ValidateMetalMeshBindings(descriptor, vertex->usage, index->usage);
+        if (validBindings.HasError())
+            return Result<std::uint64_t>::Failure(validBindings.ErrorValue());
         auto *instance = new (std::nothrow) MetalMeshInstance{.vertexBuffer = vertex->buffer, .indexBuffer = index->buffer};
         if (instance == nullptr)
             return Result<std::uint64_t>::Failure(
@@ -229,48 +414,51 @@ namespace Horo::Render::Detail {
     Result<std::uint64_t> MetalResourceRuntime::CreateTexture(const RenderTextureDescriptor &descriptor,
                                                               const std::span<const std::byte> initialData,
                                                               const RenderMemoryPlacement &placement) {
-        const auto payload = RenderTextureBaseLevelByteSize(descriptor);
         const auto cost = QueryTextureMemoryCost(descriptor);
-        const bool initialDataValid = payload.has_value() && (initialData.empty() || initialData.size() == *payload) &&
-                                      (initialData.empty() || TextureStorageMode(descriptor) == MTLStorageModeShared);
-        if (impl_->device == nil || !descriptor.IsValid() || !initialDataValid || cost.HasError() ||
-            !MatchesPlacement(cost.Value(), placement))
+        if (!ValidTextureRequest(impl_->device != nil, descriptor, initialData, placement, cost))
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal texture creation request is invalid."));
         MTLTextureDescriptor *native = NativeTextureDescriptor(descriptor);
-        id<MTLTexture> texture = [impl_->device newTextureWithDescriptor:native];
-        if (texture == nil)
+        auto heap = impl_->AcquireHeap(placement, MetalTextureStorage(descriptor));
+        if (heap.HasError())
+            return Result<std::uint64_t>::Failure(std::move(heap).ErrorValue());
+        id<MTLTexture> texture = [heap.Value()->heap newTextureWithDescriptor:native offset:placement.offsetBytes];
+        if (texture == nil) {
+            impl_->DiscardEmptyHeap(placement);
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident texture."));
-        if (!initialData.empty()) {
-            const std::size_t texelBytes = *RenderTextureTexelBytes(descriptor.format);
-            [texture replaceRegion:MTLRegionMake2D(0, 0, descriptor.extent.width, descriptor.extent.height)
-                       mipmapLevel:0
-                         withBytes:initialData.data()
-                       bytesPerRow:static_cast<NSUInteger>(descriptor.extent.width) * texelBytes];
         }
-        auto *instance = new (std::nothrow) MetalTextureInstance{.texture = texture, .format = descriptor.format};
-        if (instance == nullptr)
-            return Result<std::uint64_t>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal texture identity allocation failed."));
-        impl_->textures.insert(instance);
-        return Result<std::uint64_t>::Success(Identity(instance));
+        auto *instance = new (std::nothrow) MetalTextureInstance{.texture = texture, .descriptor = descriptor, .pool = placement.pool};
+        return impl_->FinishResident(impl_->UploadTexture(texture, descriptor, initialData), instance, *heap.Value(), placement,
+                                     impl_->textures, "Metal texture identity allocation failed.",
+                                     "Metal texture heap tracking capacity is exhausted.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
                                                                   const std::uint64_t texture) {
         MetalTextureInstance *source = Decode<MetalTextureInstance>(texture);
-        if (!descriptor.IsValid() || source == nullptr || !impl_->textures.contains(source) || source->format != descriptor.format ||
-            !AspectMatches(descriptor.format, descriptor.aspect)) {
+        if (!descriptor.IsValid() || source == nullptr || !impl_->textures.contains(source)) {
             return Result<std::uint64_t>::Failure(
-                ResourceError(MetalBackendErrors::ResourceIdentityInvalid, "Metal texture view source or aspect is invalid."));
+                ResourceError(MetalBackendErrors::ResourceIdentityInvalid, "Metal texture view source identity is invalid."));
         }
-        id<MTLTexture> view = [source->texture newTextureViewWithPixelFormat:PixelFormat(descriptor.format)];
+        if (!SupportsTextureView(source->descriptor, descriptor))
+            return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::UnsupportedResourceOperation,
+                                                                "Metal texture view binding is incompatible with its source."));
+        MTLTextureType viewType = descriptor.dimension == RenderTextureViewDimension::TwoDArray ? MTLTextureType2DArray : MTLTextureType2D;
+        if (source->descriptor.sampleCount > 1)
+            viewType = descriptor.dimension == RenderTextureViewDimension::TwoDArray ? MTLTextureType2DMultisampleArray
+                                                                                     : MTLTextureType2DMultisample;
+        id<MTLTexture> view = [source->texture newTextureViewWithPixelFormat:PixelFormat(descriptor.format)
+                                                                 textureType:viewType
+                                                                      levels:NSMakeRange(descriptor.baseMip, descriptor.mipCount)
+                                                                      slices:NSMakeRange(descriptor.baseLayer, descriptor.layerCount)];
         if (view == nil)
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to create a resident texture view."));
-        auto *instance =
-            new (std::nothrow) MetalTextureViewInstance{.texture = view, .format = descriptor.format, .aspect = descriptor.aspect};
+        auto *instance = new (std::nothrow) MetalTextureViewInstance{.texture = view,
+                                                                     .format = descriptor.format,
+                                                                     .aspect = descriptor.aspect,
+                                                                     .usage = source->descriptor.usage};
         if (instance == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal texture-view identity allocation failed."));
@@ -305,7 +493,7 @@ namespace Horo::Render::Detail {
     }
 
     void MetalResourceRuntime::DestroyBuffer(const std::uint64_t backendInstance) noexcept {
-        DestroyTracked(impl_->buffers, backendInstance);
+        impl_->DestroyResident(impl_->buffers, backendInstance, &MetalBufferInstance::buffer);
     }
 
     void MetalResourceRuntime::DestroyMesh(const std::uint64_t backendInstance) noexcept {
@@ -313,7 +501,7 @@ namespace Horo::Render::Detail {
     }
 
     void MetalResourceRuntime::DestroyTexture(const std::uint64_t backendInstance) noexcept {
-        DestroyTracked(impl_->textures, backendInstance);
+        impl_->DestroyResident(impl_->textures, backendInstance, &MetalTextureInstance::texture);
     }
 
     void MetalResourceRuntime::DestroyTextureView(const std::uint64_t backendInstance) noexcept {
@@ -330,6 +518,8 @@ namespace Horo::Render::Detail {
         DestroyAll(impl_->meshes);
         DestroyAll(impl_->textures);
         DestroyAll(impl_->buffers);
+        impl_->heaps.clear();
+        impl_->commandQueue = nil;
         impl_->device = nil;
     }
 }  // namespace Horo::Render::Detail

@@ -1771,9 +1771,11 @@ if (NOT HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalDeviceCapabilityTests
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
+            unit/runtime/renderer/MetalResourcePolicyTests.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackend.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackendErrors.cpp
+            ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalResourcePolicy.cpp
     )
     target_compile_features(HoroMetalDeviceCapabilityTests PRIVATE cxx_std_20)
     target_include_directories(HoroMetalDeviceCapabilityTests PRIVATE
@@ -1791,6 +1793,8 @@ if (HORO_BUILD_RENDER_METAL)
     add_executable(HoroRenderMetalTests
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
+            unit/runtime/renderer/MetalResourceFormatsTests.mm
+            unit/runtime/renderer/MetalResourcePolicyTests.cpp
     )
 
     target_compile_features(HoroRenderMetalTests PRIVATE cxx_std_20)
