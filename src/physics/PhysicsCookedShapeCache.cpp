@@ -163,6 +163,7 @@ namespace Horo::Physics {
                 std::uint64_t leaseCount{};
             };
 
+        private:
             PhysicsShapeCookTargetDigest target;
             PhysicsCookedShapeCacheLimits limits;
             std::list<Entry> activeEntries;
@@ -171,6 +172,7 @@ namespace Horo::Physics {
             std::uint64_t residentBytes{};
             bool admissionClosed{};
 
+        public:
             [[nodiscard]] std::shared_ptr<const PhysicsCookedShapeResource> FindAndPin(const CacheKey &key) {
                 const auto found = byKey.find(key);
                 if (found == byKey.end())
