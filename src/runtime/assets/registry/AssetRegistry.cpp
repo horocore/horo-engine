@@ -51,9 +51,8 @@ namespace Horo::Assets {
 
         [[nodiscard]] std::string PortableFold(const std::string_view value) {
             std::string folded{value};
-            std::ranges::transform(folded, folded.begin(), [](const unsigned char character) {
-                return static_cast<char>(std::tolower(character));
-            });
+            for (char &character : folded)
+                character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
             return folded;
         }
 
