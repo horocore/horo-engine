@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <span>
 #include <string>
 #include <utility>
@@ -75,34 +76,37 @@ namespace Horo::Physics::Detail {
         }
 
         void U32(const std::uint32_t value) {
-            for (unsigned shift = 0; shift < 32; shift += 8)
-                U8(static_cast<std::uint8_t>((value >> shift) & 0xffU));
+            Integer(value);
         }
 
         void U64(const std::uint64_t value) {
-            for (unsigned shift = 0; shift < 64; shift += 8)
-                U8(static_cast<std::uint8_t>((value >> shift) & 0xffU));
+            Integer(value);
         }
 
-        void Float(float value) {
-            if (value == 0.0F)
-                value = 0.0F;
-            U32(std::bit_cast<std::uint32_t>(value));
+        void Float(const float value) {
+            const float canonical = value == 0.0F ? 0.0F : value;
+            Integer(std::bit_cast<std::uint32_t>(canonical));
         }
 
         void Bytes(const std::span<const std::uint8_t> values) {
-            bytes_.insert(bytes_.end(), values.begin(), values.end());
+            bytes_.reserve(bytes_.size() + values.size());
+            std::ranges::copy(values, std::back_inserter(bytes_));
         }
 
-        [[nodiscard]] const std::vector<std::uint8_t> &View() const noexcept {
+        [[nodiscard]] std::span<const std::uint8_t> View() const noexcept {
             return bytes_;
         }
 
         [[nodiscard]] std::vector<std::uint8_t> Take() && {
-            return std::move(bytes_);
+            return std::exchange(bytes_, {});
         }
 
     private:
+        template <typename IntegerType> void Integer(const IntegerType value) {
+            for (std::size_t byteIndex = 0; byteIndex < sizeof(IntegerType); ++byteIndex)
+                bytes_.push_back(static_cast<std::uint8_t>((value >> (byteIndex * 8U)) & 0xffU));
+        }
+
         std::vector<std::uint8_t> bytes_;
     };
 
