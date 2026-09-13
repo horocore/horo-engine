@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <format>
+#include <iterator>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -321,17 +322,26 @@ namespace Horo::Render {
                 if (!invocation_.target.emitDebugInformation)
                     return Result<void>::Success();
                 const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug");
-                std::vector<std::string> arguments = DxcArguments(entry, true, debugPath);
+                return CompileDxcDebug(dxc, entry, debugPath, true, {"-Zi", "-Qembed_debug"});
+            }
+
+            [[nodiscard]] Result<void> CompileDxcDebug(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
+                                                       const std::filesystem::path &debugPath, const bool spirv,
+                                                       std::vector<std::string> debugArguments) {
+                std::vector<std::string> arguments = DxcArguments(entry, spirv, debugPath);
                 if (const auto optimization = std::ranges::find_if(arguments,
                                                                    [](const std::string_view argument) {
                     return argument == "-O1" || argument == "-O3";
                 });
                     optimization != arguments.end())
                     *optimization = "-Od";
-                arguments.insert(arguments.end() - 3, {"-Zi", "-Qembed_debug"});
+                arguments.insert(arguments.end() - 3, std::make_move_iterator(debugArguments.begin()),
+                                 std::make_move_iterator(debugArguments.end()));
                 if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
                     return compiled;
-                auto debug = ReadValidatedPayload(debugPath, invocation_.limits.maximumDebugPayloadBytes, IsSpirV);
+                auto debug = spirv ? ReadValidatedPayload(debugPath, invocation_.limits.maximumDebugPayloadBytes, IsSpirV)
+                                   : ReadBoundedFile(debugPath, invocation_.limits.maximumDebugPayloadBytes,
+                                                     ShaderCompilerPipelineErrors::ToolOutputInvalid);
                 if (debug.HasError())
                     return Result<void>::Failure(std::move(debug).ErrorValue());
                 debugStages_.emplace_back(entry.stage, entry.name, std::move(debug).Value());
@@ -362,22 +372,7 @@ namespace Horo::Render {
                     return Result<void>::Success();
                 const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug.dxil");
                 const std::filesystem::path pdbPath = scratch_.Path() / (stem + ".pdb");
-                std::vector<std::string> arguments = DxcArguments(entry, false, debugPath);
-                if (const auto optimization = std::ranges::find_if(arguments,
-                                                                   [](const std::string_view argument) {
-                    return argument == "-O1" || argument == "-O3";
-                });
-                    optimization != arguments.end())
-                    *optimization = "-Od";
-                arguments.insert(arguments.end() - 3, {"-Zi", "-Fd", pdbPath.string()});
-                if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
-                    return compiled;
-                auto pdb =
-                    ReadBoundedFile(pdbPath, invocation_.limits.maximumDebugPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                if (pdb.HasError())
-                    return Result<void>::Failure(std::move(pdb).ErrorValue());
-                debugStages_.emplace_back(entry.stage, entry.name, std::move(pdb).Value());
-                return Result<void>::Success();
+                return CompileDxcDebug(dxc, entry, debugPath, false, {"-Zi", "-Fd", pdbPath.string()});
             }
 
             [[nodiscard]] Result<ShaderCompilerAdapterOutput> CompileNullRoute() {
