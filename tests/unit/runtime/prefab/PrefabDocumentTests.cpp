@@ -417,6 +417,13 @@ namespace Horo::Prefab {
             REQUIRE(incompatible.Value().behaviors.back().status == PrefabProviderStatus::IncompatibleSchema);
             REQUIRE(incompatible.Value().assets.front().status == PrefabProviderStatus::IncompatibleSchema);
 
+            const std::array duplicateBehaviors{BehaviorDescriptor(), BehaviorDescriptor()};
+            REQUIRE(document.Value().InspectProviders(assetProviders, components, duplicateBehaviors, assets, referencedAssets).HasError());
+            Gameplay::BehaviorDescriptor invalidBehavior = BehaviorDescriptor();
+            invalidBehavior.schemaVersion = 0;
+            const std::array invalidBehaviors{invalidBehavior};
+            REQUIRE(document.Value().InspectProviders(assetProviders, components, invalidBehaviors, assets, referencedAssets).HasError());
+
             const std::array foreignAsset{PrefabReferencedGameAsset{Asset(3), &gameAsset}};
             REQUIRE(document.Value().InspectProviders(assetProviders, components, behaviorDescriptors, assets, foreignAsset).HasError());
         }
