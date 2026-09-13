@@ -14,7 +14,7 @@ namespace Horo::Render::Detail {
         MetalResourceRuntime(const MetalResourceRuntime &) = delete;
         MetalResourceRuntime &operator=(const MetalResourceRuntime &) = delete;
 
-        void Initialize(void *device) noexcept;
+        void Initialize(void *device, void *commandQueue) noexcept;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const;
         [[nodiscard]] Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
