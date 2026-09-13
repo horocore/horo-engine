@@ -145,6 +145,16 @@ namespace Horo::WorldStreaming {
         std::array<Telemetry::Counter, StreamingMetricFailureReasonCount> failures; /**< Core failure counters. */
     };
 
+    /** @brief Complete immutable-at-admission policy for one owner-scoped streaming metric binding. */
+    struct StreamingMetricBindingConfiguration final {
+        StreamingMetricBindingRevision bindingRevision;    /**< Non-zero host-issued binding revision. */
+        StreamingRuntimeCompositionRevision ownerRevision; /**< Admitted runtime-composition revision. */
+        StreamingMetricBounds bounds;                      /**< Qualified measurement maxima. */
+        StreamingMetricAvailability availability;          /**< Explicit capability state. */
+        StreamingMetricRequirement requirement;            /**< Admission behavior when unavailable. */
+        Telemetry::MetricCollectionLevel collectionLevel;  /**< Host-selected collection detail. */
+    };
+
     /**
      * @brief Registers and pre-binds the complete closed World Streaming metric vocabulary.
      * @param level Host-selected process metric collection level.
@@ -165,41 +175,26 @@ namespace Horo::WorldStreaming {
         /**
          * @brief Creates one owner-scoped metric binding without registering instruments.
          * @param owner Exact mounted runtime owner lifetime.
-         * @param bindingRevision Non-zero binding revision issued by host composition.
-         * @param ownerRevision Exact runtime-composition revision admitted by the binding.
-         * @param bounds Qualified measurement maxima copied from host policy.
-         * @param availability Explicit available, unavailable or policy-off state.
-         * @param requirement Whether unavailable collection rejects binding admission.
-         * @param level Host-selected collection detail when available.
+         * @param configuration Complete revisions, bounds and collection policy.
          * @param handles Pre-registered and pre-bound process Telemetry handles.
          * @return Binding or a typed invalid, unsupported or unavailable error.
          * @pre Called on the authority owner thread that will publish, replace, cancel and close the binding.
          * @post Failure retains no handles and publishes no metric record.
          */
-        [[nodiscard]] static Result<WorldStreamingMetricBinding> Create(
-            StreamingRuntimeOwnerToken owner, StreamingMetricBindingRevision bindingRevision,
-            StreamingRuntimeCompositionRevision ownerRevision, const StreamingMetricBounds &bounds,
-            StreamingMetricAvailability availability, StreamingMetricRequirement requirement, Telemetry::MetricCollectionLevel level,
-            StreamingMetricHandles handles);
+        [[nodiscard]] static Result<WorldStreamingMetricBinding> Create(const StreamingRuntimeOwnerToken &owner,
+                                                                        const StreamingMetricBindingConfiguration &configuration,
+                                                                        StreamingMetricHandles handles);
 
         /**
          * @brief Replaces the complete binding policy and handles transactionally for the same owner lifetime.
          * @param expectedRevision Exact current binding revision.
-         * @param successorRevision Strictly newer binding revision.
-         * @param ownerRevision Same or newer runtime-composition revision for future samples.
-         * @param bounds Complete successor measurement maxima.
-         * @param availability Complete successor availability.
-         * @param requirement Complete successor requirement.
-         * @param level Complete successor collection level.
+         * @param configuration Complete successor revisions, bounds and collection policy.
          * @param handles Complete successor pre-bound handles.
          * @return Success or a typed stale, invalid, unsupported, unavailable or lifecycle error.
          * @post Failure leaves the current binding and every caller-owned argument unchanged.
          */
         [[nodiscard]] Result<void> Replace(StreamingMetricBindingRevision expectedRevision,
-                                           StreamingMetricBindingRevision successorRevision,
-                                           StreamingRuntimeCompositionRevision ownerRevision, const StreamingMetricBounds &bounds,
-                                           StreamingMetricAvailability availability, StreamingMetricRequirement requirement,
-                                           Telemetry::MetricCollectionLevel level, StreamingMetricHandles handles);
+                                           const StreamingMetricBindingConfiguration &configuration, StreamingMetricHandles handles);
 
         /**
          * @brief Validates and publishes one complete owner-produced measurement sample.
@@ -230,16 +225,10 @@ namespace Horo::WorldStreaming {
         /**
          * @brief Retains one fully validated binding without performing registration.
          * @param owner Exact mounted owner lifetime.
-         * @param bindingRevision Host-issued binding revision.
-         * @param ownerRevision Admitted runtime-composition revision.
-         * @param bounds Complete measurement maxima.
-         * @param availability Explicit collection availability.
-         * @param level Host-selected collection detail.
+         * @param configuration Complete admitted revisions, bounds and collection policy.
          * @param handles Complete pre-bound handles when available.
          */
-        WorldStreamingMetricBinding(StreamingRuntimeOwnerToken owner, StreamingMetricBindingRevision bindingRevision,
-                                    StreamingRuntimeCompositionRevision ownerRevision, const StreamingMetricBounds &bounds,
-                                    StreamingMetricAvailability availability, Telemetry::MetricCollectionLevel level,
+        WorldStreamingMetricBinding(const StreamingRuntimeOwnerToken &owner, const StreamingMetricBindingConfiguration &configuration,
                                     StreamingMetricHandles handles) noexcept;
 
         StreamingRuntimeOwnerToken owner_;

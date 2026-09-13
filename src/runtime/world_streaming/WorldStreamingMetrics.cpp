@@ -111,16 +111,15 @@ namespace Horo::WorldStreaming {
                        : Internal::Failure<void>(WorldStreamingErrors::MetricCapabilityUnavailable);
         }
 
-        [[nodiscard]] Result<void> ValidateBindingPolicy(
-            const StreamingRuntimeOwnerToken &owner, const StreamingMetricBindingRevision bindingRevision,
-            const StreamingRuntimeCompositionRevision ownerRevision, const StreamingMetricBounds &bounds,
-            const StreamingMetricAvailability availability, const StreamingMetricRequirement requirement,
-            const Telemetry::MetricCollectionLevel level, const StreamingMetricHandles &handles) {
-            if (!BindingIdentityValid(owner, bindingRevision, ownerRevision, bounds))
+        [[nodiscard]] Result<void> ValidateBindingPolicy(const StreamingRuntimeOwnerToken &owner,
+                                                         const StreamingMetricBindingConfiguration &configuration,
+                                                         const StreamingMetricHandles &handles) {
+            if (!BindingIdentityValid(owner, configuration.bindingRevision, configuration.ownerRevision, configuration.bounds))
                 return Internal::Failure<void>(WorldStreamingErrors::MetricInvalid);
-            if (!BindingVocabularyKnown(availability, requirement, level))
+            if (!BindingVocabularyKnown(configuration.availability, configuration.requirement, configuration.collectionLevel))
                 return Internal::Failure<void>(WorldStreamingErrors::MetricUnsupported);
-            return ValidateAvailabilityPolicy(availability, requirement, level, handles);
+            return ValidateAvailabilityPolicy(configuration.availability, configuration.requirement, configuration.collectionLevel,
+                                              handles);
         }
 
         [[nodiscard]] bool LatencyValuesValid(const StreamingMetricSample &sample) noexcept {
@@ -259,43 +258,33 @@ namespace Horo::WorldStreaming {
     }
 
     /** @copydoc WorldStreamingMetricBinding::Create */
-    Result<WorldStreamingMetricBinding> WorldStreamingMetricBinding::Create(
-        const StreamingRuntimeOwnerToken owner, const StreamingMetricBindingRevision bindingRevision,
-        const StreamingRuntimeCompositionRevision ownerRevision, const StreamingMetricBounds &bounds,
-        const StreamingMetricAvailability availability, const StreamingMetricRequirement requirement,
-        const Telemetry::MetricCollectionLevel level, StreamingMetricHandles handles) {
-        if (const auto valid =
-                ValidateBindingPolicy(owner, bindingRevision, ownerRevision, bounds, availability, requirement, level, handles);
-            valid.HasError())
+    Result<WorldStreamingMetricBinding> WorldStreamingMetricBinding::Create(const StreamingRuntimeOwnerToken &owner,
+                                                                            const StreamingMetricBindingConfiguration &configuration,
+                                                                            StreamingMetricHandles handles) {
+        if (const auto valid = ValidateBindingPolicy(owner, configuration, handles); valid.HasError())
             return Result<WorldStreamingMetricBinding>::Failure(valid.ErrorValue());
-        return Result<WorldStreamingMetricBinding>::Success(
-            WorldStreamingMetricBinding{owner, bindingRevision, ownerRevision, bounds, availability, level, std::move(handles)});
+        return Result<WorldStreamingMetricBinding>::Success(WorldStreamingMetricBinding{owner, configuration, std::move(handles)});
     }
 
     /** @copydoc WorldStreamingMetricBinding::Replace */
     Result<void> WorldStreamingMetricBinding::Replace(const StreamingMetricBindingRevision expectedRevision,
-                                                      const StreamingMetricBindingRevision successorRevision,
-                                                      const StreamingRuntimeCompositionRevision ownerRevision,
-                                                      const StreamingMetricBounds &bounds, const StreamingMetricAvailability availability,
-                                                      const StreamingMetricRequirement requirement,
-                                                      const Telemetry::MetricCollectionLevel level, StreamingMetricHandles handles) {
+                                                      const StreamingMetricBindingConfiguration &configuration,
+                                                      StreamingMetricHandles handles) {
         if (std::this_thread::get_id() != ownerThread_)
             return Internal::Failure<void>(WorldStreamingErrors::MetricThreadAffinityViolation);
         if (state_ != StreamingMetricBindingState::Active)
             return Internal::Failure<void>(WorldStreamingErrors::MetricLifecycleUnavailable);
-        if (expectedRevision != bindingRevision_ || successorRevision.Value() <= bindingRevision_.Value() ||
-            ownerRevision.Value() < ownerRevision_.Value())
+        if (expectedRevision != bindingRevision_ || configuration.bindingRevision.Value() <= bindingRevision_.Value() ||
+            configuration.ownerRevision.Value() < ownerRevision_.Value())
             return Internal::Failure<void>(WorldStreamingErrors::MetricStale);
-        if (const auto valid =
-                ValidateBindingPolicy(owner_, successorRevision, ownerRevision, bounds, availability, requirement, level, handles);
-            valid.HasError())
+        if (const auto valid = ValidateBindingPolicy(owner_, configuration, handles); valid.HasError())
             return valid;
 
-        bindingRevision_ = successorRevision;
-        ownerRevision_ = ownerRevision;
-        bounds_ = bounds;
-        availability_ = availability;
-        level_ = level;
+        bindingRevision_ = configuration.bindingRevision;
+        ownerRevision_ = configuration.ownerRevision;
+        bounds_ = configuration.bounds;
+        availability_ = configuration.availability;
+        level_ = configuration.collectionLevel;
         handles_ = std::move(handles);
         return Result<void>::Success();
     }
@@ -362,14 +351,10 @@ namespace Horo::WorldStreaming {
     }
 
     /** @copydoc WorldStreamingMetricBinding::WorldStreamingMetricBinding */
-    WorldStreamingMetricBinding::WorldStreamingMetricBinding(const StreamingRuntimeOwnerToken owner,
-                                                             const StreamingMetricBindingRevision bindingRevision,
-                                                             const StreamingRuntimeCompositionRevision ownerRevision,
-                                                             const StreamingMetricBounds &bounds,
-                                                             const StreamingMetricAvailability availability,
-                                                             const Telemetry::MetricCollectionLevel level,
+    WorldStreamingMetricBinding::WorldStreamingMetricBinding(const StreamingRuntimeOwnerToken &owner,
+                                                             const StreamingMetricBindingConfiguration &configuration,
                                                              StreamingMetricHandles handles) noexcept
-        : owner_(owner), bindingRevision_(bindingRevision), ownerRevision_(ownerRevision), bounds_(bounds), availability_(availability),
-          level_(level), handles_(std::move(handles)), ownerThread_(std::this_thread::get_id()),
-          state_(StreamingMetricBindingState::Active) {}
+        : owner_(owner), bindingRevision_(configuration.bindingRevision), ownerRevision_(configuration.ownerRevision),
+          bounds_(configuration.bounds), availability_(configuration.availability), level_(configuration.collectionLevel),
+          handles_(std::move(handles)), ownerThread_(std::this_thread::get_id()), state_(StreamingMetricBindingState::Active) {}
 }  // namespace Horo::WorldStreaming

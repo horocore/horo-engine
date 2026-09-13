@@ -78,6 +78,20 @@ namespace Horo::WorldStreaming {
                     .maximumFailuresPerSample = maximum};
         }
 
+        [[nodiscard]] StreamingMetricBindingConfiguration Configuration(const StreamingMetricBindingRevision bindingRevision,
+                                                                        const StreamingRuntimeCompositionRevision ownerRevision,
+                                                                        const StreamingMetricBounds &bounds,
+                                                                        const StreamingMetricAvailability availability,
+                                                                        const StreamingMetricRequirement requirement,
+                                                                        const Telemetry::MetricCollectionLevel level) {
+            return {.bindingRevision = bindingRevision,
+                    .ownerRevision = ownerRevision,
+                    .bounds = bounds,
+                    .availability = availability,
+                    .requirement = requirement,
+                    .collectionLevel = level};
+        }
+
         [[nodiscard]] StreamingMetricSample Sample(const std::uint64_t ownerRevision = 4) {
             StreamingMetricSample sample{
                 .owner = Owner(),
@@ -98,9 +112,11 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<WorldStreamingMetricBinding> AvailableBinding(const Telemetry::MetricCollectionLevel level,
                                                                            const std::uint64_t bindingRevision = 3,
                                                                            const std::uint64_t ownerRevision = 4) {
-            return WorldStreamingMetricBinding::Create(Owner(), IdentityFrom<StreamingMetricBindingRevision>(bindingRevision),
-                                                       IdentityFrom<StreamingRuntimeCompositionRevision>(ownerRevision), Bounds(),
-                                                       StreamingMetricAvailability::Available, StreamingMetricRequirement::Required, level,
+            return WorldStreamingMetricBinding::Create(Owner(),
+                                                       Configuration(IdentityFrom<StreamingMetricBindingRevision>(bindingRevision),
+                                                                     IdentityFrom<StreamingRuntimeCompositionRevision>(ownerRevision),
+                                                                     Bounds(), StreamingMetricAvailability::Available,
+                                                                     StreamingMetricRequirement::Required, level),
                                                        RegisterStreamingMetricHandles(level));
         }
 
@@ -129,8 +145,11 @@ namespace Horo::WorldStreaming {
     TEST_CASE("World Streaming metric binding preserves explicit policy and capability states", "[unit][world_streaming][metrics]") {
         const auto revision = IdentityFrom<StreamingMetricBindingRevision>(3);
         const auto ownerRevision = IdentityFrom<StreamingRuntimeCompositionRevision>(4);
-        auto off = WorldStreamingMetricBinding::Create(Owner(), revision, ownerRevision, Bounds(), StreamingMetricAvailability::Off,
-                                                       StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Off, {});
+        auto off =
+            WorldStreamingMetricBinding::Create(Owner(),
+                                                Configuration(revision, ownerRevision, Bounds(), StreamingMetricAvailability::Off,
+                                                              StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Off),
+                                                {});
         REQUIRE(off.HasValue());
         REQUIRE(off.Value().Owner() == Owner());
         REQUIRE(off.Value().Revision() == revision);
@@ -140,26 +159,46 @@ namespace Horo::WorldStreaming {
         RequireError(off.Value().Publish(Sample(), revision), WorldStreamingErrors::MetricStale);
 
         auto unavailable =
-            WorldStreamingMetricBinding::Create(Owner(), revision, ownerRevision, Bounds(), StreamingMetricAvailability::Unavailable,
-                                                StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Core, {});
+            WorldStreamingMetricBinding::Create(Owner(),
+                                                Configuration(revision, ownerRevision, Bounds(), StreamingMetricAvailability::Unavailable,
+                                                              StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Core),
+                                                {});
         REQUIRE(unavailable.HasValue());
         REQUIRE(unavailable.Value().Publish(Sample(), revision).Value() == StreamingMetricPublishDisposition::SuppressedUnavailable);
+    }
 
-        RequireError(WorldStreamingMetricBinding::Create(Owner(), revision, ownerRevision, Bounds(),
-                                                         StreamingMetricAvailability::Unavailable, StreamingMetricRequirement::Required,
-                                                         Telemetry::MetricCollectionLevel::Core, {}),
+    TEST_CASE("World Streaming metric binding rejects inconsistent or unsupported configuration",
+              "[unit][world_streaming][metrics][failure]") {
+        const auto revision = IdentityFrom<StreamingMetricBindingRevision>(3);
+        const auto ownerRevision = IdentityFrom<StreamingRuntimeCompositionRevision>(4);
+        RequireError(WorldStreamingMetricBinding::Create(Owner(),
+                                                         Configuration(revision, ownerRevision, Bounds(),
+                                                                       StreamingMetricAvailability::Unavailable,
+                                                                       StreamingMetricRequirement::Required,
+                                                                       Telemetry::MetricCollectionLevel::Core),
+                                                         {}),
                      WorldStreamingErrors::MetricCapabilityUnavailable);
-        RequireError(WorldStreamingMetricBinding::Create(Owner(), revision, ownerRevision, Bounds(), StreamingMetricAvailability::Off,
-                                                         StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Core, {}),
+        RequireError(WorldStreamingMetricBinding::Create(Owner(),
+                                                         Configuration(revision, ownerRevision, Bounds(), StreamingMetricAvailability::Off,
+                                                                       StreamingMetricRequirement::Optional,
+                                                                       Telemetry::MetricCollectionLevel::Core),
+                                                         {}),
                      WorldStreamingErrors::MetricInvalid);
-        RequireError(WorldStreamingMetricBinding::Create(Owner(), revision, ownerRevision, Bounds(),
-                                                         static_cast<StreamingMetricAvailability>(255),
-                                                         StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Core, {}),
+        RequireError(WorldStreamingMetricBinding::Create(Owner(),
+                                                         Configuration(revision, ownerRevision, Bounds(),
+                                                                       static_cast<StreamingMetricAvailability>(255),
+                                                                       StreamingMetricRequirement::Optional,
+                                                                       Telemetry::MetricCollectionLevel::Core),
+                                                         {}),
                      WorldStreamingErrors::MetricUnsupported);
         auto invalidBounds = Bounds();
         invalidBounds.maximumQueueDepth = 0;
-        RequireError(WorldStreamingMetricBinding::Create(Owner(), revision, ownerRevision, invalidBounds, StreamingMetricAvailability::Off,
-                                                         StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Off, {}),
+        RequireError(WorldStreamingMetricBinding::Create(Owner(),
+                                                         Configuration(revision, ownerRevision, invalidBounds,
+                                                                       StreamingMetricAvailability::Off,
+                                                                       StreamingMetricRequirement::Optional,
+                                                                       Telemetry::MetricCollectionLevel::Off),
+                                                         {}),
                      WorldStreamingErrors::MetricInvalid);
     }
 
@@ -255,24 +294,31 @@ namespace Horo::WorldStreaming {
 
         auto invalidBounds = Bounds();
         invalidBounds.maximumBytesPerSample = 0;
-        RequireError(binding.Replace(current, successor, IdentityFrom<StreamingRuntimeCompositionRevision>(6), invalidBounds,
-                                     StreamingMetricAvailability::Off, StreamingMetricRequirement::Optional,
-                                     Telemetry::MetricCollectionLevel::Off, {}),
+        RequireError(binding.Replace(current,
+                                     Configuration(successor, IdentityFrom<StreamingRuntimeCompositionRevision>(6), invalidBounds,
+                                                   StreamingMetricAvailability::Off, StreamingMetricRequirement::Optional,
+                                                   Telemetry::MetricCollectionLevel::Off),
+                                     {}),
                      WorldStreamingErrors::MetricInvalid);
         REQUIRE(binding.Revision() == current);
         REQUIRE(binding.OwnerRevision() == IdentityFrom<StreamingRuntimeCompositionRevision>(4));
 
         REQUIRE(binding
-                    .Replace(current, successor, IdentityFrom<StreamingRuntimeCompositionRevision>(6), Bounds(),
-                             StreamingMetricAvailability::Off, StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Off,
+                    .Replace(current,
+                             Configuration(successor, IdentityFrom<StreamingRuntimeCompositionRevision>(6), Bounds(),
+                                           StreamingMetricAvailability::Off, StreamingMetricRequirement::Optional,
+                                           Telemetry::MetricCollectionLevel::Off),
                              {})
                     .HasValue());
         REQUIRE(binding.Revision() == successor);
         RequireError(binding.Publish(Sample(), successor), WorldStreamingErrors::MetricStale);
         REQUIRE(binding.Publish(Sample(6), successor).Value() == StreamingMetricPublishDisposition::SuppressedByPolicy);
-        RequireError(binding.Replace(current, IdentityFrom<StreamingMetricBindingRevision>(7),
-                                     IdentityFrom<StreamingRuntimeCompositionRevision>(6), Bounds(), StreamingMetricAvailability::Off,
-                                     StreamingMetricRequirement::Optional, Telemetry::MetricCollectionLevel::Off, {}),
+        RequireError(binding.Replace(current,
+                                     Configuration(IdentityFrom<StreamingMetricBindingRevision>(7),
+                                                   IdentityFrom<StreamingRuntimeCompositionRevision>(6), Bounds(),
+                                                   StreamingMetricAvailability::Off, StreamingMetricRequirement::Optional,
+                                                   Telemetry::MetricCollectionLevel::Off),
+                                     {}),
                      WorldStreamingErrors::MetricStale);
     }
 
@@ -296,9 +342,11 @@ namespace Horo::WorldStreaming {
         REQUIRE(moved.State() == StreamingMetricBindingState::Cancelled);
         RequireError(moved.Publish(Sample(), IdentityFrom<StreamingMetricBindingRevision>(3)),
                      WorldStreamingErrors::MetricLifecycleUnavailable);
-        RequireError(moved.Replace(IdentityFrom<StreamingMetricBindingRevision>(3), IdentityFrom<StreamingMetricBindingRevision>(4),
-                                   IdentityFrom<StreamingRuntimeCompositionRevision>(4), Bounds(), StreamingMetricAvailability::Available,
-                                   StreamingMetricRequirement::Required, Telemetry::MetricCollectionLevel::Core,
+        RequireError(moved.Replace(IdentityFrom<StreamingMetricBindingRevision>(3),
+                                   Configuration(IdentityFrom<StreamingMetricBindingRevision>(4),
+                                                 IdentityFrom<StreamingRuntimeCompositionRevision>(4), Bounds(),
+                                                 StreamingMetricAvailability::Available, StreamingMetricRequirement::Required,
+                                                 Telemetry::MetricCollectionLevel::Core),
                                    RegisterStreamingMetricHandles(Telemetry::MetricCollectionLevel::Core)),
                      WorldStreamingErrors::MetricLifecycleUnavailable);
         REQUIRE(moved.Close().HasValue());
