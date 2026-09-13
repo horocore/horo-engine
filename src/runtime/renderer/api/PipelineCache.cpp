@@ -46,7 +46,7 @@ namespace Horo::Render {
 
         template <typename OutputByteT, typename ValueT> void AppendInteger(std::vector<OutputByteT> &output, ValueT value) {
             using UnsignedT = std::make_unsigned_t<ValueT>;
-            UnsignedT bits = static_cast<UnsignedT>(value);
+            auto bits = static_cast<UnsignedT>(value);
             for (std::size_t index = 0; index < sizeof(UnsignedT); ++index) {
                 output.push_back(static_cast<OutputByteT>(bits & 0xffU));
                 if constexpr (sizeof(UnsignedT) > 1U)

@@ -7,10 +7,14 @@
 #include <string_view>
 #include <vector>
 
-namespace {
-    using namespace Horo;
-    using namespace Horo::Render;
-    using Tests::RequireError;
+namespace PipelineCacheTestSupport {
+    using Horo::ComputeSha256;
+    using Horo::Render::PipelineCacheCompatibility;
+    using Horo::Render::RenderAdapterId;
+    using Horo::Render::RenderBackendId;
+    using Horo::Render::ShaderPayloadFormat;
+    using Horo::Render::ShaderTargetBackend;
+    using Horo::Sha256Digest;
 
     [[nodiscard]] Sha256Digest Digest(const std::string_view text) {
         return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));
@@ -30,8 +34,15 @@ namespace {
                 .shaderInterface = {Digest("shader-interface")},
                 .pipelineDescriptorDigest = Digest("pipeline-descriptor")};
     }
+}  // namespace PipelineCacheTestSupport
 
-}  // namespace
+using Horo::Render::ComputePipelineCacheKey;
+using Horo::Render::LoadPipelineCacheBlob;
+using Horo::Render::PipelineCacheErrors;
+using Horo::Render::PipelineCacheLimits;
+using Horo::Render::SerializePipelineCacheBlob;
+using Horo::Tests::RequireError;
+using PipelineCacheTestSupport::Compatibility;
 
 TEST_CASE("Pipeline cache identity includes backend device driver shader and descriptor compatibility",
           "[runtime][renderer][pipeline-cache]") {
