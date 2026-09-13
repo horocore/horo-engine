@@ -223,7 +223,7 @@ namespace Horo::Render {
 
                 if (auto routed = RouteSpirv(entry, stem, spirvPath, std::move(spirv).Value()); routed.HasError())
                     return routed;
-                return CompileSpirvDebug(dxc, entry, stem);
+                return CompileDxcDebug(dxc, entry, scratch_.Path() / (stem + ".debug"), true, {"-Zi", "-Qembed_debug"});
             }
 
             [[nodiscard]] Result<void> RouteSpirv(const ShaderEntryPoint &entry, const std::string &stem,
@@ -317,17 +317,11 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
-            [[nodiscard]] Result<void> CompileSpirvDebug(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
-                                                         const std::string &stem) {
-                if (!invocation_.target.emitDebugInformation)
-                    return Result<void>::Success();
-                const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug");
-                return CompileDxcDebug(dxc, entry, debugPath, true, {"-Zi", "-Qembed_debug"});
-            }
-
             [[nodiscard]] Result<void> CompileDxcDebug(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
                                                        const std::filesystem::path &debugPath, const bool spirv,
                                                        std::vector<std::string> debugArguments) {
+                if (!invocation_.target.emitDebugInformation)
+                    return Result<void>::Success();
                 std::vector<std::string> arguments = DxcArguments(entry, spirv, debugPath);
                 if (const auto optimization = std::ranges::find_if(arguments,
                                                                    [](const std::string_view argument) {
@@ -363,13 +357,6 @@ namespace Horo::Render {
                 if (native.HasError())
                     return Result<void>::Failure(std::move(native).ErrorValue());
                 payloadStages_.emplace_back(entry.stage, entry.name, std::move(native).Value());
-                return CompileD3D12Debug(dxc, entry, stem);
-            }
-
-            [[nodiscard]] Result<void> CompileD3D12Debug(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
-                                                         const std::string &stem) {
-                if (!invocation_.target.emitDebugInformation)
-                    return Result<void>::Success();
                 const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug.dxil");
                 const std::filesystem::path pdbPath = scratch_.Path() / (stem + ".pdb");
                 return CompileDxcDebug(dxc, entry, debugPath, false, {"-Zi", "-Fd", pdbPath.string()});
