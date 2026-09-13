@@ -46,15 +46,14 @@ namespace Horo::Prefab {
             if (kind == PrefabDependencyKind::VariantParent)
                 return composition.variantAuthoredAgainst && *composition.variantAuthoredAgainst == targetRevision;
             if (kind == PrefabDependencyKind::NestedPrefab) {
-                bool found = false;
-                for (const NestedPrefabPlacement &placement : composition.nestedPlacements) {
-                    if (placement.sourcePrefab.Asset() == target) {
-                        found = true;
-                        if (placement.authoredAgainst != targetRevision)
-                            return false;
-                    }
-                }
-                return found;
+                const auto first = std::ranges::find_if(composition.nestedPlacements, [&target](const NestedPrefabPlacement &placement) {
+                    return placement.sourcePrefab.Asset() == target;
+                });
+                return first != composition.nestedPlacements.end() &&
+                       std::ranges::all_of(first, composition.nestedPlacements.end(),
+                                           [&target, &targetRevision](const NestedPrefabPlacement &placement) {
+                    return placement.sourcePrefab.Asset() != target || placement.authoredAgainst == targetRevision;
+                });
             }
             return false;
         }
@@ -67,15 +66,14 @@ namespace Horo::Prefab {
         /** @brief Adds one registry-backed node if it is not already captured. */
         [[nodiscard]] Result<void> CaptureNode(NodeMap &nodes, const Assets::AssetRecord &record,
                                                std::optional<PrefabSourceRevision> revision, PrefabExpansionBudget &budget) {
-            const auto existing = nodes.find(record.id);
-            if (existing != nodes.end()) {
+            if (const auto existing = nodes.find(record.id); existing != nodes.end()) {
                 if (revision)
                     existing->second.sourceRevision = std::move(revision);
                 return Result<void>::Success();
             }
             if (const auto charged = Charge(budget); charged.HasError())
                 return charged;
-            nodes.emplace(record.id, PrefabDependencyNode{record.id, record.type, std::move(revision)});
+            nodes.try_emplace(record.id, PrefabDependencyNode{record.id, record.type, std::move(revision)});
             return Result<void>::Success();
         }
 
@@ -98,7 +96,7 @@ namespace Horo::Prefab {
                 if (document.composition && document.composition->nestedPlacements.size() > limits.Policy().maximumDirectNestedPlacements)
                     return Result<void>::Failure(MakeError(PrefabErrors::NestedPlacementCountExceeded));
                 const Assets::AssetId id = document.assetId;
-                if (!RevisionMatchesDocument(source) || !sourceById.emplace(id, std::addressof(source)).second)
+                if (!RevisionMatchesDocument(source) || !sourceById.try_emplace(id, std::addressof(source)).second)
                     return Result<void>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
                 const Assets::AssetRecord *record = registry.Find(id);
                 if (record == nullptr)
@@ -138,7 +136,7 @@ namespace Horo::Prefab {
                         return Result<std::vector<PrefabDependencyEdge>>::Failure(captured.ErrorValue());
                     if (const auto charged = Charge(budget); charged.HasError())
                         return Result<std::vector<PrefabDependencyEdge>>::Failure(charged.ErrorValue());
-                    edges.push_back({document.assetId, target, kind});
+                    edges.emplace_back(document.assetId, target, kind);
                 }
             }
             return Result<std::vector<PrefabDependencyEdge>>::Success(std::move(edges));
@@ -193,11 +191,13 @@ namespace Horo::Prefab {
                 pending.push_back(root);
         }
 
-        for (std::size_t index = 0; index < pending.size(); ++index) {
+        std::size_t index = 0;
+        while (index < pending.size()) {
             for (const PrefabDependencyEdge &edge : DirectDependencies(pending[index])) {
                 if (InsertSorted(visited, edge.targetAsset))
                     pending.push_back(edge.targetAsset);
             }
+            ++index;
         }
 
         for (const Assets::AssetId root : roots)
@@ -223,7 +223,8 @@ namespace Horo::Prefab {
             }
         }
 
-        for (std::size_t index = 0; index < pending.size(); ++index) {
+        std::size_t index = 0;
+        while (index < pending.size()) {
             const Assets::AssetId target = pending[index];
             const auto first = std::ranges::lower_bound(reverseEdges_, target, {}, &PrefabDependencyEdge::targetAsset);
             const auto last = std::ranges::upper_bound(first, reverseEdges_.end(), target, {}, &PrefabDependencyEdge::targetAsset);
@@ -232,6 +233,7 @@ namespace Horo::Prefab {
                 if (InsertSorted(visited, edge->sourcePrefab))
                     pending.push_back(edge->sourcePrefab);
             }
+            ++index;
         }
         return affected;
     }
