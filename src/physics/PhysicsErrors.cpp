@@ -168,4 +168,40 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor ShapeCookSourceInvalid{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.shape_cook.source_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Physics shape source geometry is invalid.",
+        .remediationHint = "Repair the named source vertices or choose an explicit supported authoring operation before cooking.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor ShapeCookLimitExceeded{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.shape_cook.limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Physics shape cooking exceeded a configured limit.",
+        .remediationHint = "Reduce the source hull or select a separately qualified profile; topology is never silently truncated.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor ShapeCookCancelled{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.shape_cook.cancelled"},
+        .defaultSeverity = ErrorSeverity::Info,
+        .summary = "Physics shape cooking was cancelled.",
+        .remediationHint = "Retry only while the captured source, settings and target identity remain current.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor ShapeArtifactInvalid{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.shape_artifact.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The cooked Physics shape artifact is invalid.",
+        .remediationHint = "Discard the artifact and recook it from validated source for the exact active Physics target.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::Physics::PhysicsErrors

@@ -261,6 +261,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsCapabilities.h
     Horo/Physics/PhysicsCollisionSchema.h
     Horo/Physics/PhysicsConstraintDescriptor.h
+    Horo/Physics/PhysicsConvexHullCook.h
     Horo/Physics/PhysicsCookedShapeDescriptor.h
     Horo/Physics/PhysicsDiagnostics.h
     Horo/Physics/PhysicsDeterminismPolicy.h
