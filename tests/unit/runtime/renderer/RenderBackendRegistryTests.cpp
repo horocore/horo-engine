@@ -18,6 +18,19 @@ namespace {
         REQUIRE((condition));
     }
 
+    [[nodiscard]] RenderMemoryPlacement TestPlacement(const std::size_t bytes, const std::uint64_t compatibility = 1,
+                                                      const std::uint64_t attempt = 1) {
+        return {.pool = {{1}, compatibility},
+                .scope = {1, 1},
+                .attempt = {attempt},
+                .compatibility = {compatibility},
+                .budgetRevision = 1,
+                .payloadBytes = bytes,
+                .requiredBytes = bytes,
+                .backingBytes = bytes,
+                .allocationClass = RenderMemoryAllocationClass::Dedicated};
+    }
+
     enum class ProviderBehavior {
         ReturnNull,
         ReturnFailure,
@@ -334,18 +347,19 @@ namespace {
             .usage = RenderBufferUsage::Vertex,
             .access = RenderBufferAccess::DeviceLocal,
         };
-        Check(backend->CreateBuffer(vertexDescriptor, bytes).ErrorValue().code.Value() == "render.backend.not_initialized");
+        Check(backend->CreateBuffer(vertexDescriptor, bytes, TestPlacement(bytes.size())).ErrorValue().code.Value() ==
+              "render.backend.not_initialized");
         Check(backend->Initialize(RenderBackendConfig{}).HasValue());
         Check(backend->Capabilities().supportsBufferResources);
         Check(backend->Capabilities().supportsMeshResources);
 
-        Check(backend->CreateBuffer({}, {}).ErrorValue().code.Value() == "render.backend.invalid_config");
-        Check(backend->CreateBuffer(vertexDescriptor, std::span{bytes}.first<4>()).ErrorValue().code.Value() ==
+        Check(backend->CreateBuffer({}, {}, TestPlacement(bytes.size())).ErrorValue().code.Value() == "render.backend.invalid_config");
+        Check(backend->CreateBuffer(vertexDescriptor, std::span{bytes}.first<4>(), TestPlacement(bytes.size())).ErrorValue().code.Value() ==
               "render.backend.invalid_config");
-        auto vertex = backend->CreateBuffer(vertexDescriptor, bytes);
+        auto vertex = backend->CreateBuffer(vertexDescriptor, bytes, TestPlacement(bytes.size()));
         auto index =
             backend->CreateBuffer({.byteSize = bytes.size(), .usage = RenderBufferUsage::Index, .access = RenderBufferAccess::DeviceLocal},
-                                  bytes);
+                                  bytes, TestPlacement(bytes.size(), 1, 2));
         Check(vertex.HasValue());
         Check(index.HasValue());
         Check(vertex.Value() != index.Value());

@@ -8,9 +8,11 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderResource.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 
 namespace Horo::Render {
@@ -167,6 +169,54 @@ namespace Horo::Render {
             return mipCount <= maximumMipCount && static_cast<std::uint64_t>(mipCount) * layerCount <= maximumSubresourceCount;
         }
     };
+
+    /** @brief Returns the byte width of one uncompressed texel for a valid backend-neutral format. */
+    [[nodiscard]] constexpr std::optional<std::size_t> RenderTextureTexelBytes(const RenderTextureFormat format) noexcept {
+        using enum RenderTextureFormat;
+        switch (format) {
+            case R8Unorm:
+                return 1;
+            case Rg8Unorm:
+            case R16Float:
+            case Depth16Unorm:
+                return 2;
+            case Rgba8Unorm:
+            case Depth24Stencil8:
+            case Depth32Float:
+            case Rgba8UnormSrgb:
+            case Bgra8Unorm:
+            case Bgra8UnormSrgb:
+            case Rg16Float:
+            case R32Float:
+                return 4;
+            case Rgba16Float:
+            case Rg32Float:
+            case Depth32FloatStencil8:
+                return 8;
+            case Rgba32Float:
+                return 16;
+        }
+        return std::nullopt;
+    }
+
+    /** @brief Returns a checked tightly packed byte count for the complete base level. */
+    [[nodiscard]] constexpr std::optional<std::size_t> RenderTextureBaseLevelByteSize(const RenderTextureDescriptor &descriptor) noexcept {
+        if (!descriptor.IsValid())
+            return std::nullopt;
+        const auto texelBytes = RenderTextureTexelBytes(descriptor.format);
+        if (!texelBytes.has_value())
+            return std::nullopt;
+        constexpr std::size_t maximum = std::numeric_limits<std::size_t>::max();
+        const std::array factors{static_cast<std::size_t>(descriptor.extent.width), static_cast<std::size_t>(descriptor.extent.height),
+                                 static_cast<std::size_t>(descriptor.depth), static_cast<std::size_t>(descriptor.layerCount), *texelBytes};
+        std::size_t bytes = descriptor.sampleCount;
+        for (const std::size_t factor : factors) {
+            if (factor != 0 && bytes > maximum / factor)
+                return std::nullopt;
+            bytes *= factor;
+        }
+        return bytes;
+    }
 
     /** @brief Selects the image plane exposed by a texture view. */
     enum class RenderTextureAspect : std::uint8_t {

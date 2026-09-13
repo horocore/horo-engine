@@ -273,7 +273,8 @@ namespace {
                                          .maximumPendingRequests = 8,
                                          .retirementDrainBudget = 1,
                                          .maximumOperationResults = 8},
-                                        [&released](const RenderResourceClass, const std::uint64_t backendInstance) noexcept {
+                                        [&released](const RenderResourceClass, const std::uint64_t backendInstance,
+                                                    const std::optional<RenderMemoryAllocationId>) noexcept {
             released.instances[released.count++] = backendInstance;
         }};
 

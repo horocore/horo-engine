@@ -143,11 +143,11 @@ namespace Horo::Render {
             using enum UploadRequestKind;
             switch (request.kind) {
                 case Buffer:
-                    return backend.CreateBuffer(request.buffer, request.initialData);
+                    return backend.CreateBuffer(request.buffer, request.initialData, request.memoryPlacement);
                 case Mesh:
                     return RealizeMeshRequest(backend, registry, request.mesh);
                 case Texture:
-                    return backend.CreateTexture(request.texture);
+                    return backend.CreateTexture(request.texture, request.initialData, request.memoryPlacement);
                 case TextureView:
                     return RealizeTextureViewRequest(backend, registry, request.textureView);
                 case RenderTarget:
@@ -161,15 +161,35 @@ namespace Horo::Render {
         }
     }
 
-    void CompleteResourceRequest(IRenderBackend &backend, Detail::RenderResourceRegistry &registry, const UploadRequest &request,
-                                 const Result<std::uint64_t> &created) {
+    void CompleteResourceRequest(IRenderBackend &backend, RenderMemoryBudget &memoryBudget, Detail::RenderResourceRegistry &registry,
+                                 const UploadRequest &request, const Result<std::uint64_t> &created) {
         const Detail::RenderResourceClass resourceClass = ResourceClassFor(request.kind);
         if (created.HasError()) {
+            if (request.memoryReservation.IsValid())
+                static_cast<void>(memoryBudget.Cancel(request.memoryReservation));
             static_cast<void>(registry.Fail(resourceClass, request.identity, created.ErrorValue()));
             return;
         }
-        if (const Result<void> published = registry.Publish(resourceClass, request.identity, created.Value()); published.HasError()) {
+
+        std::optional<RenderMemoryAllocation> allocation;
+        if (request.memoryReservation.IsValid()) {
+            auto committed = memoryBudget.Commit(request.memoryReservation);
+            if (committed.HasError()) {
+                DestroyResourceInstance(backend, resourceClass, created.Value());
+                static_cast<void>(memoryBudget.Cancel(request.memoryReservation));
+                static_cast<void>(registry.Fail(resourceClass, request.identity, committed.ErrorValue()));
+                return;
+            }
+            allocation = committed.Value();
+        }
+        const std::optional<RenderMemoryAllocationId> allocationId = allocation.has_value() ? std::optional{allocation->id} : std::nullopt;
+        if (const Result<void> published = registry.Publish(resourceClass, request.identity, created.Value(), allocationId);
+            published.HasError()) {
             DestroyResourceInstance(backend, resourceClass, created.Value());
+            if (allocation.has_value()) {
+                static_cast<void>(memoryBudget.BeginRetire(allocation->id));
+                static_cast<void>(memoryBudget.AcknowledgeRetirement(allocation->id));
+            }
             static_cast<void>(registry.Fail(resourceClass, request.identity, published.ErrorValue()));
             return;
         }

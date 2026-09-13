@@ -67,4 +67,20 @@ namespace Horo::Prefab::PrefabErrors {
     const ErrorCodeDescriptor CompositionInvalid =
         Describe("prefab.composition.invalid", "Prefab composition data is invalid.",
                  "Use unique bounded placements for concrete prefabs or one exclusive variant parent.");
+
+    const ErrorCodeDescriptor DependencyGraphInvalid =
+        Describe("prefab.dependency_graph.invalid", "A prefab dependency graph candidate is invalid.",
+                 "Provide each prefab source once with a canonical revision matching its document and registry record.");
+
+    const ErrorCodeDescriptor DependencyUnavailable =
+        Describe("prefab.dependency.unavailable", "A prefab dependency is unavailable.",
+                 "Include the registered asset and every referenced prefab source in the pinned graph candidate.");
+
+    const ErrorCodeDescriptor DependencyTypeMismatch =
+        Describe("prefab.dependency.type_mismatch", "A prefab dependency has an incompatible asset type.",
+                 "Register prefab graph sources and composition targets as core.prefab assets.");
+
+    const ErrorCodeDescriptor DependencyRevisionMismatch =
+        Describe("prefab.dependency.revision_mismatch", "A prefab dependency source revision does not match.",
+                 "Reload the dependency graph from one coherent immutable source and Asset Registry snapshot.");
 }  // namespace Horo::Prefab::PrefabErrors
