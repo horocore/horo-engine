@@ -18,8 +18,20 @@ namespace {
 
     struct ReleasedBackendResources {
         std::array<std::uint64_t, 4> instances{};
+        std::array<BackendResourceReleaseMode, 4> modes{};
         std::size_t count{0};
     };
+
+    [[nodiscard]] RenderResourceRegistry MakeRegistry(const RenderResourceOwnerId owner, ReleasedBackendResources &released,
+                                                      const RenderResourceRegistryLimits &limits = {}) {
+        return RenderResourceRegistry{owner, limits,
+                                      [&released](const RenderResourceClass, const std::uint64_t backendInstance,
+                                                  const std::optional<RenderMemoryAllocationId>,
+                                                  const BackendResourceReleaseMode mode) noexcept {
+            released.instances[released.count] = backendInstance;
+            released.modes[released.count++] = mode;
+        }};
+    }
 
     TEST_CASE("Resource registry publishes a pending generation and records completion", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
@@ -107,6 +119,9 @@ namespace {
         REQUIRE_FALSE(RenderResourceRegistryLimits{.maximumPendingRequests = 0}.IsValid());
         REQUIRE_FALSE(RenderResourceRegistryLimits{.retirementDrainBudget = 0}.IsValid());
         REQUIRE_FALSE(RenderResourceRegistryLimits{.maximumPendingRequests = 2, .maximumOperationResults = 1}.IsValid());
+        REQUIRE_FALSE(RenderResourceRegistryLimits{.maximumSubmissionPins = 0}.IsValid());
+        REQUIRE_FALSE(RenderResourceRegistryLimits{.maximumTrackedQueues = 0}.IsValid());
+        REQUIRE_FALSE(RenderResourceRegistryLimits{.completionDrainBudget = 0}.IsValid());
     }
 
     TEST_CASE("Resource registry reports malformed identities", "[unit][runtime][renderer][resource]") {
@@ -268,15 +283,9 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         ReleasedBackendResources released;
-        RenderResourceRegistry registry{owner.Value(),
-                                        {.maximumSlots = 8,
-                                         .maximumPendingRequests = 8,
-                                         .retirementDrainBudget = 1,
-                                         .maximumOperationResults = 8},
-                                        [&released](const RenderResourceClass, const std::uint64_t backendInstance,
-                                                    const std::optional<RenderMemoryAllocationId>) noexcept {
-            released.instances[released.count++] = backendInstance;
-        }};
+        RenderResourceRegistry registry =
+            MakeRegistry(owner.Value(), released,
+                         {.maximumSlots = 8, .maximumPendingRequests = 8, .retirementDrainBudget = 1, .maximumOperationResults = 8});
 
         auto buffer = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(buffer.HasValue());
@@ -300,6 +309,128 @@ namespace {
         REQUIRE(released.instances[1] == 1);
     }
 
+    TEST_CASE("Multi-queue completion gates retirement by every accepted GPU use", "[unit][runtime][renderer][resource]") {
+        const auto owner = AcquireRenderResourceOwnerId();
+        REQUIRE(owner.HasValue());
+        ReleasedBackendResources released;
+        RenderResourceRegistry registry = MakeRegistry(owner.Value(), released,
+                                                       {.maximumSlots = 4,
+                                                        .maximumPendingRequests = 4,
+                                                        .retirementDrainBudget = 4,
+                                                        .maximumOperationResults = 4,
+                                                        .maximumSubmissionPins = 4,
+                                                        .maximumTrackedQueues = 2,
+                                                        .completionDrainBudget = 4});
+
+        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
+        REQUIRE(buffer.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 41).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 7}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{2}, 3}).HasValue());
+        REQUIRE(registry.Release(RenderResourceClass::Buffer, Identity(buffer.Value())).HasValue());
+
+        REQUIRE(registry.AcknowledgeCompletion({{1}, 7}).Value() == 1);
+        REQUIRE(registry.DrainRetirements() == 0);
+        REQUIRE(released.count == 0);
+        REQUIRE(registry.AcknowledgeCompletion({{2}, 3}).Value() == 1);
+        REQUIRE(registry.DrainRetirements() == 1);
+        REQUIRE(released.count == 1);
+        REQUIRE(released.instances[0] == 41);
+        REQUIRE(released.modes[0] == BackendResourceReleaseMode::DestroyNative);
+    }
+
+    TEST_CASE("Submission completion validation is typed and capacity bounded", "[unit][runtime][renderer][resource]") {
+        const auto owner = AcquireRenderResourceOwnerId();
+        REQUIRE(owner.HasValue());
+        RenderResourceRegistry registry{owner.Value(),
+                                        {.maximumSlots = 2,
+                                         .maximumPendingRequests = 2,
+                                         .retirementDrainBudget = 1,
+                                         .maximumOperationResults = 2,
+                                         .maximumSubmissionPins = 1,
+                                         .maximumTrackedQueues = 1,
+                                         .completionDrainBudget = 1}};
+        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
+        REQUIRE(buffer.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 1).HasValue());
+
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {}).ErrorValue().code.Value() ==
+                "render.frontend.resource.completion_invalid");
+        REQUIRE(registry.AcknowledgeCompletion({{9}, 1}).ErrorValue().code.Value() == "render.frontend.resource.completion_unknown_queue");
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 2}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 3}).ErrorValue().code.Value() ==
+                "render.frontend.resource.submission_capacity_exceeded");
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{2}, 1}).ErrorValue().code.Value() ==
+                "render.frontend.resource.submission_capacity_exceeded");
+        REQUIRE(registry.AcknowledgeCompletion({{1}, 3}).Value() == 1);
+        REQUIRE(registry.AcknowledgeCompletion({{1}, 2}).ErrorValue().code.Value() == "render.frontend.resource.completion_regressed");
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 2}).ErrorValue().code.Value() ==
+                "render.frontend.resource.completion_regressed");
+    }
+
+    TEST_CASE("Completion draining is bounded across pending queue uses", "[unit][runtime][renderer][resource]") {
+        const auto owner = AcquireRenderResourceOwnerId();
+        REQUIRE(owner.HasValue());
+        RenderResourceRegistry registry{owner.Value(),
+                                        {.maximumSlots = 2,
+                                         .maximumPendingRequests = 2,
+                                         .retirementDrainBudget = 2,
+                                         .maximumOperationResults = 2,
+                                         .maximumSubmissionPins = 3,
+                                         .maximumTrackedQueues = 1,
+                                         .completionDrainBudget = 1}};
+        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
+        REQUIRE(buffer.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 1).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 1}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 2}).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 3}).HasValue());
+        REQUIRE(registry.Release(RenderResourceClass::Buffer, Identity(buffer.Value())).HasValue());
+
+        REQUIRE(registry.AcknowledgeCompletion({{1}, 3}).Value() == 1);
+        REQUIRE(registry.DrainRetirements() == 0);
+        REQUIRE(registry.AcknowledgeCompletion({{1}, 3}).Value() == 1);
+        REQUIRE(registry.DrainRetirements() == 0);
+        REQUIRE(registry.AcknowledgeCompletion({{1}, 3}).Value() == 1);
+        REQUIRE(registry.DrainRetirements() == 1);
+    }
+
+    TEST_CASE("Shutdown invalidates tracked uses after the backend releases native resources", "[unit][runtime][renderer][resource]") {
+        const auto owner = AcquireRenderResourceOwnerId();
+        REQUIRE(owner.HasValue());
+        ReleasedBackendResources released;
+        RenderResourceRegistry registry = MakeRegistry(owner.Value(), released);
+        const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
+        REQUIRE(buffer.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 71).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 4}).HasValue());
+
+        registry.Shutdown(BackendResourceReleaseMode::NativeAlreadyReleased);
+        REQUIRE(released.count == 1);
+        REQUIRE(released.instances[0] == 71);
+        REQUIRE(released.modes[0] == BackendResourceReleaseMode::NativeAlreadyReleased);
+        REQUIRE(registry.State(RenderResourceClass::Buffer, Identity(buffer.Value())).ErrorValue().code.Value() ==
+                "render.frontend.resource.stale");
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Buffer, Identity(buffer.Value()), {{1}, 5}).ErrorValue().code.Value() ==
+                "render.frontend.resource.registry_stopped");
+    }
+
+    TEST_CASE("Device loss abandons tracked native instances without issuing destruction", "[unit][runtime][renderer][resource]") {
+        const auto owner = AcquireRenderResourceOwnerId();
+        REQUIRE(owner.HasValue());
+        ReleasedBackendResources released;
+        RenderResourceRegistry registry = MakeRegistry(owner.Value(), released);
+        const auto texture = registry.Reserve(RenderResourceClass::Texture);
+        REQUIRE(texture.HasValue());
+        REQUIRE(registry.Publish(RenderResourceClass::Texture, Identity(texture.Value()), 91).HasValue());
+        REQUIRE(registry.TrackSubmission(RenderResourceClass::Texture, Identity(texture.Value()), {{3}, 8}).HasValue());
+
+        registry.Shutdown(BackendResourceReleaseMode::NativeUnavailable);
+        REQUIRE(released.count == 1);
+        REQUIRE(released.instances[0] == 91);
+        REQUIRE(released.modes[0] == BackendResourceReleaseMode::NativeUnavailable);
+    }
+
     TEST_CASE("Failure and shutdown preserve terminal operation results", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
@@ -320,13 +451,13 @@ namespace {
 
         auto cancelled = registry.Reserve(RenderResourceClass::Pipeline);
         REQUIRE(cancelled.HasValue());
-        registry.Shutdown();
+        registry.Shutdown(BackendResourceReleaseMode::NativeAlreadyReleased);
         const auto cancellation = registry.OperationResult(cancelled.Value().operation);
         REQUIRE(cancellation.HasError());
         REQUIRE(cancellation.ErrorValue().code.Value() == "render.frontend.resource.registry_stopped");
         const auto stopped = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(stopped.HasError());
         REQUIRE(stopped.ErrorValue().code.Value() == "render.frontend.resource.registry_stopped");
-        registry.Shutdown();
+        registry.Shutdown(BackendResourceReleaseMode::NativeAlreadyReleased);
     }
 }  // namespace

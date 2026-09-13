@@ -23,17 +23,20 @@ namespace Horo::Render::Detail {
     }  // namespace
 
     bool RenderResourceRegistryLimits::IsValid() const noexcept {
-        return std::min({maximumSlots, maximumPendingRequests, retirementDrainBudget}) > 0 &&
+        return std::min({maximumSlots, maximumPendingRequests, retirementDrainBudget, maximumSubmissionPins, maximumTrackedQueues,
+                         completionDrainBudget}) > 0 &&
                maximumOperationResults >= maximumPendingRequests;
     }
 
-    RenderResourceRegistry::RenderResourceRegistry(const RenderResourceOwnerId owner, const RenderResourceRegistryLimits limits,
+    RenderResourceRegistry::RenderResourceRegistry(const RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
                                                    BackendResourceRelease releaseBackendResource)
         : owner_(owner), limits_(limits), retirementQueue_(limits.maximumSlots),
           releaseBackendResource_(std::move(releaseBackendResource)) {
         assert(owner_.IsValid());
         assert(limits_.IsValid());
         freeSlots_.reserve(limits_.maximumSlots);
+        submissionPins_.reserve(limits_.maximumSubmissionPins);
+        queueProgress_.reserve(limits_.maximumTrackedQueues);
     }
 
     Result<ResourceReservation> RenderResourceRegistry::Reserve(const RenderResourceClass resourceClass,
@@ -291,19 +294,101 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    std::size_t RenderResourceRegistry::DrainRetirements() {
+    Result<void> RenderResourceRegistry::TrackSubmission(const RenderResourceClass resourceClass, const RenderResourceIdentity identity,
+                                                         const RenderTimelinePoint completion) {
+        if (!completion.IsValid()) {
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceCompletionInvalid, "A resource submission requires a valid queue completion point."));
+        }
+        if (!acceptingRequests_) {
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceRegistryStopped, "Resource submissions are disabled during frontend shutdown."));
+        }
+        auto queue = std::ranges::find(queueProgress_, completion.queue, &QueueProgress::queue);
+        const bool newQueue = queue == queueProgress_.end();
+        if (newQueue && queueProgress_.size() >= limits_.maximumTrackedQueues) {
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceSubmissionCapacityExceeded,
+                              "The renderer cannot track another logical queue without exceeding its configured queue bound."));
+        }
+        if (!newQueue && (completion.value <= queue->completed || completion.value < queue->submitted)) {
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceCompletionRegressed,
+                              "The resource submission completion point is already complete or regresses its logical queue."));
+        }
+        if (submissionPins_.size() >= limits_.maximumSubmissionPins) {
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceSubmissionCapacityExceeded, "The bounded renderer submission-pin queue is full."));
+        }
+        if (const Result<void> pinned = AddSubmissionPin(resourceClass, identity); pinned.HasError()) {
+            return pinned;
+        }
+        if (newQueue) {
+            queueProgress_.push_back(QueueProgress{.queue = completion.queue});
+            queue = queueProgress_.end() - 1;
+        }
+        queue->submitted = completion.value;
+        submissionPins_.push_back(SubmissionPin{resourceClass, identity, completion});
+        return Result<void>::Success();
+    }
+
+    Result<std::size_t> RenderResourceRegistry::AcknowledgeCompletion(const RenderTimelinePoint completion) {
+        if (!completion.IsValid()) {
+            return Result<std::size_t>::Failure(RegistryError(FrontendErrors::ResourceCompletionInvalid,
+                                                              "A completion acknowledgement requires a valid queue timeline point."));
+        }
+        auto queue = std::ranges::find(queueProgress_, completion.queue, &QueueProgress::queue);
+        if (queue == queueProgress_.end()) {
+            return Result<std::size_t>::Failure(
+                RegistryError(FrontendErrors::ResourceCompletionUnknownQueue,
+                              "The completion acknowledgement names a queue with no accepted resource submissions."));
+        }
+        if (completion.value < queue->completed) {
+            return Result<std::size_t>::Failure(RegistryError(FrontendErrors::ResourceCompletionRegressed,
+                                                              "The completion acknowledgement regresses the queue's completed timeline."));
+        }
+        queue->completed = completion.value;
+
+        std::size_t released = 0;
+        std::size_t inspected = 0;
+        while (!submissionPins_.empty() && inspected < limits_.completionDrainBudget) {
+            completionScanCursor_ %= submissionPins_.size();
+            const SubmissionPin &pin = submissionPins_[completionScanCursor_];
+            const auto pinQueue = std::ranges::find(queueProgress_, pin.completion.queue, &QueueProgress::queue);
+            const bool complete = pinQueue != queueProgress_.end() && pin.completion.value <= pinQueue->completed;
+            ++inspected;
+            if (!complete) {
+                completionScanCursor_ = (completionScanCursor_ + 1) % submissionPins_.size();
+                continue;
+            }
+            const SubmissionPin completedPin = pin;
+            submissionPins_[completionScanCursor_] = submissionPins_.back();
+            submissionPins_.pop_back();
+            if (const Result<void> unpinned = ReleaseSubmissionPin(completedPin.resourceClass, completedPin.identity);
+                unpinned.HasError()) {
+                return Result<std::size_t>::Failure(unpinned.ErrorValue());
+            }
+            ++released;
+        }
+        if (submissionPins_.empty()) {
+            completionScanCursor_ = 0;
+        }
+        return Result<std::size_t>::Success(released);
+    }
+
+    std::size_t RenderResourceRegistry::DrainRetirements(const BackendResourceReleaseMode releaseMode) {
         std::size_t retired = 0;
         while (retired < limits_.retirementDrainBudget && retirementQueueCount_ > 0) {
             const std::uint32_t slot = retirementQueue_[retirementQueueHead_];
             retirementQueueHead_ = (retirementQueueHead_ + 1) % retirementQueue_.size();
             --retirementQueueCount_;
-            Retire(slot);
+            Retire(slot, releaseMode);
             ++retired;
         }
         return retired;
     }
 
-    void RenderResourceRegistry::Shutdown() noexcept {
+    void RenderResourceRegistry::Shutdown(const BackendResourceReleaseMode releaseMode) noexcept {
         using enum RenderResourceState;
 
         if (!acceptingRequests_) {
@@ -311,6 +396,9 @@ namespace Horo::Render::Detail {
         }
         acceptingRequests_ = false;
         pendingRequests_ = 0;
+        submissionPins_.clear();
+        queueProgress_.clear();
+        completionScanCursor_ = 0;
         for (std::size_t slot = 1; slot < entries_.size(); ++slot) {
             Entry &entry = entries_[slot];
             if (entry.state == Pending) {
@@ -323,12 +411,12 @@ namespace Horo::Render::Detail {
             entry.submissionPins = 0;
             QueueRetirementIfEligible(slot);
         }
-        while (DrainRetirements() != 0) {
+        while (DrainRetirements(releaseMode) != 0) {
             // Continue until dependency retirement makes no further entry eligible.
         }
         for (std::size_t slot = 1; slot < entries_.size(); ++slot) {
             if (entries_[slot].state != Retired) {
-                Retire(slot);
+                Retire(slot, releaseMode);
             }
         }
         retirementQueueHead_ = 0;
@@ -401,7 +489,7 @@ namespace Horo::Render::Detail {
         ++retirementQueueCount_;
     }
 
-    void RenderResourceRegistry::Retire(const std::size_t slot) noexcept {
+    void RenderResourceRegistry::Retire(const std::size_t slot, const BackendResourceReleaseMode releaseMode) noexcept {
         Entry &entry = entries_[slot];
         for (const RenderResourceIdentity dependency : entry.dependencies) {
             if (FindExact(dependency) != nullptr) {
@@ -413,7 +501,7 @@ namespace Horo::Render::Detail {
         }
         entry.dependencies.clear();
         if (entry.backendInstance != 0 && releaseBackendResource_) {
-            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation);
+            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation, releaseMode);
         }
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();

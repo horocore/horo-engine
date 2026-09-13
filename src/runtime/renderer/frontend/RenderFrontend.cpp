@@ -17,10 +17,50 @@ namespace Horo::Render {
             return MakeError(descriptor, std::move(message));
         }
 
-        /** @brief Releases one backend instance and retires its admitted memory. */
-        void DestroyResource(IRenderBackend &backend, RenderMemoryBudget &memoryBudget, const Detail::RenderResourceClass resourceClass,
-                             const std::uint64_t backendInstance, const std::optional<RenderMemoryAllocationId> memoryAllocation,
-                             const std::uint32_t maximumEmptyBlocksReclaimedPerDrain) {
+        [[nodiscard]] Result<void> ValidateFrontendConfiguration(const RenderResourceUploadLimits &uploadLimits,
+                                                                 const RenderFrontendMemoryConfig &memoryConfig,
+                                                                 const RenderResourceRetirementLimits &retirementLimits) {
+            if (!uploadLimits.IsValid()) {
+                return Result<void>::Failure(
+                    MakeFrontendError(FrontendErrors::InvalidResourceUploadLimits, "Renderer resource upload limits are invalid."));
+            }
+            if (!memoryConfig.IsValid()) {
+                return Result<void>::Failure(
+                    MakeFrontendError(FrontendErrors::InvalidMemoryConfig, "Renderer memory admission limits or scope are invalid."));
+            }
+            if (!retirementLimits.IsValid()) {
+                return Result<void>::Failure(MakeFrontendError(FrontendErrors::InvalidResourceRetirementLimits,
+                                                               "Renderer resource retirement limits must use finite non-zero completion, "
+                                                               "queue, and destruction bounds."));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<std::unique_ptr<IRenderBackend>> CreateInitializedBackend(const RenderBackendRegistry &registry,
+                                                                                       const RenderBackendId &backendId,
+                                                                                       const RenderBackendConfig &config) {
+            auto created = registry.Create(backendId);
+            if (created.HasError()) {
+                return Result<std::unique_ptr<IRenderBackend>>::Failure(created.ErrorValue());
+            }
+
+            std::unique_ptr<IRenderBackend> backend = std::move(created).Value();
+            try {
+                if (const Result<void> initialized = backend->Initialize(config); initialized.HasError()) {
+                    backend->Shutdown();
+                    return Result<std::unique_ptr<IRenderBackend>>::Failure(initialized.ErrorValue());
+                }
+            } catch (...) {  // NOSONAR(cpp:S2738)
+                backend->Shutdown();
+                return Result<std::unique_ptr<IRenderBackend>>::Failure(
+                    MakeFrontendError(FrontendErrors::InitializeException, "Renderer backend initialization threw."));
+            }
+            return Result<std::unique_ptr<IRenderBackend>>::Success(std::move(backend));
+        }
+
+        /** @brief Releases one native backend instance for a retiring frontend resource. */
+        void DestroyNativeResource(IRenderBackend &backend, const Detail::RenderResourceClass resourceClass,
+                                   const std::uint64_t backendInstance) {
             using enum Detail::RenderResourceClass;
             if (resourceClass == Buffer)
                 backend.DestroyBuffer(backendInstance);
@@ -32,11 +72,18 @@ namespace Horo::Render {
                 backend.DestroyTextureView(backendInstance);
             else if (resourceClass == RenderTarget)
                 backend.DestroyRenderTarget(backendInstance);
-            if (!memoryAllocation.has_value())
+        }
+
+        /** @brief Applies backend-release disposition and retires admitted memory when it remains valid. */
+        void ReleaseResource(IRenderBackend &backend, RenderMemoryBudget &memoryBudget, const Detail::RenderResourceClass resourceClass,
+                             const std::uint64_t backendInstance, const std::optional<RenderMemoryAllocationId> memoryAllocation,
+                             const Detail::BackendResourceReleaseMode releaseMode) {
+            if (releaseMode == Detail::BackendResourceReleaseMode::DestroyNative)
+                DestroyNativeResource(backend, resourceClass, backendInstance);
+            if (!memoryAllocation.has_value() || releaseMode == Detail::BackendResourceReleaseMode::NativeUnavailable)
                 return;
             static_cast<void>(memoryBudget.BeginRetire(*memoryAllocation));
             static_cast<void>(memoryBudget.AcknowledgeRetirement(*memoryAllocation));
-            static_cast<void>(memoryBudget.ReclaimEmptyBlocks(maximumEmptyBlocksReclaimedPerDrain));
         }
 
     }  // namespace
@@ -180,31 +227,16 @@ namespace Horo::Render {
     Result<std::unique_ptr<RenderFrontend>> RenderFrontend::Create(const RenderBackendRegistry &registry, const RenderBackendId &backendId,
                                                                    const RenderBackendConfig &config,
                                                                    const RenderResourceUploadLimits uploadLimits,
-                                                                   const RenderFrontendMemoryConfig &memoryConfig) {
-        if (!uploadLimits.IsValid()) {
-            return Result<std::unique_ptr<RenderFrontend>>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidResourceUploadLimits, "Renderer resource upload limits are invalid."));
+                                                                   const RenderFrontendMemoryConfig &memoryConfig,
+                                                                   const RenderResourceRetirementLimits &retirementLimits) {
+        if (const Result<void> valid = ValidateFrontendConfiguration(uploadLimits, memoryConfig, retirementLimits); valid.HasError()) {
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(valid.ErrorValue());
         }
-        if (!memoryConfig.IsValid()) {
-            return Result<std::unique_ptr<RenderFrontend>>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidMemoryConfig, "Renderer memory admission limits or scope are invalid."));
+        auto initializedBackend = CreateInitializedBackend(registry, backendId, config);
+        if (initializedBackend.HasError()) {
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(initializedBackend.ErrorValue());
         }
-        auto createdBackend = registry.Create(backendId);
-        if (createdBackend.HasError()) {
-            return Result<std::unique_ptr<RenderFrontend>>::Failure(createdBackend.ErrorValue());
-        }
-
-        std::unique_ptr<IRenderBackend> backend = std::move(createdBackend).Value();
-        try {
-            if (const Result<void> initialized = backend->Initialize(config); initialized.HasError()) {
-                backend->Shutdown();
-                return Result<std::unique_ptr<RenderFrontend>>::Failure(initialized.ErrorValue());
-            }
-        } catch (...) {  // NOSONAR(cpp:S2738)
-            backend->Shutdown();
-            return Result<std::unique_ptr<RenderFrontend>>::Failure(
-                MakeFrontendError(FrontendErrors::InitializeException, "Renderer backend initialization threw."));
-        }
+        std::unique_ptr<IRenderBackend> backend = std::move(initializedBackend).Value();
 
         auto resourceOwner = Detail::AcquireRenderResourceOwnerId();
         if (resourceOwner.HasError()) {
@@ -219,7 +251,7 @@ namespace Horo::Render {
         try {
             return Result<std::unique_ptr<RenderFrontend>>::Success(
                 std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, std::move(memoryBudget).Value(),
-                                                 memoryConfig, ConstructionKey{}));
+                                                 memoryConfig, retirementLimits, ConstructionKey{}));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceCapacityExhausted, "Renderer frontend bounded queue storage allocation failed."));
@@ -232,17 +264,27 @@ namespace Horo::Render {
 
     RenderFrontend::RenderFrontend(std::unique_ptr<IRenderBackend> backend, const RenderResourceOwnerId resourceOwner,
                                    const RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
-                                   const RenderFrontendMemoryConfig &memoryConfig, ConstructionKey)
+                                   const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
+                                   ConstructionKey)
         : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
           resourceRegistry_(
-              std::make_unique<Detail::RenderResourceRegistry>(resourceOwner, Detail::RenderResourceRegistryLimits{},
-                                                               [this](const Detail::RenderResourceClass resourceClass,
-                                                                      const std::uint64_t backendInstance,
-                                                                      const std::optional<RenderMemoryAllocationId> memoryAllocation) {
-                                                                   DestroyResource(*backend_, *memoryBudget_, resourceClass,
-                                                                                   backendInstance, memoryAllocation,
-                                                                                   memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
-                                                               })),
+              std::make_unique<
+                  Detail::RenderResourceRegistry>(resourceOwner,
+                                                  Detail::RenderResourceRegistryLimits{.retirementDrainBudget =
+                                                                                           retirementLimits.maximumRetirementsPerDrain,
+                                                                                       .maximumSubmissionPins =
+                                                                                           retirementLimits.maximumSubmissionPins,
+                                                                                       .maximumTrackedQueues =
+                                                                                           retirementLimits.maximumTrackedQueues,
+                                                                                       .completionDrainBudget =
+                                                                                           retirementLimits.maximumCompletionsPerDrain},
+                                                  [this](const Detail::RenderResourceClass resourceClass,
+                                                         const std::uint64_t backendInstance,
+                                                         const std::optional<RenderMemoryAllocationId> memoryAllocation,
+                                                         const Detail::BackendResourceReleaseMode releaseMode) {
+                                                      ReleaseResource(*backend_, *memoryBudget_, resourceClass, backendInstance,
+                                                                      memoryAllocation, releaseMode);
+                                                  })),
           resourceUploadQueue_(std::make_unique<Detail::RenderResourceUploadQueue>(uploadLimits)) {}
 
     /** @copydoc RenderFrontend::~RenderFrontend */
@@ -256,8 +298,8 @@ namespace Horo::Render {
             if (request.memoryReservation.IsValid())
                 static_cast<void>(memoryBudget_->Cancel(request.memoryReservation));
         }
-        resourceRegistry_->Shutdown();
         backend_->Shutdown();
+        resourceRegistry_->Shutdown(Detail::BackendResourceReleaseMode::NativeAlreadyReleased);
         while (memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks) != 0) {
             // Drain every now-empty backing block before invalidating the ledger.
         }
