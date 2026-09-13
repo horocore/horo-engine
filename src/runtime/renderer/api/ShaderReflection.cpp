@@ -226,7 +226,8 @@ namespace Horo::Render {
             for (std::size_t index = 0; index < candidate.targetBindings.size(); ++index) {
                 const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
                 const ShaderReflectedBinding *reflection = FindReflectedBinding(candidate, mapping.id);
-                if (const auto key = std::pair{mapping.id, mapping.generatedHelperIndex}; !mapping.id.IsValid() ||
+                if (const auto key = std::pair{mapping.id, mapping.generatedHelperIndex};
+                    !mapping.id.IsValid() ||
                     (index > 0 &&
                      std::pair{candidate.targetBindings[index - 1].id, candidate.targetBindings[index - 1].generatedHelperIndex} >= key) ||
                     reflection == nullptr ||
