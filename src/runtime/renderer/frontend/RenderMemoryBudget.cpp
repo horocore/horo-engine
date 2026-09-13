@@ -101,83 +101,19 @@ namespace Horo::Render {
             pools_.reserve(config.maximumPools);
             blocks_.reserve(config.maximumBlocks);
             regions_.resize(config.maximumAllocations);
+            sortedRegionsScratch_.reserve(config.maximumAllocations);
         }
 
         [[nodiscard]] Result<RenderMemoryReservationId> Reserve(const RenderMemoryScopeId scope, const ResourceOperationId attempt,
                                                                 const RenderMemoryCostPlan &plan) {
-            if (!acceptingReservations_)
-                return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::Stopped,
-                                                          "Renderer memory reservation was requested during shutdown.");
-            if (!scope.IsValid() || !attempt.IsValid())
-                return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::InvalidRequest,
-                                                          "Memory scope or resource-attempt identity is invalid.");
-            if (!plan.IsValid() || plan.alignment > config_.maximumAlignment)
-                return Failure<
-                    RenderMemoryReservationId>(RenderMemoryBudgetErrors::InvalidCostPlan,
-                                               "Memory size, alignment, allocation class, compatibility, or provenance is invalid.");
-            if (ChargedBytes() > config_.hardCapBytes) {
-                ++failedReservationCount_;
-                return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::BudgetExceeded,
-                                                          "Existing renderer backing exceeds the revised hard cap.");
-            }
-            if (nextReservation_ == 0 || nextAllocation_ == 0)
-                return CapacityFailure<RenderMemoryReservationId>();
-
-            if (reservationCount_ >= config_.maximumReservations || reservationCount_ + allocationCount_ >= config_.maximumAllocations)
-                return CapacityFailure<RenderMemoryReservationId>();
+            const Result<void> validation = ValidateReservationRequest(scope, attempt, plan);
+            if (validation.HasError())
+                return Result<RenderMemoryReservationId>::Failure(validation.ErrorValue());
 
             Pool *pool = FindPool(scope, plan.memoryClass, plan.compatibility);
-            if (plan.allocationClass == RenderMemoryAllocationClass::Suballocated) {
-                if (plan.requiredBytes > config_.maximumBlockBytes)
-                    return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::UnsupportedAllocation,
-                                                              "Suballocated requirements exceed the configured maximum block size.");
-                if (pool != nullptr) {
-                    for (Block &block : blocks_) {
-                        if (block.pool == pool->id && block.committed && !block.dedicated) {
-                            if (const auto offset = FindFirstFit(block, regions_, plan.requiredBytes, plan.alignment); offset.has_value())
-                                return AddReservation(block, *offset, attempt, plan);
-                        }
-                    }
-                }
-            }
-
-            if (blocks_.size() >= config_.maximumBlocks)
-                return CapacityFailure<RenderMemoryReservationId>();
-
-            std::size_t backingBytes = plan.requiredBytes;
-            if (plan.allocationClass == RenderMemoryAllocationClass::Suballocated) {
-                backingBytes = std::max(config_.defaultBlockBytes, plan.requiredBytes);
-                const auto aligned = AlignUp(backingBytes, plan.alignment);
-                if (!aligned.has_value() || *aligned > config_.maximumBlockBytes)
-                    return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::UnsupportedAllocation,
-                                                              "Aligned suballocation block exceeds the configured maximum block size.");
-                backingBytes = *aligned;
-            }
-            if (!CanCharge(backingBytes)) {
-                ++failedReservationCount_;
-                return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::BudgetExceeded,
-                                                          "Whole backing capacity would exceed the renderer hard cap.");
-            }
-            if (pool == nullptr) {
-                if (pools_.size() >= config_.maximumPools || nextPool_ == 0)
-                    return CapacityFailure<RenderMemoryReservationId>();
-                pools_.push_back(Pool{.id = RenderMemoryPoolId{renderer_, nextPool_++},
-                                      .scope = scope,
-                                      .memoryClass = plan.memoryClass,
-                                      .compatibility = plan.compatibility});
-                pool = &pools_.back();
-            }
-            if (nextBlock_ == 0)
-                return CapacityFailure<RenderMemoryReservationId>();
-
-            Block block{.id = nextBlock_++,
-                        .pool = pool->id,
-                        .capacity = backingBytes,
-                        .dedicated = plan.allocationClass == RenderMemoryAllocationClass::Dedicated};
-            blocks_.push_back(std::move(block));
-            const std::size_t charged = ChargedBytes();
-            peakChargedBytes_ = std::max(peakChargedBytes_, charged);
-            return AddReservation(blocks_.back(), 0, attempt, plan);
+            if (auto existing = TryReserveExistingBlock(pool, attempt, plan); existing.has_value())
+                return std::move(*existing);
+            return ReserveNewBlock(pool, scope, attempt, plan);
         }
 
         [[nodiscard]] Result<void> Cancel(const RenderMemoryReservationId reservation) {
@@ -313,8 +249,9 @@ namespace Horo::Render {
                 else
                     snapshot.retiringPayloadBytes += region.payloadBytes;
             }
+            const SortedRegions &sortedRegions = SortActiveRegions();
             for (const Pool &pool : pools_) {
-                const RenderMemoryPoolSnapshot poolSnapshot = MakePoolSnapshot(pool);
+                const RenderMemoryPoolSnapshot poolSnapshot = MakePoolSnapshot(pool, sortedRegions);
                 snapshot.reusableSlackBytes += poolSnapshot.reusableSlackBytes;
                 snapshot.externalFragmentationBasisPoints =
                     std::max(snapshot.externalFragmentationBasisPoints, poolSnapshot.externalFragmentationBasisPoints);
@@ -332,7 +269,7 @@ namespace Horo::Render {
             if (found == nullptr)
                 return Failure<RenderMemoryPoolSnapshot>(RenderMemoryBudgetErrors::InvalidPool,
                                                          "Memory pool identity is stale or belongs to another ledger.");
-            return Result<RenderMemoryPoolSnapshot>::Success(MakePoolSnapshot(*found));
+            return Result<RenderMemoryPoolSnapshot>::Success(MakePoolSnapshot(*found, SortActiveRegions()));
         }
 
         void Shutdown() noexcept {
@@ -359,6 +296,81 @@ namespace Horo::Render {
         template <typename T> [[nodiscard]] Result<T> CapacityFailure() {
             ++failedReservationCount_;
             return Failure<T>(RenderMemoryBudgetErrors::CapacityExceeded, "A bounded renderer memory record table is full.");
+        }
+
+        [[nodiscard]] Result<void> ValidateReservationRequest(const RenderMemoryScopeId scope, const ResourceOperationId attempt,
+                                                              const RenderMemoryCostPlan &plan) {
+            if (!acceptingReservations_)
+                return Failure<void>(RenderMemoryBudgetErrors::Stopped, "Renderer memory reservation was requested during shutdown.");
+            if (!scope.IsValid() || !attempt.IsValid())
+                return Failure<void>(RenderMemoryBudgetErrors::InvalidRequest, "Memory scope or resource-attempt identity is invalid.");
+            if (!plan.IsValid() || plan.alignment > config_.maximumAlignment)
+                return Failure<void>(RenderMemoryBudgetErrors::InvalidCostPlan,
+                                     "Memory size, alignment, allocation class, compatibility, or provenance is invalid.");
+            if (ChargedBytes() > config_.hardCapBytes) {
+                ++failedReservationCount_;
+                return Failure<void>(RenderMemoryBudgetErrors::BudgetExceeded, "Existing renderer backing exceeds the revised hard cap.");
+            }
+            if (nextReservation_ == 0 || nextAllocation_ == 0 || reservationCount_ >= config_.maximumReservations ||
+                reservationCount_ + allocationCount_ >= config_.maximumAllocations)
+                return CapacityFailure<void>();
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] std::optional<Result<RenderMemoryReservationId>> TryReserveExistingBlock(Pool *pool,
+                                                                                               const ResourceOperationId attempt,
+                                                                                               const RenderMemoryCostPlan &plan) {
+            if (plan.allocationClass != RenderMemoryAllocationClass::Suballocated)
+                return std::nullopt;
+            if (plan.requiredBytes > config_.maximumBlockBytes)
+                return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::UnsupportedAllocation,
+                                                          "Suballocated requirements exceed the configured maximum block size.");
+            if (pool == nullptr)
+                return std::nullopt;
+            for (Block &block : blocks_) {
+                if (block.pool != pool->id || block.dedicated)
+                    continue;
+                if (const auto offset = FindFirstFit(block, regions_, plan.requiredBytes, plan.alignment); offset.has_value())
+                    return AddReservation(block, *offset, attempt, plan);
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] Result<RenderMemoryReservationId> ReserveNewBlock(Pool *pool, const RenderMemoryScopeId scope,
+                                                                        const ResourceOperationId attempt,
+                                                                        const RenderMemoryCostPlan &plan) {
+            if (blocks_.size() >= config_.maximumBlocks)
+                return CapacityFailure<RenderMemoryReservationId>();
+            std::size_t backingBytes = plan.requiredBytes;
+            if (plan.allocationClass == RenderMemoryAllocationClass::Suballocated) {
+                const auto aligned = AlignUp(std::max(config_.defaultBlockBytes, plan.requiredBytes), plan.alignment);
+                if (!aligned.has_value() || *aligned > config_.maximumBlockBytes)
+                    return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::UnsupportedAllocation,
+                                                              "Aligned suballocation block exceeds the configured maximum block size.");
+                backingBytes = *aligned;
+            }
+            if (!CanCharge(backingBytes)) {
+                ++failedReservationCount_;
+                return Failure<RenderMemoryReservationId>(RenderMemoryBudgetErrors::BudgetExceeded,
+                                                          "Whole backing capacity would exceed the renderer hard cap.");
+            }
+            if (pool == nullptr) {
+                if (pools_.size() >= config_.maximumPools || nextPool_ == 0)
+                    return CapacityFailure<RenderMemoryReservationId>();
+                pools_.push_back(Pool{.id = RenderMemoryPoolId{renderer_, nextPool_++},
+                                      .scope = scope,
+                                      .memoryClass = plan.memoryClass,
+                                      .compatibility = plan.compatibility});
+                pool = &pools_.back();
+            }
+            if (nextBlock_ == 0)
+                return CapacityFailure<RenderMemoryReservationId>();
+            blocks_.push_back(Block{.id = nextBlock_++,
+                                    .pool = pool->id,
+                                    .capacity = backingBytes,
+                                    .dedicated = plan.allocationClass == RenderMemoryAllocationClass::Dedicated});
+            peakChargedBytes_ = std::max(peakChargedBytes_, ChargedBytes());
+            return AddReservation(blocks_.back(), 0, attempt, plan);
         }
 
         [[nodiscard]] Result<void> InvalidAllocationResult() const {
@@ -462,32 +474,34 @@ namespace Horo::Render {
                 });
         }
 
-        static void AccumulateFreeSpace(const Block &block, const std::vector<Region> &regions, std::size_t &total,
-                                        std::size_t &largest) noexcept {
-            std::size_t cursor = 0;
-            while (cursor < block.capacity) {
-                const Region *next = nullptr;
-                for (const Region &region : regions) {
-                    if (region.active && region.block == block.id && region.offset >= cursor &&
-                        (next == nullptr || region.offset < next->offset))
-                        next = &region;
-                }
-                if (next == nullptr) {
-                    const std::size_t freeBytes = block.capacity - cursor;
-                    total += freeBytes;
-                    largest = std::max(largest, freeBytes);
-                    break;
-                }
-                if (next->offset > cursor) {
-                    const std::size_t freeBytes = next->offset - cursor;
-                    total += freeBytes;
-                    largest = std::max(largest, freeBytes);
-                }
-                cursor = next->offset + next->requiredBytes;
+        using SortedRegions = std::vector<const Region *>;
+
+        [[nodiscard]] const SortedRegions &SortActiveRegions() const noexcept {
+            sortedRegionsScratch_.clear();
+            for (const Region &region : regions_) {
+                if (region.active)
+                    sortedRegionsScratch_.push_back(&region);
             }
+            std::ranges::sort(sortedRegionsScratch_, [](const Region *left, const Region *right) {
+                return left->block < right->block || (left->block == right->block && left->offset < right->offset);
+            });
+            return sortedRegionsScratch_;
         }
 
-        [[nodiscard]] RenderMemoryPoolSnapshot MakePoolSnapshot(const Pool &pool) const noexcept {
+        static void AccumulateRegion(const Region &region, RenderMemoryPoolSnapshot &snapshot) noexcept {
+            if (region.state == RegionState::Reserved) {
+                snapshot.reservedPayloadBytes += region.payloadBytes;
+                ++snapshot.reservationCount;
+                return;
+            }
+            ++snapshot.allocationCount;
+            if (region.state == RegionState::Live)
+                snapshot.livePayloadBytes += region.payloadBytes;
+            else
+                snapshot.retiringPayloadBytes += region.payloadBytes;
+        }
+
+        [[nodiscard]] RenderMemoryPoolSnapshot MakePoolSnapshot(const Pool &pool, const SortedRegions &sortedRegions) const noexcept {
             RenderMemoryPoolSnapshot snapshot{.pool = pool.id,
                                               .scope = pool.scope,
                                               .memoryClass = pool.memoryClass,
@@ -501,21 +515,28 @@ namespace Horo::Render {
                     snapshot.committedBackingBytes += block.capacity;
                 else
                     snapshot.reservedUnallocatedBytes += block.capacity;
-                if (block.committed && !block.dedicated)
-                    AccumulateFreeSpace(block, regions_, snapshot.reusableSlackBytes, largestFreeRegion);
-            }
-            for (const Region &region : regions_) {
-                if (!region.active || region.pool != pool.id)
-                    continue;
-                if (region.state == RegionState::Reserved) {
-                    snapshot.reservedPayloadBytes += region.payloadBytes;
-                    ++snapshot.reservationCount;
-                } else {
-                    ++snapshot.allocationCount;
-                    if (region.state == RegionState::Live)
-                        snapshot.livePayloadBytes += region.payloadBytes;
-                    else
-                        snapshot.retiringPayloadBytes += region.payloadBytes;
+
+                const auto blockId = [](const Region *region) {
+                    return region->block;
+                };
+                const auto first = std::ranges::lower_bound(sortedRegions, block.id, {}, blockId);
+                const auto last = std::ranges::upper_bound(sortedRegions, block.id, {}, blockId);
+                std::size_t cursor = 0;
+                for (auto region = first; region != last; ++region) {
+                    AccumulateRegion(**region, snapshot);
+                    if (!block.committed || block.dedicated)
+                        continue;
+                    if ((*region)->offset > cursor) {
+                        const std::size_t freeBytes = (*region)->offset - cursor;
+                        snapshot.reusableSlackBytes += freeBytes;
+                        largestFreeRegion = std::max(largestFreeRegion, freeBytes);
+                    }
+                    cursor = (*region)->offset + (*region)->requiredBytes;
+                }
+                if (block.committed && !block.dedicated && cursor < block.capacity) {
+                    const std::size_t freeBytes = block.capacity - cursor;
+                    snapshot.reusableSlackBytes += freeBytes;
+                    largestFreeRegion = std::max(largestFreeRegion, freeBytes);
                 }
             }
             if (snapshot.reusableSlackBytes != 0) {
@@ -531,6 +552,7 @@ namespace Horo::Render {
         std::vector<Pool> pools_;
         std::vector<Block> blocks_;
         std::vector<Region> regions_;
+        mutable SortedRegions sortedRegionsScratch_;
         std::size_t peakChargedBytes_{0};
         std::uint64_t failedReservationCount_{0};
         std::uint32_t reservationCount_{0};

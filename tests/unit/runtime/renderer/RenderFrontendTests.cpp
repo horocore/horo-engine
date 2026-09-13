@@ -742,34 +742,38 @@ namespace {
         CHECK(aligned.occupiedStagingBytes == 11);
         CHECK(aligned.pendingRequests == 2);
 
-        const auto requestFull =
-            frontend->CreateTexture({.extent = {1, 1}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled});
-        REQUIRE(requestFull.HasError());
-        CHECK(requestFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+        SECTION("Rejects requests after reaching the request limit") {
+            const auto requestFull = frontend->CreateTexture(
+                {.extent = {1, 1}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled});
+            REQUIRE(requestFull.HasError());
+            CHECK(requestFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+        }
 
-        REQUIRE(frontend->ReleaseBuffer(first.Value().handle).HasValue());
-        const RenderResourceUploadSnapshot compacted = frontend->UploadSnapshot();
-        CHECK(compacted.pendingPayloadBytes == secondBytes.size());
-        CHECK(compacted.occupiedStagingBytes == secondBytes.size());
-        CHECK(compacted.pendingRequests == 1);
-        CHECK(compacted.cancelledRequestCount == 1);
+        SECTION("Compacts once after cancellation and preserves staged bytes") {
+            REQUIRE(frontend->ReleaseBuffer(first.Value().handle).HasValue());
+            const RenderResourceUploadSnapshot compacted = frontend->UploadSnapshot();
+            CHECK(compacted.pendingPayloadBytes == secondBytes.size());
+            CHECK(compacted.occupiedStagingBytes == secondBytes.size());
+            CHECK(compacted.pendingRequests == 1);
+            CHECK(compacted.cancelledRequestCount == 1);
 
-        const std::array<std::byte, 9> paddingOverflow{};
-        const auto alignmentFull = frontend->CreateBuffer({.byteSize = paddingOverflow.size(),
-                                                           .usage = RenderBufferUsage::Vertex,
-                                                           .access = RenderBufferAccess::HostVisible},
-                                                          paddingOverflow);
-        REQUIRE(alignmentFull.HasError());
-        CHECK(alignmentFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+            const std::array<std::byte, 9> paddingOverflow{};
+            const auto alignmentFull = frontend->CreateBuffer({.byteSize = paddingOverflow.size(),
+                                                               .usage = RenderBufferUsage::Vertex,
+                                                               .access = RenderBufferAccess::HostVisible},
+                                                              paddingOverflow);
+            REQUIRE(alignmentFull.HasError());
+            CHECK(alignmentFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
 
-        REQUIRE(frontend->ProcessResourceRequests().HasValue());
-        CHECK(lifecycleState.lastBufferInitialData == std::vector<std::byte>(secondBytes.begin(), secondBytes.end()));
-        const RenderResourceUploadSnapshot completed = frontend->UploadSnapshot();
-        CHECK(completed.pendingPayloadBytes == 0);
-        CHECK(completed.occupiedStagingBytes == 0);
-        CHECK(completed.completedBatchCount == 1);
-        CHECK(completed.lastBatchPayloadBytes == secondBytes.size());
-        CHECK(completed.lastBatchRequestCount == 1);
+            REQUIRE(frontend->ProcessResourceRequests().HasValue());
+            CHECK(lifecycleState.lastBufferInitialData == std::vector<std::byte>(secondBytes.begin(), secondBytes.end()));
+            const RenderResourceUploadSnapshot completed = frontend->UploadSnapshot();
+            CHECK(completed.pendingPayloadBytes == 0);
+            CHECK(completed.occupiedStagingBytes == 0);
+            CHECK(completed.completedBatchCount == 1);
+            CHECK(completed.lastBatchPayloadBytes == secondBytes.size());
+            CHECK(completed.lastBatchRequestCount == 1);
+        }
     }
 
     TEST_CASE("Frontend Rejects Unsupported And In-Frame Resource Mutations", "[unit][runtime][renderer][resource]") {
