@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <format>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -78,7 +80,7 @@ namespace Horo::Render {
                 return archiveDigest.has_value() && entry.hostPlatform == hostPlatform && entry.tool == identity.tool &&
                        entry.release == identity.release && *archiveDigest == identity.buildDigest;
             });
-            return found == ApprovedTools.end() ? nullptr : &*found;
+            return found == ApprovedTools.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] bool IsApproved(const ShaderCompilerToolchainConfiguration &configuration,
@@ -95,6 +97,11 @@ namespace Horo::Render {
         class ScratchDirectory final {
         public:
             explicit ScratchDirectory(std::filesystem::path path) : path_(std::move(path)) {}
+
+            ScratchDirectory(const ScratchDirectory &) = delete;
+            ScratchDirectory &operator=(const ScratchDirectory &) = delete;
+            ScratchDirectory(ScratchDirectory &&) = delete;
+            ScratchDirectory &operator=(ScratchDirectory &&) = delete;
 
             ~ScratchDirectory() noexcept {
                 std::error_code ignored;
@@ -158,7 +165,7 @@ namespace Horo::Render {
                     return candidate.identity.tool == tool && candidate.identity.release == expected->release &&
                            candidate.identity.buildDigest == expected->buildDigest;
                 });
-                return installed == configuration_.tools.end() ? nullptr : &*installed;
+                return installed == configuration_.tools.end() ? nullptr : std::to_address(installed);
             }
 
             [[nodiscard]] Result<void> Run(const ShaderCompilerToolInstallation &tool, std::vector<std::string> arguments) {
@@ -172,7 +179,7 @@ namespace Horo::Render {
                 request.timeout = configuration_.processTimeout;
                 request.maximumLineBytes =
                     std::min(invocation_.limits.maximumDiagnosticMessageBytes, configuration_.maximumProcessOutputBytes);
-                request.onOutput = [&](ProcessOutputLine line) {
+                request.onOutput = [this](ProcessOutputLine line) {
                     CaptureDiagnostic(std::move(line));
                 };
                 auto result = processes_.Run(request, cancellation_);
@@ -191,8 +198,8 @@ namespace Horo::Render {
                     diagnosticBytes_ >= configuration_.maximumProcessOutputBytes)
                     return;
                 line.text = SanitizeLine(std::move(line.text), scratch_.Path(), sourcePath_);
-                const std::size_t remaining = configuration_.maximumProcessOutputBytes - diagnosticBytes_;
-                if (line.text.size() > remaining) {
+                if (const std::size_t remaining = configuration_.maximumProcessOutputBytes - diagnosticBytes_;
+                    line.text.size() > remaining) {
                     line.text.resize(remaining);
                     line.truncated = true;
                 }
@@ -206,15 +213,18 @@ namespace Horo::Render {
                 Error failure = MakeError(ShaderCompilerPipelineErrors::ToolProcessFailed);
                 try {
                     for (const ShaderCompilerDiagnostic &diagnostic : diagnostics_) {
-                        failure.diagnostics.push_back(
-                            {.code = DiagnosticCode{diagnostic.category == ShaderCompilerDiagnosticCategory::Source
-                                                        ? "render.shader_compiler.source"
-                                                        : "render.shader_compiler.toolchain"},
-                             .severity = diagnostic.severity == ShaderCompilerDiagnosticSeverity::Error     ? DiagnosticSeverity::Error
-                                         : diagnostic.severity == ShaderCompilerDiagnosticSeverity::Warning ? DiagnosticSeverity::Warning
-                                                                                                            : DiagnosticSeverity::Note,
-                             .message = diagnostic.message,
-                             .location = {diagnostic.sourceIdentity, diagnostic.line, diagnostic.column}});
+                        DiagnosticSeverity severity = DiagnosticSeverity::Note;
+                        if (diagnostic.severity == ShaderCompilerDiagnosticSeverity::Error)
+                            severity = DiagnosticSeverity::Error;
+                        else if (diagnostic.severity == ShaderCompilerDiagnosticSeverity::Warning)
+                            severity = DiagnosticSeverity::Warning;
+                        failure.diagnostics.emplace_back(
+                            Diagnostic{.code = DiagnosticCode{diagnostic.category == ShaderCompilerDiagnosticCategory::Source
+                                                                  ? "render.shader_compiler.source"
+                                                                  : "render.shader_compiler.toolchain"},
+                                       .severity = severity,
+                                       .message = diagnostic.message,
+                                       .location = {diagnostic.sourceIdentity, diagnostic.line, diagnostic.column}});
                     }
                 } catch (const std::bad_alloc &) {
                     failure.diagnostics.clear();
@@ -226,13 +236,16 @@ namespace Horo::Render {
                                                                 const std::filesystem::path &output) const {
                 std::vector<std::string>
                     arguments{"-nologo", "-HV", "2021", "-Ges", "-Zpc", "-T", std::string{StageProfile(entry.stage)}, "-E", entry.name};
-                arguments.push_back(invocation_.target.enableFastMath ? "-ffinite-math-only" : "-Gis");
-                arguments.push_back(invocation_.target.optimization == ShaderOptimizationLevel::Disabled ? "-Od"
-                                    : invocation_.target.optimization == ShaderOptimizationLevel::Size   ? "-O1"
-                                                                                                         : "-O3");
+                arguments.emplace_back(invocation_.target.enableFastMath ? "-ffinite-math-only" : "-Gis");
+                std::string_view optimization = "-O3";
+                if (invocation_.target.optimization == ShaderOptimizationLevel::Disabled)
+                    optimization = "-Od";
+                else if (invocation_.target.optimization == ShaderOptimizationLevel::Size)
+                    optimization = "-O1";
+                arguments.emplace_back(optimization);
                 for (const ShaderCompilerDefine &define : invocation_.defines) {
                     arguments.emplace_back("-D");
-                    arguments.push_back(define.name + "=" + define.value);
+                    arguments.emplace_back(std::format("{}={}", define.name, define.value));
                 }
                 if (spirv)
                     arguments.insert(arguments.end(), {"-spirv", "-fspv-target-env=vulkan1.3", "-fvk-use-gl-layout"});
@@ -242,7 +255,7 @@ namespace Horo::Render {
 
             [[nodiscard]] Result<void> CompileSpirvRoute(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
                                                          const std::size_t index) {
-                const std::string stem = "stage-" + std::to_string(index);
+                const std::string stem = std::format("stage-{}", index);
                 const std::filesystem::path spirvPath = scratch_.Path() / (stem + ".spv");
                 if (auto compiled = Run(dxc, DxcArguments(entry, true, spirvPath)); compiled.HasError())
                     return compiled;
@@ -258,17 +271,24 @@ namespace Horo::Render {
                 if (!IsSpirV(spirv.Value()))
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
 
-                const ShaderTargetBackend backend = invocation_.target.requirement.backend;
-                Result<void> routed = backend == ShaderTargetBackend::Vulkan   ? StoreVulkan(entry, std::move(spirv).Value())
-                                      : backend == ShaderTargetBackend::OpenGL ? CompileOpenGLRoute(entry, stem, spirvPath)
-                                                                               : CompileMetalRoute(entry, stem, spirvPath);
-                if (routed.HasError())
+                if (auto routed = RouteSpirv(entry, stem, spirvPath, std::move(spirv).Value()); routed.HasError())
                     return routed;
                 return CompileSpirvDebug(dxc, entry, stem);
             }
 
+            [[nodiscard]] Result<void> RouteSpirv(const ShaderEntryPoint &entry, const std::string &stem,
+                                                  const std::filesystem::path &spirvPath, std::vector<std::uint8_t> spirv) {
+                if (invocation_.target.requirement.backend == ShaderTargetBackend::Vulkan)
+                    return StoreVulkan(entry, std::move(spirv));
+                if (invocation_.target.requirement.backend == ShaderTargetBackend::OpenGL)
+                    return CompileOpenGLRoute(entry, stem, spirvPath);
+                if (invocation_.target.requirement.backend == ShaderTargetBackend::Metal)
+                    return CompileMetalRoute(entry, stem, spirvPath);
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::UnsupportedTarget));
+            }
+
             [[nodiscard]] Result<void> StoreVulkan(const ShaderEntryPoint &entry, std::vector<std::uint8_t> spirv) {
-                payloadStages_.push_back({entry.stage, entry.name, std::move(spirv)});
+                payloadStages_.emplace_back(entry.stage, entry.name, std::move(spirv));
                 return Result<void>::Success();
             }
 
@@ -283,13 +303,15 @@ namespace Horo::Render {
                                           std::string{StageName(entry.stage)}, "--version", "410", "--no-es", "--no-420pack-extension"});
                     translated.HasError())
                     return translated;
-                auto native =
-                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                if (native.HasError())
+                if (auto native = ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes,
+                                                  ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                    native.HasError()) {
                     return Result<void>::Failure(std::move(native).ErrorValue());
-                if (!IsGlsl410(native.Value()))
-                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                payloadStages_.push_back({entry.stage, entry.name, std::move(native).Value()});
+                } else {
+                    if (!IsGlsl410(native.Value()))
+                        return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+                    payloadStages_.emplace_back(entry.stage, entry.name, std::move(native).Value());
+                }
                 return Result<void>::Success();
             }
 
@@ -304,9 +326,9 @@ namespace Horo::Render {
                                                         "--stage", std::string{StageName(entry.stage)}, "--msl", "--msl-version", "20400"});
                     translated.HasError())
                     return translated;
-                auto native =
-                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                if (native.HasError())
+                if (auto native = ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes,
+                                                  ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                    native.HasError())
                     return Result<void>::Failure(std::move(native).ErrorValue());
                 const std::filesystem::path airPath = scratch_.Path() / (stem + ".air");
                 if (auto compiled = Run(*metal, {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
@@ -324,7 +346,7 @@ namespace Horo::Render {
                 if (library.Value().size() < 4U || library.Value()[0] != 'M' || library.Value()[1] != 'T' || library.Value()[2] != 'L' ||
                     library.Value()[3] != 'B')
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                payloadStages_.push_back({entry.stage, entry.name, std::move(library).Value()});
+                payloadStages_.emplace_back(entry.stage, entry.name, std::move(library).Value());
                 return Result<void>::Success();
             }
 
@@ -334,10 +356,11 @@ namespace Horo::Render {
                     return Result<void>::Success();
                 const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug");
                 std::vector<std::string> arguments = DxcArguments(entry, true, debugPath);
-                const auto optimization = std::ranges::find_if(arguments, [](const std::string &argument) {
+                if (const auto optimization = std::ranges::find_if(arguments,
+                                                                   [](const std::string_view argument) {
                     return argument == "-O1" || argument == "-O3";
                 });
-                if (optimization != arguments.end())
+                    optimization != arguments.end())
                     *optimization = "-Od";
                 arguments.insert(arguments.end() - 3, {"-Zi", "-Qembed_debug"});
                 if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
@@ -348,13 +371,13 @@ namespace Horo::Render {
                     return Result<void>::Failure(std::move(debug).ErrorValue());
                 if (!IsSpirV(debug.Value()))
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                debugStages_.push_back({entry.stage, entry.name, std::move(debug).Value()});
+                debugStages_.emplace_back(entry.stage, entry.name, std::move(debug).Value());
                 return Result<void>::Success();
             }
 
             [[nodiscard]] Result<void> CompileD3D12Route(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
                                                          const std::size_t index) {
-                const std::string stem = "stage-" + std::to_string(index);
+                const std::string stem = std::format("stage-{}", index);
                 const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
                 if (auto compiled = Run(dxc, DxcArguments(entry, false, nativePath)); compiled.HasError())
                     return compiled;
@@ -369,7 +392,7 @@ namespace Horo::Render {
                     return Result<void>::Failure(std::move(native).ErrorValue());
                 if (!IsDxil(native.Value()))
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                payloadStages_.push_back({entry.stage, entry.name, std::move(native).Value()});
+                payloadStages_.emplace_back(entry.stage, entry.name, std::move(native).Value());
                 return CompileD3D12Debug(dxc, entry, stem);
             }
 
@@ -380,10 +403,11 @@ namespace Horo::Render {
                 const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug.dxil");
                 const std::filesystem::path pdbPath = scratch_.Path() / (stem + ".pdb");
                 std::vector<std::string> arguments = DxcArguments(entry, false, debugPath);
-                const auto optimization = std::ranges::find_if(arguments, [](const std::string &argument) {
+                if (const auto optimization = std::ranges::find_if(arguments,
+                                                                   [](const std::string_view argument) {
                     return argument == "-O1" || argument == "-O3";
                 });
-                if (optimization != arguments.end())
+                    optimization != arguments.end())
                     *optimization = "-Od";
                 arguments.insert(arguments.end() - 3, {"-Zi", "-Fd", pdbPath.string()});
                 if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
@@ -392,7 +416,7 @@ namespace Horo::Render {
                     ReadBoundedFile(pdbPath, invocation_.limits.maximumDebugPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
                 if (pdb.HasError())
                     return Result<void>::Failure(std::move(pdb).ErrorValue());
-                debugStages_.push_back({entry.stage, entry.name, std::move(pdb).Value()});
+                debugStages_.emplace_back(entry.stage, entry.name, std::move(pdb).Value());
                 return Result<void>::Success();
             }
 
@@ -404,7 +428,7 @@ namespace Horo::Render {
                         std::vector<std::uint8_t> bytes;
                         bytes.insert(bytes.end(), invocation_.artifactKey.bytes.begin(), invocation_.artifactKey.bytes.end());
                         bytes.insert(bytes.end(), entry.name.begin(), entry.name.end());
-                        records.push_back({entry.stage, entry.name, std::move(bytes)});
+                        records.emplace_back(entry.stage, entry.name, std::move(bytes));
                     }
                 } catch (const std::bad_alloc &) {
                     return Failure(ShaderCompilerPipelineErrors::ToolOutputInvalid);
@@ -526,7 +550,7 @@ namespace Horo::Render {
         const std::uint64_t sequence = state_->nextInvocation.fetch_add(1, std::memory_order_relaxed);
         if (sequence == 0)
             return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
-        std::filesystem::path scratchPath = state_->configuration.scratchRoot / ("shader-" + std::to_string(sequence));
+        std::filesystem::path scratchPath = state_->configuration.scratchRoot / std::format("shader-{}", sequence);
         std::error_code ioError;
         if (!std::filesystem::create_directory(scratchPath, ioError) || ioError)
             return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
