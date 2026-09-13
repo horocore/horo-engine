@@ -43,4 +43,12 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor QuerySnapshotStale;
     /** @brief Candidate or process initialization failed after releasing acquired resources. */
     extern const ErrorCodeDescriptor InitializationFailed;
+    /** @brief Convex or mesh source geometry is malformed before solver cooking. */
+    extern const ErrorCodeDescriptor ShapeCookSourceInvalid;
+    /** @brief Shape cooking exceeded an explicit source, output or payload limit. */
+    extern const ErrorCodeDescriptor ShapeCookLimitExceeded;
+    /** @brief Shape cooking was cooperatively cancelled before publication. */
+    extern const ErrorCodeDescriptor ShapeCookCancelled;
+    /** @brief A cooked Physics shape artifact is malformed or fails integrity validation. */
+    extern const ErrorCodeDescriptor ShapeArtifactInvalid;
 }  // namespace Horo::Physics::PhysicsErrors
