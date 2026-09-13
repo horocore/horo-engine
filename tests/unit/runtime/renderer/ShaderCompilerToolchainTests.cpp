@@ -130,7 +130,7 @@ TEST_CASE("Shader toolchain lock rejects executable bytes that do not match the 
     auto digest = ParseSha256(Approved(ShaderCompilerTool::Dxc).executableSha256);
     REQUIRE(digest.HasValue());
     configuration.tools = {{Identity(ShaderCompilerTool::Dxc), executable, digest.Value()}};
-    NativeExternalProcessRunner processes;
+    auto processes = std::make_shared<NativeExternalProcessRunner>();
     RequireError(ExternalShaderCompilerAdapter::Create(std::move(configuration), processes),
                  ShaderCompilerPipelineErrors::ToolDigestMismatch);
 }
@@ -141,7 +141,7 @@ TEST_CASE("Null shader validation artifact is deterministic and leaves no scratc
     ShaderCompilerToolchainConfiguration configuration;
     configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
     configuration.scratchRoot = temporary.Path() / "scratch";
-    NativeExternalProcessRunner processes;
+    auto processes = std::make_shared<NativeExternalProcessRunner>();
     auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
     REQUIRE(adapter.HasValue());
 
@@ -156,13 +156,39 @@ TEST_CASE("Null shader validation artifact is deterministic and leaves no scratc
     CHECK(std::filesystem::is_empty(temporary.Path() / "scratch"));
 }
 
+TEST_CASE("Shader toolchain adapter retains its shared process runner", "[runtime][renderer][shader-compiler][toolchain]") {
+    TemporaryDirectory temporary;
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = temporary.Path() / "scratch";
+    auto processes = std::make_shared<NativeExternalProcessRunner>();
+    std::weak_ptr<IExternalProcessRunner> retained = processes;
+
+    {
+        auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
+        REQUIRE(adapter.HasValue());
+        processes.reset();
+        CHECK_FALSE(retained.expired());
+    }
+    CHECK(retained.expired());
+}
+
+TEST_CASE("Shader toolchain adapter rejects a missing process runner", "[runtime][renderer][shader-compiler][toolchain]") {
+    TemporaryDirectory temporary;
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = temporary.Path() / "scratch";
+    RequireError(ExternalShaderCompilerAdapter::Create(std::move(configuration), {}),
+                 ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid);
+}
+
 TEST_CASE("Production shader adapter reports an unavailable required tool without fallback",
           "[runtime][renderer][shader-compiler][toolchain]") {
     TemporaryDirectory temporary;
     ShaderCompilerToolchainConfiguration configuration;
     configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
     configuration.scratchRoot = temporary.Path() / "scratch";
-    NativeExternalProcessRunner processes;
+    auto processes = std::make_shared<NativeExternalProcessRunner>();
     auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
     REQUIRE(adapter.HasValue());
 
@@ -189,7 +215,7 @@ TEST_CASE("Locked Linux shader tools produce repeatable validated native artifac
     configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
     configuration.scratchRoot = temporary.Path() / "scratch";
     configuration.tools = {*dxc, *spirvTools, *spirvCross, *dxilValidator};
-    NativeExternalProcessRunner processes;
+    auto processes = std::make_shared<NativeExternalProcessRunner>();
     auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
     REQUIRE(adapter.HasValue());
 

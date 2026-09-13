@@ -6,6 +6,7 @@
 #include <limits>
 #include <new>
 #include <ranges>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -151,8 +152,8 @@ namespace Horo::Render {
                 std::uint32_t end{0};
             };
 
-            std::vector<OccupiedRange> ranges;
             try {
+                std::vector<OccupiedRange> ranges;
                 ranges.reserve(candidate.parameters.size());
                 for (std::size_t index = 0; index < candidate.parameters.size(); ++index) {
                     const ShaderReflectedParameter &parameter = candidate.parameters[index];
@@ -170,8 +171,6 @@ namespace Horo::Render {
                             return Result<void>::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
                         continue;
                     }
-                    if (parameter.rows > 1 && parameter.columns > 1 && !parameter.columnMajor)
-                        return Result<void>::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
                     auto end = ParameterEnd(parameter, limits.maximumBufferBytes);
                     if (end.HasError())
                         return Result<void>::Failure(std::move(end).ErrorValue());
@@ -228,13 +227,13 @@ namespace Horo::Render {
             return 0;
         }
 
-        [[nodiscard]] Result<void> ValidateTargetBindings(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
-                                                          const ShaderReflectionCandidate &candidate,
-                                                          const ShaderReflectionLimits &limits) {
+        [[nodiscard]] Result<std::size_t> ValidateTargetBindingStructure(const ShaderTargetRequirement &target,
+                                                                         const ShaderReflectionCandidate &candidate,
+                                                                         const ShaderReflectionLimits &limits) {
             if (candidate.targetBindings.size() < candidate.bindings.size() ||
                 candidate.targetBindings.size() > limits.maximumTargetBindingEntries ||
                 candidate.targetBindings.size() > target.maximumBindings)
-                return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
+                return Result<std::size_t>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
             std::size_t primaryCount = 0;
             for (std::size_t index = 0; index < candidate.targetBindings.size(); ++index) {
                 const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
@@ -252,39 +251,70 @@ namespace Horo::Render {
                     (!mapping.active && (mapping.nativeSpace != 0 || mapping.nativeBinding != 0 || !mapping.nativeName.empty() ||
                                          mapping.pairedSampler.IsValid())) ||
                     (target.backend == ShaderTargetBackend::OpenGL && mapping.active && mapping.nativeName.empty()))
-                    return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
+                    return Result<std::size_t>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
                 if (mapping.generatedHelperIndex == 0)
                     ++primaryCount;
                 if (target.backend == ShaderTargetBackend::Null &&
                     (mapping.nativeSpace != 0 || mapping.nativeBinding != 0 || !mapping.nativeName.empty() ||
                      mapping.pairedSampler.IsValid() || mapping.generatedHelperIndex != 0))
-                    return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
-                if (mapping.pairedSampler.IsValid()) {
-                    const ShaderResourceBinding *logical = FindDeclaredBinding(manifest, mapping.id);
-                    const ShaderResourceBinding *sampler = FindDeclaredBinding(manifest, mapping.pairedSampler);
-                    if (logical == nullptr || logical->kind != ShaderResourceKind::SampledTexture || sampler == nullptr ||
-                        sampler->kind != ShaderResourceKind::Sampler || !reflection->active ||
-                        !FindReflectedBinding(candidate, mapping.pairedSampler)->active)
-                        return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
-                }
-                if (!mapping.active)
-                    continue;
-                if (target.backend == ShaderTargetBackend::Null)
-                    continue;
-                for (std::size_t prior = 0; prior < index; ++prior) {
-                    const ShaderTargetBindingMapEntry &other = candidate.targetBindings[prior];
-                    if (!other.active)
-                        continue;
-                    const bool declaredPair = mapping.pairedSampler == other.id || other.pairedSampler == mapping.id;
-                    if (!declaredPair &&
-                        NativeNamespace(FindReflectedBinding(candidate, other.id)->kind, target.backend) ==
-                            NativeNamespace(reflection->kind, target.backend) &&
-                        other.nativeSpace == mapping.nativeSpace && other.nativeBinding == mapping.nativeBinding)
-                        return Result<void>::Failure(MakeError(ShaderReflectionErrors::NativeBindingCollision));
-                }
+                    return Result<std::size_t>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
             }
-            if (primaryCount != candidate.bindings.size())
+            return Result<std::size_t>::Success(primaryCount);
+        }
+
+        [[nodiscard]] Result<void> ValidatePairedSampler(const ShaderManifest &manifest, const ShaderReflectionCandidate &candidate,
+                                                         const ShaderTargetBindingMapEntry &mapping,
+                                                         const ShaderReflectedBinding &reflection) {
+            if (!mapping.pairedSampler.IsValid())
+                return Result<void>::Success();
+            const ShaderResourceBinding *logical = FindDeclaredBinding(manifest, mapping.id);
+            const ShaderResourceBinding *sampler = FindDeclaredBinding(manifest, mapping.pairedSampler);
+            const ShaderReflectedBinding *reflectedSampler = FindReflectedBinding(candidate, mapping.pairedSampler);
+            if (logical == nullptr || logical->kind != ShaderResourceKind::SampledTexture || sampler == nullptr ||
+                sampler->kind != ShaderResourceKind::Sampler || !reflection.active || reflectedSampler == nullptr ||
+                !reflectedSampler->active)
                 return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateNativeBindingCollision(const ShaderTargetRequirement &target,
+                                                                  const ShaderReflectionCandidate &candidate, const std::size_t index,
+                                                                  const ShaderReflectedBinding &reflection) {
+            const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
+            if (!mapping.active || target.backend == ShaderTargetBackend::Null)
+                return Result<void>::Success();
+            for (std::size_t prior = 0; prior < index; ++prior) {
+                const ShaderTargetBindingMapEntry &other = candidate.targetBindings[prior];
+                if (!other.active)
+                    continue;
+                const bool declaredPair = mapping.pairedSampler == other.id || other.pairedSampler == mapping.id;
+                const ShaderReflectedBinding *otherReflection = FindReflectedBinding(candidate, other.id);
+                if (!declaredPair && otherReflection != nullptr &&
+                    NativeNamespace(otherReflection->kind, target.backend) == NativeNamespace(reflection.kind, target.backend) &&
+                    other.nativeSpace == mapping.nativeSpace && other.nativeBinding == mapping.nativeBinding)
+                    return Result<void>::Failure(MakeError(ShaderReflectionErrors::NativeBindingCollision));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateTargetBindings(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
+                                                          const ShaderReflectionCandidate &candidate,
+                                                          const ShaderReflectionLimits &limits) {
+            auto primaryCount = ValidateTargetBindingStructure(target, candidate, limits);
+            if (primaryCount.HasError())
+                return Result<void>::Failure(std::move(primaryCount).ErrorValue());
+            if (primaryCount.Value() != candidate.bindings.size())
+                return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
+            for (std::size_t index = 0; index < candidate.targetBindings.size(); ++index) {
+                const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
+                const ShaderReflectedBinding *reflection = FindReflectedBinding(candidate, mapping.id);
+                if (reflection == nullptr)
+                    return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
+                if (auto paired = ValidatePairedSampler(manifest, candidate, mapping, *reflection); paired.HasError())
+                    return paired;
+                if (auto collision = ValidateNativeBindingCollision(target, candidate, index, *reflection); collision.HasError())
+                    return collision;
+            }
             return Result<void>::Success();
         }
 
@@ -402,11 +432,15 @@ namespace Horo::Render {
     Result<ShaderMappedSourceLocation> MapShaderSourceLocation(const ShaderGeneratedSourceLocation &location,
                                                                const std::vector<ShaderSourceMapEntry> &sourceMap) {
         try {
-            const auto mapping = std::ranges::find_if(sourceMap, [&](const ShaderSourceMapEntry &entry) {
-                return entry.generatedSourceIdentity == location.sourceIdentity && location.line >= entry.generatedLineBegin &&
-                       location.line <= entry.generatedLineEnd;
+            const auto after = std::ranges::upper_bound(sourceMap, std::pair{std::string_view{location.sourceIdentity}, location.line}, {},
+                                                        [](const ShaderSourceMapEntry &entry) {
+                return std::pair{std::string_view{entry.generatedSourceIdentity}, entry.generatedLineBegin};
             });
-            if (mapping == sourceMap.end())
+            if (after == sourceMap.begin())
+                return Result<ShaderMappedSourceLocation>::Success(
+                    {location.sourceIdentity, location.line, location.column, {}, {}, false});
+            const auto mapping = after - 1;
+            if (mapping->generatedSourceIdentity != location.sourceIdentity || location.line > mapping->generatedLineEnd)
                 return Result<ShaderMappedSourceLocation>::Success(
                     {location.sourceIdentity, location.line, location.column, {}, {}, false});
             return Result<ShaderMappedSourceLocation>::Success(

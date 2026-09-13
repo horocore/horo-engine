@@ -127,6 +127,21 @@ TEST_CASE("Shader reflection rejects overlapping packing and incompatible stage 
     RequireError(NormalizeShaderReflection(manifest, target, unordered, AdmittedIncludes), ShaderReflectionErrors::InvalidReflection);
 }
 
+TEST_CASE("Shader reflection accepts bounded row-major matrix layouts", "[runtime][renderer][shader-reflection]") {
+    ShaderManifest manifest = Manifest();
+    ShaderReflectionCandidate candidate = Candidate();
+    manifest.parameters[0].rows = 3;
+    manifest.parameters[0].columns = 4;
+    candidate.parameters[0].rows = 3;
+    candidate.parameters[0].columns = 4;
+    candidate.parameters[0].columnMajor = false;
+    candidate.parameters[0].matrixStride = 16;
+
+    const auto normalized = NormalizeShaderReflection(manifest, Target(), candidate, AdmittedIncludes);
+    REQUIRE(normalized.HasValue());
+    CHECK_FALSE(normalized.Value().parameters[0].columnMajor);
+}
+
 TEST_CASE("Shader source mapping preserves authored graph provenance and explicit generated fallback",
           "[runtime][renderer][shader-reflection]") {
     const ShaderReflectionCandidate candidate = Candidate();
@@ -138,6 +153,16 @@ TEST_CASE("Shader source mapping preserves authored graph provenance and explici
     CHECK(mapped.Value().column == 9);
     CHECK(mapped.Value().graphNodeIdentity == "node.albedo");
     CHECK(mapped.Value().graphPinIdentity == "pin.color");
+
+    const auto firstRangeEnd = MapShaderSourceLocation({"generated.surface", 8, 1}, candidate.sourceMap);
+    REQUIRE(firstRangeEnd.HasValue());
+    CHECK(firstRangeEnd.Value().mapped);
+    CHECK(firstRangeEnd.Value().sourceIdentity == "shaders/material/surface.hlsl");
+
+    const auto secondRangeBegin = MapShaderSourceLocation({"generated.surface", 9, 1}, candidate.sourceMap);
+    REQUIRE(secondRangeBegin.HasValue());
+    CHECK(secondRangeBegin.Value().mapped);
+    CHECK(secondRangeBegin.Value().sourceIdentity == "shaders/common.hlsli");
 
     const auto generated = MapShaderSourceLocation({"generated.surface", 99, 2}, candidate.sourceMap);
     REQUIRE(generated.HasValue());
