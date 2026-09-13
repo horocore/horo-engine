@@ -318,6 +318,7 @@ namespace Horo::Runtime {
             Record(StagedRestorePhase::Activate, StagedRestoreEventOutcome::Succeeded, index);
         }
         state_ = StagedRestoreTransactionState::Activated;
+        // Publication cannot be reversed safely; this impossible bookkeeping violation is a host fault under the save architecture.
         if (operation_.Complete(SaveOperationCommitOutcome::Committed) != SaveOperationTransitionResult::Applied)
             std::terminate();
         return Result<void>::Success();
