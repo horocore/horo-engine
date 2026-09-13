@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <map>
 #include <memory>
-#include <set>
 #include <string_view>
 #include <utility>
 
@@ -79,6 +78,71 @@ namespace Horo::Prefab {
             nodes.emplace(record.id, PrefabDependencyNode{record.id, record.type, std::move(revision)});
             return Result<void>::Success();
         }
+
+        [[nodiscard]] bool InsertSorted(std::vector<Assets::AssetId> &values, const Assets::AssetId value) {
+            const auto position = std::ranges::lower_bound(values, value);
+            if (position != values.end() && *position == value)
+                return false;
+            values.insert(position, value);
+            return true;
+        }
+
+        [[nodiscard]] Result<void> ValidateAndCaptureNodes(const Assets::AssetRegistrySnapshot &registry,
+                                                           const std::vector<PrefabDependencySource> &sources,
+                                                           const PrefabLimitProfile &limits, PrefabExpansionBudget &budget,
+                                                           SourceMap &sourceById, NodeMap &nodes) {
+            for (const PrefabDependencySource &source : sources) {
+                const PrefabDocumentData &document = source.document.Data();
+                if (document.referencedAssets.size() > limits.Policy().maximumReferencedAssets)
+                    return Result<void>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
+                if (document.composition && document.composition->nestedPlacements.size() > limits.Policy().maximumDirectNestedPlacements)
+                    return Result<void>::Failure(MakeError(PrefabErrors::NestedPlacementCountExceeded));
+                const Assets::AssetId id = document.assetId;
+                if (!RevisionMatchesDocument(source) || !sourceById.emplace(id, std::addressof(source)).second)
+                    return Result<void>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
+                const Assets::AssetRecord *record = registry.Find(id);
+                if (record == nullptr)
+                    return Result<void>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+                if (record->type.Value() != PrefabAssetType)
+                    return Result<void>::Failure(MakeError(PrefabErrors::DependencyTypeMismatch));
+                if (const auto captured = CaptureNode(nodes, *record, source.sourceRevision, budget); captured.HasError())
+                    return captured;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<std::vector<PrefabDependencyEdge>> ProcessEdges(const Assets::AssetRegistrySnapshot &registry,
+                                                                             const std::vector<PrefabDependencySource> &sources,
+                                                                             const SourceMap &sourceById, NodeMap &nodes,
+                                                                             PrefabExpansionBudget &budget) {
+            std::vector<PrefabDependencyEdge> edges;
+            for (const PrefabDependencySource &source : sources) {
+                const PrefabDocumentData &document = source.document.Data();
+                for (const Assets::AssetId target : document.referencedAssets) {
+                    const Assets::AssetRecord *record = registry.Find(target);
+                    if (record == nullptr)
+                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+
+                    const PrefabDependencyKind kind = DependencyKind(document, target);
+                    const bool semanticPrefab = kind != PrefabDependencyKind::Resource;
+                    if (semanticPrefab && record->type.Value() != PrefabAssetType)
+                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyTypeMismatch));
+
+                    const auto targetSource = sourceById.find(target);
+                    if (record->type.Value() == PrefabAssetType && targetSource == sourceById.end())
+                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+                    if (semanticPrefab && !AuthoredRevisionsMatch(document, target, kind, targetSource->second->sourceRevision))
+                        return Result<std::vector<PrefabDependencyEdge>>::Failure(MakeError(PrefabErrors::DependencyRevisionMismatch));
+
+                    if (const auto captured = CaptureNode(nodes, *record, std::nullopt, budget); captured.HasError())
+                        return Result<std::vector<PrefabDependencyEdge>>::Failure(captured.ErrorValue());
+                    if (const auto charged = Charge(budget); charged.HasError())
+                        return Result<std::vector<PrefabDependencyEdge>>::Failure(charged.ErrorValue());
+                    edges.push_back({document.assetId, target, kind});
+                }
+            }
+            return Result<std::vector<PrefabDependencyEdge>>::Success(std::move(edges));
+        }
     }  // namespace
 
     PrefabDependencyGraphSnapshot::PrefabDependencyGraphSnapshot(const Assets::AssetRegistryRevision registryRevision,
@@ -118,40 +182,44 @@ namespace Horo::Prefab {
     /** @copydoc PrefabDependencyGraphSnapshot::DependencyClosure */
     Result<std::vector<Assets::AssetId>> PrefabDependencyGraphSnapshot::DependencyClosure(
         const std::span<const Assets::AssetId> roots) const {
-        std::set<Assets::AssetId> visited;
+        std::vector<Assets::AssetId> visited;
         std::vector<Assets::AssetId> pending;
+        visited.reserve(nodes_.size());
         pending.reserve(nodes_.size());
         for (const Assets::AssetId root : roots) {
             if (FindNode(root) == nullptr)
                 return Result<std::vector<Assets::AssetId>>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-            if (visited.insert(root).second)
+            if (InsertSorted(visited, root))
                 pending.push_back(root);
         }
 
         for (std::size_t index = 0; index < pending.size(); ++index) {
             for (const PrefabDependencyEdge &edge : DirectDependencies(pending[index])) {
-                if (visited.insert(edge.targetAsset).second)
+                if (InsertSorted(visited, edge.targetAsset))
                     pending.push_back(edge.targetAsset);
             }
         }
 
         for (const Assets::AssetId root : roots)
-            visited.erase(root);
-        return Result<std::vector<Assets::AssetId>>::Success({visited.begin(), visited.end()});
+            if (const auto found = std::ranges::lower_bound(visited, root); found != visited.end() && *found == root)
+                visited.erase(found);
+        return Result<std::vector<Assets::AssetId>>::Success(std::move(visited));
     }
 
     /** @copydoc PrefabDependencyGraphSnapshot::InvalidatedPrefabs */
     std::vector<Assets::AssetId> PrefabDependencyGraphSnapshot::InvalidatedPrefabs(
         const std::span<const Assets::AssetId> changedAssets) const {
-        std::set<Assets::AssetId> visited;
-        std::set<Assets::AssetId> affected;
+        std::vector<Assets::AssetId> visited;
+        std::vector<Assets::AssetId> affected;
         std::vector<Assets::AssetId> pending;
+        visited.reserve(nodes_.size());
+        affected.reserve(nodes_.size());
         pending.reserve(nodes_.size());
         for (const Assets::AssetId changed : changedAssets) {
-            if (const PrefabDependencyNode *node = FindNode(changed); node != nullptr && visited.insert(changed).second) {
+            if (const PrefabDependencyNode *node = FindNode(changed); node != nullptr && InsertSorted(visited, changed)) {
                 pending.push_back(changed);
                 if (node->sourceRevision)
-                    affected.insert(changed);
+                    static_cast<void>(InsertSorted(affected, changed));
             }
         }
 
@@ -160,67 +228,28 @@ namespace Horo::Prefab {
             const auto first = std::ranges::lower_bound(reverseEdges_, target, {}, &PrefabDependencyEdge::targetAsset);
             const auto last = std::ranges::upper_bound(first, reverseEdges_.end(), target, {}, &PrefabDependencyEdge::targetAsset);
             for (auto edge = first; edge != last; ++edge) {
-                affected.insert(edge->sourcePrefab);
-                if (visited.insert(edge->sourcePrefab).second)
+                static_cast<void>(InsertSorted(affected, edge->sourcePrefab));
+                if (InsertSorted(visited, edge->sourcePrefab))
                     pending.push_back(edge->sourcePrefab);
             }
         }
-        return {affected.begin(), affected.end()};
+        return affected;
     }
 
     /** @copydoc BuildPrefabDependencyGraph */
     Result<PrefabDependencyGraphSnapshot> BuildPrefabDependencyGraph(const Assets::AssetRegistrySnapshot &registry,
-                                                                     std::vector<PrefabDependencySource> sources,
+                                                                     const std::vector<PrefabDependencySource> &sources,
                                                                      const PrefabLimitProfile &limits) {
         PrefabExpansionBudget budget{limits};
         SourceMap sourceById;
         NodeMap nodes;
 
-        for (const PrefabDependencySource &source : sources) {
-            const PrefabDocumentData &document = source.document.Data();
-            if (document.referencedAssets.size() > limits.Policy().maximumReferencedAssets)
-                return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
-            if (document.composition && document.composition->nestedPlacements.size() > limits.Policy().maximumDirectNestedPlacements)
-                return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::NestedPlacementCountExceeded));
-            const Assets::AssetId id = document.assetId;
-            if (!RevisionMatchesDocument(source) || !sourceById.emplace(id, std::addressof(source)).second)
-                return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
-            const Assets::AssetRecord *record = registry.Find(id);
-            if (record == nullptr)
-                return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-            if (record->type.Value() != PrefabAssetType)
-                return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyTypeMismatch));
-            if (const auto captured = CaptureNode(nodes, *record, source.sourceRevision, budget); captured.HasError())
-                return Result<PrefabDependencyGraphSnapshot>::Failure(captured.ErrorValue());
-        }
-
-        std::vector<PrefabDependencyEdge> edges;
-        for (const PrefabDependencySource &source : sources) {
-            const PrefabDocumentData &document = source.document.Data();
-            for (const Assets::AssetId target : document.referencedAssets) {
-                const Assets::AssetRecord *record = registry.Find(target);
-                if (record == nullptr)
-                    return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-
-                const PrefabDependencyKind kind = DependencyKind(document, target);
-                const bool semanticPrefab = kind != PrefabDependencyKind::Resource;
-                if (semanticPrefab && record->type.Value() != PrefabAssetType)
-                    return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyTypeMismatch));
-
-                const auto targetSource = sourceById.find(target);
-                if (record->type.Value() == PrefabAssetType && targetSource == sourceById.end())
-                    return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-                if (semanticPrefab && (targetSource == sourceById.end() ||
-                                       !AuthoredRevisionsMatch(document, target, kind, targetSource->second->sourceRevision)))
-                    return Result<PrefabDependencyGraphSnapshot>::Failure(MakeError(PrefabErrors::DependencyRevisionMismatch));
-
-                if (const auto captured = CaptureNode(nodes, *record, std::nullopt, budget); captured.HasError())
-                    return Result<PrefabDependencyGraphSnapshot>::Failure(captured.ErrorValue());
-                if (const auto charged = Charge(budget); charged.HasError())
-                    return Result<PrefabDependencyGraphSnapshot>::Failure(charged.ErrorValue());
-                edges.push_back({document.assetId, target, kind});
-            }
-        }
+        if (auto validated = ValidateAndCaptureNodes(registry, sources, limits, budget, sourceById, nodes); validated.HasError())
+            return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(validated).ErrorValue());
+        auto processedEdges = ProcessEdges(registry, sources, sourceById, nodes, budget);
+        if (processedEdges.HasError())
+            return Result<PrefabDependencyGraphSnapshot>::Failure(std::move(processedEdges).ErrorValue());
+        std::vector<PrefabDependencyEdge> edges = std::move(processedEdges).Value();
 
         std::ranges::sort(edges);
         edges.erase(std::ranges::unique(edges).begin(), edges.end());
