@@ -136,6 +136,15 @@ namespace Horo::Prefab {
             return {.projectVersion = ProjectVersion(), .assetId = Asset(1), .objects = {Root()}};
         }
 
+        /** @brief Builds one concrete prefab carrying the shared project-provider payload fixture. */
+        PrefabDocumentData ProviderDocumentData(std::vector<Gameplay::BehaviorComponent> behaviors, const std::size_t componentBytes = 0) {
+            PrefabDocumentData data = Concrete();
+            data.referencedAssets = {Asset(2)};
+            data.objects.front().components = {Component(1, componentBytes)};
+            data.objects.front().behaviors = std::move(behaviors);
+            return data;
+        }
+
         PrefabLimitProfile Limits() {
             return PrefabLimitProfile::Create({}).Value();
         }
@@ -145,10 +154,7 @@ namespace Horo::Prefab {
         }
 
         TEST_CASE("Prefab document publishes one immutable ordered portable candidate", "[unit][prefab][document]") {
-            auto data = Concrete();
-            data.referencedAssets = {Asset(2)};
-            data.objects.front().components = {Component(1)};
-            data.objects.front().behaviors = {Behavior(2)};
+            auto data = ProviderDocumentData({Behavior(2)});
             data.objects.push_back({.localId = {8}, .parentLocalId = LocalObjectId{}, .name = "Child"});
             data.composition = PrefabComposition{
                 .nestedPlacements = {{.placementLocalId = {12},
@@ -343,11 +349,8 @@ namespace Horo::Prefab {
         }
 
         TEST_CASE("Prefab provider inspection preserves unavailable component behavior and asset payloads") {
-            auto data = Concrete();
-            data.referencedAssets = {Asset(2)};
-            data.objects.front().components = {Component(1, 3)};
+            auto data = ProviderDocumentData({Behavior(2)}, 3);
             data.objects.front().components.front().component.payload = {std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}};
-            data.objects.front().behaviors = {Behavior(2)};
             auto document = CreateDocument(data);
             REQUIRE(document.HasValue());
             const PrefabDocumentData originalDocument = document.Value().Data();
@@ -390,10 +393,7 @@ namespace Horo::Prefab {
         }
 
         TEST_CASE("Prefab provider inspection rejects schema skew ambiguous behavior and foreign asset input") {
-            auto data = Concrete();
-            data.referencedAssets = {Asset(2)};
-            data.objects.front().components = {Component(1)};
-            data.objects.front().behaviors = {Behavior(2), Behavior(3)};
+            auto data = ProviderDocumentData({Behavior(2), Behavior(3)});
             auto document = CreateDocument(data);
             REQUIRE(document.HasValue());
 
