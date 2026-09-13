@@ -38,11 +38,12 @@ namespace PipelineCacheTestSupport {
 
 using Horo::Render::ComputePipelineCacheKey;
 using Horo::Render::LoadPipelineCacheBlob;
-using Horo::Render::PipelineCacheErrors;
 using Horo::Render::PipelineCacheLimits;
 using Horo::Render::SerializePipelineCacheBlob;
 using Horo::Tests::RequireError;
 using PipelineCacheTestSupport::Compatibility;
+using PipelineCacheTestSupport::Digest;
+namespace PipelineCacheErrors = Horo::Render::PipelineCacheErrors;
 
 TEST_CASE("Pipeline cache identity includes backend device driver shader and descriptor compatibility",
           "[runtime][renderer][pipeline-cache]") {
