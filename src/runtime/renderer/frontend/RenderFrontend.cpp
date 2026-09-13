@@ -5,7 +5,9 @@
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
 
+#include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -177,7 +179,7 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::Create */
     Result<std::unique_ptr<RenderFrontend>> RenderFrontend::Create(const RenderBackendRegistry &registry, const RenderBackendId &backendId,
                                                                    const RenderBackendConfig &config,
-                                                                   const RenderResourceUploadLimits uploadLimits,
+                                                                   const RenderResourceUploadLimits &uploadLimits,
                                                                    const RenderFrontendMemoryConfig &memoryConfig) {
         if (!uploadLimits.IsValid()) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
@@ -214,13 +216,22 @@ namespace Horo::Render {
             backend->Shutdown();
             return Result<std::unique_ptr<RenderFrontend>>::Failure(memoryBudget.ErrorValue());
         }
-        return Result<std::unique_ptr<RenderFrontend>>::Success(
-            std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, std::move(memoryBudget).Value(),
-                                             memoryConfig, ConstructionKey{}));
+        try {
+            return Result<std::unique_ptr<RenderFrontend>>::Success(
+                std::make_unique<RenderFrontend>(std::move(backend), resourceOwner.Value(), uploadLimits, std::move(memoryBudget).Value(),
+                                                 memoryConfig, ConstructionKey{}));
+        } catch (const std::bad_alloc &) {
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceCapacityExhausted, "Renderer frontend bounded queue storage allocation failed."));
+        } catch (const std::length_error &) {
+            return Result<std::unique_ptr<RenderFrontend>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceCapacityExhausted,
+                                  "Renderer frontend bounded queue limits exceed supported storage sizes."));
+        }
     }
 
     RenderFrontend::RenderFrontend(std::unique_ptr<IRenderBackend> backend, const RenderResourceOwnerId resourceOwner,
-                                   const RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                                   const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
                                    const RenderFrontendMemoryConfig &memoryConfig, ConstructionKey)
         : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
           resourceRegistry_(
@@ -239,6 +250,7 @@ namespace Horo::Render {
         if (activeFrameScope_ != nullptr) {
             activeFrameScope_->Abort();
         }
+        resourceUploadQueue_->StopAdmission();
         while (!resourceUploadQueue_->Empty()) {
             const Detail::RenderResourceUploadQueue::Request request = resourceUploadQueue_->Pop();
             if (request.memoryReservation.IsValid())
