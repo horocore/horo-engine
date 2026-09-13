@@ -109,7 +109,7 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<void> ValidateRetentionCapacity(const SavePolicyMode mode, const SaveRotationPolicy &rotation) {
             if (rotation.maximumRetainedSlots == 0 || rotation.maximumRetainedSlots > CookedSaveProjectPolicy::MaximumRetainedSlotsPerMode)
-                return Result<void>::Failure(InvalidPolicy(mode, "retained slot capacity must be within the engine ceiling"));
+                return Result<void>::Failure(InvalidPolicy(mode, "retained slot capacity must be positive and within the engine ceiling"));
             return Result<void>::Success();
         }
 

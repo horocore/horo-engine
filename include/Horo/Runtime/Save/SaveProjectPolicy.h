@@ -116,6 +116,7 @@ namespace Horo::Runtime {
     struct SaveProjectPolicy final {
         static constexpr std::uint32_t CurrentSchemaVersion = 1;
         static constexpr std::size_t ModeCount = static_cast<std::size_t>(SavePolicyMode::Count);
+        static_assert(ModeCount <= 32, "SavePolicyMode count exceeds cooked policy mask capacity");
 
         std::uint32_t schemaVersion{CurrentSchemaVersion};
         std::array<SaveModeProjectPolicy, ModeCount> modes{};
