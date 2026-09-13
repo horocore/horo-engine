@@ -148,6 +148,12 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor StorageResultInvalid;
     /** @brief Storage operation admission state could not be allocated. */
     extern const ErrorCodeDescriptor StorageAllocationFailed;
+    /** @brief A slot-generation transaction or persisted journal is malformed or contradictory. */
+    extern const ErrorCodeDescriptor SlotCommitInvalid;
+    /** @brief Atomic catalog publication may have selected the new generation and requires reconciliation. */
+    extern const ErrorCodeDescriptor SlotCommitOutcomeUnknown;
+    /** @brief Journal replay could not prove or converge to a safe old-or-new generation. */
+    extern const ErrorCodeDescriptor SlotCommitRecoveryFailed;
     /** @brief An asynchronous save operation descriptor or handle is invalid. */
     extern const ErrorCodeDescriptor OperationInvalid;
     /** @brief Asynchronous save operation state or callback storage could not be allocated. */
