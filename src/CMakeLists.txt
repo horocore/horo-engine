@@ -778,6 +778,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
         runtime/renderer/api/ShaderManifestErrors.cpp
+        runtime/renderer/api/ShaderReflection.cpp
+        runtime/renderer/api/ShaderReflectionErrors.cpp
         runtime/renderer/api/TemporalHistory.cpp
         runtime/renderer/api/TemporalHistoryErrors.cpp
 )
