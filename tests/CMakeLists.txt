@@ -1292,6 +1292,7 @@ target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOU
 target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderFrontendTests.cpp
+        unit/runtime/renderer/RenderReadbackTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
         unit/runtime/renderer/UiRenderCompositionTests.cpp
 )
