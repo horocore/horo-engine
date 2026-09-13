@@ -897,6 +897,7 @@ if (HORO_BUILD_RENDER_OPENGL)
             runtime/renderer/modules/opengl/OpenGLCommandFunctions.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackend.cpp
             runtime/renderer/modules/opengl/OpenGLRenderBackendErrors.cpp
+            runtime/renderer/modules/opengl/OpenGLRenderBackendResources.inl
     )
     add_library(HoroEngine::RenderOpenGL ALIAS HoroRenderOpenGL)
 

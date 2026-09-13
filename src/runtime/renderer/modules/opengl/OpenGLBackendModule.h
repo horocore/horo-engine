@@ -10,7 +10,9 @@
 namespace Horo::Render {
     /** @brief OpenGL context profile requested from the platform presentation attachment. */
     enum class OpenGLContextProfile : std::uint8_t {
+        Unknown,
         Core,
+        Compatibility,
     };
 
     /** @brief Native-free OpenGL context creation requirements. */
@@ -19,6 +21,25 @@ namespace Horo::Render {
         std::uint16_t minorVersion{1};
         OpenGLContextProfile profile{OpenGLContextProfile::Core};
         bool enableDebugContext{false};
+    };
+
+    /** @brief Actual native context family reported after command dispatch is loaded. */
+    enum class OpenGLApiFamily : std::uint8_t {
+        Unknown,
+        Desktop,
+        Embedded,
+    };
+
+    /** @brief Native-free facts queried from the current context before backend readiness. */
+    struct OpenGLContextFacts {
+        OpenGLApiFamily apiFamily{OpenGLApiFamily::Unknown};
+        std::uint16_t majorVersion{0};
+        std::uint16_t minorVersion{0};
+        OpenGLContextProfile profile{OpenGLContextProfile::Unknown};
+        bool requiredEntryPointsAvailable{false};
+        std::uint32_t maxTexture2DSize{0};
+        std::uint32_t maxColorAttachments{0};
+        std::uint32_t maxVertexAttributes{0};
     };
 
     /** @brief OpenGL backend module configuration fixed when its provider is registered. */
@@ -54,6 +75,12 @@ namespace Horo::Render {
 
         /** @brief Loads the linked OpenGL command dispatch after the retained context becomes current. */
         [[nodiscard]] virtual Result<void> LoadCommandDispatch() = 0;
+
+        /**
+         * @brief Queries actual context identity and bounded baseline limits from the current context.
+         * @return Owned native-free facts or a typed query failure.
+         */
+        [[nodiscard]] virtual Result<OpenGLContextFacts> QueryContextFacts() = 0;
 
         /**
          * @brief Applies backend-neutral presentation pacing to the retained context.

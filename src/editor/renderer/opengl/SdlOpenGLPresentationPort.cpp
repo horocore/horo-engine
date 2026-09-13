@@ -3,12 +3,18 @@
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <glad/gl.h>
+#include <limits>
 #include <string>
 
 namespace Horo::Editor {
     namespace {
         [[nodiscard]] Error MakeSdlRenderError(const ErrorCodeDescriptor &descriptor, const char *operation) {
             return MakeError(descriptor, std::string{operation} + ": " + SDL_GetError());
+        }
+
+        [[nodiscard]] std::uint16_t ContextVersionComponent(const int value) noexcept {
+            constexpr auto maximum = static_cast<int>(std::numeric_limits<std::uint16_t>::max());
+            return value > 0 && value <= maximum ? static_cast<std::uint16_t>(value) : 0;
         }
     }  // namespace
 
@@ -51,6 +57,45 @@ namespace Horo::Editor {
                 MakeSdlRenderError(RendererErrors::ViewportOpenGLDispatchFailed, "OpenGL command dispatch loading failed"));
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc SdlOpenGLPresentationPort::QueryContextFacts */
+    Result<Render::OpenGLContextFacts> SdlOpenGLPresentationPort::QueryContextFacts() {
+        int majorVersion = 0;
+        int minorVersion = 0;
+        int profile = 0;
+        if (context_ == nullptr || !SDL_GL_GetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, &majorVersion) ||
+            !SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &minorVersion) ||
+            !SDL_GL_GetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, &profile)) {
+            return Result<Render::OpenGLContextFacts>::Failure(
+                MakeSdlRenderError(RendererErrors::SdlContextAttributesFailed, "OpenGL context inspection failed"));
+        }
+
+        GLint maxTextureSize = 0;
+        GLint maxColorAttachments = 0;
+        GLint maxVertexAttributes = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+        glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxColorAttachments);
+        glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &maxVertexAttributes);
+        const auto positive = [](const GLint value) {
+            return value > 0 ? static_cast<std::uint32_t>(value) : 0U;
+        };
+        Render::OpenGLContextProfile contextProfile = Render::OpenGLContextProfile::Unknown;
+        if ((profile & SDL_GL_CONTEXT_PROFILE_CORE) != 0)
+            contextProfile = Render::OpenGLContextProfile::Core;
+        else if ((profile & SDL_GL_CONTEXT_PROFILE_COMPATIBILITY) != 0)
+            contextProfile = Render::OpenGLContextProfile::Compatibility;
+
+        return Result<Render::OpenGLContextFacts>::Success({
+            .apiFamily = (profile & SDL_GL_CONTEXT_PROFILE_ES) != 0 ? Render::OpenGLApiFamily::Embedded : Render::OpenGLApiFamily::Desktop,
+            .majorVersion = ContextVersionComponent(majorVersion),
+            .minorVersion = ContextVersionComponent(minorVersion),
+            .profile = contextProfile,
+            .requiredEntryPointsAvailable = GLAD_GL_VERSION_4_1 != 0,
+            .maxTexture2DSize = positive(maxTextureSize),
+            .maxColorAttachments = positive(maxColorAttachments),
+            .maxVertexAttributes = positive(maxVertexAttributes),
+        });
     }
 
     /** @copydoc SdlOpenGLPresentationPort::SetPresentMode */

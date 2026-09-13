@@ -14,6 +14,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> CreateContext(const Render::OpenGLContextDescriptor &descriptor) override;
         [[nodiscard]] Result<void> MakeCurrent() override;
         [[nodiscard]] Result<void> LoadCommandDispatch() override;
+        [[nodiscard]] Result<Render::OpenGLContextFacts> QueryContextFacts() override;
         [[nodiscard]] Result<void> SetPresentMode(Render::PresentMode mode) override;
         [[nodiscard]] Result<void> SwapBuffers() override;
         void DestroyContext() noexcept override;

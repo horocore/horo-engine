@@ -12,10 +12,15 @@
 #include <memory>
 #include <vector>
 
-namespace {
-    using namespace Horo;
-    using namespace Horo::Editor;
-    using namespace Horo::Render;
+namespace Horo::Render::OpenGLSmokeTests {
+    using Editor::EditorViewportExtent;
+    using Editor::EditorViewportInstance;
+    using Editor::EditorViewportMeshResourceView;
+    using Editor::EditorViewportRendererOpenGL;
+    using Editor::EditorViewportSceneView;
+    using Editor::EditorViewportTextureView;
+    using Editor::SdlOpenGLPresentationPort;
+    using Editor::ToRenderCamera;
 
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -36,6 +41,10 @@ namespace {
 
         Result<void> LoadCommandDispatch() override {
             return port_.LoadCommandDispatch();
+        }
+
+        Result<OpenGLContextFacts> QueryContextFacts() override {
+            return port_.QueryContextFacts();
         }
 
         Result<void> SetPresentMode(PresentMode) override {
@@ -119,193 +128,214 @@ namespace {
         Check(viewport.TextureView().textureId != activeTexture.textureId);
     }
 
-}  // namespace
+    struct CallerOpenGLState {
+        GLuint vertexArray{0};
+        GLuint arrayBuffer{0};
+        GLuint drawFramebuffer{0};
+        GLuint readFramebuffer{0};
+    };
 
-TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
-    constexpr std::uint32_t width = 512;
-    constexpr std::uint32_t height = 384;
-    Check(SDL_Init(SDL_INIT_VIDEO));
-    Check(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
-    Check(SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24));
-    SDL_Window *window = SDL_CreateWindow("Horo viewport smoke", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
-    Check(window != nullptr);
+    [[nodiscard]] CallerOpenGLState CreateCallerOpenGLState() {
+        CallerOpenGLState state;
+        glGenVertexArrays(1, &state.vertexArray);
+        glGenBuffers(1, &state.arrayBuffer);
+        glGenFramebuffers(1, &state.drawFramebuffer);
+        glGenFramebuffers(1, &state.readFramebuffer);
+        glBindVertexArray(state.vertexArray);
+        glBindBuffer(GL_ARRAY_BUFFER, state.arrayBuffer);
+        return state;
+    }
 
-    HeadlessOpenGLPresentationPort presentationPort{*window};
-    RenderBackendRegistry registry;
-    Check(RegisterOpenGLRenderBackend(registry, presentationPort).HasValue());
-    Check(registry.Seal().HasValue());
-    auto frontendResult = RenderFrontend::Create(registry, RenderBackendId{"opengl"},
-                                                 RenderBackendConfig{.requirePresentation = true,
-                                                                     .enableValidation = false,
-                                                                     .maxFramesInFlight = 2,
-                                                                     .presentMode = PresentMode::Immediate});
-    Check(frontendResult.HasValue());
-    std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
+    void ConfigureCallerOpenGLState(const CallerOpenGLState &state) {
+        glViewport(7, 9, 111, 113);
+        glClearColor(0.2F, 0.3F, 0.4F, 0.5F);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_ALWAYS);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(3, 5, 7, 11);
+        glEnable(GL_BLEND);
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_FRONT_AND_BACK);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glDepthMask(GL_FALSE);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, state.drawFramebuffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, state.readFramebuffer);
+    }
 
-    Check(gladLoadGL(SDL_GL_GetProcAddress) != 0);
-    GLuint callerVertexArray = 0;
-    GLuint callerArrayBuffer = 0;
-    GLuint callerDrawFramebuffer = 0;
-    GLuint callerReadFramebuffer = 0;
-    glGenVertexArrays(1, &callerVertexArray);
-    glGenBuffers(1, &callerArrayBuffer);
-    glGenFramebuffers(1, &callerDrawFramebuffer);
-    glGenFramebuffers(1, &callerReadFramebuffer);
-    glBindVertexArray(callerVertexArray);
-    glBindBuffer(GL_ARRAY_BUFFER, callerArrayBuffer);
+    void CheckCallerOpenGLState(const CallerOpenGLState &state) {
+        GLint drawFramebuffer = 0;
+        GLint readFramebuffer = 0;
+        std::array<GLint, 4> viewport{};
+        GLint depthFunction = 0;
+        std::array<GLint, 4> scissorBox{};
+        std::array<GLboolean, 4> colorMask{};
+        GLboolean depthMask = GL_TRUE;
+        std::array<GLfloat, 4> clearColor{};
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+        glGetIntegerv(GL_VIEWPORT, viewport.data());
+        glGetIntegerv(GL_DEPTH_FUNC, &depthFunction);
+        glGetIntegerv(GL_SCISSOR_BOX, scissorBox.data());
+        glGetBooleanv(GL_COLOR_WRITEMASK, colorMask.data());
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+        glGetFloatv(GL_COLOR_CLEAR_VALUE, clearColor.data());
+        Check(drawFramebuffer == static_cast<GLint>(state.drawFramebuffer));
+        Check(readFramebuffer == static_cast<GLint>(state.readFramebuffer));
+        Check(viewport[0] == 7 && viewport[1] == 9 && viewport[2] == 111 && viewport[3] == 113);
+        Check(glIsEnabled(GL_DEPTH_TEST) == GL_TRUE && depthFunction == GL_ALWAYS);
+        Check(glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE && glIsEnabled(GL_BLEND) == GL_TRUE && glIsEnabled(GL_CULL_FACE) == GL_TRUE);
+        Check(scissorBox[0] == 3 && scissorBox[1] == 5 && scissorBox[2] == 7 && scissorBox[3] == 11);
+        Check(colorMask[0] == GL_FALSE && colorMask[1] == GL_FALSE && colorMask[2] == GL_FALSE && colorMask[3] == GL_FALSE);
+        Check(depthMask == GL_FALSE);
+        Check(std::fabs(clearColor[0] - 0.2F) < 0.001F && std::fabs(clearColor[3] - 0.5F) < 0.001F);
+    }
 
-    EditorViewportRendererOpenGL viewport{*frontend};
-    Check(viewport.Initialize().HasValue());
-    Runtime::PrimitiveMeshCache meshCache;
-    constexpr std::array primitiveTypes{Runtime::PrimitiveMeshType::Box,     Runtime::PrimitiveMeshType::Sphere,
-                                        Runtime::PrimitiveMeshType::Capsule, Runtime::PrimitiveMeshType::Cylinder,
-                                        Runtime::PrimitiveMeshType::Cone,    Runtime::PrimitiveMeshType::Plane,
-                                        Runtime::PrimitiveMeshType::Quad};
-    std::vector<Runtime::PrimitiveMeshLease> meshLeases;
-    std::vector<EditorViewportMeshResourceView> meshResources;
-    std::vector<EditorViewportInstance> viewportInstances;
-    for (std::size_t index = 0; index < primitiveTypes.size(); ++index) {
-        auto acquiredMesh = meshCache.Acquire(Runtime::PrimitiveMeshDescriptor::Defaults(primitiveTypes[index]));
-        Check(acquiredMesh.HasValue());
-        Runtime::PrimitiveMeshLease meshLease = std::move(acquiredMesh).Value();
-        const MeshData &mesh = meshLease.Data();
-        const RenderMeshSourceHandle meshHandle{meshLease.Id(), 1};
-        meshResources.push_back({meshHandle, mesh.vertices, mesh.indices, mesh.localBounds});
+    void RestoreDefaultOpenGLState() {
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthMask(GL_TRUE);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+
+    void DestroyCallerOpenGLState(const CallerOpenGLState &state) {
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+        glDeleteBuffers(1, &state.arrayBuffer);
+        glDeleteVertexArrays(1, &state.vertexArray);
+        glDeleteFramebuffers(1, &state.drawFramebuffer);
+        glDeleteFramebuffers(1, &state.readFramebuffer);
+    }
+
+    struct ViewportSceneFixture {
+        Runtime::PrimitiveMeshCache meshCache{Runtime::PrimitiveMeshCacheLimits{}};
+        std::vector<Runtime::PrimitiveMeshLease> meshLeases;
+        std::vector<EditorViewportMeshResourceView> meshResources;
+        std::vector<EditorViewportInstance> instances;
+        std::array<RenderLight, 1> lights;
+
+        [[nodiscard]] EditorViewportSceneView View() const noexcept {
+            return {.camera = {}, .meshResources = meshResources, .instances = instances, .lights = lights};
+        }
+    };
+
+    [[nodiscard]] ViewportSceneFixture CreateViewportScene() {
+        ViewportSceneFixture fixture{
+            .lights = {RenderLight{.kind = RenderLightKind::Directional,
+                                   .direction = Math::Normalize(Math::Vec3{0.5F, -1.0F, -0.5F}),
+                                   .color = {1.0F, 0.95F, 0.88F},
+                                   .intensity = 2.0F}},
+        };
+        constexpr std::array primitiveTypes{Runtime::PrimitiveMeshType::Box,     Runtime::PrimitiveMeshType::Sphere,
+                                            Runtime::PrimitiveMeshType::Capsule, Runtime::PrimitiveMeshType::Cylinder,
+                                            Runtime::PrimitiveMeshType::Cone,    Runtime::PrimitiveMeshType::Plane,
+                                            Runtime::PrimitiveMeshType::Quad};
         constexpr std::array positions{Math::Vec2{0, 0},         Math::Vec2{-1.0F, 0.7F}, Math::Vec2{0, 0.9F},    Math::Vec2{1.0F, 0.7F},
                                        Math::Vec2{-1.0F, -0.7F}, Math::Vec2{0, -0.9F},    Math::Vec2{1.0F, -0.7F}};
-        const float scale = primitiveTypes[index] == Runtime::PrimitiveMeshType::Plane ? 0.08F : index == 0 ? 0.65F : 0.45F;
-        viewportInstances.push_back(
-            {meshHandle,
-             Math::Transform{.translation = {positions[index].x, positions[index].y, 0}, .scale = {scale, scale, scale}}.ToMatrix(),
-             mesh.localBounds,
-             CoreDefaultMaterial,
-             {.tint = {0.12F, 0.72F, 1.0F}, .tintStrength = index == 0 ? 0.65F : 0.0F}});
-        meshLeases.push_back(std::move(meshLease));
+        for (std::size_t index = 0; index < primitiveTypes.size(); ++index) {
+            auto acquired = fixture.meshCache.Acquire(Runtime::PrimitiveMeshDescriptor::Defaults(primitiveTypes[index]));
+            Check(acquired.HasValue());
+            Runtime::PrimitiveMeshLease lease = std::move(acquired).Value();
+            const MeshData &mesh = lease.Data();
+            const RenderMeshSourceHandle handle{lease.Id(), 1};
+            fixture.meshResources.push_back({handle, mesh.vertices, mesh.indices, mesh.localBounds});
+            const float scale = primitiveTypes[index] == Runtime::PrimitiveMeshType::Plane ? 0.08F : index == 0 ? 0.65F : 0.45F;
+            fixture.instances.push_back(
+                {handle,
+                 Math::Transform{.translation = {positions[index].x, positions[index].y, 0}, .scale = {scale, scale, scale}}.ToMatrix(),
+                 mesh.localBounds,
+                 CoreDefaultMaterial,
+                 {.tint = {0.12F, 0.72F, 1.0F}, .tintStrength = index == 0 ? 0.65F : 0.0F}});
+            fixture.meshLeases.push_back(std::move(lease));
+        }
+        return fixture;
     }
-    const std::array lights{
-        RenderLight{
-            .kind = RenderLightKind::Directional,
-            .direction = Math::Normalize(Math::Vec3{0.5F, -1.0F, -0.5F}),
-            .color = {1.0F, 0.95F, 0.88F},
-            .intensity = 2.0F,
-        },
-    };
-    const EditorViewportSceneView viewportScene{.camera = {},
-                                                .meshResources = meshResources,
-                                                .instances = viewportInstances,
-                                                .lights = lights};
 
-    GLint initializedVertexArray = 0;
-    GLint initializedArrayBuffer = 0;
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &initializedVertexArray);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &initializedArrayBuffer);
-    Check(initializedVertexArray == static_cast<GLint>(callerVertexArray));
-    Check(initializedArrayBuffer == static_cast<GLint>(callerArrayBuffer));
-    Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
-    const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {width, height});
-
-    viewport.RequestExtent(EditorViewportExtent{width, height});
-
-    auto begun = frontend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {640, 480}});
-    Check(begun.HasValue());
-    RenderFrameScope frame = std::move(begun).Value();
-    const std::array passes{RenderPassDescriptor{
-        .id = RenderPassId{1},
-        .kind = RenderPassKind::Graphics,
-        .staticMesh =
-            StaticMeshPassDescriptor{
-                .target = viewportTarget,
-                .extent = {width, height},
-                .scene = RenderSceneView{ToRenderCamera(viewportScene.camera), viewportScene.meshResources, viewportScene.instances,
-                                         viewportScene.lights},
-            },
-    }};
-
-    glViewport(7, 9, 111, 113);
-    glClearColor(0.2F, 0.3F, 0.4F, 0.5F);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_ALWAYS);
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(3, 5, 7, 11);
-    glEnable(GL_BLEND);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_FRONT_AND_BACK);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glDepthMask(GL_FALSE);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, callerDrawFramebuffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, callerReadFramebuffer);
-    Check(frame.Execute(passes).HasValue());
-
-    GLint restoredDrawFramebuffer = 0;
-    GLint restoredReadFramebuffer = 0;
-    GLint restoredViewport[4]{};
-    GLint restoredDepthFunction = 0;
-    GLint restoredScissorBox[4]{};
-    GLboolean restoredColorMask[4]{};
-    GLboolean restoredDepthMask = GL_TRUE;
-    GLfloat restoredClearColor[4]{};
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &restoredDrawFramebuffer);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &restoredReadFramebuffer);
-    glGetIntegerv(GL_VIEWPORT, restoredViewport);
-    glGetIntegerv(GL_DEPTH_FUNC, &restoredDepthFunction);
-    glGetIntegerv(GL_SCISSOR_BOX, restoredScissorBox);
-    glGetBooleanv(GL_COLOR_WRITEMASK, restoredColorMask);
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &restoredDepthMask);
-    glGetFloatv(GL_COLOR_CLEAR_VALUE, restoredClearColor);
-    Check(restoredDrawFramebuffer == static_cast<GLint>(callerDrawFramebuffer));
-    Check(restoredReadFramebuffer == static_cast<GLint>(callerReadFramebuffer));
-    Check(restoredViewport[0] == 7 && restoredViewport[1] == 9 && restoredViewport[2] == 111 && restoredViewport[3] == 113);
-    Check(glIsEnabled(GL_DEPTH_TEST) == GL_TRUE);
-    Check(restoredDepthFunction == GL_ALWAYS);
-    Check(glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE);
-    Check(glIsEnabled(GL_BLEND) == GL_TRUE);
-    Check(glIsEnabled(GL_CULL_FACE) == GL_TRUE);
-    Check(restoredScissorBox[0] == 3 && restoredScissorBox[1] == 5 && restoredScissorBox[2] == 7 && restoredScissorBox[3] == 11);
-    Check(restoredColorMask[0] == GL_FALSE && restoredColorMask[1] == GL_FALSE && restoredColorMask[2] == GL_FALSE &&
-          restoredColorMask[3] == GL_FALSE);
-    Check(restoredDepthMask == GL_FALSE);
-    Check(std::fabs(restoredClearColor[0] - 0.2F) < 0.001F && std::fabs(restoredClearColor[3] - 0.5F) < 0.001F);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDepthMask(GL_TRUE);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-
-    Check(viewport.IsReady());
-    const EditorViewportTextureView firstTextureView = viewport.TextureView();
-    Check(firstTextureView.IsValid());
-    Check(firstTextureView.v0 == 1.0F && firstTextureView.v1 == 0.0F);
-
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
-    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(firstTextureView.textureId));
-    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    std::size_t coloredPixels = 0;
-    for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
-        const bool differsFromBackground = pixels[offset] > 20 || pixels[offset + 1] > 24 || pixels[offset + 2] > 32;
-        coloredPixels += differsFromBackground ? 1 : 0;
+    [[nodiscard]] RenderFrameScope ExecuteViewportFrame(RenderFrontend &frontend, const EditorViewportSceneView &scene,
+                                                        const RenderTargetHandle target, const EditorViewportExtent extent,
+                                                        const CallerOpenGLState &callerState) {
+        auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {640, 480}});
+        Check(begun.HasValue());
+        RenderFrameScope frame = std::move(begun).Value();
+        const std::array passes{RenderPassDescriptor{
+            .id = RenderPassId{1},
+            .kind = RenderPassKind::Graphics,
+            .staticMesh = StaticMeshPassDescriptor{.target = target,
+                                                   .extent = {extent.width, extent.height},
+                                                   .scene = RenderSceneView{ToRenderCamera(scene.camera), scene.meshResources,
+                                                                            scene.instances, scene.lights}},
+        }};
+        ConfigureCallerOpenGLState(callerState);
+        Check(frame.Execute(passes).HasValue());
+        return frame;
     }
-    Check(coloredPixels > 10000);
-    const std::size_t center = (static_cast<std::size_t>(height / 2) * width + width / 2) * 4;
-    Check(pixels[center] < 150 && pixels[center + 1] > 130 && pixels[center + 2] > 150);
-    Check(frame.Present().HasValue());
 
-    CheckSeamlessResourceTransition(viewport, *frontend, viewportScene, viewportTarget, firstTextureView);
+    void CheckViewportPixels(const EditorViewportTextureView view, const std::uint32_t width, const std::uint32_t height) {
+        std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(view.textureId));
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        std::size_t coloredPixels = 0;
+        for (std::size_t offset = 0; offset < pixels.size(); offset += 4) {
+            const bool differsFromBackground = pixels[offset] > 20 || pixels[offset + 1] > 24 || pixels[offset + 2] > 32;
+            coloredPixels += differsFromBackground ? 1 : 0;
+        }
+        Check(coloredPixels > 10000);
+        const std::size_t center = (static_cast<std::size_t>(height / 2) * width + width / 2) * 4;
+        Check(pixels[center] < 150 && pixels[center + 1] > 130 && pixels[center + 2] > 150);
+    }
 
-    frontend->DetachStaticMeshPassExecutor(viewport);
-    viewport.Shutdown();
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-    glDeleteBuffers(1, &callerArrayBuffer);
-    glDeleteVertexArrays(1, &callerVertexArray);
-    glDeleteFramebuffers(1, &callerDrawFramebuffer);
-    glDeleteFramebuffers(1, &callerReadFramebuffer);
-    frontend.reset();
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-}
+    TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
+        constexpr EditorViewportExtent extent{512, 384};
+        Check(SDL_Init(SDL_INIT_VIDEO));
+        Check(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1));
+        Check(SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24));
+        SDL_Window *window = SDL_CreateWindow("Horo viewport smoke", 640, 480, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+        Check(window != nullptr);
+
+        HeadlessOpenGLPresentationPort presentationPort{*window};
+        RenderBackendRegistry registry;
+        Check(RegisterOpenGLRenderBackend(registry, presentationPort).HasValue());
+        Check(registry.Seal().HasValue());
+        auto frontendResult = RenderFrontend::Create(registry, RenderBackendId{"opengl"},
+                                                     RenderBackendConfig{.requirePresentation = true,
+                                                                         .enableValidation = false,
+                                                                         .maxFramesInFlight = 2,
+                                                                         .presentMode = PresentMode::Immediate});
+        Check(frontendResult.HasValue());
+        std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
+        Check(gladLoadGL(SDL_GL_GetProcAddress) != 0);
+
+        const CallerOpenGLState callerState = CreateCallerOpenGLState();
+        EditorViewportRendererOpenGL viewport{*frontend};
+        Check(viewport.Initialize().HasValue());
+        ViewportSceneFixture fixture = CreateViewportScene();
+        const EditorViewportSceneView scene = fixture.View();
+        Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
+        const RenderTargetHandle target = PrepareViewportTarget(viewport, *frontend, scene, extent);
+        viewport.RequestExtent(extent);
+
+        RenderFrameScope frame = ExecuteViewportFrame(*frontend, scene, target, extent, callerState);
+        CheckCallerOpenGLState(callerState);
+        RestoreDefaultOpenGLState();
+        Check(viewport.IsReady());
+        const EditorViewportTextureView textureView = viewport.TextureView();
+        Check(textureView.IsValid());
+        Check(textureView.v0 == 1.0F && textureView.v1 == 0.0F);
+        CheckViewportPixels(textureView, extent.width, extent.height);
+        Check(frame.Present().HasValue());
+        CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView);
+
+        frontend->DetachStaticMeshPassExecutor(viewport);
+        viewport.Shutdown();
+        DestroyCallerOpenGLState(callerState);
+        frontend.reset();
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+    }
+
+}  // namespace Horo::Render::OpenGLSmokeTests

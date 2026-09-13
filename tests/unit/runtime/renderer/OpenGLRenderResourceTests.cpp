@@ -6,9 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 
-namespace {
-    using namespace Horo;
-    using namespace Horo::Render;
+namespace Horo::Render::OpenGLResourceTests {
 
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -28,6 +26,17 @@ namespace {
             return Result<void>::Success();
         }
 
+        Result<OpenGLContextFacts> QueryContextFacts() override {
+            return Result<OpenGLContextFacts>::Success({.apiFamily = OpenGLApiFamily::Desktop,
+                                                        .majorVersion = 4,
+                                                        .minorVersion = 1,
+                                                        .profile = OpenGLContextProfile::Core,
+                                                        .requiredEntryPointsAvailable = true,
+                                                        .maxTexture2DSize = 16384,
+                                                        .maxColorAttachments = 8,
+                                                        .maxVertexAttributes = 16});
+        }
+
         Result<void> SetPresentMode(PresentMode) override {
             return Result<void>::Success();
         }
@@ -36,7 +45,9 @@ namespace {
             return Result<void>::Success();
         }
 
-        void DestroyContext() noexcept override {}
+        void DestroyContext() noexcept override {
+            // This test double owns no native context.
+        }
     };
 
     struct ResourceCommandState {
@@ -57,11 +68,17 @@ namespace {
 
     ResourceCommandState resourceCommandState;
 
-    void ProbeNoOp(std::uint32_t) {}
+    void ProbeNoOp(std::uint32_t) {
+        // This probe intentionally records no state.
+    }
 
-    void ProbeViewport(std::int32_t, std::int32_t, std::int32_t, std::int32_t) {}
+    void ProbeViewport(std::int32_t, std::int32_t, std::int32_t, std::int32_t) {
+        // Viewport state is outside this resource test's scope.
+    }
 
-    void ProbeClearColor(float, float, float, float) {}
+    void ProbeClearColor(float, float, float, float) {
+        // Clear color state is outside this resource test's scope.
+    }
 
     void ProbeGenerateBuffers(const std::int32_t count, std::uint32_t *objects) {
         resourceCommandState.generatedBuffers += count;
@@ -103,7 +120,9 @@ namespace {
         resourceCommandState.deletedFramebuffers += count;
     }
 
-    void ProbeBindObject(std::uint32_t, std::uint32_t) {}
+    void ProbeBindObject(std::uint32_t, std::uint32_t) {
+        // Binding state is outside this resource test's scope.
+    }
 
     void ProbeBufferData(std::uint32_t, const std::size_t byteSize, const std::span<const std::byte> data, std::uint32_t) {
         ++resourceCommandState.uploads;
@@ -111,13 +130,21 @@ namespace {
             resourceCommandState.emptyBufferBytes = byteSize;
     }
 
-    void ProbeVertexAttributePointer(std::uint32_t, std::int32_t, std::uint32_t, std::uint8_t, std::int32_t, std::uintptr_t) {}
+    void ProbeVertexAttributePointer(std::uint32_t, std::int32_t, std::uint32_t, std::uint8_t, std::int32_t, std::uintptr_t) {
+        // Vertex attribute state is outside this resource test's scope.
+    }
 
-    void ProbeEnableVertexAttribute(std::uint32_t) {}
+    void ProbeEnableVertexAttribute(std::uint32_t) {
+        // Vertex attribute enablement is outside this resource test's scope.
+    }
 
-    void ProbeTextureParameter(std::uint32_t, std::uint32_t, std::int32_t) {}
+    void ProbeTextureParameter(std::uint32_t, std::uint32_t, std::int32_t) {
+        // Texture parameters are outside this resource test's scope.
+    }
 
-    void ProbeTextureImage(const Detail::OpenGLTextureImageDescriptor &) {}
+    void ProbeTextureImage(const Detail::OpenGLTextureImageDescriptor &) {
+        // Texture uploads are outside this resource test's scope.
+    }
 
     void ProbeFramebufferTexture(std::uint32_t, std::uint32_t, std::uint32_t, std::int32_t) {
         ++resourceCommandState.attachments;
@@ -269,21 +296,29 @@ namespace {
         Check(resourceCommandState.deletedVertexArrays == 1);
         Check(resourceCommandState.deletedBuffers == 2);
     }
-}  // namespace
 
-TEST_CASE("OpenGL Generic Resources Realize And Roll Back Through Typed Contracts", "[unit][runtime][renderer][resource]") {
-    resourceCommandState = {};
-    ResourcePresentationPort port;
-    std::unique_ptr<IRenderBackend> backend = CreateResourceBackend(port);
-    Check(backend->Initialize(RenderBackendConfig{}).HasValue());
-    Check(backend->Capabilities().supportsBufferResources);
-    Check(backend->Capabilities().supportsMeshResources);
-    Check(backend->Capabilities().supportsTextureResources);
-    Check(backend->Capabilities().supportsRenderTargetResources);
-    ResourceInstances resources;
-    CreateMeshResources(*backend, resources);
-    const RenderTargetDescriptor targetDescriptor = CreateTargetResources(*backend, resources);
-    CheckCreationAndRollback(*backend, resources, targetDescriptor);
-    DestroyResources(*backend, resources);
-    backend->Shutdown();
-}
+    TEST_CASE("OpenGL Generic Resources Realize And Roll Back Through Typed Contracts", "[unit][runtime][renderer][resource]") {
+        resourceCommandState = {};
+        ResourcePresentationPort port;
+        std::unique_ptr<IRenderBackend> backend = CreateResourceBackend(port);
+        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        Check(backend->Capabilities().supportsBufferResources);
+        Check(backend->Capabilities().supportsMeshResources);
+        Check(backend->Capabilities().supportsTextureResources);
+        Check(backend->Capabilities().supportsRenderTargetResources);
+        const RenderTextureDescriptor oversizedTexture{.extent = {16385, 1},
+                                                       .format = RenderTextureFormat::Rgba8Unorm,
+                                                       .usage = RenderTextureUsage::Sampled};
+        const auto oversizedCost = backend->QueryTextureMemoryCost(oversizedTexture);
+        Check(oversizedCost.HasValue());
+        const auto oversized = backend->CreateTexture(oversizedTexture, {}, TestSupport::PlacementFor(oversizedCost.Value(), 1));
+        Check(oversized.HasError());
+        ResourceInstances resources;
+        CreateMeshResources(*backend, resources);
+        const RenderTargetDescriptor targetDescriptor = CreateTargetResources(*backend, resources);
+        CheckCreationAndRollback(*backend, resources, targetDescriptor);
+        DestroyResources(*backend, resources);
+        backend->Shutdown();
+    }
+
+}  // namespace Horo::Render::OpenGLResourceTests
