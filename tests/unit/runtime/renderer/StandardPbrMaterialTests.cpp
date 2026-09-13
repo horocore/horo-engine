@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/StandardPbrMaterial.h"
 #include "Horo/Runtime/Render/StandardPbrMaterialErrors.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <array>
 #include <bit>
@@ -78,12 +79,9 @@ namespace {
     }
 
     template <typename ValueT> void RequireError(const Result<ValueT> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
-        CHECK_FALSE(result.ErrorValue().message.empty());
-        CHECK_FALSE(expected.remediationHint.empty());
+        Tests::RequireActionableError(result, expected);
     }
+
 }  // namespace
 
 TEST_CASE("Standard PBR packs semantic values from final target reflection", "[runtime][renderer][material]") {

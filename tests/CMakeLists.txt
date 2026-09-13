@@ -1278,6 +1278,7 @@ add_executable(HoroStandardPbrMaterialTests
         unit/runtime/renderer/StandardPbrMaterialTests.cpp
 )
 target_compile_features(HoroStandardPbrMaterialTests PRIVATE cxx_std_20)
+target_include_directories(HoroStandardPbrMaterialTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrMaterialTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
