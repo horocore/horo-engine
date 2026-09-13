@@ -11,11 +11,16 @@ namespace Horo::Render::Detail {
         virtual ~IMetalRuntime() = default;
 
         [[nodiscard]] virtual Result<void> Initialize(const MetalPresentationDescriptor &descriptor) = 0;
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const = 0;
+        [[nodiscard]] virtual Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const = 0;
         [[nodiscard]] virtual Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                                                 std::span<const std::byte> initialData) = 0;
+                                                                 std::span<const std::byte> initialData,
+                                                                 const RenderMemoryPlacement &placement) = 0;
         [[nodiscard]] virtual Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertexBuffer,
                                                                std::uint64_t indexBuffer) = 0;
-        [[nodiscard]] virtual Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) = 0;
+        [[nodiscard]] virtual Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor,
+                                                                  std::span<const std::byte> initialData,
+                                                                  const RenderMemoryPlacement &placement) = 0;
         [[nodiscard]] virtual Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor,
                                                                       std::uint64_t texture) = 0;
         [[nodiscard]] virtual Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor,

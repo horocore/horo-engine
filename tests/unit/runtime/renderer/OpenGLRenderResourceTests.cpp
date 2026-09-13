@@ -49,6 +49,7 @@ namespace {
         int generatedFramebuffers{0};
         int deletedFramebuffers{0};
         int uploads{0};
+        std::size_t emptyBufferBytes{0};
         int attachments{0};
         bool framebufferComplete{true};
     };
@@ -103,8 +104,10 @@ namespace {
 
     void ProbeBindObject(std::uint32_t, std::uint32_t) {}
 
-    void ProbeBufferData(std::uint32_t, std::span<const std::byte>, std::uint32_t) {
+    void ProbeBufferData(std::uint32_t, const std::size_t byteSize, const std::span<const std::byte> data, std::uint32_t) {
         ++resourceCommandState.uploads;
+        if (data.empty())
+            resourceCommandState.emptyBufferBytes = byteSize;
     }
 
     void ProbeVertexAttributePointer(std::uint32_t, std::int32_t, std::uint32_t, std::uint8_t, std::int32_t, std::uintptr_t) {}
@@ -173,17 +176,34 @@ namespace {
         std::uint64_t target{0};
     };
 
+    [[nodiscard]] RenderMemoryPlacement PlacementFor(const RenderMemoryCostPlan &plan, const std::uint64_t attempt) {
+        return {.pool = {{1}, attempt},
+                .scope = {1, 1},
+                .attempt = {attempt},
+                .memoryClass = plan.memoryClass,
+                .compatibility = plan.compatibility,
+                .provenance = plan.provenance,
+                .budgetRevision = 1,
+                .payloadBytes = plan.payloadBytes,
+                .requiredBytes = plan.requiredBytes,
+                .backingBytes = plan.requiredBytes,
+                .allocationClass = plan.allocationClass};
+    }
+
     /** @brief Creates one triangle's generic buffer and mesh resources. */
     void CreateMeshResources(IRenderBackend &backend, ResourceInstances &resources) {
         const std::array<std::byte, sizeof(MeshVertex) * 3> vertices{};
         const std::array<std::byte, sizeof(std::uint32_t) * 3> indices{};
-        auto vertex = backend.CreateBuffer({.byteSize = vertices.size(),
-                                            .usage = RenderBufferUsage::Vertex,
-                                            .access = RenderBufferAccess::DeviceLocal},
-                                           vertices);
-        auto index =
-            backend.CreateBuffer({.byteSize = indices.size(), .usage = RenderBufferUsage::Index, .access = RenderBufferAccess::DeviceLocal},
-                                 indices);
+        const RenderBufferDescriptor vertexDescriptor{.byteSize = vertices.size(),
+                                                      .usage = RenderBufferUsage::Vertex,
+                                                      .access = RenderBufferAccess::DeviceLocal};
+        const RenderBufferDescriptor indexDescriptor{.byteSize = indices.size(),
+                                                     .usage = RenderBufferUsage::Index,
+                                                     .access = RenderBufferAccess::DeviceLocal};
+        const auto vertexPlan = backend.QueryBufferMemoryCost(vertexDescriptor).Value();
+        const auto indexPlan = backend.QueryBufferMemoryCost(indexDescriptor).Value();
+        auto vertex = backend.CreateBuffer(vertexDescriptor, {}, PlacementFor(vertexPlan, 1));
+        auto index = backend.CreateBuffer(indexDescriptor, indices, PlacementFor(indexPlan, 2));
         Check(vertex.HasValue() && index.HasValue());
         auto mesh = backend.CreateMesh({.vertexBuffer = {{1}, 1, 1},
                                         .indexBuffer = {{1}, 2, 1},
@@ -206,8 +226,10 @@ namespace {
         const RenderTextureDescriptor depthDescriptor{.extent = {64, 32},
                                                       .format = RenderTextureFormat::Depth24Stencil8,
                                                       .usage = RenderTextureUsage::RenderAttachment};
-        auto color = backend.CreateTexture(colorDescriptor);
-        auto depth = backend.CreateTexture(depthDescriptor);
+        const auto colorPlan = backend.QueryTextureMemoryCost(colorDescriptor).Value();
+        const auto depthPlan = backend.QueryTextureMemoryCost(depthDescriptor).Value();
+        auto color = backend.CreateTexture(colorDescriptor, {}, PlacementFor(colorPlan, 3));
+        auto depth = backend.CreateTexture(depthDescriptor, {}, PlacementFor(depthPlan, 4));
         Check(color.HasValue() && depth.HasValue());
         auto colorView = backend.CreateTextureView({.texture = {{1}, 3, 1},
                                                     .format = RenderTextureFormat::Rgba8Unorm,
@@ -236,6 +258,7 @@ namespace {
         Check(resourceCommandState.generatedTextures == 2);
         Check(resourceCommandState.generatedFramebuffers == 1);
         Check(resourceCommandState.uploads == 2);
+        Check(resourceCommandState.emptyBufferBytes == sizeof(MeshVertex) * 3);
         Check(resourceCommandState.attachments == 2);
         resourceCommandState.framebufferComplete = false;
         auto incomplete = backend.CreateRenderTarget(descriptor, resources.colorView, resources.depthView);

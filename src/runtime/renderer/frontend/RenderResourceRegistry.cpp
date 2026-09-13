@@ -58,6 +58,7 @@ namespace Horo::Render::Detail {
         entry.dependentPins = 0;
         entry.submissionPins = 0;
         entry.backendInstance = 0;
+        entry.memoryAllocation.reset();
         entry.operation = ResourceOperationId{nextOperation_++};
         entry.dependencies.assign(dependencies.begin(), dependencies.end());
         entry.retirementQueued = false;
@@ -134,7 +135,8 @@ namespace Horo::Render::Detail {
     }
 
     Result<void> RenderResourceRegistry::Publish(const RenderResourceClass resourceClass, const RenderResourceIdentity identity,
-                                                 const std::uint64_t backendInstance) {
+                                                 const std::uint64_t backendInstance,
+                                                 const std::optional<RenderMemoryAllocationId> memoryAllocation) {
         auto validated = Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<void>::Failure(validated.ErrorValue());
@@ -149,6 +151,7 @@ namespace Horo::Render::Detail {
                 RegistryError(FrontendErrors::ResourceBackendInstanceInvalid, "A ready resource requires a backend instance identity."));
         }
         entry.backendInstance = backendInstance;
+        entry.memoryAllocation = memoryAllocation;
         entry.state = RenderResourceState::Ready;
         --pendingRequests_;
         CompleteOperation(entry.operation, std::nullopt);
@@ -410,9 +413,10 @@ namespace Horo::Render::Detail {
         }
         entry.dependencies.clear();
         if (entry.backendInstance != 0 && releaseBackendResource_) {
-            releaseBackendResource_(entry.resourceClass, entry.backendInstance);
+            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation);
         }
         entry.backendInstance = 0;
+        entry.memoryAllocation.reset();
         entry.operation = {};
         entry.state = RenderResourceState::Retired;
         entry.retirementQueued = false;

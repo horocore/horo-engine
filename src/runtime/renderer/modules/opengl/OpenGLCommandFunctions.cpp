@@ -29,8 +29,9 @@ namespace Horo::Render::Detail {
             glBindBuffer(target, object);
         }
 
-        void ProductionBufferData(const std::uint32_t target, const std::span<const std::byte> data, const std::uint32_t usage) {
-            glBufferData(target, static_cast<GLsizeiptr>(data.size()), data.data(), usage);
+        void ProductionBufferData(const std::uint32_t target, const std::size_t byteSize, const std::span<const std::byte> data,
+                                  const std::uint32_t usage) {
+            glBufferData(target, static_cast<GLsizeiptr>(byteSize), data.empty() ? nullptr : data.data(), usage);
         }
 
         void ProductionGenerateVertexArrays(const std::int32_t count, std::uint32_t *objects) {
@@ -73,7 +74,8 @@ namespace Horo::Render::Detail {
 
         void ProductionTextureImage(const OpenGLTextureImageDescriptor &descriptor) {
             glTexImage2D(descriptor.target, descriptor.level, descriptor.internalFormat, descriptor.width, descriptor.height,
-                         descriptor.border, descriptor.format, descriptor.type, nullptr);
+                         descriptor.border, descriptor.format, descriptor.type,
+                         descriptor.initialData.empty() ? nullptr : descriptor.initialData.data());
         }
 
         void ProductionGenerateFramebuffers(const std::int32_t count, std::uint32_t *objects) {

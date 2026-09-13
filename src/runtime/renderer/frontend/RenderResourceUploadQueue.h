@@ -5,6 +5,7 @@
 #include "Horo/Runtime/Render/Texture.h"
 #include "RenderResourceRegistry.h"
 
+#include <algorithm>
 #include <deque>
 #include <optional>
 #include <vector>
@@ -29,6 +30,8 @@ namespace Horo::Render::Detail {
             RenderTextureViewDescriptor textureView;
             RenderTargetDescriptor renderTarget;
             std::vector<std::byte> initialData;
+            RenderMemoryReservationId memoryReservation;
+            RenderMemoryPlacement memoryPlacement;
             std::optional<RenderResourceIdentity> replacedMesh;
         };
 
@@ -39,11 +42,16 @@ namespace Horo::Render::Detail {
         }
 
         void EnqueueBuffer(const RenderResourceIdentity identity, const RenderBufferDescriptor &descriptor,
-                           const std::span<const std::byte> initialData) {
-            Request request{.kind = RequestKind::Buffer, .identity = identity, .buffer = descriptor};
+                           const std::span<const std::byte> initialData, const RenderMemoryReservationId memoryReservation,
+                           const RenderMemoryPlacement &memoryPlacement) {
+            Request request{.kind = RequestKind::Buffer,
+                            .identity = identity,
+                            .buffer = descriptor,
+                            .memoryReservation = memoryReservation,
+                            .memoryPlacement = memoryPlacement};
             request.initialData.assign(initialData.begin(), initialData.end());
-            pendingBytes_ += request.initialData.size();
             requests_.push_back(std::move(request));
+            pendingBytes_ += requests_.back().initialData.size();
         }
 
         void EnqueueMesh(const RenderResourceIdentity identity, const RenderMeshDescriptor &descriptor,
@@ -51,8 +59,17 @@ namespace Horo::Render::Detail {
             requests_.push_back(Request{.kind = RequestKind::Mesh, .identity = identity, .mesh = descriptor, .replacedMesh = replacedMesh});
         }
 
-        void EnqueueTexture(const RenderResourceIdentity identity, const RenderTextureDescriptor &descriptor) {
-            requests_.push_back(Request{.kind = RequestKind::Texture, .identity = identity, .texture = descriptor});
+        void EnqueueTexture(const RenderResourceIdentity identity, const RenderTextureDescriptor &descriptor,
+                            const std::span<const std::byte> initialData, const RenderMemoryReservationId memoryReservation,
+                            const RenderMemoryPlacement &memoryPlacement) {
+            Request request{.kind = RequestKind::Texture,
+                            .identity = identity,
+                            .texture = descriptor,
+                            .memoryReservation = memoryReservation,
+                            .memoryPlacement = memoryPlacement};
+            request.initialData.assign(initialData.begin(), initialData.end());
+            requests_.push_back(std::move(request));
+            pendingBytes_ += requests_.back().initialData.size();
         }
 
         void EnqueueTextureView(const RenderResourceIdentity identity, const RenderTextureViewDescriptor &descriptor) {
@@ -86,6 +103,16 @@ namespace Horo::Render::Detail {
             Request request = std::move(requests_.front());
             requests_.pop_front();
             pendingBytes_ -= request.initialData.size();
+            return request;
+        }
+
+        [[nodiscard]] std::optional<Request> Cancel(const RenderResourceIdentity identity) {
+            const auto found = std::ranges::find(requests_, identity, &Request::identity);
+            if (found == requests_.end())
+                return std::nullopt;
+            Request request = std::move(*found);
+            pendingBytes_ -= request.initialData.size();
+            requests_.erase(found);
             return request;
         }
 

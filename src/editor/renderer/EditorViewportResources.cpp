@@ -32,10 +32,11 @@ namespace Horo::Editor {
             return Result<bool>::Failure(state.ErrorValue());
         }
 
-        [[nodiscard]] Result<bool> AdvanceTexture(Render::RenderFrontend &frontend, const Render::RenderTextureDescriptor &descriptor,
-                                                  Render::RenderTextureHandle &handle, Render::ResourceOperationId &operation) {
+        [[nodiscard]] Result<bool> AdvanceTexture(Render::RenderFrontend &frontend, const Render::RenderMemoryScopeId memoryScope,
+                                                  const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureHandle &handle,
+                                                  Render::ResourceOperationId &operation) {
             if (!handle.IsValid()) {
-                auto created = frontend.CreateTexture(descriptor);
+                auto created = frontend.CreateTexture(memoryScope, descriptor);
                 if (created.HasError())
                     return Result<bool>::Failure(created.ErrorValue());
                 handle = created.Value().handle;
@@ -70,7 +71,7 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    EditorViewportResources::EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig config) noexcept
+    EditorViewportResources::EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept
         : frontend_(&frontend), config_(config) {}
 
     Result<std::optional<Render::RenderTargetHandle>> EditorViewportResources::Prepare(const Render::RenderSceneView &scene,
@@ -212,7 +213,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(
                 MakeViewportError(RendererErrors::ViewportGeometryCreationFailed, "Viewport mesh exceeds generic resource count limits."));
         }
-        auto vertex = frontend_->CreateBuffer({.byteSize = resource.vertices.size_bytes(),
+        auto vertex = frontend_->CreateBuffer(config_.memoryScope,
+                                              {.byteSize = resource.vertices.size_bytes(),
                                                .usage = Render::RenderBufferUsage::Vertex,
                                                .access = Render::RenderBufferAccess::DeviceLocal},
                                               std::as_bytes(resource.vertices));
@@ -220,7 +222,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(vertex.ErrorValue());
         resident.vertexBuffer = vertex.Value().handle;
         resident.vertexOperation = vertex.Value().operation;
-        auto index = frontend_->CreateBuffer({.byteSize = resource.indices.size_bytes(),
+        auto index = frontend_->CreateBuffer(config_.memoryScope,
+                                             {.byteSize = resource.indices.size_bytes(),
                                               .usage = Render::RenderBufferUsage::Index,
                                               .access = Render::RenderBufferAccess::DeviceLocal},
                                              std::as_bytes(resource.indices));
@@ -304,13 +307,14 @@ namespace Horo::Editor {
         using enum Render::RenderTextureUsage;
         const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
         const auto color =
-            AdvanceTexture(*frontend_,
+            AdvanceTexture(*frontend_, config_.memoryScope,
                            {.extent = extent, .format = Render::RenderTextureFormat::Rgba8Unorm, .usage = Sampled | RenderAttachment},
                            resources.colorTexture, resources.colorTextureOperation);
         if (color.HasError())
             return Result<bool>::Failure(color.ErrorValue());
-        const auto depth = AdvanceTexture(*frontend_, {.extent = extent, .format = config_.depthFormat, .usage = RenderAttachment},
-                                          resources.depthTexture, resources.depthTextureOperation);
+        const auto depth =
+            AdvanceTexture(*frontend_, config_.memoryScope, {.extent = extent, .format = config_.depthFormat, .usage = RenderAttachment},
+                           resources.depthTexture, resources.depthTextureOperation);
         if (depth.HasError())
             return Result<bool>::Failure(depth.ErrorValue());
         return Result<bool>::Success(color.Value() && depth.Value());
@@ -345,7 +349,7 @@ namespace Horo::Editor {
         using enum Render::RenderTextureUsage;
         constexpr Render::FramebufferExtent shadowExtent{EditorViewportDirectionalShadowMapResolution,
                                                          EditorViewportDirectionalShadowMapResolution};
-        if (const auto textureReady = AdvanceTexture(*frontend_,
+        if (const auto textureReady = AdvanceTexture(*frontend_, config_.memoryScope,
                                                      {.extent = shadowExtent,
                                                       .format = Render::RenderTextureFormat::Depth32Float,
                                                       .usage = Sampled | RenderAttachment},

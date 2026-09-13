@@ -286,7 +286,16 @@ namespace {
         Check(!backend->Capabilities().supportsMeshResources);
         const auto buffer =
             backend->CreateBuffer({.byteSize = bytes.size(), .usage = RenderBufferUsage::Vertex, .access = RenderBufferAccess::DeviceLocal},
-                                  bytes);
+                                  bytes,
+                                  {.pool = {{1}, 1},
+                                   .scope = {1, 1},
+                                   .attempt = {1},
+                                   .compatibility = {1},
+                                   .budgetRevision = 1,
+                                   .payloadBytes = bytes.size(),
+                                   .requiredBytes = bytes.size(),
+                                   .backingBytes = bytes.size(),
+                                   .allocationClass = RenderMemoryAllocationClass::Dedicated});
         Check(buffer.HasError());
         Check(buffer.ErrorValue().code.Value() == "render.opengl.unsupported_resource_operation");
         const auto mesh = backend->CreateMesh({}, 1, 2);

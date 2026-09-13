@@ -805,6 +805,8 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontend.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
+        runtime/renderer/frontend/RenderMemoryBudget.cpp
+        runtime/renderer/frontend/RenderMemoryBudgetErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
