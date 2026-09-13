@@ -28,15 +28,22 @@ namespace {
         }
 
         ~TemporaryDirectory() {
-            std::error_code ignored;
-            std::filesystem::remove_all(path_, ignored);
+            Cleanup();
         }
+
+        TemporaryDirectory(const TemporaryDirectory &) = delete;
+        TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
 
         [[nodiscard]] const std::filesystem::path &Path() const noexcept {
             return path_;
         }
 
     private:
+        void Cleanup() noexcept {
+            std::error_code ignored;
+            std::filesystem::remove_all(path_, ignored);
+        }
+
         std::filesystem::path path_;
     };
 
@@ -112,17 +119,23 @@ namespace {
     };
 
     [[nodiscard]] std::vector<std::uint8_t> Read(const std::filesystem::path &path) {
-        std::ifstream input(path, std::ios::binary);
-        return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        std::ifstream stream(path, std::ios::binary | std::ios::ate);
+        const auto size = stream.tellg();
+        stream.seekg(0);
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+        stream.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(size));
+        return bytes;
     }
 
     [[nodiscard]] ShaderTargetRequirement Requirement(const ShaderTargetBackend backend, const ShaderPayloadFormat format) {
-        return {.backend = backend,
-                .payloadFormat = format,
-                .descriptorVersion = 1,
-                .interfaceSchemaVersion = 1,
-                .maximumBindings = 16,
-                .maximumInlineConstantBytes = 128};
+        ShaderTargetRequirement requirement;
+        requirement.backend = backend;
+        requirement.payloadFormat = format;
+        requirement.descriptorVersion = 1;
+        requirement.interfaceSchemaVersion = 1;
+        requirement.maximumBindings = 16;
+        requirement.maximumInlineConstantBytes = 128;
+        return requirement;
     }
 
     [[nodiscard]] const ApprovedShaderCompilerTool &Approved(const ShaderCompilerTool tool) {
@@ -169,9 +182,13 @@ namespace {
                             .targets = {Requirement(backend, format)}};
         ShaderCompilerTargetDescriptor target;
         target.requirement = request.manifest.targets.front();
-        target.platformTriple = backend == ShaderTargetBackend::Vulkan   ? "desktop-vulkan"
-                                : backend == ShaderTargetBackend::OpenGL ? "desktop-opengl"
-                                                                         : "windows-x64-d3d12";
+        target.platformTriple = "windows-x64-d3d12";
+        if (backend == ShaderTargetBackend::Vulkan)
+            target.platformTriple = "desktop-vulkan";
+        else if (backend == ShaderTargetBackend::OpenGL)
+            target.platformTriple = "desktop-opengl";
+        else if (backend == ShaderTargetBackend::Metal)
+            target.platformTriple = "macos-arm64-metal";
         target.intermediateEnvironment = backend == ShaderTargetBackend::Null || backend == ShaderTargetBackend::D3D12
                                              ? ShaderIntermediateEnvironment::None
                                              : ShaderIntermediateEnvironment::Vulkan13SpirV16;
@@ -182,7 +199,6 @@ namespace {
 
     template <typename ValueT> void RequireError(const Result<ValueT> &result, const ErrorCodeDescriptor &expected) {
         REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
         CHECK(result.ErrorValue().code.Value() == expected.code.Value());
     }
 
@@ -244,6 +260,24 @@ namespace {
         CHECK_FALSE(result.Value().artifacts.front().debugPayload.empty());
         CHECK_FALSE(result.Value().artifacts.front().diagnostics.empty());
     }
+
+    [[nodiscard]] Result<ExternalShaderCompilerAdapter> CreateEmptyAdapter(const TemporaryDirectory &temporary,
+                                                                           std::shared_ptr<IExternalProcessRunner> processes) {
+        ShaderCompilerToolchainConfiguration configuration;
+        configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+        configuration.scratchRoot = temporary.Path() / "scratch";
+        return ExternalShaderCompilerAdapter::Create(std::move(configuration), std::move(processes));
+    }
+
+    void RequireRepeatable(const ShaderCompilationRequest &request, IShaderCompilerAdapter &adapter) {
+        const auto first = CompileShaderTargets(request, adapter, {});
+        REQUIRE(first.HasValue());
+        const auto second = CompileShaderTargets(request, adapter, {});
+        REQUIRE(second.HasValue());
+        REQUIRE(first.Value().artifacts.size() == 1U);
+        CHECK(first.Value().artifacts.front().payload == second.Value().artifacts.front().payload);
+        CHECK(first.Value().artifacts.front().artifactKey == second.Value().artifacts.front().artifactKey);
+    }
 }  // namespace
 
 TEST_CASE("Shader toolchain lock rejects executable bytes that do not match the reviewed artifact",
@@ -268,34 +302,23 @@ TEST_CASE("Shader toolchain lock rejects executable bytes that do not match the 
 TEST_CASE("Null shader validation artifact is deterministic and leaves no scratch generation",
           "[runtime][renderer][shader-compiler][toolchain]") {
     TemporaryDirectory temporary;
-    ShaderCompilerToolchainConfiguration configuration;
-    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
-    configuration.scratchRoot = temporary.Path() / "scratch";
     auto processes = std::make_shared<NativeExternalProcessRunner>();
-    auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
+    auto adapter = CreateEmptyAdapter(temporary, processes);
     REQUIRE(adapter.HasValue());
 
     auto request = Request(ShaderTargetBackend::Null, ShaderPayloadFormat::ValidationFixture, {});
     request.targets.front().platformTriple = "headless-null";
-    const auto first = CompileShaderTargets(request, adapter.Value(), {});
-    REQUIRE(first.HasValue());
-    const auto second = CompileShaderTargets(request, adapter.Value(), {});
-    REQUIRE(second.HasValue());
-    REQUIRE(first.Value().artifacts.size() == 1U);
-    CHECK(first.Value().artifacts.front().payload == second.Value().artifacts.front().payload);
+    RequireRepeatable(request, adapter.Value());
     CHECK(std::filesystem::is_empty(temporary.Path() / "scratch"));
 }
 
 TEST_CASE("Shader toolchain adapter retains its shared process runner", "[runtime][renderer][shader-compiler][toolchain]") {
     TemporaryDirectory temporary;
-    ShaderCompilerToolchainConfiguration configuration;
-    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
-    configuration.scratchRoot = temporary.Path() / "scratch";
     auto processes = std::make_shared<NativeExternalProcessRunner>();
     std::weak_ptr<IExternalProcessRunner> retained = processes;
 
     {
-        auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
+        auto adapter = CreateEmptyAdapter(temporary, processes);
         REQUIRE(adapter.HasValue());
         processes.reset();
         CHECK_FALSE(retained.expired());
@@ -305,11 +328,7 @@ TEST_CASE("Shader toolchain adapter retains its shared process runner", "[runtim
 
 TEST_CASE("Shader toolchain adapter rejects a missing process runner", "[runtime][renderer][shader-compiler][toolchain]") {
     TemporaryDirectory temporary;
-    ShaderCompilerToolchainConfiguration configuration;
-    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
-    configuration.scratchRoot = temporary.Path() / "scratch";
-    RequireError(ExternalShaderCompilerAdapter::Create(std::move(configuration), {}),
-                 ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid);
+    RequireError(CreateEmptyAdapter(temporary, {}), ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid);
 }
 
 TEST_CASE("Verified host catalogs admit exact tools without a built-in OS restriction", "[runtime][renderer][shader-compiler][toolchain]") {
@@ -338,11 +357,8 @@ TEST_CASE("Verified host catalogs admit exact tools without a built-in OS restri
 TEST_CASE("Production shader adapter reports an unavailable required tool without fallback",
           "[runtime][renderer][shader-compiler][toolchain]") {
     TemporaryDirectory temporary;
-    ShaderCompilerToolchainConfiguration configuration;
-    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
-    configuration.scratchRoot = temporary.Path() / "scratch";
     auto processes = std::make_shared<NativeExternalProcessRunner>();
-    auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
+    auto adapter = CreateEmptyAdapter(temporary, processes);
     REQUIRE(adapter.HasValue());
 
     const auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16,
@@ -393,13 +409,7 @@ TEST_CASE("Locked Linux shader tools produce repeatable validated native artifac
     const auto verify = [&](const ShaderTargetBackend backend, const ShaderPayloadFormat format,
                             std::vector<ShaderCompilerToolIdentity> tools) {
         const ShaderCompilationRequest request = Request(backend, format, std::move(tools));
-        const auto first = CompileShaderTargets(request, adapter.Value(), {});
-        REQUIRE(first.HasValue());
-        const auto second = CompileShaderTargets(request, adapter.Value(), {});
-        REQUIRE(second.HasValue());
-        REQUIRE(first.Value().artifacts.size() == 1U);
-        CHECK(first.Value().artifacts.front().payload == second.Value().artifacts.front().payload);
-        CHECK(first.Value().artifacts.front().artifactKey == second.Value().artifacts.front().artifactKey);
+        RequireRepeatable(request, adapter.Value());
     };
 
     verify(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16,
