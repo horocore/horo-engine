@@ -143,7 +143,7 @@ namespace Horo::Render {
      * All methods and destruction must run serially on one host-declared render-capable
      * thread. The frontend and its frame scope are not thread-safe.
      */
-    class RenderFrontend final {
+    class RenderFrontend final {  // NOSONAR(cpp:S1448) Cohesive public facade for one renderer frontend lifetime.
     public:
         /**
          * @brief Creates and initializes the selected backend from a sealed registry.
@@ -158,7 +158,7 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<RenderFrontend>> Create(const RenderBackendRegistry &registry,
                                                                             const RenderBackendId &backendId,
                                                                             const RenderBackendConfig &config,
-                                                                            RenderResourceUploadLimits uploadLimits = {},
+                                                                            const RenderResourceUploadLimits &uploadLimits = {},
                                                                             const RenderFrontendMemoryConfig &memoryConfig = {},
                                                                             const RenderResourceRetirementLimits &retirementLimits = {});
 
@@ -331,7 +331,7 @@ namespace Horo::Render {
 
     public:
         RenderFrontend(std::unique_ptr<IRenderBackend> backend, RenderResourceOwnerId resourceOwner,
-                       RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                       const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
                        const RenderFrontendMemoryConfig &memoryConfig, const RenderResourceRetirementLimits &retirementLimits,
                        ConstructionKey);
 

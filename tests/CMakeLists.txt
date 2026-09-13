@@ -505,9 +505,11 @@ target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
 
 add_executable(HoroPrefabTests
+        unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
+        unit/runtime/prefab/PrefabSourceResolverTests.cpp
 )
 target_compile_features(HoroPrefabTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTests PRIVATE HoroEngine::PrefabAuthoring)
@@ -1266,7 +1268,21 @@ add_executable(HoroShaderManifestTests
         unit/runtime/renderer/ShaderManifestTests.cpp
 )
 target_compile_features(HoroShaderManifestTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderManifestTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroShaderManifestTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroShaderReflectionTests
+        unit/runtime/renderer/ShaderReflectionTests.cpp
+)
+target_compile_features(HoroShaderReflectionTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderReflectionTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroShaderReflectionTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroShaderCompilerPipelineTests
+        unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
+        unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
+)
+target_compile_features(HoroShaderCompilerPipelineTests PRIVATE cxx_std_20)
+target_include_directories(HoroShaderCompilerPipelineTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroShaderCompilerPipelineTests PRIVATE HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
 add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderFrontendTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
@@ -1868,6 +1884,8 @@ set(HORO_CATCH_TEST_TARGETS
         HoroTemporalHistoryTests
         HoroRenderResourceDescriptorTests
         HoroShaderManifestTests
+        HoroShaderReflectionTests
+        HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests
         HoroRenderMemoryBudgetTests

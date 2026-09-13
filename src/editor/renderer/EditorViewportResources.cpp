@@ -48,7 +48,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceTexture(Render::RenderFrontend &frontend, const Render::RenderMemoryScopeId memoryScope,
                                                   const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureHandle &handle,
                                                   Render::ResourceOperationId &operation) {
-            return AdvanceResource(frontend, handle, operation, [&] {
+            return AdvanceResource(frontend, handle, operation, [&frontend, memoryScope, &descriptor] {
                 return frontend.CreateTexture(memoryScope, descriptor);
             });
         }
@@ -56,14 +56,14 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> AdvanceTextureView(Render::RenderFrontend &frontend,
                                                       const Render::RenderTextureViewDescriptor &descriptor,
                                                       Render::RenderTextureViewHandle &handle, Render::ResourceOperationId &operation) {
-            return AdvanceResource(frontend, handle, operation, [&] {
+            return AdvanceResource(frontend, handle, operation, [&frontend, &descriptor] {
                 return frontend.CreateTextureView(descriptor);
             });
         }
 
         [[nodiscard]] Result<bool> AdvanceRenderTarget(Render::RenderFrontend &frontend, const Render::RenderTargetDescriptor &descriptor,
                                                        Render::RenderTargetHandle &handle, Render::ResourceOperationId &operation) {
-            return AdvanceResource(frontend, handle, operation, [&] {
+            return AdvanceResource(frontend, handle, operation, [&frontend, &descriptor] {
                 return frontend.CreateRenderTarget(descriptor);
             });
         }

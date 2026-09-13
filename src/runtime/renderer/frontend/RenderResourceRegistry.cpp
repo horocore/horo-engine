@@ -512,7 +512,7 @@ namespace Horo::Render::Detail {
             entry.generationExhausted = true;
         } else {
             ++entry.generation;
-            freeSlots_.push_back(static_cast<std::uint32_t>(slot));
+            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
         }
     }
 
