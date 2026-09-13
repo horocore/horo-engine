@@ -8,12 +8,16 @@
 #include "Horo/Application/ProjectVersion.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
+#include "Horo/Gameplay/GameAssetTypeRegistry.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabLimits.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,6 +77,53 @@ namespace Horo::Prefab {
         [[nodiscard]] bool operator==(const PrefabDocumentData &) const noexcept = default;
     };
 
+    /** @brief Compatibility of preserved project-owned data with the currently available provider snapshot. */
+    enum class PrefabProviderStatus : std::uint8_t {
+        Current,
+        Missing,
+        MigrationRequired,
+        IncompatibleSchema,
+    };
+
+    /** @brief Provider compatibility for one preserved component occurrence. */
+    struct PrefabComponentProviderInspection final {
+        LocalObjectId object;
+        PrefabComponentInstanceId instance;
+        Gameplay::ComponentTypeId type;
+        PrefabProviderStatus status{PrefabProviderStatus::Missing};
+    };
+
+    /** @brief Provider compatibility for one preserved behavior occurrence. */
+    struct PrefabBehaviorProviderInspection final {
+        LocalObjectId object;
+        Gameplay::BehaviorInstanceId instance;
+        Gameplay::BehaviorTypeId type;
+        PrefabProviderStatus status{PrefabProviderStatus::Missing};
+    };
+
+    /** @brief One referenced project-owned asset payload supplied without transferring ownership. */
+    struct PrefabReferencedGameAsset final {
+        Assets::AssetId assetId;
+        const Gameplay::SerializedGameAsset *payload{};
+    };
+
+    /** @brief Provider compatibility for one referenced project-owned asset payload. */
+    struct PrefabGameAssetProviderInspection final {
+        Assets::AssetId assetId;
+        Gameplay::GameAssetTypeId type;
+        PrefabProviderStatus status{PrefabProviderStatus::Missing};
+    };
+
+    /** @brief Immutable editor/headless projection that never owns or mutates preserved payload bytes. */
+    struct PrefabProviderInspection final {
+        std::vector<PrefabComponentProviderInspection> components;
+        std::vector<PrefabBehaviorProviderInspection> behaviors;
+        std::vector<PrefabGameAssetProviderInspection> gameAssets;
+
+        /** @brief Reports whether any preserved payload cannot currently be reclaimed. @return True for a degraded projection. */
+        [[nodiscard]] bool IsDegraded() const noexcept;
+    };
+
     /** @brief Immutable validated source document suitable for save, import and cook boundaries. */
     class PrefabDocument final {
     public:
@@ -86,6 +137,19 @@ namespace Horo::Prefab {
 
         /** @brief Returns the immutable validated source data. @return Borrowed document data. */
         [[nodiscard]] const PrefabDocumentData &Data() const noexcept;
+
+        /**
+         * @brief Inspects preserved project payloads against one explicit provider snapshot without changing the document.
+         * @param components Available component schema registry.
+         * @param behaviors Available inert behavior descriptors.
+         * @param gameAssetTypes Available project-owned asset type registry.
+         * @param referencedGameAssets Referenced asset identities paired with their separately owned opaque authored payloads.
+         * @return Stable per-occurrence compatibility projection, or a validation error for malformed provider input.
+         */
+        [[nodiscard]] Result<PrefabProviderInspection> InspectProviders(
+            const Gameplay::ComponentRegistry &components, std::span<const Gameplay::BehaviorDescriptor> behaviors,
+            const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
+            std::span<const PrefabReferencedGameAsset> referencedGameAssets = {}) const;
 
     private:
         explicit PrefabDocument(PrefabDocumentData data) noexcept : data_(std::move(data)) {}
