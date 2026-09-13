@@ -509,6 +509,8 @@ namespace Horo::Physics {
             world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = fixedDelta, .solverJobs = batch});
         REQUIRE(failed.HasError());
         REQUIRE(failed.ErrorValue().code.Value() == PhysicsErrors::InitializationFailed.code.Value());
+        REQUIRE(failingTrace.completed.load(std::memory_order_acquire) == 2);
+        REQUIRE(siblingTrace.completed.load(std::memory_order_acquire) == 2);
         REQUIRE(world->State() == PhysicsWorldState::Failed);
         REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::FatalSolverError);
         REQUIRE(world->LastFailure().has_value());
