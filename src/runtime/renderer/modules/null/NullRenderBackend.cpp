@@ -94,8 +94,8 @@ namespace Horo::Render {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::NotInitialized, "Renderer backend is not initialized."));
                 }
-                const auto cost = QueryBufferMemoryCost(descriptor);
-                if (!descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
+                if (const auto cost = QueryBufferMemoryCost(descriptor);
+                    !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
                     !MatchesPlacement(cost.Value(), placement)) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null buffer realization request is invalid."));
@@ -121,9 +121,9 @@ namespace Horo::Render {
             Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
                                                 const RenderMemoryPlacement &placement) override {
                 const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
-                const auto cost = QueryTextureMemoryCost(descriptor);
-                if (!initialized_ || !bytes.has_value() || (!initialData.empty() && initialData.size() != *bytes) || cost.HasError() ||
-                    !MatchesPlacement(cost.Value(), placement))
+                if (const auto cost = QueryTextureMemoryCost(descriptor); !initialized_ || !bytes.has_value() ||
+                                                                          (!initialData.empty() && initialData.size() != *bytes) ||
+                                                                          cost.HasError() || !MatchesPlacement(cost.Value(), placement))
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture realization request is invalid."));
                 return NextResourceInstance();

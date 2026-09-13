@@ -101,8 +101,8 @@ namespace Horo::Editor {
             return Result<std::uintptr_t>::Failure(view.ErrorValue());
         }
         const auto processed = frontend_->ProcessResourceRequests();
-        const auto completed = frontend_->ResourceOperationResult(view.Value().operation);
-        if (processed.HasError() || completed.HasError()) {
+        if (const auto completed = frontend_->ResourceOperationResult(view.Value().operation);
+            processed.HasError() || completed.HasError()) {
             const Error error = processed.HasError() ? processed.ErrorValue() : completed.ErrorValue();
             static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
             static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
@@ -115,7 +115,7 @@ namespace Horo::Editor {
             return Result<std::uintptr_t>::Failure(identity.ErrorValue());
         }
         try {
-            textures_.push_back({identity.Value(), texture.Value().handle, view.Value().handle});
+            textures_.emplace_back(identity.Value(), texture.Value().handle, view.Value().handle);
         } catch (...) {  // NOSONAR(cpp:S2738)
             static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
             static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));

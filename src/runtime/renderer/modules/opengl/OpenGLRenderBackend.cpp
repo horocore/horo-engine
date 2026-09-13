@@ -87,7 +87,7 @@ namespace Horo::Render {
         }
 
         /** @brief OpenGL backend owning one presentation-port context lifecycle. */
-        class OpenGLRenderBackend final : public IRenderBackend {
+        class OpenGLRenderBackend final : public IRenderBackend {  // NOSONAR(cpp:S1448)
         public:
             OpenGLRenderBackend(IOpenGLPresentationPort &presentationPort, const OpenGLBackendOptions options,
                                 const Detail::OpenGLCommandFunctions &functions, std::shared_ptr<OpenGLContextLease> contextLease) noexcept
@@ -203,8 +203,8 @@ namespace Horo::Render {
                                                const RenderMemoryPlacement &placement) override {
                 if (!initialized_ || !functions_.HasResourceFunctions())
                     return ResourceUnavailable("OpenGL buffer creation is unavailable in the current backend state.");
-                const auto cost = QueryBufferMemoryCost(descriptor);
-                if (!descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
+                if (const auto cost = QueryBufferMemoryCost(descriptor);
+                    !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
                     !MatchesPlacement(cost.Value(), placement) ||
                     descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
                     return Result<std::uint64_t>::Failure(

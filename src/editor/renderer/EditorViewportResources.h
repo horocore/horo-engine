@@ -26,7 +26,7 @@ namespace Horo::Editor {
             std::uint32_t indexCount{0};
         };
 
-        EditorViewportResources(Render::RenderFrontend &frontend, EditorViewportResourceConfig config) noexcept;
+        EditorViewportResources(Render::RenderFrontend &frontend, const EditorViewportResourceConfig &config) noexcept;
 
         [[nodiscard]] Result<std::optional<Render::RenderTargetHandle>> Prepare(const Render::RenderSceneView &scene,
                                                                                 EditorViewportExtent requestedExtent);
