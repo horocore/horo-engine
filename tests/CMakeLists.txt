@@ -289,6 +289,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsCollisionSchemaTests.cpp
         unit/runtime/physics/PhysicsConstraintDescriptorTests.cpp
         unit/runtime/physics/PhysicsConvexHullCookTests.cpp
+        unit/runtime/physics/PhysicsTriangleMeshCookTests.cpp
         unit/runtime/physics/PhysicsCookedShapeDescriptorTests.cpp
         unit/runtime/physics/PhysicsDeterminismPolicyTests.cpp
         unit/runtime/physics/PhysicsDiagnosticsTests.cpp

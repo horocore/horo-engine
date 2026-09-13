@@ -49,6 +49,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor ShapeCookLimitExceeded;
     /** @brief Shape cooking was cooperatively cancelled before publication. */
     extern const ErrorCodeDescriptor ShapeCookCancelled;
+    /** @brief A cooked shape kind cannot be attached to the requested body motion mode. */
+    extern const ErrorCodeDescriptor ShapeMotionUnsupported;
     /** @brief A cooked Physics shape artifact is malformed or fails integrity validation. */
     extern const ErrorCodeDescriptor ShapeArtifactInvalid;
 }  // namespace Horo::Physics::PhysicsErrors
