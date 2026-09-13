@@ -6,8 +6,9 @@
 #include <array>
 #include <cstddef>
 #include <memory>
-#include <set>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Horo::Prefab {
@@ -47,6 +48,15 @@ namespace Horo::Prefab {
             return {hash == 0 ? 1 : hash};
         }
 
+        struct ExpandedKeyHash final {
+            /** @brief Hashes an expanded key for operation-local lookup; iteration order is never observed. */
+            [[nodiscard]] std::size_t operator()(const ExpandedPrefabObjectKey &key) const noexcept {
+                return static_cast<std::size_t>(HashIdentity(key).value);
+            }
+        };
+
+        using IdentityLookup = std::unordered_map<ExpandedPrefabObjectKey, PrefabSceneObjectId, ExpandedKeyHash>;
+
         /** @brief Finds a mapped object in source-key order. */
         [[nodiscard]] const PrefabSceneIdentityMapping *FindMapping(const std::span<const PrefabSceneIdentityMapping> mappings,
                                                                     const ExpandedPrefabObjectKey &source) noexcept {
@@ -71,6 +81,31 @@ namespace Horo::Prefab {
                     return !object && !component && !behavior && asset && request.assetTarget->IsValid();
             }
             return false;
+        }
+
+        /** @brief Rewrites all typed requests without publishing partial output on failure. */
+        [[nodiscard]] Result<std::vector<RewrittenPrefabReference>> RewriteReferences(
+            const std::span<const PrefabReferenceRewriteRequest> references, const IdentityLookup &lookup) {
+            std::vector<RewrittenPrefabReference> rewritten;
+            rewritten.reserve(references.size());
+            for (const PrefabReferenceRewriteRequest &request : references) {
+                if (!IsCanonical(request))
+                    return Result<std::vector<RewrittenPrefabReference>>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
+                const auto owner = lookup.find(request.owner);
+                if (owner == lookup.end())
+                    return Result<std::vector<RewrittenPrefabReference>>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
+
+                std::optional<PrefabSceneObjectId> target;
+                if (request.objectTarget) {
+                    const auto mappedTarget = lookup.find(*request.objectTarget);
+                    if (mappedTarget == lookup.end())
+                        return Result<std::vector<RewrittenPrefabReference>>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
+                    target = mappedTarget->second;
+                }
+                rewritten.push_back(
+                    {owner->second, request.kind, target, request.componentTarget, request.behaviorTarget, request.assetTarget});
+            }
+            return Result<std::vector<RewrittenPrefabReference>>::Success(std::move(rewritten));
         }
     }  // namespace
 
@@ -110,42 +145,30 @@ namespace Horo::Prefab {
         if (references.size() > limits.Policy().maximumReferencedAssets)
             return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::ReferenceCountExceeded));
 
-        std::set<PrefabSceneObjectId> identities;
+        std::unordered_set<std::uint64_t> identities;
+        identities.reserve(occupied.size());
         for (const PrefabSceneObjectId identity : occupied) {
-            if (!identity.IsValid() || !identities.insert(identity).second)
+            if (!identity.IsValid() || !identities.insert(identity.value).second)
                 return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::IdentityCollision));
         }
 
         std::vector<PrefabSceneIdentityMapping> mappings;
         mappings.reserve(candidate.Objects().size());
+        IdentityLookup lookup;
+        lookup.reserve(candidate.Objects().size());
         for (const ResolvedPrefabObject &object : candidate.Objects()) {
             const PrefabSceneObjectId scene = HashIdentity(object.key);
-            if (!identities.insert(scene).second)
+            if (!identities.insert(scene.value).second || !lookup.emplace(object.key, scene).second)
                 return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::IdentityCollision));
             mappings.push_back({object.key, object.sourcePrefab, scene});
         }
         std::ranges::sort(mappings, {}, &PrefabSceneIdentityMapping::source);
 
-        std::vector<RewrittenPrefabReference> rewritten;
-        rewritten.reserve(references.size());
-        for (const PrefabReferenceRewriteRequest &request : references) {
-            if (!IsCanonical(request))
-                return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
-            const PrefabSceneIdentityMapping *owner = FindMapping(mappings, request.owner);
-            if (owner == nullptr)
-                return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
-
-            std::optional<PrefabSceneObjectId> target;
-            if (request.objectTarget) {
-                const PrefabSceneIdentityMapping *mappedTarget = FindMapping(mappings, *request.objectTarget);
-                if (mappedTarget == nullptr)
-                    return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
-                target = mappedTarget->scene;
-            }
-            rewritten.push_back({owner->scene, request.kind, target, request.componentTarget, request.behaviorTarget, request.assetTarget});
-        }
+        auto rewritten = RewriteReferences(references, lookup);
+        if (rewritten.HasError())
+            return Result<PrefabSceneIdentityMap>::Failure(rewritten.ErrorValue());
 
         return Result<PrefabSceneIdentityMap>::Success(
-            PrefabSceneIdentityMap{candidate.Revision(), std::move(mappings), std::move(rewritten)});
+            PrefabSceneIdentityMap{candidate.Revision(), std::move(mappings), std::move(rewritten).Value()});
     }
 }  // namespace Horo::Prefab
