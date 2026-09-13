@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -44,6 +45,143 @@ namespace Horo::Prefab {
         /** @brief Checks whether an AssetId occurs in a validated unique dependency list. */
         [[nodiscard]] bool ContainsAsset(const std::vector<Assets::AssetId> &assets, const Assets::AssetId &asset) {
             return std::ranges::find(assets, asset) != assets.end();
+        }
+
+        [[nodiscard]] PrefabProviderStatus ToPrefabStatus(const Gameplay::ComponentInspectionStatus status) noexcept {
+            using enum Gameplay::ComponentInspectionStatus;
+            switch (status) {
+                case Current:
+                    return PrefabProviderStatus::Current;
+                case MigrationRequired:
+                    return PrefabProviderStatus::MigrationRequired;
+                case MissingDescriptor:
+                    return PrefabProviderStatus::Missing;
+                case UnsupportedOlderSchema:
+                case NewerSchema:
+                    return PrefabProviderStatus::IncompatibleSchema;
+            }
+            return PrefabProviderStatus::IncompatibleSchema;
+        }
+
+        [[nodiscard]] PrefabProviderStatus ToPrefabStatus(const Gameplay::GameAssetInspectionStatus status) noexcept {
+            using enum Gameplay::GameAssetInspectionStatus;
+            switch (status) {
+                case Current:
+                    return PrefabProviderStatus::Current;
+                case MissingDescriptor:
+                    return PrefabProviderStatus::Missing;
+                case OlderSchema:
+                case NewerSchema:
+                    return PrefabProviderStatus::IncompatibleSchema;
+            }
+            return PrefabProviderStatus::IncompatibleSchema;
+        }
+
+        [[nodiscard]] const Gameplay::BehaviorDescriptor *FindBehaviorDescriptor(
+            const std::span<const Gameplay::BehaviorDescriptor> descriptors, const Gameplay::BehaviorTypeId &type) noexcept {
+            const auto found = std::ranges::find(descriptors, type, &Gameplay::BehaviorDescriptor::typeId);
+            return found == descriptors.end() ? nullptr : std::to_address(found);
+        }
+
+        [[nodiscard]] bool BehaviorFieldsMatch(const Gameplay::BehaviorComponent &component,
+                                               const Gameplay::BehaviorDescriptor &descriptor) noexcept {
+            return std::ranges::all_of(component.fields, [&descriptor](const Gameplay::BehaviorField &field) {
+                const auto found = std::ranges::find(descriptor.fields, field.name, &Gameplay::BehaviorFieldDescriptor::name);
+                return found != descriptor.fields.end() && found->defaultValue.index() == field.value.index();
+            });
+        }
+
+        [[nodiscard]] Result<void> ValidateBehaviorDescriptors(const std::span<const Gameplay::BehaviorDescriptor> descriptors) {
+            std::unordered_set<std::string_view> types;
+            types.reserve(descriptors.size());
+            for (const Gameplay::BehaviorDescriptor &descriptor : descriptors) {
+                if (!descriptor.typeId.IsValid() || descriptor.schemaVersion == 0 || descriptor.displayName.empty() ||
+                    !types.emplace(descriptor.typeId.Value()).second)
+                    return Result<void>::Failure(MakeError(PrefabErrors::DocumentInvalid));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] PrefabProviderStatus InspectBehavior(const Gameplay::BehaviorComponent &component,
+                                                           const Gameplay::BehaviorDescriptor *descriptor,
+                                                           std::span<const Gameplay::BehaviorComponent> siblings) noexcept {
+            using enum PrefabProviderStatus;
+            if (descriptor == nullptr)
+                return Missing;
+            if (const std::size_t occurrenceCount = std::ranges::count(siblings, component.typeId, &Gameplay::BehaviorComponent::typeId);
+                component.schemaVersion != descriptor->schemaVersion || !BehaviorFieldsMatch(component, *descriptor) ||
+                (!descriptor->allowMultiple && occurrenceCount > 1))
+                return IncompatibleSchema;
+            return Current;
+        }
+
+        [[nodiscard]] Result<void> InspectObjectProviders(const PrefabObjectNode &object, const Gameplay::ComponentRegistry &components,
+                                                          const std::span<const Gameplay::BehaviorDescriptor> behaviors,
+                                                          PrefabProviderInspection &result) {
+            for (const RawComponentPayload &component : object.components) {
+                auto inspected = components.Inspect(component.component);
+                if (inspected.HasError())
+                    return Result<void>::Failure(inspected.ErrorValue());
+                result.components.emplace_back(object.localId, component.instance, component.component.typeId,
+                                               ToPrefabStatus(inspected.Value().status));
+            }
+            for (const Gameplay::BehaviorComponent &behavior : object.behaviors) {
+                result.behaviors.emplace_back(object.localId, behavior.instanceId, behavior.typeId,
+                                              InspectBehavior(behavior, FindBehaviorDescriptor(behaviors, behavior.typeId),
+                                                              object.behaviors));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateReferencedGameAssets(const PrefabDocumentData &document,
+                                                                const Assets::AssetRegistrySnapshot &assets,
+                                                                const std::span<const PrefabReferencedGameAsset> referencedGameAssets) {
+            std::vector<Assets::AssetId> identities;
+            identities.reserve(referencedGameAssets.size());
+            for (const PrefabReferencedGameAsset &asset : referencedGameAssets) {
+                if (const Assets::AssetRecord *record = assets.Find(asset.assetId);
+                    !asset.assetId.IsValid() || record == nullptr || !record->type.Value().starts_with("game.") ||
+                    !ContainsAsset(document.referencedAssets, asset.assetId) || ContainsAsset(identities, asset.assetId) ||
+                    (asset.payload != nullptr && asset.payload->typeId.Value() != record->type.Value()))
+                    return Result<void>::Failure(MakeError(PrefabErrors::ReferenceInvalid));
+                identities.emplace_back(asset.assetId);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] const PrefabReferencedGameAsset *FindReferencedGameAsset(const std::span<const PrefabReferencedGameAsset> assets,
+                                                                               const Assets::AssetId assetId) noexcept {
+            const auto found = std::ranges::find(assets, assetId, &PrefabReferencedGameAsset::assetId);
+            return found == assets.end() ? nullptr : std::to_address(found);
+        }
+
+        [[nodiscard]] Result<void> InspectGameAssetProviders(const PrefabDocumentData &document,
+                                                             const Assets::AssetRegistrySnapshot &assets,
+                                                             const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
+                                                             const std::span<const PrefabReferencedGameAsset> referencedGameAssets,
+                                                             PrefabProviderInspection &result) {
+            result.assets.reserve(document.referencedAssets.size());
+            for (const Assets::AssetId assetId : document.referencedAssets) {
+                const Assets::AssetRecord *record = assets.Find(assetId);
+                if (record == nullptr) {
+                    result.assets.emplace_back(assetId, std::nullopt, PrefabProviderStatus::Missing);
+                    continue;
+                }
+                if (!record->type.Value().starts_with("game.")) {
+                    result.assets.emplace_back(assetId, record->type, PrefabProviderStatus::Current);
+                    continue;
+                }
+                const PrefabReferencedGameAsset *asset = FindReferencedGameAsset(referencedGameAssets, assetId);
+                if (asset == nullptr || asset->payload == nullptr) {
+                    result.assets.emplace_back(assetId, record->type, PrefabProviderStatus::Missing);
+                    continue;
+                }
+                auto inspected = gameAssetTypes.Inspect(*asset->payload);
+                if (inspected.HasError())
+                    return Result<void>::Failure(inspected.ErrorValue());
+                result.assets.emplace_back(assetId, record->type, ToPrefabStatus(inspected.Value().status));
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Validates unique component occurrences and accounts for their dynamic bytes. */
@@ -237,5 +375,43 @@ namespace Horo::Prefab {
     /** @copydoc PrefabDocument::Data */
     const PrefabDocumentData &PrefabDocument::Data() const noexcept {
         return data_;
+    }
+
+    /** @copydoc PrefabProviderInspection::IsDegraded */
+    bool PrefabProviderInspection::IsDegraded() const noexcept {
+        const auto degraded = [](const auto &entry) {
+            return entry.status != PrefabProviderStatus::Current;
+        };
+        return std::ranges::any_of(components, degraded) || std::ranges::any_of(behaviors, degraded) ||
+               std::ranges::any_of(assets, degraded);
+    }
+
+    /** @copydoc PrefabDocument::InspectProviders */
+    Result<PrefabProviderInspection> PrefabDocument::InspectProviders(
+        const Assets::AssetRegistrySnapshot &assets, const Gameplay::ComponentRegistry &components,
+        const std::span<const Gameplay::BehaviorDescriptor> behaviors, const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
+        const std::span<const PrefabReferencedGameAsset> referencedGameAssets) const {
+        if (const auto validDescriptors = ValidateBehaviorDescriptors(behaviors); validDescriptors.HasError())
+            return Result<PrefabProviderInspection>::Failure(validDescriptors.ErrorValue());
+        if (const auto validAssets = ValidateReferencedGameAssets(data_, assets, referencedGameAssets); validAssets.HasError())
+            return Result<PrefabProviderInspection>::Failure(validAssets.ErrorValue());
+
+        PrefabProviderInspection result;
+        std::size_t componentCount{};
+        std::size_t behaviorCount{};
+        for (const PrefabObjectNode &object : data_.objects) {
+            componentCount += object.components.size();
+            behaviorCount += object.behaviors.size();
+        }
+        result.components.reserve(componentCount);
+        result.behaviors.reserve(behaviorCount);
+        for (const PrefabObjectNode &object : data_.objects) {
+            if (const auto inspectedObject = InspectObjectProviders(object, components, behaviors, result); inspectedObject.HasError())
+                return Result<PrefabProviderInspection>::Failure(inspectedObject.ErrorValue());
+        }
+        if (const auto inspectedAssets = InspectGameAssetProviders(data_, assets, gameAssetTypes, referencedGameAssets, result);
+            inspectedAssets.HasError())
+            return Result<PrefabProviderInspection>::Failure(inspectedAssets.ErrorValue());
+        return Result<PrefabProviderInspection>::Success(std::move(result));
     }
 }  // namespace Horo::Prefab
