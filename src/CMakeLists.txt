@@ -792,6 +792,7 @@ target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
 
 add_library(HoroShaderCompilerToolchain STATIC
         runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
+        runtime/renderer/toolchain/ShaderCompilerToolchainSupport.cpp
 )
 add_library(HoroEngine::ShaderCompilerToolchain ALIAS HoroShaderCompilerToolchain)
 target_compile_features(HoroShaderCompilerToolchain PUBLIC cxx_std_20)
