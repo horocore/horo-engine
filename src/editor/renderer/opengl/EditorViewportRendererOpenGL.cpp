@@ -3,6 +3,7 @@
 #include "OpenGLStateSnapshot.h"
 #include "OpenGLViewportResourceBridge.h"
 #include "OpenGLViewportShaders.h"
+#include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/grid/EditorViewportGridGeometry.h"
 #include "editor/screens/workspace/panels/viewport/visualizers/light/LightVisualizerGeometry.h"
@@ -14,6 +15,7 @@
 #include <glad/gl.h>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Horo::Editor {
     namespace {
@@ -75,7 +77,31 @@ namespace Horo::Editor {
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
         glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
         glGenVertexArrays(1, &gridVertexArray_);
-        glGenBuffers(1, &gridVertexBuffer_);
+        constexpr std::size_t gridBufferSize = sizeof(Math::Vec3) * (ViewportGridGeometry::MaxRegularVertices + 4);
+        const std::vector<std::byte> emptyGrid(gridBufferSize);
+        auto gridBuffer = frontend_->CreateBuffer(RenderMemoryScopes::ViewportResources,
+                                                  {.byteSize = gridBufferSize,
+                                                   .usage = Render::RenderBufferUsage::Vertex | Render::RenderBufferUsage::CopyDestination,
+                                                   .access = Render::RenderBufferAccess::HostVisible},
+                                                  std::span<const std::byte>{emptyGrid});
+        if (gridBuffer.HasError()) {
+            Shutdown();
+            return Result<void>::Failure(gridBuffer.ErrorValue());
+        }
+        gridVertexBufferHandle_ = gridBuffer.Value().handle;
+        const auto processed = frontend_->ProcessResourceRequests();
+        const auto completed = frontend_->ResourceOperationResult(gridBuffer.Value().operation);
+        const auto nativeBuffer = OpenGLViewportResourceBridge::ResolveBuffer(*frontend_, gridVertexBufferHandle_);
+        if (processed.HasError() || completed.HasError() || nativeBuffer.HasError()) {
+            Error error = nativeBuffer.ErrorValue();
+            if (processed.HasError())
+                error = processed.ErrorValue();
+            else if (completed.HasError())
+                error = completed.ErrorValue();
+            Shutdown();
+            return Result<void>::Failure(error);
+        }
+        gridVertexBuffer_ = nativeBuffer.Value();
         glBindVertexArray(gridVertexArray_);
         glBindBuffer(GL_ARRAY_BUFFER, gridVertexBuffer_);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, static_cast<GLsizei>(sizeof(Math::Vec3)), nullptr);
@@ -97,10 +123,10 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererOpenGL::Shutdown */
     void EditorViewportRendererOpenGL::Shutdown() noexcept {
         resources_.Shutdown();
-        if (gridVertexBuffer_ != 0) {
-            glDeleteBuffers(1, &gridVertexBuffer_);
-            gridVertexBuffer_ = 0;
-        }
+        if (gridVertexBufferHandle_.IsValid())
+            static_cast<void>(frontend_->ReleaseBuffer(gridVertexBufferHandle_));
+        gridVertexBufferHandle_ = {};
+        gridVertexBuffer_ = 0;
         if (gridVertexArray_ != 0) {
             glDeleteVertexArrays(1, &gridVertexArray_);
             gridVertexArray_ = 0;
@@ -280,7 +306,7 @@ namespace Horo::Editor {
         glDepthMask(GL_FALSE);
         glBindVertexArray(gridVertexArray_);
         glBindBuffer(GL_ARRAY_BUFFER, gridVertexBuffer_);
-        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(geometry.Lines().size_bytes()), geometry.Lines().data(), GL_DYNAMIC_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(geometry.Lines().size_bytes()), geometry.Lines().data());
         glUniformMatrix4fv(uniforms_.mvp, 1, GL_FALSE, viewProjection.Value().values.data());
         const Math::Mat4 identity = Math::Mat4::Identity();
         glUniformMatrix4fv(uniforms_.model, 1, GL_FALSE, identity.values.data());
@@ -326,7 +352,7 @@ namespace Horo::Editor {
             if (batch.positions.empty())
                 return;
             glBindBuffer(GL_ARRAY_BUFFER, gridVertexBuffer_);
-            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(batch.positions.size_bytes()), batch.positions.data(), GL_DYNAMIC_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(batch.positions.size_bytes()), batch.positions.data());
             glUniform3f(uniforms_.selectionColor, batch.color.x, batch.color.y, batch.color.z);
             const GLenum primitive = batch.topology == ViewportGridPrimitiveTopology::Triangles ? GL_TRIANGLES : GL_LINES;
             glDrawArrays(primitive, 0, static_cast<GLsizei>(batch.positions.size()));

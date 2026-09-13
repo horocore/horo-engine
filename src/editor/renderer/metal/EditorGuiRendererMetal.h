@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Runtime/Render/RenderFrontend.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "runtime/renderer/modules/metal/MetalBackendModule.h"
 
@@ -11,7 +12,8 @@ namespace Horo::Editor {
     class EditorGuiRendererMetal final : public IEditorGuiRenderer {
     public:
         /** @brief Borrows the SDL window and initialized runtime Metal bridge. */
-        EditorGuiRendererMetal(SDL_Window &window, Render::MetalEditorGraphicsBridge &graphicsBridge) noexcept;
+        EditorGuiRendererMetal(SDL_Window &window, Render::MetalEditorGraphicsBridge &graphicsBridge,
+                               Render::RenderFrontend &frontend) noexcept;
         ~EditorGuiRendererMetal() override;
 
         [[nodiscard]] Result<void> Initialize() override;

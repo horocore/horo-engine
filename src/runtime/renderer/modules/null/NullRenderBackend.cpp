@@ -13,6 +13,13 @@ namespace Horo::Render {
             return MakeError(descriptor, std::move(message));
         }
 
+        [[nodiscard]] bool MatchesPlacement(const RenderMemoryCostPlan &plan, const RenderMemoryPlacement &placement) noexcept {
+            return placement.IsValid() && placement.memoryClass == plan.memoryClass && placement.allocationClass == plan.allocationClass &&
+                   placement.provenance == plan.provenance && placement.compatibility == plan.compatibility &&
+                   placement.payloadBytes == plan.payloadBytes && placement.requiredBytes == plan.requiredBytes &&
+                   placement.offsetBytes == 0;
+        }
+
         /** @brief Headless backend that validates renderer lifecycle without acquiring GPU resources. */
         class NullRenderBackend final : public IRenderBackend {
         public:
@@ -51,14 +58,45 @@ namespace Horo::Render {
                 return capabilities_;
             }
 
+            /** @copydoc IRenderBackend::QueryBufferMemoryCost */
+            Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+                if (!initialized_ || !descriptor.IsValid())
+                    return Result<RenderMemoryCostPlan>::Failure(
+                        MakeBackendError(NullBackendErrors::InvalidConfig, "Null buffer memory requirement request is invalid."));
+                return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
+                                                              .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                              .provenance = RenderMemoryCostProvenance::Exact,
+                                                              .compatibility = RenderMemoryCompatibilityId{1},
+                                                              .payloadBytes = descriptor.byteSize,
+                                                              .requiredBytes = descriptor.byteSize,
+                                                              .alignment = 1});
+            }
+
+            /** @copydoc IRenderBackend::QueryTextureMemoryCost */
+            Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+                const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
+                if (!initialized_ || !bytes.has_value())
+                    return Result<RenderMemoryCostPlan>::Failure(
+                        MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture memory requirement request is invalid."));
+                return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
+                                                              .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                              .provenance = RenderMemoryCostProvenance::Exact,
+                                                              .compatibility = RenderMemoryCompatibilityId{2},
+                                                              .payloadBytes = *bytes,
+                                                              .requiredBytes = *bytes,
+                                                              .alignment = 1});
+            }
+
             /** @copydoc IRenderBackend::CreateBuffer */
-            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
-                                               const std::span<const std::byte> initialData) override {
+            Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                               const RenderMemoryPlacement &placement) override {
                 if (!initialized_) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::NotInitialized, "Renderer backend is not initialized."));
                 }
-                if (!descriptor.IsValid() || initialData.size() != descriptor.byteSize) {
+                if (const auto cost = QueryBufferMemoryCost(descriptor);
+                    !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
+                    !MatchesPlacement(cost.Value(), placement)) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null buffer realization request is invalid."));
                 }
@@ -79,8 +117,13 @@ namespace Horo::Render {
                 return NextResourceInstance();
             }
 
-            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor) override {
-                if (!initialized_ || !descriptor.IsValid())
+            /** @copydoc IRenderBackend::CreateTexture */
+            Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
+                                                const RenderMemoryPlacement &placement) override {
+                const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
+                if (const auto cost = QueryTextureMemoryCost(descriptor); !initialized_ || !bytes.has_value() ||
+                                                                          (!initialData.empty() && initialData.size() != *bytes) ||
+                                                                          cost.HasError() || !MatchesPlacement(cost.Value(), placement))
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture realization request is invalid."));
                 return NextResourceInstance();

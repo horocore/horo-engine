@@ -3,6 +3,7 @@
 #include "MetalViewportResourceBridge.h"
 #include "MetalViewportShaderTypes.h"
 #include "MetalViewportShaders.h"
+#include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/EditorViewportGridGeometry.h"
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Horo::Editor {
     namespace {
@@ -60,6 +62,7 @@ namespace Horo::Editor {
         __strong id<MTLDepthStencilState> gridDepthState{nil};
         __strong id<MTLSamplerState> shadowSampler{nil};
         __strong id<MTLBuffer> gridVertexBuffer{nil};
+        Render::RenderBufferHandle gridVertexBufferHandle;
         EditorViewportExtent requestedExtent{};
         EditorViewportGridOptions gridOptions{};
         EditorViewportLightVisualizerOptions lightVisualizerOptions{};
@@ -139,8 +142,28 @@ namespace Horo::Editor {
         gridDepthDescriptor.depthCompareFunction = MTLCompareFunctionLess;
         gridDepthDescriptor.depthWriteEnabled = NO;
         gridDepthState = [device newDepthStencilStateWithDescriptor:gridDepthDescriptor];
-        constexpr NSUInteger gridBufferSize = sizeof(Math::Vec3) * (ViewportGridGeometry::MaxRegularVertices + 4);
-        gridVertexBuffer = [device newBufferWithLength:gridBufferSize options:MTLResourceStorageModeShared];
+        constexpr std::size_t gridBufferSize = sizeof(Math::Vec3) * (ViewportGridGeometry::MaxRegularVertices + 4);
+        const std::vector<std::byte> emptyGrid(gridBufferSize);
+        auto gridBuffer = frontend->CreateBuffer(RenderMemoryScopes::ViewportResources,
+                                                 {.byteSize = gridBufferSize,
+                                                  .usage = Render::RenderBufferUsage::Vertex | Render::RenderBufferUsage::CopyDestination,
+                                                  .access = Render::RenderBufferAccess::HostVisible},
+                                                 std::span<const std::byte>{emptyGrid});
+        if (gridBuffer.HasError())
+            return Result<void>::Failure(gridBuffer.ErrorValue());
+        gridVertexBufferHandle = gridBuffer.Value().handle;
+        const auto processed = frontend->ProcessResourceRequests();
+        const auto completed = frontend->ResourceOperationResult(gridBuffer.Value().operation);
+        const auto nativeBuffer = MetalViewportResourceBridge::ResolveBuffer(*frontend, gridVertexBufferHandle);
+        if (processed.HasError() || completed.HasError() || nativeBuffer.HasError()) {
+            const Error error = processed.HasError()   ? processed.ErrorValue()
+                                : completed.HasError() ? completed.ErrorValue()
+                                                       : nativeBuffer.ErrorValue();
+            static_cast<void>(frontend->ReleaseBuffer(gridVertexBufferHandle));
+            gridVertexBufferHandle = {};
+            return Result<void>::Failure(error);
+        }
+        gridVertexBuffer = (__bridge id<MTLBuffer>)nativeBuffer.Value();
 
         MTLSamplerDescriptor *samplerDescriptor = [MTLSamplerDescriptor new];
         samplerDescriptor.minFilter = MTLSamplerMinMagFilterLinear;
@@ -445,6 +468,9 @@ namespace Horo::Editor {
         impl_->graphicsBridge->WaitUntilIdle();
         impl_->resources.Shutdown();
         impl_->gridVertexBuffer = nil;
+        if (impl_->gridVertexBufferHandle.IsValid())
+            static_cast<void>(impl_->frontend->ReleaseBuffer(impl_->gridVertexBufferHandle));
+        impl_->gridVertexBufferHandle = {};
         impl_->gridDepthState = nil;
         impl_->depthState = nil;
         impl_->shadowSampler = nil;

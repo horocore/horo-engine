@@ -505,6 +505,7 @@ target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
 
 add_executable(HoroPrefabTests
+        unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
@@ -1295,6 +1296,13 @@ target_link_libraries(HoroRenderFrontendTests
         HoroEngine::RenderFrontend
         HoroEngine::RenderNull
 )
+add_executable(HoroRenderMemoryBudgetTests
+        support/AllocationProbe.cpp
+        unit/runtime/renderer/RenderMemoryBudgetTests.cpp
+)
+target_compile_features(HoroRenderMemoryBudgetTests PRIVATE cxx_std_20)
+target_include_directories(HoroRenderMemoryBudgetTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRenderMemoryBudgetTests PRIVATE HoroEngine::RenderFrontend)
 add_executable(HoroRuntimeLifecycleTests
         unit/runtime/lifecycle/RuntimeLifecycleTests.cpp
 )
@@ -1878,6 +1886,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests
+        HoroRenderMemoryBudgetTests
         HoroEditorViewportResourceTests
         HoroRuntimeLifecycleTests
         HoroRuntimeSaveIdentityTests
