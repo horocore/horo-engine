@@ -1,7 +1,9 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "RenderMemoryTestSupport.h"
 #include "renderer/RenderBackendContractSuite.h"
 #include "runtime/renderer/modules/vulkan/VulkanBackendInternal.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <string>
@@ -51,6 +53,9 @@ namespace {
         VulkanInstanceRequest instanceRequest;
         VulkanDeviceRequest deviceRequest;
         std::vector<std::string> lifecycle;
+        int queryBufferCostCount{0};
+        int createBufferCount{0};
+        int destroyBufferCount{0};
     };
 
     [[nodiscard]] VulkanAdapterCandidate Adapter(std::string id, std::vector<VulkanQueueFamily> queues,
@@ -67,7 +72,7 @@ namespace {
         };
     }
 
-    class FakeRuntimePort final : public IVulkanRuntimePort {
+    class FakeRuntimePort final : public IVulkanRuntimePort, public IVulkanResourcePort, public IRenderResourceBackend {
     public:
         explicit FakeRuntimePort(RuntimeState &state) noexcept : state_(&state) {}
 
@@ -138,6 +143,78 @@ namespace {
         void ReleaseLoader() noexcept override {
             ++state_->releaseLoaderCount;
             state_->lifecycle.emplace_back("release-loader");
+        }
+
+        IRenderResourceBackend *ResourceBackend() noexcept override {
+            return state_->createDeviceCount > 0 ? this : nullptr;
+        }
+
+        Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
+            ++state_->queryBufferCostCount;
+            return Result<RenderMemoryCostPlan>::Success({.memoryClass = descriptor.access == RenderBufferAccess::HostVisible
+                                                                             ? RenderMemoryClass::Upload
+                                                                             : RenderMemoryClass::PersistentDevice,
+                                                          .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                                          .provenance = RenderMemoryCostProvenance::Exact,
+                                                          .compatibility = RenderMemoryCompatibilityId{11},
+                                                          .payloadBytes = descriptor.byteSize,
+                                                          .requiredBytes = descriptor.byteSize,
+                                                          .alignment = 16});
+        }
+
+        Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
+            const auto bytes = *RenderTextureBaseLevelByteSize(descriptor);
+            const RenderMemoryCostPlan plan{.memoryClass = RenderMemoryClass::PersistentDevice,
+                                            .allocationClass = RenderMemoryAllocationClass::Dedicated,
+                                            .provenance = RenderMemoryCostProvenance::Exact,
+                                            .compatibility = RenderMemoryCompatibilityId{12},
+                                            .payloadBytes = bytes,
+                                            .requiredBytes = bytes,
+                                            .alignment = 16};
+            return Result<RenderMemoryCostPlan>::Success(plan);
+        }
+
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>,
+                                           const RenderMemoryPlacement &) override {
+            ++state_->createBufferCount;
+            return Result<std::uint64_t>::Success(101);
+        }
+
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
+            return Result<std::uint64_t>::Success(102);
+        }
+
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,
+                                            const RenderMemoryPlacement &) override {
+            return Result<std::uint64_t>::Success(103);
+        }
+
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {
+            return Result<std::uint64_t>::Success(104);
+        }
+
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t) override {
+            return Result<std::uint64_t>::Success(105);
+        }
+
+        void DestroyBuffer(std::uint64_t) noexcept override {
+            ++state_->destroyBufferCount;
+        }
+
+        void DestroyMesh(std::uint64_t) noexcept override {
+            state_->lifecycle.emplace_back("destroy-mesh");
+        }
+
+        void DestroyTexture(std::uint64_t) noexcept override {
+            state_->lifecycle.emplace_back("destroy-texture");
+        }
+
+        void DestroyTextureView(std::uint64_t) noexcept override {
+            state_->lifecycle.emplace_back("destroy-texture-view");
+        }
+
+        void DestroyRenderTarget(std::uint64_t) noexcept override {
+            state_->lifecycle.emplace_back("destroy-render-target");
         }
 
     private:
@@ -238,6 +315,33 @@ namespace {
         backend->Shutdown();
         REQUIRE(state.lifecycle == std::vector<std::string>{"acquire-loader", "create-instance", "create-device", "destroy-device",
                                                             "destroy-instance", "release-loader"});
+    }
+
+    TEST_CASE("Vulkan backend realizes admitted resources through the device-owned resource port", "[unit][runtime][renderer][vulkan]") {
+        RuntimeState state = DefaultState();
+        FakeRuntimePort port{state};
+        std::unique_ptr<IRenderBackend> backend = CreateBackend(port);
+        const RenderBufferDescriptor descriptor{.byteSize = 64,
+                                                .usage = RenderBufferUsage::Vertex | RenderBufferUsage::CopyDestination,
+                                                .access = RenderBufferAccess::HostVisible};
+
+        REQUIRE(backend->QueryBufferMemoryCost(descriptor).HasError());
+        REQUIRE(backend->Initialize({}).HasValue());
+        const auto plan = backend->QueryBufferMemoryCost(descriptor);
+        REQUIRE(plan.HasValue());
+        REQUIRE(plan.Value().memoryClass == RenderMemoryClass::Upload);
+        REQUIRE(plan.Value().allocationClass == RenderMemoryAllocationClass::Dedicated);
+        const std::array<std::byte, 64> initialData{};
+        const auto created = backend->CreateBuffer(descriptor, initialData, TestSupport::PlacementFor(plan.Value(), 1));
+        REQUIRE(created.HasValue());
+        REQUIRE(created.Value() == 101);
+        REQUIRE(state.queryBufferCostCount == 1);
+        REQUIRE(state.createBufferCount == 1);
+
+        backend->DestroyBuffer(created.Value());
+        REQUIRE(state.destroyBufferCount == 1);
+        backend->Shutdown();
+        REQUIRE(backend->QueryBufferMemoryCost(descriptor).HasError());
     }
 
     TEST_CASE("Vulkan discovery publishes a bounded sorted backend-neutral snapshot", "[unit][runtime][renderer][vulkan]") {

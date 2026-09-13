@@ -1,6 +1,7 @@
 #include "VulkanNativeRuntime.h"
 
 #include "VulkanRenderBackendErrors.h"
+#include "VulkanResourceRuntime.h"
 
 #include <algorithm>
 #include <array>
@@ -68,7 +69,7 @@ namespace Horo::Render {
             return native;
         }
 
-        class VulkanNativeRuntime final : public IVulkanRuntimePort {  // NOSONAR(cpp:S1448)
+        class VulkanNativeRuntime final : public IVulkanRuntimePort, public IVulkanResourcePort {  // NOSONAR(cpp:S1448)
         public:
             explicit VulkanNativeRuntime(IVulkanLoaderPort &loaderPort) noexcept : loaderPort_(&loaderPort) {}
 
@@ -234,10 +235,20 @@ namespace Horo::Render {
                 if (const VkResult result = createDevice_(selected->device, &createInfo, nullptr, &device_); result != VK_SUCCESS) {
                     return Result<void>::Failure(NativeFailure("vkCreateDevice", result));
                 }
-                return LoadDeviceDispatch(request);
+                if (auto dispatch = LoadDeviceDispatch(request); dispatch.HasError()) {
+                    return dispatch;
+                }
+                VkPhysicalDeviceMemoryProperties memoryProperties{};
+                getPhysicalDeviceMemoryProperties_(selected->device, &memoryProperties);
+                return resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_);
+            }
+
+            IRenderResourceBackend *ResourceBackend() noexcept override {
+                return &resources_;
             }
 
             void DestroyDevice() noexcept override {
+                resources_.ShutdownResources();
                 if (device_ != VK_NULL_HANDLE && destroyDevice_ != nullptr) {
                     destroyDevice_(device_, nullptr);
                 }
@@ -477,6 +488,7 @@ namespace Horo::Render {
             VkQueue graphicsQueue_{VK_NULL_HANDLE};
             VkQueue presentationQueue_{VK_NULL_HANDLE};
             PFN_vkDestroyDevice destroyDevice_{nullptr};
+            Detail::VulkanResourceRuntime resources_;
         };
     }  // namespace
 

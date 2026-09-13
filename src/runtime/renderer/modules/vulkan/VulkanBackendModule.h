@@ -148,6 +148,15 @@ namespace Horo::Render {
         virtual void ReleaseLoader() noexcept = 0;
     };
 
+    /** @brief Optional provider for the production runtime's resource realization backend. */
+    class IVulkanResourcePort {
+    public:
+        virtual ~IVulkanResourcePort() = default;
+
+        /** @brief Returns the device-owned backend after logical-device initialization. */
+        [[nodiscard]] virtual IRenderResourceBackend *ResourceBackend() noexcept = 0;
+    };
+
     /** @brief Returns inert native-free module metadata for host window planning. */
     [[nodiscard]] const RenderBackendModuleInfo &GetVulkanRenderBackendModuleInfo() noexcept;
 

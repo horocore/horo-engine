@@ -1840,6 +1840,7 @@ endif ()
 if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
+            unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderVulkanTests PRIVATE
