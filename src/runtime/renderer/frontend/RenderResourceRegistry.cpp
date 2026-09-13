@@ -324,11 +324,11 @@ namespace Horo::Render::Detail {
             return pinned;
         }
         if (newQueue) {
-            queueProgress_.push_back(QueueProgress{.queue = completion.queue});
+            queueProgress_.emplace_back(QueueProgress{.queue = completion.queue});
             queue = queueProgress_.end() - 1;
         }
         queue->submitted = completion.value;
-        submissionPins_.push_back(SubmissionPin{resourceClass, identity, completion});
+        submissionPins_.emplace_back(SubmissionPin{resourceClass, identity, completion});
         return Result<void>::Success();
     }
 
