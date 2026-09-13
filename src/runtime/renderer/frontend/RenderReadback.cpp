@@ -329,20 +329,21 @@ namespace Horo::Render {
             return Result<void>::Failure(ReadbackError(RenderReadbackErrors::InvalidTransition, std::move(message)));
         }
 
-        [[nodiscard]] RecordIterator FindIterator(const RenderReadbackId request) {
-            if (!request.IsValid() || request.renderer != renderer_)
-                return records_.end();
-            return std::find_if(records_.begin(), records_.end(), [request](const ReadbackRecord &record) {
+        template <typename Records>
+        [[nodiscard]] static auto FindRecord(Records &records, const RenderResourceOwnerId renderer, const RenderReadbackId request) {
+            if (!request.IsValid() || request.renderer != renderer)
+                return records.end();
+            return std::find_if(records.begin(), records.end(), [request](const ReadbackRecord &record) {
                 return record.id == request;
             });
         }
 
+        [[nodiscard]] RecordIterator FindIterator(const RenderReadbackId request) {
+            return FindRecord(records_, renderer_, request);
+        }
+
         [[nodiscard]] ConstRecordIterator FindIterator(const RenderReadbackId request) const {
-            if (!request.IsValid() || request.renderer != renderer_)
-                return records_.end();
-            return std::find_if(records_.begin(), records_.end(), [request](const ReadbackRecord &record) {
-                return record.id == request;
-            });
+            return FindRecord(records_, renderer_, request);
         }
 
         [[nodiscard]] ReadbackRecord *Find(const RenderReadbackId request) {
