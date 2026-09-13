@@ -49,7 +49,7 @@ namespace Horo::Render {
         std::filesystem::path scratchRoot;                 /**< Absolute host-owned isolated scratch root. */
         std::vector<ShaderCompilerToolInstallation> tools; /**< Sorted unique installed tools. */
         std::shared_ptr<const IVerifiedShaderCompilerToolCatalog>
-            verifiedCatalog; /**< Optional signed host catalog for Windows, macOS, and additional qualified hosts. */
+            verifiedCatalog; /**< Optional signed host catalog for Windows, macOS, and other contract-supported hosts. */
         std::chrono::milliseconds processTimeout{std::chrono::minutes{5}}; /**< Per-process timeout. */
         std::size_t maximumToolBinaryBytes{256U * 1024U * 1024U};          /**< Verification read bound. */
         std::size_t maximumProcessOutputBytes{1024U * 1024U};              /**< Per-invocation output bound. */
@@ -80,7 +80,7 @@ namespace Horo::Render {
      * calls. Each Compile call owns an isolated scratch directory which is removed before return. Tool identity
      * and executable content are verified when the adapter is created, before any source is written.
      */
-    class ExternalShaderCompilerAdapter final : public IShaderCompilerAdapter {
+    class ExternalShaderCompilerAdapter final : public IShaderCompilerAdapter {  // NOSONAR(cpp:S3624) Explicit destructor is below.
     public:
         /** @brief Releases adapter state without touching host-owned tool installations. */
         ~ExternalShaderCompilerAdapter() noexcept override;
