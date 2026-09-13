@@ -10,7 +10,9 @@ executable with different bytes is not admitted.
 
 The host supplies absolute executable paths and an isolated scratch root. The
 adapter verifies the target's archive identity, the configured executable
-identity, and the executable bytes before it writes source or invokes a child.
+identity, and the executable bytes when it is created, before it writes source
+or invokes a child. The host keeps the admitted installation immutable for the
+adapter lifetime.
 It uses the shell-free platform process boundary with an empty environment,
 finite output, file and time bounds, cancellation, and per-invocation scratch
 cleanup.
