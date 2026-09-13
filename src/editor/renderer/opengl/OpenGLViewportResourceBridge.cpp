@@ -8,19 +8,36 @@
 
 namespace Horo::Editor {
     namespace {
+        enum class OpenGLObjectIdentity : std::uint8_t {
+            Native,
+            EncodedTextureView,
+        };
+
         [[nodiscard]] Result<std::uint32_t> ResolveOpenGLObject(const Render::RenderFrontend &frontend,
-                                                                const Result<std::uint64_t> &resolved) {
+                                                                const Result<std::uint64_t> &resolved,
+                                                                const OpenGLObjectIdentity identity = OpenGLObjectIdentity::Native) {
             if (frontend.Capabilities().backend != Render::RenderBackendId{"opengl"}) {
                 return Result<std::uint32_t>::Failure(MakeError(Render::OpenGLBackendErrors::UnsupportedResourceOperation,
                                                                 "OpenGL editor bridge received a non-OpenGL frontend."));
             }
             if (resolved.HasError())
                 return Result<std::uint32_t>::Failure(resolved.ErrorValue());
-            if (resolved.Value() == 0 || resolved.Value() > std::numeric_limits<std::uint32_t>::max()) {
+            const auto object = static_cast<std::uint32_t>(resolved.Value());
+            const bool nativeIdentityValid = resolved.Value() > 0 && resolved.Value() <= std::numeric_limits<std::uint32_t>::max();
+            if (const bool viewIdentityValid = resolved.Value() > std::numeric_limits<std::uint32_t>::max() && object != 0;
+                (identity == OpenGLObjectIdentity::Native && !nativeIdentityValid) ||
+                (identity == OpenGLObjectIdentity::EncodedTextureView && !viewIdentityValid)) {
                 return Result<std::uint32_t>::Failure(MakeError(Render::OpenGLBackendErrors::UnsupportedResourceOperation,
                                                                 "OpenGL resource identity is outside the native object range."));
             }
-            return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(resolved.Value()));
+            return Result<std::uint32_t>::Success(object);
+        }
+
+        /** @brief Resolves one encoded logical view to its native OpenGL texture object. */
+        [[nodiscard]] Result<std::uint32_t> ResolveOpenGLTextureView(const Render::RenderFrontend &frontend,
+                                                                     const Render::RenderTextureViewHandle view) {
+            return ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, view),
+                                       OpenGLObjectIdentity::EncodedTextureView);
         }
     }  // namespace
 
@@ -55,7 +72,7 @@ namespace Horo::Editor {
         if (unit >= 32)
             return Result<void>::Failure(MakeError(Render::OpenGLBackendErrors::UnsupportedResourceOperation,
                                                    "OpenGL editor texture unit is outside the supported bridge range."));
-        const auto object = ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, view));
+        const auto object = ResolveOpenGLTextureView(frontend, view);
         if (object.HasError())
             return Result<void>::Failure(object.ErrorValue());
         glActiveTexture(GL_TEXTURE0 + unit);
@@ -66,7 +83,7 @@ namespace Horo::Editor {
     /** @copydoc OpenGLViewportResourceBridge::EditorImageIdentity */
     Result<std::uintptr_t> OpenGLViewportResourceBridge::EditorImageIdentity(const Render::RenderFrontend &frontend,
                                                                              const Render::RenderTextureViewHandle view) {
-        const auto object = ResolveOpenGLObject(frontend, Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, view));
+        const auto object = ResolveOpenGLTextureView(frontend, view);
         if (object.HasError())
             return Result<std::uintptr_t>::Failure(object.ErrorValue());
         return Result<std::uintptr_t>::Success(object.Value());

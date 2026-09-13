@@ -24,4 +24,6 @@ namespace Horo::Render::OpenGLBackendErrors {
     extern const ErrorCodeDescriptor PresentationInUse;
     extern const ErrorCodeDescriptor UnsupportedPassKind;
     extern const ErrorCodeDescriptor UnsupportedResourceOperation;
+    extern const ErrorCodeDescriptor ResourceCreationFailed;
+    extern const ErrorCodeDescriptor ResourceIdentityInvalid;
 }  // namespace Horo::Render::OpenGLBackendErrors
