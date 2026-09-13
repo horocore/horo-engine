@@ -29,7 +29,7 @@ namespace Horo::Runtime {
     struct SaveSlotIndex final {
         std::uint32_t schemaVersion{SaveSlotIndexSchemaVersion}; /**< Exact wire/model schema. */
         std::uint64_t revision{};                                /**< Non-zero monotonic catalog publication revision. */
-        std::vector<SaveSlotCatalogEntry> entries;               /**< Unique entries in canonical slot-identity order. */
+        std::vector<SaveSlotCatalogEntry> entries;               /**< Unambiguous entries in canonical slot-identity order. */
     };
 
     /** @brief Storage classification supplied by the qualified save storage scanner. */

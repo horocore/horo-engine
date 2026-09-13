@@ -57,7 +57,7 @@ namespace Horo::Runtime {
             if (observation.state != SaveSlotArtifactState::Committed || !observation.entry || ValidateEntry(*observation.entry).HasError())
                 return AddDiagnostic(diagnostics, limits,
                                      {.kind = SaveSlotIndexDiagnosticKind::Corrupt, .slot = observation.suspectedSlot});
-            if (committed.size() == limits.maximumEntries)
+            if (committed.size() == limits.maximumArtifacts)
                 return Result<void>::Failure(MakeError(SaveErrors::SlotIndexLimitExceeded));
             committed.push_back(*observation.entry);
             return Result<void>::Success();
@@ -72,16 +72,25 @@ namespace Horo::Runtime {
             } catch (const std::bad_alloc &) {
                 return Result<std::vector<SaveSlotCatalogEntry>>::Failure(MakeError(SaveErrors::SlotIndexAllocationFailed));
             }
-            for (const auto &entry : committed) {
-                if (!unique.empty() && Slot(unique.back()) == Slot(entry)) {
-                    auto duplicate = SaveSlotIndexDiagnostic{.kind = SaveSlotIndexDiagnosticKind::Duplicate,
-                                                             .slot = Slot(entry),
-                                                             .generation = entry.publication.generation};
-                    if (auto added = AddDiagnostic(diagnostics, limits, std::move(duplicate)); added.HasError())
-                        return Result<std::vector<SaveSlotCatalogEntry>>::Failure(added.ErrorValue());
+            std::size_t position = 0;
+            while (position < committed.size()) {
+                std::size_t groupEnd = position + 1;
+                while (groupEnd < committed.size() && Slot(committed[groupEnd]) == Slot(committed[position]))
+                    ++groupEnd;
+                if (groupEnd - position == 1) {
+                    if (unique.size() == limits.maximumEntries)
+                        return Result<std::vector<SaveSlotCatalogEntry>>::Failure(MakeError(SaveErrors::SlotIndexLimitExceeded));
+                    unique.push_back(committed[position]);
                 } else {
-                    unique.push_back(entry);
+                    for (std::size_t duplicatePosition = position; duplicatePosition < groupEnd; ++duplicatePosition) {
+                        auto duplicate = SaveSlotIndexDiagnostic{.kind = SaveSlotIndexDiagnosticKind::Duplicate,
+                                                                 .slot = Slot(committed[duplicatePosition]),
+                                                                 .generation = committed[duplicatePosition].publication.generation};
+                        if (auto added = AddDiagnostic(diagnostics, limits, std::move(duplicate)); added.HasError())
+                            return Result<std::vector<SaveSlotCatalogEntry>>::Failure(added.ErrorValue());
+                    }
                 }
+                position = groupEnd;
             }
             return Result<std::vector<SaveSlotCatalogEntry>>::Success(std::move(unique));
         }
@@ -180,7 +189,7 @@ namespace Horo::Runtime {
             return Result<SaveSlotIndexRebuilder>::Failure(MakeError(SaveErrors::SlotIndexInvalid));
         try {
             SaveSlotIndexRebuilder builder{std::move(previous), nextRevision, limits};
-            builder.committed_.reserve(limits.maximumEntries);
+            builder.committed_.reserve(limits.maximumArtifacts);
             builder.diagnostics_.reserve(limits.maximumDiagnostics);
             return Result<SaveSlotIndexRebuilder>::Success(std::move(builder));
         } catch (const std::bad_alloc &) {

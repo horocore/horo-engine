@@ -65,13 +65,12 @@ namespace Horo::Runtime {
             REQUIRE(rebuild.Consume(observations, observations.size()).Value() == observations.size());
             const auto result = rebuild.Finalize().Value();
 
-            REQUIRE(result.candidate.entries.size() == 2);
+            REQUIRE(result.candidate.entries.size() == 1);
             REQUIRE(result.candidate.entries[0].publication.generation == Id<SlotGenerationId>(10));
-            REQUIRE(result.candidate.entries[1].publication.generation == Id<SlotGenerationId>(30));
             REQUIRE(result.artifactsExamined == 5);
             REQUIRE(result.diagnostics.size() == 5);
             REQUIRE(result.diagnostics[0].kind == SaveSlotIndexDiagnosticKind::Stale);
-            REQUIRE(result.diagnostics[1].kind == SaveSlotIndexDiagnosticKind::Missing);
+            REQUIRE(result.diagnostics[1].kind == SaveSlotIndexDiagnosticKind::Duplicate);
             REQUIRE(result.diagnostics[2].kind == SaveSlotIndexDiagnosticKind::Duplicate);
             REQUIRE(result.diagnostics[3].kind == SaveSlotIndexDiagnosticKind::Orphaned);
             REQUIRE(result.diagnostics[4].kind == SaveSlotIndexDiagnosticKind::Corrupt);
@@ -108,6 +107,21 @@ namespace Horo::Runtime {
                     SaveErrors::SlotIndexLimitExceeded.code.Value());
             REQUIRE(published.revision == preserved.revision);
             REQUIRE(published.entries == preserved.entries);
+        }
+
+        TEST_CASE("Artifact and result limits are enforced at distinct boundaries", "[unit][save][slot-index]") {
+            const SaveSlotIndexLimits limits{.maximumEntries = 1, .maximumArtifacts = 3, .maximumDiagnostics = 3};
+            auto duplicates = SaveSlotIndexRebuilder::Create(std::nullopt, 1, limits).Value();
+            const std::array duplicateArtifacts{Committed(1, 10), Committed(1, 11), Committed(1, 12)};
+            REQUIRE(duplicates.Consume(duplicateArtifacts, duplicateArtifacts.size()).HasValue());
+            const auto duplicateResult = duplicates.Finalize().Value();
+            REQUIRE(duplicateResult.candidate.entries.empty());
+            REQUIRE(duplicateResult.diagnostics.size() == 3);
+
+            auto uniqueSlots = SaveSlotIndexRebuilder::Create(std::nullopt, 1, limits).Value();
+            const std::array uniqueArtifacts{Committed(1, 10), Committed(2, 20)};
+            REQUIRE(uniqueSlots.Consume(uniqueArtifacts, uniqueArtifacts.size()).HasValue());
+            REQUIRE(uniqueSlots.Finalize().ErrorValue().code.Value() == SaveErrors::SlotIndexLimitExceeded.code.Value());
         }
 
         TEST_CASE("Index validation rejects schema revision duplicates and malformed entries", "[unit][save][slot-index]") {
