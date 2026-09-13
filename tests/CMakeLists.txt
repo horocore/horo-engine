@@ -509,6 +509,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
+        unit/runtime/prefab/PrefabSceneIdentityRemapTests.cpp
         unit/runtime/prefab/PrefabSourceResolverTests.cpp
 )
 target_compile_features(HoroPrefabTests PRIVATE cxx_std_20)
