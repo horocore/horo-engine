@@ -82,10 +82,9 @@ namespace {
                 REQUIRE(std::next(found) != request.arguments.end());
                 return *std::next(found);
             };
-            std::vector<std::uint8_t> bytes;
             if (role == "dxc") {
                 const bool spirv = std::ranges::find(request.arguments, "-spirv") != request.arguments.end();
-                bytes.resize(spirv ? 20U : 32U);
+                std::vector<std::uint8_t> bytes(spirv ? 20U : 32U);
                 if (spirv)
                     bytes = {0x03, 0x02, 0x23, 0x07, 0, 0x06, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
                 else
@@ -185,6 +184,65 @@ namespace {
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
         CHECK(result.ErrorValue().code.Value() == expected.code.Value());
+    }
+
+    [[nodiscard]] ShaderCompilerToolIdentity FixtureIdentity(const ShaderCompilerTool tool) {
+        using enum ShaderCompilerTool;
+        std::string_view name;
+        switch (tool) {
+            case Dxc:
+                name = "dxc";
+                break;
+            case SpirvTools:
+                name = "spirv-val";
+                break;
+            case SpirvCross:
+                name = "spirv-cross";
+                break;
+            case AppleMetal:
+                name = "apple-metal";
+                break;
+            case DxilValidator:
+                name = "dxil-validator";
+                break;
+        }
+        return {tool, "fixture-v1", ComputeSha256(std::as_bytes(std::span{name.data(), name.size()}))};
+    }
+
+    [[nodiscard]] ShaderCompilerToolchainConfiguration FixtureConfiguration(const TemporaryDirectory &temporary) {
+        ShaderCompilerToolchainConfiguration configuration;
+        configuration.hostPlatform = "contract-test-host";
+        configuration.scratchRoot = temporary.Path() / "scratch";
+        configuration.verifiedCatalog = std::make_shared<TestToolCatalog>();
+        for (const auto [tool, name] : {
+                 std::pair{ShaderCompilerTool::Dxc, "dxc"},
+                 std::pair{ShaderCompilerTool::SpirvTools, "spirv-val"},
+                 std::pair{ShaderCompilerTool::SpirvCross, "spirv-cross"},
+                 std::pair{ShaderCompilerTool::AppleMetal, "apple-metal"},
+                 std::pair{ShaderCompilerTool::DxilValidator, "dxil-validator"},
+             }) {
+            const std::filesystem::path executable = temporary.Path() / name;
+            {
+                std::ofstream output(executable, std::ios::binary);
+                output << name;
+            }
+            const std::vector<std::uint8_t> bytes = Read(executable);
+            const Sha256Digest digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+            configuration.tools.emplace_back(ShaderCompilerToolIdentity{tool, "fixture-v1", digest}, executable, digest);
+        }
+        return configuration;
+    }
+
+    void RequireFixtureRoute(ExternalShaderCompilerAdapter &adapter, const ShaderTargetBackend backend, const ShaderPayloadFormat format,
+                             std::vector<ShaderCompilerToolIdentity> tools) {
+        auto request = Request(backend, format, std::move(tools));
+        request.targets.front().emitDebugInformation = true;
+        const auto result = CompileShaderTargets(request, adapter, {});
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().artifacts.size() == 1);
+        CHECK_FALSE(result.Value().artifacts.front().payload.empty());
+        CHECK_FALSE(result.Value().artifacts.front().debugPayload.empty());
+        CHECK_FALSE(result.Value().artifacts.front().diagnostics.empty());
     }
 }  // namespace
 
@@ -298,60 +356,20 @@ TEST_CASE("Production shader adapter reports an unavailable required tool withou
 
 TEST_CASE("Verified fixture tools exercise every contract-tested backend route", "[runtime][renderer][shader-compiler][toolchain]") {
     TemporaryDirectory temporary;
-    ShaderCompilerToolchainConfiguration configuration;
-    configuration.hostPlatform = "contract-test-host";
-    configuration.scratchRoot = temporary.Path() / "scratch";
-    configuration.verifiedCatalog = std::make_shared<TestToolCatalog>();
-    for (const auto [tool, name] : {
-             std::pair{ShaderCompilerTool::Dxc, "dxc"},
-             std::pair{ShaderCompilerTool::SpirvTools, "spirv-val"},
-             std::pair{ShaderCompilerTool::SpirvCross, "spirv-cross"},
-             std::pair{ShaderCompilerTool::AppleMetal, "apple-metal"},
-             std::pair{ShaderCompilerTool::DxilValidator, "dxil-validator"},
-         }) {
-        const std::filesystem::path executable = temporary.Path() / name;
-        {
-            std::ofstream output(executable, std::ios::binary);
-            output << name;
-        }
-        const std::vector<std::uint8_t> bytes = Read(executable);
-        const Sha256Digest digest = ComputeSha256(std::as_bytes(std::span{bytes}));
-        configuration.tools.push_back({{tool, "fixture-v1", digest}, executable, digest});
-    }
     auto processes = std::make_shared<FixtureProcessRunner>();
-    auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), processes);
+    auto adapter = ExternalShaderCompilerAdapter::Create(FixtureConfiguration(temporary), processes);
     REQUIRE(adapter.HasValue());
 
-    const auto compile = [&](const ShaderTargetBackend backend, const ShaderPayloadFormat format,
-                             std::vector<ShaderCompilerToolIdentity> tools) {
-        auto request = Request(backend, format, std::move(tools));
-        request.targets.front().emitDebugInformation = true;
-        const auto result = CompileShaderTargets(request, adapter.Value(), {});
-        REQUIRE(result.HasValue());
-        REQUIRE(result.Value().artifacts.size() == 1);
-        CHECK_FALSE(result.Value().artifacts.front().payload.empty());
-        CHECK_FALSE(result.Value().artifacts.front().debugPayload.empty());
-        CHECK_FALSE(result.Value().artifacts.front().diagnostics.empty());
-    };
-    const auto identity = [](const ShaderCompilerTool tool) {
-        using enum ShaderCompilerTool;
-        const std::string_view name = tool == Dxc          ? "dxc"
-                                      : tool == SpirvTools ? "spirv-val"
-                                      : tool == SpirvCross ? "spirv-cross"
-                                      : tool == AppleMetal ? "apple-metal"
-                                                           : "dxil-validator";
-        return ShaderCompilerToolIdentity{tool, "fixture-v1", ComputeSha256(std::as_bytes(std::span{name.data(), name.size()}))};
-    };
-
-    compile(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16,
-            {identity(ShaderCompilerTool::Dxc), identity(ShaderCompilerTool::SpirvTools)});
-    compile(ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410,
-            {identity(ShaderCompilerTool::Dxc), identity(ShaderCompilerTool::SpirvTools), identity(ShaderCompilerTool::SpirvCross)});
-    compile(ShaderTargetBackend::Metal, ShaderPayloadFormat::MetalLibrary24,
-            {identity(ShaderCompilerTool::Dxc), identity(ShaderCompilerTool::SpirvTools), identity(ShaderCompilerTool::SpirvCross),
-             identity(ShaderCompilerTool::AppleMetal)});
-    compile(ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60,
-            {identity(ShaderCompilerTool::Dxc), identity(ShaderCompilerTool::DxilValidator)});
+    RequireFixtureRoute(adapter.Value(), ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16,
+                        {FixtureIdentity(ShaderCompilerTool::Dxc), FixtureIdentity(ShaderCompilerTool::SpirvTools)});
+    RequireFixtureRoute(adapter.Value(), ShaderTargetBackend::OpenGL, ShaderPayloadFormat::Glsl410,
+                        {FixtureIdentity(ShaderCompilerTool::Dxc), FixtureIdentity(ShaderCompilerTool::SpirvTools),
+                         FixtureIdentity(ShaderCompilerTool::SpirvCross)});
+    RequireFixtureRoute(adapter.Value(), ShaderTargetBackend::Metal, ShaderPayloadFormat::MetalLibrary24,
+                        {FixtureIdentity(ShaderCompilerTool::Dxc), FixtureIdentity(ShaderCompilerTool::SpirvTools),
+                         FixtureIdentity(ShaderCompilerTool::SpirvCross), FixtureIdentity(ShaderCompilerTool::AppleMetal)});
+    RequireFixtureRoute(adapter.Value(), ShaderTargetBackend::D3D12, ShaderPayloadFormat::Dxil60,
+                        {FixtureIdentity(ShaderCompilerTool::Dxc), FixtureIdentity(ShaderCompilerTool::DxilValidator)});
 }
 
 TEST_CASE("Locked Linux shader tools produce repeatable validated native artifacts",
