@@ -505,6 +505,7 @@ target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
 
 add_executable(HoroPrefabTests
+        unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
