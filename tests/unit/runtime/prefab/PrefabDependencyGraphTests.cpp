@@ -1,5 +1,6 @@
 #include "Horo/Prefab/PrefabDependencyGraph.h"
 #include "Horo/Prefab/PrefabErrors.h"
+#include "PrefabTestUtils.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -11,12 +12,7 @@
 
 namespace Horo::Prefab {
     namespace {
-        Assets::AssetId Asset(const std::uint16_t suffix) {
-            std::array<std::uint8_t, 16> bytes{};
-            bytes[14] = static_cast<std::uint8_t>(suffix >> 8U);
-            bytes[15] = static_cast<std::uint8_t>(suffix);
-            return Assets::AssetId::FromBytes(bytes);
-        }
+        using Test::Asset;
 
         Assets::AssetTypeId Type(const std::string_view value) {
             return Assets::AssetTypeId::Parse(value).Value();
