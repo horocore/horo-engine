@@ -125,6 +125,9 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Shader Source and Intermediate Representation](../adr/035-shader-source-and-intermediate-representation.md):
   HLSL authoring, target-specific SPIR-V/DXIL routes, normalized reflection,
   compiler identity, source diagnostics, and cooked/runtime boundaries.
+- [Shader Toolchain Lock And Qualification](./runtime/shader-toolchain-lock.md):
+  exact production compiler artifacts, host support, invocation policy,
+  deterministic package contract, and qualification evidence.
 - [Renderer Distribution And Availability](./runtime/renderer-distribution-and-availability.md):
   optional renderer components, install/repair/probe states, launcher recovery,
   and selection policy.
