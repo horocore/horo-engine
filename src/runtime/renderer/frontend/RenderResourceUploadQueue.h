@@ -39,7 +39,7 @@ namespace Horo::Render::Detail {
             std::optional<RenderResourceIdentity> replacedMesh;
         };
 
-        explicit RenderResourceUploadQueue(const RenderResourceUploadLimits limits) : limits_(limits) {
+        explicit RenderResourceUploadQueue(const RenderResourceUploadLimits &limits) : limits_(limits) {
             requests_.reserve(limits.maximumPendingRequests);
             stagingStorage_.reserve(limits.maximumPendingBytes);
         }
@@ -160,7 +160,7 @@ namespace Horo::Render::Detail {
                                               const RenderMemoryPlacement &memoryPlacement) const {
             return {.kind = kind,
                     .identity = identity,
-                    .stagingOffset = initialData.empty() ? 0 : *AlignedOffset(occupiedStagingBytes_),
+                    .stagingOffset = initialData.empty() ? 0 : AlignedOffset(occupiedStagingBytes_).value_or(0),
                     .stagingByteCount = initialData.size(),
                     .memoryReservation = memoryReservation,
                     .memoryPlacement = memoryPlacement};
@@ -179,7 +179,7 @@ namespace Horo::Render::Detail {
         }
 
         void StageBack(const std::span<const std::byte> initialData) noexcept {
-            Request &request = requests_.back();
+            const Request &request = requests_.back();
             if (initialData.empty())
                 return;
             stagingStorage_.resize(request.stagingOffset + request.stagingByteCount);
@@ -197,7 +197,7 @@ namespace Horo::Render::Detail {
                     request.stagingOffset = 0;
                     continue;
                 }
-                const std::size_t destination = *AlignedOffset(nextOffset);
+                const std::size_t destination = AlignedOffset(nextOffset).value_or(nextOffset);
                 if (destination != request.stagingOffset) {
                     std::memmove(stagingStorage_.data() + destination, stagingStorage_.data() + request.stagingOffset,
                                  request.stagingByteCount);
