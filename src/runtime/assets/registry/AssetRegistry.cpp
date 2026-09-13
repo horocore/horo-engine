@@ -57,6 +57,25 @@ namespace Horo::Assets {
             return folded;
         }
 
+        struct RegistryUniquenessState final {
+            std::set<AssetId> identities;
+            TransparentStringSet paths;
+            TransparentStringSet foldedPaths;
+        };
+
+        struct RegistryUniquenessIssues final {
+            bool duplicateId{false};
+            bool duplicatePath{false};
+            bool pathCollision{false};
+        };
+
+        [[nodiscard]] RegistryUniquenessIssues CheckAndRecordUniqueness(const AssetRecord &record, RegistryUniquenessState &state) {
+            const bool duplicateId = !state.identities.insert(record.id).second;
+            const bool duplicatePath = !state.paths.insert(record.sourcePath.String()).second;
+            const bool pathCollision = !state.foldedPaths.insert(PortableFold(record.sourcePath.String())).second;
+            return {duplicateId, duplicatePath, pathCollision};
+        }
+
         [[nodiscard]] bool IsSupportedSourceExtension(std::string extension) {
             std::ranges::transform(extension, extension.begin(), [](const unsigned char value) {
                 return static_cast<char>(std::tolower(value));
@@ -122,6 +141,17 @@ namespace Horo::Assets {
             return ProjectPath::Parse(value);
         }
 
+        [[nodiscard]] bool IsPrefabSourcePath(const std::string_view sourcePath) {
+            return PortableFold(std::filesystem::path{sourcePath}.extension().string()) == ".prefab";
+        }
+
+        [[nodiscard]] Result<void> ValidateSourceType(const ProjectPath &sourcePath, const AssetTypeId &type) {
+            constexpr std::string_view kPrefabAssetType = "core.prefab";
+            if (IsPrefabSourcePath(sourcePath.String()) != (type.Value() == kPrefabAssetType))
+                return Result<void>::Failure(Failure(AssetErrors::TypeMismatch));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<AssetRecord> ParseRecord(const Json &value, const std::optional<std::string_view> objectId = {}) {
             if (!value.is_object() || !value.contains("assetId") || !value["assetId"].is_string())
                 return Result<AssetRecord>::Failure(Failure(AssetErrors::IdentityMissing));
@@ -143,6 +173,8 @@ namespace Horo::Assets {
             Result<ProjectPath> metadata = ParseAssetPath(value["metadataPath"].get<std::string>());
             if (source.HasError() || metadata.HasError())
                 return Result<AssetRecord>::Failure(source.HasError() ? source.ErrorValue() : metadata.ErrorValue());
+            if (Result<void> sourceType = ValidateSourceType(source.Value(), type.Value()); sourceType.HasError())
+                return Result<AssetRecord>::Failure(sourceType.ErrorValue());
             return Result<AssetRecord>::Success(
                 AssetRecord{std::move(id).Value(), std::move(type).Value(), std::move(source).Value(), std::move(metadata).Value()});
         }
@@ -233,9 +265,11 @@ namespace Horo::Assets {
             sidecarJson["metadataPath"] = metadataPath;
             Result<AssetRecord> record = ParseRecord(sidecarJson);
             if (record.HasError()) {
-                const ErrorCodeDescriptor &descriptor = record.ErrorValue().code.Value() == "asset.identity.invalid"
+                const std::string_view code = record.ErrorValue().code.Value();
+                const ErrorCodeDescriptor &descriptor = code == AssetErrors::IdentityInvalid.code.Value()
                                                             ? AssetErrors::RegistryIdentityInvalid
-                                                            : AssetErrors::SidecarMalformed;
+                                                        : code == AssetErrors::TypeMismatch.code.Value() ? AssetErrors::TypeMismatch
+                                                                                                         : AssetErrors::SidecarMalformed;
                 AddDiagnostic(diagnostics, descriptor, metadataPath, record.ErrorValue().message);
                 return std::nullopt;
             }
@@ -314,23 +348,26 @@ namespace Horo::Assets {
             diagnostics.resize(kMaximumDiagnostics - 1);
         std::ranges::sort(candidate, {}, &AssetRecord::id);
         bool ambiguous = false;
-        TransparentStringSet paths;
-        TransparentStringSet foldedPaths;
-        for (std::size_t index = 0; index < candidate.size(); ++index) {
-            const AssetRecord &record = candidate[index];
+        RegistryUniquenessState uniqueness;
+        for (const AssetRecord &record : candidate) {
             if (!record.id.IsValid() || record.type.Value().empty()) {
                 AddDiagnostic(diagnostics, AssetErrors::RegistryIdentityInvalid, record.sourcePath.String());
                 ambiguous = true;
             }
-            if (index > 0 && candidate[index - 1].id == record.id) {
+            if (ValidateSourceType(record.sourcePath, record.type).HasError()) {
+                AddDiagnostic(diagnostics, AssetErrors::TypeMismatch, record.sourcePath.String());
+                ambiguous = true;
+            }
+            const RegistryUniquenessIssues issues = CheckAndRecordUniqueness(record, uniqueness);
+            if (issues.duplicateId) {
                 AddDiagnostic(diagnostics, AssetErrors::DuplicateId, record.sourcePath.String());
                 ambiguous = true;
             }
-            if (!paths.insert(record.sourcePath.String()).second) {
+            if (issues.duplicatePath) {
                 AddDiagnostic(diagnostics, AssetErrors::DuplicatePath, record.sourcePath.String());
                 ambiguous = true;
             }
-            if (!foldedPaths.insert(PortableFold(record.sourcePath.String())).second) {
+            if (issues.pathCollision) {
                 AddDiagnostic(diagnostics, AssetErrors::PathCollision, record.sourcePath.String());
                 ambiguous = true;
             }
@@ -370,10 +407,19 @@ namespace Horo::Assets {
 
         std::vector<AssetRecord> records;
         records.reserve(root["assets"].size());
+        RegistryUniquenessState uniqueness;
         for (const Json &item : root["assets"]) {
             Result<AssetRecord> record = ParseRecord(item);
             if (record.HasError())
                 return Result<std::vector<AssetRecord>>::Failure(record.ErrorValue());
+            const AssetRecord &value = record.Value();
+            const RegistryUniquenessIssues issues = CheckAndRecordUniqueness(value, uniqueness);
+            if (issues.duplicateId)
+                return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::DuplicateId));
+            if (issues.duplicatePath)
+                return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::DuplicatePath));
+            if (issues.pathCollision)
+                return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::PathCollision));
             records.push_back(std::move(record).Value());
         }
         return Result<std::vector<AssetRecord>>::Success(std::move(records));

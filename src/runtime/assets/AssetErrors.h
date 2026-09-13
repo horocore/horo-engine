@@ -9,6 +9,7 @@ namespace Horo::Assets::AssetErrors {
     extern const ErrorCodeDescriptor IdentityMissing;
     extern const ErrorCodeDescriptor RegistryIdentityInvalid;
     extern const ErrorCodeDescriptor SidecarMalformed;
+    extern const ErrorCodeDescriptor TypeMismatch;
     extern const ErrorCodeDescriptor SchemaUnsupported;
     extern const ErrorCodeDescriptor SourceMissing;
     extern const ErrorCodeDescriptor DuplicateId;
