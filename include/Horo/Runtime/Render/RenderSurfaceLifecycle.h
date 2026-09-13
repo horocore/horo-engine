@@ -77,7 +77,8 @@ namespace Horo::Render {
         std::uint64_t revision{};                                 /**< Non-zero lifecycle publication revision. */
         RenderSurfaceState state{RenderSurfaceState::Unattached}; /**< Explicit acquisition-admission state. */
         std::optional<RenderSurfaceConfiguration> active;         /**< Last successfully realized output, when retained. */
-        std::optional<std::uint64_t> candidateSequence;           /**< Frozen transition currently awaiting realization. */
+        std::optional<RenderSurfaceCommand> pendingCandidate;     /**< Latest admitted candidate for a future safe point. */
+        std::optional<std::uint64_t> inFlightSequence;            /**< Frozen transition currently awaiting realization. */
 
         [[nodiscard]] bool operator==(const RenderSurfaceSnapshot &) const noexcept = default;
     };
@@ -117,10 +118,11 @@ namespace Horo::Render {
     /**
      * @brief Owner-thread bounded state machine for one current primary native surface.
      *
-     * Queue retains at most one not-yet-frozen request and coalesces later requests with
-     * explicit supersession evidence. BeginFrameBoundary freezes exactly one candidate;
-     * Complete publishes native success or an honest rollback/suspended/lost outcome.
-     * The class owns no native handles and performs no waits.
+     * Queue publishes at most one not-yet-frozen request and coalesces later requests
+     * with explicit supersession evidence. BeginFrameBoundary freezes exactly one
+     * candidate while later admissions remain separately observable; Complete publishes
+     * native success or an honest rollback/suspended/lost outcome. The class owns no
+     * native handles and performs no waits.
      */
     class RenderSurfaceLifecycle final {
     public:
@@ -144,6 +146,7 @@ namespace Horo::Render {
          * @brief Queues or coalesces one newer request without changing a frozen transition.
          * @param command Complete typed request from the platform/host owner.
          * @return Admission disposition and superseded sequence, or a typed validation/state failure.
+         * @post Successful admission publishes the complete pending candidate at a new snapshot revision.
          */
         [[nodiscard]] Result<RenderSurfaceQueueResult> Queue(RenderSurfaceCommand command);
 
@@ -184,11 +187,23 @@ namespace Horo::Render {
     private:
         struct ConstructionKey {};
 
+        /** @brief Selects one owner-thread presence query without reading lifecycle state eagerly. */
+        enum class PresenceQuery : std::uint8_t {
+            InFlight,
+            Pending,
+        };
+
         RenderSurfaceLifecycle(std::uint64_t owner, ConstructionKey) noexcept;
+
+        /**
+         * @brief Evaluates a lifecycle-state presence query after enforcing owner-thread affinity.
+         * @param query State-presence fact to read.
+         * @return Queried presence or a typed thread-affinity failure.
+         */
+        [[nodiscard]] Result<bool> QueryPresence(PresenceQuery query) const;
 
         std::thread::id ownerThread_;
         RenderSurfaceSnapshot snapshot_;
-        std::optional<RenderSurfaceCommand> pending_;
         std::optional<RenderSurfaceTransition> inFlight_;
         RenderSurfaceState stateBeforeTransition_{RenderSurfaceState::Unattached};
         std::optional<RenderSurfaceConfiguration> activeBeforeTransition_;

@@ -72,24 +72,36 @@ namespace Horo::Render::SurfaceLifecycleTests {
         const auto queued = lifecycle.Queue(Command(1, RenderSurfaceCommandKind::Attach, Configuration()));
         REQUIRE(queued.HasValue());
         CHECK(queued.Value().disposition == RenderSurfaceQueueDisposition::Accepted);
+        const auto admitted = lifecycle.Snapshot();
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().revision == 2);
+        CHECK(admitted.Value().state == RenderSurfaceState::Unattached);
+        CHECK(admitted.Value().pendingCandidate == Command(1, RenderSurfaceCommandKind::Attach, Configuration()));
+        CHECK_FALSE(admitted.Value().inFlightSequence.has_value());
         const auto transition = lifecycle.BeginFrameBoundary();
         REQUIRE(transition.HasValue());
         CHECK(transition.Value().sourceSurface == RenderSurfaceId{42, 0});
-        CHECK(transition.Value().sourceRevision == 1);
+        CHECK(transition.Value().sourceRevision == 2);
         const auto pending = lifecycle.Snapshot();
         REQUIRE(pending.HasValue());
         CHECK(pending.Value().state == RenderSurfaceState::Reconfiguring);
-        CHECK(pending.Value().candidateSequence == 1);
+        CHECK_FALSE(pending.Value().pendingCandidate.has_value());
+        CHECK(pending.Value().inFlightSequence == 1);
         REQUIRE(lifecycle.Queue(Command(2, RenderSurfaceCommandKind::Close)).HasValue());
         CHECK(lifecycle.HasPendingRequest().Value());
+        const auto queuedClose = lifecycle.Snapshot();
+        REQUIRE(queuedClose.HasValue());
+        CHECK(queuedClose.Value().pendingCandidate == Command(2, RenderSurfaceCommandKind::Close));
+        CHECK(queuedClose.Value().inFlightSequence == 1);
 
         const auto complete = lifecycle.Complete(transition.Value(), RenderSurfaceRealization::Ready);
         REQUIRE(complete.HasValue());
         CHECK(complete.Value().surface == RenderSurfaceId{42, 1});
-        CHECK(complete.Value().revision == 3);
+        CHECK(complete.Value().revision == 5);
         CHECK(complete.Value().state == RenderSurfaceState::Ready);
         CHECK(complete.Value().active == Configuration());
-        CHECK_FALSE(complete.Value().candidateSequence.has_value());
+        CHECK(complete.Value().pendingCandidate == Command(2, RenderSurfaceCommandKind::Close));
+        CHECK_FALSE(complete.Value().inFlightSequence.has_value());
         CHECK(Complete(lifecycle, RenderSurfaceRealization::Unattached).state == RenderSurfaceState::Unattached);
     }
 
@@ -99,6 +111,9 @@ namespace Horo::Render::SurfaceLifecycleTests {
         const auto coalesced = lifecycle.Queue(Command(3, RenderSurfaceCommandKind::Resize, Configuration(1920, 3)));
         REQUIRE(coalesced.HasValue());
         CHECK(coalesced.Value() == RenderSurfaceQueueResult{RenderSurfaceQueueDisposition::Coalesced, 2});
+        const auto coalescedSnapshot = lifecycle.Snapshot();
+        REQUIRE(coalescedSnapshot.HasValue());
+        CHECK(coalescedSnapshot.Value().pendingCandidate == Command(3, RenderSurfaceCommandKind::Resize, Configuration(1920, 3)));
 
         const auto close = lifecycle.Queue(Command(4, RenderSurfaceCommandKind::Close));
         REQUIRE(close.HasValue());
@@ -118,6 +133,10 @@ namespace Horo::Render::SurfaceLifecycleTests {
         const RenderSurfaceTransition frozen = FreezeResize(lifecycle, 2, 1600, 2);
         REQUIRE(lifecycle.Queue(Command(3, RenderSurfaceCommandKind::Replace, Configuration(1920, 3))).HasValue());
         CHECK(lifecycle.HasPendingRequest().Value());
+        const auto queuedDuringRealization = lifecycle.Snapshot();
+        REQUIRE(queuedDuringRealization.HasValue());
+        CHECK(queuedDuringRealization.Value().pendingCandidate == Command(3, RenderSurfaceCommandKind::Replace, Configuration(1920, 3)));
+        CHECK(queuedDuringRealization.Value().inFlightSequence == 2);
 
         const auto first = lifecycle.Complete(frozen, RenderSurfaceRealization::Ready);
         REQUIRE(first.HasValue());
@@ -132,7 +151,10 @@ namespace Horo::Render::SurfaceLifecycleTests {
 
     TEST_CASE("Prior native loss explicitly invalidates an incompatible queued candidate", "[runtime][renderer][surface]") {
         RenderSurfaceLifecycle lifecycle = ReadyLifecycle();
-        const RenderSurfaceTransition frozen = FreezeResize(lifecycle, 2, 1600, 2);
+        QueueResize(lifecycle, 2, 1600, 2);
+        const auto frozenResult = lifecycle.BeginFrameBoundary();
+        REQUIRE(frozenResult.HasValue());
+        const RenderSurfaceTransition frozen = frozenResult.Value();
         REQUIRE(lifecycle.Queue(Command(3, RenderSurfaceCommandKind::Suspend)).HasValue());
         const auto lost = lifecycle.Complete(frozen, RenderSurfaceRealization::Lost);
         REQUIRE(lost.HasValue());
@@ -143,6 +165,7 @@ namespace Horo::Render::SurfaceLifecycleTests {
         CHECK(HasCode(invalidated.ErrorValue(), RenderSurfaceLifecycleErrors::PendingRequestInvalidated));
         CHECK(invalidated.ErrorValue().message.find("sequence 3") != std::string::npos);
         CHECK_FALSE(lifecycle.HasPendingRequest().Value());
+        CHECK_FALSE(lifecycle.Snapshot().Value().pendingCandidate.has_value());
 
         REQUIRE(lifecycle.Queue(Command(4, RenderSurfaceCommandKind::Recover, Configuration(1600, 3))).HasValue());
         CHECK(Complete(lifecycle, RenderSurfaceRealization::Ready).state == RenderSurfaceState::Ready);

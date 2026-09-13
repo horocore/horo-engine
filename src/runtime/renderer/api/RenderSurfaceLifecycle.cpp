@@ -53,6 +53,15 @@ namespace Horo::Render {
             return snapshot.surface.IsAttachedGeneration() && snapshot.state != RenderSurfaceState::Unattached;
         }
 
+        [[nodiscard]] bool CanSupersedePending(const std::optional<RenderSurfaceCommand> &pending,
+                                               const RenderSurfaceCommandKind nextKind) noexcept {
+            if (!pending.has_value())
+                return true;
+            if (pending->kind == RenderSurfaceCommandKind::Close)
+                return false;
+            return pending->kind != RenderSurfaceCommandKind::Lose || nextKind == RenderSurfaceCommandKind::Close;
+        }
+
         [[nodiscard]] bool CanQueue(const RenderSurfaceSnapshot &snapshot, const RenderSurfaceCommandKind kind) noexcept {
             constexpr std::array permissions{
                 std::array{true, false, false, false, false, false},  // Attach
@@ -146,10 +155,9 @@ namespace Horo::Render {
     /** @copydoc RenderSurfaceLifecycle::RenderSurfaceLifecycle(RenderSurfaceLifecycle &&) */
     RenderSurfaceLifecycle::RenderSurfaceLifecycle(RenderSurfaceLifecycle &&other) noexcept
         : ownerThread_(std::exchange(other.ownerThread_, {})), snapshot_(std::exchange(other.snapshot_, {})),
-          pending_(std::move(other.pending_)), inFlight_(std::move(other.inFlight_)), stateBeforeTransition_(other.stateBeforeTransition_),
+          inFlight_(std::move(other.inFlight_)), stateBeforeTransition_(other.stateBeforeTransition_),
           activeBeforeTransition_(std::move(other.activeBeforeTransition_)),
           lastAcceptedSequence_(std::exchange(other.lastAcceptedSequence_, 0)) {
-        other.pending_.reset();
         other.inFlight_.reset();
         other.stateBeforeTransition_ = RenderSurfaceState::Unattached;
         other.activeBeforeTransition_.reset();
@@ -165,17 +173,19 @@ namespace Horo::Render {
             return Result<RenderSurfaceQueueResult>::Failure(MakeError(RenderSurfaceLifecycleErrors::StaleRequest));
         if (!CanQueue(snapshot_, command.kind))
             return Result<RenderSurfaceQueueResult>::Failure(MakeError(RenderSurfaceLifecycleErrors::InvalidState));
-        if (pending_.has_value() && (pending_->kind == RenderSurfaceCommandKind::Close ||
-                                     (pending_->kind == RenderSurfaceCommandKind::Lose && command.kind != RenderSurfaceCommandKind::Close)))
+        if (!CanSupersedePending(snapshot_.pendingCandidate, command.kind))
             return Result<RenderSurfaceQueueResult>::Failure(MakeError(RenderSurfaceLifecycleErrors::InvalidState));
+        if (snapshot_.revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<RenderSurfaceQueueResult>::Failure(MakeError(RenderSurfaceLifecycleErrors::RevisionExhausted));
 
         RenderSurfaceQueueResult result;
-        if (pending_.has_value()) {
+        if (snapshot_.pendingCandidate.has_value()) {
             result.disposition = RenderSurfaceQueueDisposition::Coalesced;
-            result.supersededSequence = pending_->sequence;
+            result.supersededSequence = snapshot_.pendingCandidate->sequence;
         }
-        pending_ = std::move(command);
-        lastAcceptedSequence_ = pending_->sequence;
+        snapshot_.pendingCandidate = std::move(command);
+        lastAcceptedSequence_ = snapshot_.pendingCandidate->sequence;
+        ++snapshot_.revision;
         return Result<RenderSurfaceQueueResult>::Success(std::move(result));
     }
 
@@ -185,13 +195,14 @@ namespace Horo::Render {
             return Result<RenderSurfaceTransition>::Failure(MakeError(RenderSurfaceLifecycleErrors::WrongThread));
         if (inFlight_.has_value())
             return Result<RenderSurfaceTransition>::Failure(MakeError(RenderSurfaceLifecycleErrors::TransitionBusy));
-        if (!pending_.has_value())
+        if (!snapshot_.pendingCandidate.has_value())
             return Result<RenderSurfaceTransition>::Failure(MakeError(RenderSurfaceLifecycleErrors::NoPendingRequest));
         if (snapshot_.revision >= std::numeric_limits<std::uint64_t>::max() - 1)
             return Result<RenderSurfaceTransition>::Failure(MakeError(RenderSurfaceLifecycleErrors::RevisionExhausted));
-        if (!CanQueue(snapshot_, pending_->kind)) {
-            const std::uint64_t invalidatedSequence = pending_->sequence;
-            pending_.reset();
+        if (!CanQueue(snapshot_, snapshot_.pendingCandidate->kind)) {
+            const std::uint64_t invalidatedSequence = snapshot_.pendingCandidate->sequence;
+            snapshot_.pendingCandidate.reset();
+            ++snapshot_.revision;
             return Result<RenderSurfaceTransition>::Failure(MakeError(RenderSurfaceLifecycleErrors::PendingRequestInvalidated,
                                                                       std::format("Queued surface command sequence {} is incompatible "
                                                                                   "with the realized surface state.",
@@ -200,9 +211,9 @@ namespace Horo::Render {
 
         stateBeforeTransition_ = snapshot_.state;
         activeBeforeTransition_ = snapshot_.active;
-        inFlight_ = RenderSurfaceTransition{snapshot_.surface, snapshot_.revision, std::move(*pending_)};
-        pending_.reset();
-        snapshot_.candidateSequence = inFlight_->command.sequence;
+        inFlight_ = RenderSurfaceTransition{snapshot_.surface, snapshot_.revision, std::move(*snapshot_.pendingCandidate)};
+        snapshot_.pendingCandidate.reset();
+        snapshot_.inFlightSequence = inFlight_->command.sequence;
         ++snapshot_.revision;
         using enum RenderSurfaceCommandKind;
         if (inFlight_->command.kind == Close)
@@ -235,7 +246,7 @@ namespace Horo::Render {
         }
 
         PublishRealization(snapshot_, transition.command, realization, stateBeforeTransition_, activeBeforeTransition_);
-        snapshot_.candidateSequence.reset();
+        snapshot_.inFlightSequence.reset();
         ++snapshot_.revision;
         inFlight_.reset();
         return Result<RenderSurfaceSnapshot>::Success(snapshot_);
@@ -248,17 +259,20 @@ namespace Horo::Render {
         return Result<RenderSurfaceSnapshot>::Success(snapshot_);
     }
 
-    /** @copydoc RenderSurfaceLifecycle::HasTransitionInFlight */
-    Result<bool> RenderSurfaceLifecycle::HasTransitionInFlight() const {
+    /** @copydoc RenderSurfaceLifecycle::QueryPresence */
+    Result<bool> RenderSurfaceLifecycle::QueryPresence(const PresenceQuery query) const {
         if (ownerThread_ != std::this_thread::get_id())
             return Result<bool>::Failure(MakeError(RenderSurfaceLifecycleErrors::WrongThread));
-        return Result<bool>::Success(inFlight_.has_value());
+        return Result<bool>::Success(query == PresenceQuery::InFlight ? inFlight_.has_value() : snapshot_.pendingCandidate.has_value());
+    }
+
+    /** @copydoc RenderSurfaceLifecycle::HasTransitionInFlight */
+    Result<bool> RenderSurfaceLifecycle::HasTransitionInFlight() const {
+        return QueryPresence(PresenceQuery::InFlight);
     }
 
     /** @copydoc RenderSurfaceLifecycle::HasPendingRequest */
     Result<bool> RenderSurfaceLifecycle::HasPendingRequest() const {
-        if (ownerThread_ != std::this_thread::get_id())
-            return Result<bool>::Failure(MakeError(RenderSurfaceLifecycleErrors::WrongThread));
-        return Result<bool>::Success(pending_.has_value());
+        return QueryPresence(PresenceQuery::Pending);
     }
 }  // namespace Horo::Render

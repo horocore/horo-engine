@@ -1642,8 +1642,10 @@ resolution must not share a resize authority.
 
 `RenderSurfaceLifecycle` is the backend-neutral owner-thread state machine for the
 current single primary surface. It retains at most one pending command, reports an
-explicit superseded sequence when coalescing, and freezes exactly one immutable
-transition at a render safe point. The private native owner completes that exact
+explicit superseded sequence when coalescing, and publishes that complete native-free
+candidate and a new snapshot revision before layout/extraction. It freezes exactly one
+immutable transition at a render safe point while keeping any later pending candidate
+separately observable. The private native owner completes that exact
 owner/generation/revision/sequence with `Ready`, `Suspended`, `Lost`,
 `PreserveActive`, or `Unattached`; mismatched and late completions cannot publish.
 Ready replacement advances the surface generation, while a preserved usable output
