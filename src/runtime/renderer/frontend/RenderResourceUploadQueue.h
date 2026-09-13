@@ -56,13 +56,8 @@ namespace Horo::Render::Detail {
         void EnqueueBuffer(const RenderResourceIdentity identity, const RenderBufferDescriptor &descriptor,
                            const std::span<const std::byte> initialData, const RenderMemoryReservationId memoryReservation,
                            const RenderMemoryPlacement &memoryPlacement) {
-            Request request{.kind = RequestKind::Buffer,
-                            .identity = identity,
-                            .buffer = descriptor,
-                            .stagingOffset = initialData.empty() ? 0 : *AlignedOffset(occupiedStagingBytes_),
-                            .stagingByteCount = initialData.size(),
-                            .memoryReservation = memoryReservation,
-                            .memoryPlacement = memoryPlacement};
+            Request request = MakeDataRequest(RequestKind::Buffer, identity, initialData, memoryReservation, memoryPlacement);
+            request.buffer = descriptor;
             EnqueueWithInitialData(std::move(request), initialData);
         }
 
@@ -74,13 +69,8 @@ namespace Horo::Render::Detail {
         void EnqueueTexture(const RenderResourceIdentity identity, const RenderTextureDescriptor &descriptor,
                             const std::span<const std::byte> initialData, const RenderMemoryReservationId memoryReservation,
                             const RenderMemoryPlacement &memoryPlacement) {
-            Request request{.kind = RequestKind::Texture,
-                            .identity = identity,
-                            .texture = descriptor,
-                            .stagingOffset = initialData.empty() ? 0 : *AlignedOffset(occupiedStagingBytes_),
-                            .stagingByteCount = initialData.size(),
-                            .memoryReservation = memoryReservation,
-                            .memoryPlacement = memoryPlacement};
+            Request request = MakeDataRequest(RequestKind::Texture, identity, initialData, memoryReservation, memoryPlacement);
+            request.texture = descriptor;
             EnqueueWithInitialData(std::move(request), initialData);
         }
 
@@ -164,6 +154,18 @@ namespace Horo::Render::Detail {
         }
 
     private:
+        [[nodiscard]] Request MakeDataRequest(const RequestKind kind, const RenderResourceIdentity identity,
+                                              const std::span<const std::byte> initialData,
+                                              const RenderMemoryReservationId memoryReservation,
+                                              const RenderMemoryPlacement &memoryPlacement) const {
+            return {.kind = kind,
+                    .identity = identity,
+                    .stagingOffset = initialData.empty() ? 0 : *AlignedOffset(occupiedStagingBytes_),
+                    .stagingByteCount = initialData.size(),
+                    .memoryReservation = memoryReservation,
+                    .memoryPlacement = memoryPlacement};
+        }
+
         void EnqueueWithInitialData(Request request, const std::span<const std::byte> initialData) {
             requests_.push_back(std::move(request));
             StageBack(initialData);
@@ -211,16 +213,18 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] std::size_t PendingRequestCount() const noexcept {
             return requests_.size() - readIndex_;
-            RenderResourceUploadLimits limits_;
-            std::vector<Request> requests_;
-            std::size_t readIndex_{0};
-            std::vector<std::byte> stagingStorage_;
-            std::size_t pendingPayloadBytes_{0};
-            std::size_t occupiedStagingBytes_{0};
-            std::uint64_t completedBatchCount_{0};
-            std::uint64_t cancelledRequestCount_{0};
-            std::size_t lastBatchPayloadBytes_{0};
-            std::uint32_t lastBatchRequestCount_{0};
-            bool acceptingRequests_{true};
-        };
-    }  // namespace Horo::Render::Detail
+        }
+
+        RenderResourceUploadLimits limits_;
+        std::vector<Request> requests_;
+        std::size_t readIndex_{0};
+        std::vector<std::byte> stagingStorage_;
+        std::size_t pendingPayloadBytes_{0};
+        std::size_t occupiedStagingBytes_{0};
+        std::uint64_t completedBatchCount_{0};
+        std::uint64_t cancelledRequestCount_{0};
+        std::size_t lastBatchPayloadBytes_{0};
+        std::uint32_t lastBatchRequestCount_{0};
+        bool acceptingRequests_{true};
+    };
+}  // namespace Horo::Render::Detail
