@@ -62,18 +62,6 @@ namespace Horo::Render {
         }
     };
 
-    /** @brief Host-composed renderer memory envelope, default scope, and bounded reclaim policy. */
-    struct RenderFrontendMemoryConfig {
-        RenderMemoryBudgetConfig budget;
-        RenderMemoryScopeId defaultResourceScope{1, 1};
-        std::uint32_t maximumEmptyBlocksReclaimedPerDrain{16};
-
-        /** @brief Reports whether the envelope, scope, and reclaim bound are usable. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return budget.IsValid() && defaultResourceScope.IsValid() && maximumEmptyBlocksReclaimedPerDrain > 0;
-        }
-    };
-
     /**
      * @brief Move-only owner of one begun backend frame until presentation or abort.
      *
@@ -141,7 +129,7 @@ namespace Horo::Render {
      * All methods and destruction must run serially on one host-declared render-capable
      * thread. The frontend and its frame scope are not thread-safe.
      */
-    class RenderFrontend final {
+    class RenderFrontend final {  // NOSONAR(cpp:S1448) Cohesive public facade for one renderer frontend lifetime.
     public:
         /**
          * @brief Creates and initializes the selected backend from a sealed registry.
@@ -155,7 +143,7 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<RenderFrontend>> Create(const RenderBackendRegistry &registry,
                                                                             const RenderBackendId &backendId,
                                                                             const RenderBackendConfig &config,
-                                                                            RenderResourceUploadLimits uploadLimits = {},
+                                                                            const RenderResourceUploadLimits &uploadLimits = {},
                                                                             const RenderFrontendMemoryConfig &memoryConfig = {});
 
         /** @brief Shuts down and releases the owned backend. */
@@ -327,7 +315,7 @@ namespace Horo::Render {
 
     public:
         RenderFrontend(std::unique_ptr<IRenderBackend> backend, RenderResourceOwnerId resourceOwner,
-                       RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                       const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
                        const RenderFrontendMemoryConfig &memoryConfig, ConstructionKey);
 
     private:

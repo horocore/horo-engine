@@ -179,7 +179,7 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::Create */
     Result<std::unique_ptr<RenderFrontend>> RenderFrontend::Create(const RenderBackendRegistry &registry, const RenderBackendId &backendId,
                                                                    const RenderBackendConfig &config,
-                                                                   const RenderResourceUploadLimits uploadLimits,
+                                                                   const RenderResourceUploadLimits &uploadLimits,
                                                                    const RenderFrontendMemoryConfig &memoryConfig) {
         if (!uploadLimits.IsValid()) {
             return Result<std::unique_ptr<RenderFrontend>>::Failure(
@@ -231,7 +231,7 @@ namespace Horo::Render {
     }
 
     RenderFrontend::RenderFrontend(std::unique_ptr<IRenderBackend> backend, const RenderResourceOwnerId resourceOwner,
-                                   const RenderResourceUploadLimits uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
+                                   const RenderResourceUploadLimits &uploadLimits, std::unique_ptr<RenderMemoryBudget> memoryBudget,
                                    const RenderFrontendMemoryConfig &memoryConfig, ConstructionKey)
         : backend_(std::move(backend)), memoryBudget_(std::move(memoryBudget)), memoryConfig_(memoryConfig),
           resourceRegistry_(

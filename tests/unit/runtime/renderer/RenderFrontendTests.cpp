@@ -13,7 +13,8 @@
 #include <utility>
 #include <vector>
 
-namespace {
+namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture state intentionally have internal linkage.
+
     class TrackingStaticMeshExecutor final : public Horo::Render::IStaticMeshPassExecutor {
     public:
         Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {
@@ -24,8 +25,8 @@ namespace {
         std::size_t executeCount{0};
     };
 
-    using namespace Horo;
-    using namespace Horo::Render;
+    using namespace Horo;          // NOSONAR(cpp:S1003) Limited to this test translation unit's anonymous namespace.
+    using namespace Horo::Render;  // NOSONAR(cpp:S1003) Keeps the renderer contract tests readable without public namespace pollution.
 
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -38,7 +39,7 @@ namespace {
         Present,
     };
 
-    struct BackendLifecycleState {
+    struct BackendLifecycleState {  // NOSONAR(cpp:S1820) Flat assertion ledger keeps injected backend transitions directly observable.
         int initializeCount{0};
         int shutdownCount{0};
         int abortCount{0};
@@ -77,6 +78,11 @@ namespace {
 
     BackendLifecycleState lifecycleState;
 
+    class InjectedBackendException final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     class TrackingBackend final : public IRenderBackend {
     public:
         TrackingBackend()
@@ -90,7 +96,7 @@ namespace {
             ++lifecycleState.initializeCount;
             initialized_ = true;
             if (lifecycleState.throwDuringInitialize) {
-                throw std::runtime_error{"Injected initialization failure."};
+                throw InjectedBackendException{"Injected initialization failure."};
             }
             return Result<void>::Success();
         }
@@ -113,7 +119,7 @@ namespace {
             ++lifecycleState.createBufferCount;
             lifecycleState.lastBufferInitialData.assign(initialData.begin(), initialData.end());
             if (lifecycleState.throwDuringResourceCreation) {
-                throw std::runtime_error{"Injected resource creation exception."};
+                throw InjectedBackendException{"Injected resource creation exception."};
             }
             if (lifecycleState.failResourceCreation) {
                 return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
@@ -128,7 +134,7 @@ namespace {
         Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
             ++lifecycleState.createMeshCount;
             if (lifecycleState.throwDuringResourceCreation) {
-                throw std::runtime_error{"Injected resource creation exception."};
+                throw InjectedBackendException{"Injected resource creation exception."};
             }
             if (lifecycleState.failResourceCreation) {
                 return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
@@ -182,7 +188,7 @@ namespace {
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Begin) {
                 lifecycleState.frameActive = true;
                 lifecycleState.activeFrame = FrameToken{descriptor.frameNumber};
-                throw std::runtime_error{"Injected begin failure."};
+                throw InjectedBackendException{"Injected begin failure."};
             }
             if (lifecycleState.failBeginAfterActivation) {
                 lifecycleState.frameActive = true;
@@ -208,7 +214,7 @@ namespace {
             Check(lifecycleState.frameActive);
             Check(plan.frame == lifecycleState.activeFrame);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Execute) {
-                throw std::runtime_error{"Injected execution failure."};
+                throw InjectedBackendException{"Injected execution failure."};
             }
             return Result<void>::Success();
         }
@@ -218,7 +224,7 @@ namespace {
             Check(lifecycleState.frameActive);
             Check(frame == lifecycleState.activeFrame);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Present) {
-                throw std::runtime_error{"Injected presentation exception."};
+                throw InjectedBackendException{"Injected presentation exception."};
             }
             if (lifecycleState.failPresentation) {
                 return Result<void>::Failure({ErrorCode{"render.test.present_failed"},
@@ -251,7 +257,7 @@ namespace {
         Result<void> Resize(FramebufferExtent) override {
             ++lifecycleState.resizeCount;
             if (lifecycleState.throwDuringResize) {
-                throw std::runtime_error{"Injected resize failure."};
+                throw InjectedBackendException{"Injected resize failure."};
             }
             if (lifecycleState.failResize) {
                 return Result<void>::Failure({ErrorCode{"render.test.resize_failed"},
