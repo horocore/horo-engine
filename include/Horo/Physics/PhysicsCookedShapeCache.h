@@ -99,7 +99,7 @@ namespace Horo::Physics {
          * @param limits Positive bounded resident shape and byte ceilings.
          * @return Open cache, or CapacityExceeded when limits are zero or outside qualified maxima.
          */
-        [[nodiscard]] static Result<PhysicsCookedShapeCache> Create(PhysicsShapeCookTargetDigest target,
+        [[nodiscard]] static Result<PhysicsCookedShapeCache> Create(const PhysicsShapeCookTargetDigest &target,
                                                                     const PhysicsCookedShapeCacheLimits &limits = {});
 
         /**
@@ -110,20 +110,20 @@ namespace Horo::Physics {
          * @post Failure publishes no partial entry. Concurrent success for one key shares one published resource.
          */
         [[nodiscard]] Result<PhysicsCookedShapeLease> Acquire(const PhysicsCookedShapeDescriptor &descriptor,
-                                                              std::span<const std::uint8_t> payload);
+                                                              std::span<const std::uint8_t> payload) const;
 
         /**
          * @brief Removes the cache retain for one exact descriptor while preserving active leases.
          * @param descriptor Complete descriptor whose key should be removed.
          * @return True when a resident entry was removed, false when absent, or validation/lifecycle failure.
          */
-        [[nodiscard]] Result<bool> Evict(const PhysicsCookedShapeDescriptor &descriptor);
+        [[nodiscard]] Result<bool> Evict(const PhysicsCookedShapeDescriptor &descriptor) const;
 
         /**
          * @brief Closes admission and removes every cache retain; active leases remain valid.
          * @return Success. Repeated calls are idempotent.
          */
-        [[nodiscard]] Result<void> Shutdown() noexcept;
+        [[nodiscard]] Result<void> Shutdown() const noexcept;
 
         /** @brief Returns an atomic snapshot of cache-owned residency and admission state. */
         [[nodiscard]] PhysicsCookedShapeCacheStats Stats() const noexcept;
