@@ -340,6 +340,19 @@ only acceleration: reject incompatible blobs and prepare from the admitted cooke
 artifact at a permitted non-frame-hot boundary. Cache invalidation does not permit
 an implicit source cook or claim that native pipeline creation can never compile.
 
+`PipelineCacheCompatibility` is the backend-neutral cache-key input. It binds the
+blob to the cache schema, Horo backend identity and module/cache ABI version,
+stable adapter identity and backend-derived device compatibility digest, driver
+identity/version, cooked shader backend/format/artifact key, logical shader
+interface, and canonical pipeline descriptor digest. `ComputePipelineCacheKey`
+hashes those fields in fixed order.
+`SerializePipelineCacheBlob` stores only that key, a payload digest, a bounded
+length, and opaque backend bytes in the versioned `HOROPIPE` envelope.
+`LoadPipelineCacheBlob` validates structure, version, exact key, length, and
+payload digest before returning owned bytes. Stale, foreign, oversized, and
+corrupt blobs return distinct typed failures; callers discard them and prepare
+from the cooked artifact outside frame-hot execution.
+
 Material parameters remain typed semantic values. Renderer packing uses the
 selected artifact's validated target offsets/strides and binding map; C++ struct
 layout or another backend's reflection cannot substitute for that map.

@@ -757,6 +757,8 @@ target_include_directories(HoroInput PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/PipelineCache.cpp
+        runtime/renderer/api/PipelineCacheErrors.cpp
         runtime/renderer/api/RenderAdapter.cpp
         runtime/renderer/api/RenderAdapterErrors.cpp
         runtime/renderer/api/RenderDisplay.cpp
