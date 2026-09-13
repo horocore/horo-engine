@@ -328,7 +328,7 @@ namespace Horo::Render::Detail {
             queue = queueProgress_.end() - 1;
         }
         queue->submitted = completion.value;
-        submissionPins_.emplace_back(SubmissionPin{resourceClass, identity, completion});
+        submissionPins_.emplace_back(resourceClass, identity, completion);
         return Result<void>::Success();
     }
 
