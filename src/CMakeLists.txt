@@ -741,6 +741,7 @@ target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
 
 add_library(HoroPrefabAuthoring STATIC
+        runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabDocument.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
@@ -774,6 +775,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphValidation.cpp
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
         runtime/renderer/api/RenderResourceDescriptors.cpp
+        runtime/renderer/api/ShaderCompilerPipeline.cpp
+        runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
         runtime/renderer/api/ShaderManifest.cpp
         runtime/renderer/api/ShaderManifestErrors.cpp
         runtime/renderer/api/TemporalHistory.cpp
@@ -787,6 +790,22 @@ target_include_directories(HoroRenderApi
         ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(HoroRenderApi PUBLIC HoroEngine::Foundation)
+
+add_library(HoroShaderCompilerToolchain STATIC
+        runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp
+        runtime/renderer/toolchain/ShaderCompilerToolchain.cpp
+        runtime/renderer/toolchain/ShaderCompilerToolchainSupport.cpp
+)
+add_library(HoroEngine::ShaderCompilerToolchain ALIAS HoroShaderCompilerToolchain)
+target_compile_features(HoroShaderCompilerToolchain PUBLIC cxx_std_20)
+target_include_directories(HoroShaderCompilerToolchain
+        PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/toolchain>
+)
+target_link_libraries(HoroShaderCompilerToolchain
+        PUBLIC HoroEngine::RenderApi
+        PRIVATE HoroEngine::Platform
+)
 
 add_library(HoroRenderBackendRegistry STATIC
         runtime/renderer/backend_registry/RenderBackendRegistry.cpp

@@ -62,6 +62,18 @@ namespace Horo::Render {
         }
     };
 
+    /** @brief Host-composed renderer memory envelope, default scope, and bounded reclaim policy. */
+    struct RenderFrontendMemoryConfig {
+        RenderMemoryBudgetConfig budget;
+        RenderMemoryScopeId defaultResourceScope{1, 1};
+        std::uint32_t maximumEmptyBlocksReclaimedPerDrain{16};
+
+        /** @brief Reports whether the envelope, scope, and reclaim bound are usable. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return budget.IsValid() && defaultResourceScope.IsValid() && maximumEmptyBlocksReclaimedPerDrain > 0;
+        }
+    };
+
     /**
      * @brief Move-only owner of one begun backend frame until presentation or abort.
      *
