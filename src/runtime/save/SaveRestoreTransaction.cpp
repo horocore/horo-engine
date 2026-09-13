@@ -3,6 +3,8 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
+#include <exception>
+#include <new>
 #include <ranges>
 #include <utility>
 
@@ -45,8 +47,7 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] bool RequirementLess(const std::unique_ptr<IStagedRestoreParticipant> &left,
-                                           const std::unique_ptr<IStagedRestoreParticipant> &right) noexcept {
+        [[nodiscard]] bool RequirementLess(const IStagedRestoreParticipant *left, const IStagedRestoreParticipant *right) noexcept {
             if (!left)
                 return static_cast<bool>(right);
             if (!right)
@@ -74,7 +75,9 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<std::vector<StagedRestoreParticipantRequirement>> BuildRequirements(
             std::vector<std::unique_ptr<IStagedRestoreParticipant>> &staged) {
-            std::ranges::sort(staged, RequirementLess);
+            std::ranges::sort(staged, RequirementLess, [](const auto &candidate) {
+                return candidate.get();
+            });
             if (std::ranges::any_of(staged, [](const auto &candidate) {
                 return !candidate || !RequirementValid(candidate->Requirement());
             }))
@@ -152,10 +155,11 @@ namespace Horo::Runtime {
                 const SaveParticipantBinding *binding = participants_.Find(requirements_[currentIndex_].participant);
                 if (binding == nullptr)
                     return nullptr;
-                const bool declared = std::ranges::any_of(binding->Descriptor().dependencies, [&](const auto &dependency) {
+                if (const bool declared = std::ranges::any_of(binding->Descriptor().dependencies,
+                                                              [&](const auto &dependency) {
                     return AppliesToRestore(dependency.phase) && dependency.participant == participant;
                 });
-                if (!declared)
+                    !declared)
                     return nullptr;
                 const auto visible = std::ranges::find_if(visiblePlan_, [&](const std::size_t index) {
                     return requirements_[index].participant == participant;
@@ -174,8 +178,7 @@ namespace Horo::Runtime {
         };
 
         [[nodiscard]] Error TerminalErrorOr(const SaveOperationHandle &operation, const ErrorCodeDescriptor &fallback) {
-            const auto snapshot = operation.Snapshot();
-            if (snapshot.has_value() && snapshot->terminalError.has_value())
+            if (const auto snapshot = operation.Snapshot(); snapshot.has_value() && snapshot->terminalError.has_value())
                 return *snapshot->terminalError;
             return MakeError(fallback);
         }
@@ -183,8 +186,8 @@ namespace Horo::Runtime {
 
     /** @copydoc StagedRestoreTransaction::~StagedRestoreTransaction */
     StagedRestoreTransaction::~StagedRestoreTransaction() {
-        if (state_ == StagedRestoreTransactionState::Created || state_ == StagedRestoreTransactionState::Preparing ||
-            state_ == StagedRestoreTransactionState::ReadyToActivate)
+        using enum StagedRestoreTransactionState;
+        if (state_ == Created || state_ == Preparing || state_ == ReadyToActivate)
             RollbackCandidates();
     }
 
@@ -198,10 +201,10 @@ namespace Horo::Runtime {
 
     /** @copydoc StagedRestoreTransaction::operator= */
     StagedRestoreTransaction &StagedRestoreTransaction::operator=(StagedRestoreTransaction &&other) noexcept {
+        using enum StagedRestoreTransactionState;
         if (this == &other)
             return *this;
-        if (state_ == StagedRestoreTransactionState::Created || state_ == StagedRestoreTransactionState::Preparing ||
-            state_ == StagedRestoreTransactionState::ReadyToActivate)
+        if (state_ == Created || state_ == Preparing || state_ == ReadyToActivate)
             RollbackCandidates();
         context_ = other.context_;
         operation_ = std::move(other.operation_);
@@ -211,7 +214,7 @@ namespace Horo::Runtime {
         restorePlan_ = std::move(other.restorePlan_);
         trace_ = std::move(other.trace_);
         state_ = other.state_;
-        other.state_ = StagedRestoreTransactionState::RolledBack;
+        other.state_ = RolledBack;
         return *this;
     }
 
@@ -242,7 +245,7 @@ namespace Horo::Runtime {
             return Result<StagedRestoreTransaction>::Success(
                 StagedRestoreTransaction{std::move(context), std::move(operation), std::move(participants), std::move(staged),
                                          std::move(planResult.requirements), std::move(planResult.plan), std::move(trace)});
-        } catch (...) {
+        } catch (const std::bad_alloc &) {
             return reject(MakeError(SaveErrors::RestoreAllocationFailed));
         }
     }
@@ -326,14 +329,14 @@ namespace Horo::Runtime {
 
     /** @copydoc StagedRestoreTransaction::Rollback */
     void StagedRestoreTransaction::Rollback(Error error) {
-        if (state_ != StagedRestoreTransactionState::Created && state_ != StagedRestoreTransactionState::Preparing &&
-            state_ != StagedRestoreTransactionState::ReadyToActivate)
+        using enum StagedRestoreTransactionState;
+        if (state_ != Created && state_ != Preparing && state_ != ReadyToActivate)
             return;
         RollbackCandidates();
         state_ =
             operation_.Fail(std::move(error), SaveOperationCommitOutcome::NotCommitted) == SaveOperationTransitionResult::CancellationWon
-                ? StagedRestoreTransactionState::RolledBack
-                : StagedRestoreTransactionState::Failed;
+                ? RolledBack
+                : Failed;
     }
 
     /** @copydoc StagedRestoreTransaction::State */
@@ -431,7 +434,9 @@ namespace Horo::Runtime {
                     result = Failure<void>(SaveErrors::RestoreTransitionInvalid);
                     break;
             }
-        } catch (...) {
+        } catch (const std::exception &) {
+            result = Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
+        } catch (...) {  // NOSONAR -- Participant implementations are foreign contract boundaries and may throw non-standard values.
             result = Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
         }
         if (result.HasError())
