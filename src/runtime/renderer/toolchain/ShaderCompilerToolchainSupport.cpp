@@ -12,10 +12,11 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     namespace {
         constexpr std::array<std::uint8_t, 8> PackageMagic{'H', 'O', 'R', 'O', 'S', 'H', 'D', 'R'};
         constexpr std::uint32_t PackageVersion = 1;
+        constexpr std::size_t RecordHeaderBytes = sizeof(std::uint8_t) + sizeof(std::uint32_t) + sizeof(std::uint64_t);
 
         template <typename ValueT> void AppendInteger(std::vector<std::uint8_t> &output, ValueT value) {
             using UnsignedT = std::make_unsigned_t<ValueT>;
-            UnsignedT bits = static_cast<UnsignedT>(value);
+            auto bits = static_cast<UnsignedT>(value);
             for (std::size_t index = 0; index < sizeof(UnsignedT); ++index) {
                 output.push_back(static_cast<std::uint8_t>(bits & 0xffU));
                 if constexpr (sizeof(UnsignedT) > 1U)
@@ -32,16 +33,15 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     Result<std::vector<std::uint8_t>> ReadBoundedFile(const std::filesystem::path &path, const std::size_t maximumBytes,
                                                       const ErrorCodeDescriptor &failure) {
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(path, error);
-        if (error || !std::filesystem::is_regular_file(status))
+        if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
             return Result<std::vector<std::uint8_t>>::Failure(MakeError(failure));
         const std::uintmax_t size = std::filesystem::file_size(path, error);
         if (error || size == 0 || size > maximumBytes || size > std::numeric_limits<std::size_t>::max())
             return Result<std::vector<std::uint8_t>>::Failure(MakeError(failure));
         try {
             std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-            std::ifstream input(path, std::ios::binary);
-            if (!input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())) ||
+            if (std::ifstream input(path, std::ios::binary);
+                !input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())) ||
                 input.peek() != std::char_traits<char>::eof())
                 return Result<std::vector<std::uint8_t>>::Failure(MakeError(failure));
             return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
@@ -51,8 +51,8 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     }
 
     Result<void> WriteFile(const std::filesystem::path &path, const std::span<const std::uint8_t> bytes) {
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
-        if (!output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())) || !output.flush())
+        if (std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            !output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())) || !output.flush())
             return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ScratchIoFailed));
         return Result<void>::Success();
     }
@@ -66,7 +66,6 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
             AppendInteger(output, static_cast<std::uint8_t>(format));
             AppendInteger(output, static_cast<std::uint32_t>(stages.size()));
             for (const ToolArtifactRecord &record : stages) {
-                constexpr std::size_t RecordHeaderBytes = sizeof(std::uint8_t) + sizeof(std::uint32_t) + sizeof(std::uint64_t);
                 if (maximumBytes < RecordHeaderBytes || record.entryPoint.size() > std::numeric_limits<std::uint32_t>::max() ||
                     record.entryPoint.size() > maximumBytes - RecordHeaderBytes || record.bytes.size() > maximumBytes ||
                     output.size() > maximumBytes - RecordHeaderBytes ||
@@ -87,24 +86,26 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     }
 
     std::string_view StageProfile(const ShaderStage stage) noexcept {
+        using enum ShaderStage;
         switch (stage) {
-            case ShaderStage::Vertex:
+            case Vertex:
                 return "vs_6_0";
-            case ShaderStage::Fragment:
+            case Fragment:
                 return "ps_6_0";
-            case ShaderStage::Compute:
+            case Compute:
                 return "cs_6_0";
         }
         return {};
     }
 
     std::string_view StageName(const ShaderStage stage) noexcept {
+        using enum ShaderStage;
         switch (stage) {
-            case ShaderStage::Vertex:
+            case Vertex:
                 return "vert";
-            case ShaderStage::Fragment:
+            case Fragment:
                 return "frag";
-            case ShaderStage::Compute:
+            case Compute:
                 return "comp";
         }
         return {};
@@ -125,7 +126,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
     }
 
     std::string SanitizeLine(std::string line, const std::filesystem::path &scratch, const std::filesystem::path &source) {
-        const auto replaceAll = [&](const std::string &needle) {
+        const auto replaceAll = [&](const std::string_view needle) {
             if (needle.empty())
                 return;
             std::size_t offset = 0;
@@ -157,8 +158,7 @@ namespace Horo::Render::ShaderCompilerToolchainDetail {
         if (parsedLine.ec != std::errc{} || parsedLine.ptr == end || *parsedLine.ptr != ':')
             return diagnostic;
         std::uint32_t column = 0;
-        const auto parsedColumn = std::from_chars(parsedLine.ptr + 1, end, column);
-        if (parsedColumn.ec != std::errc{} || line == 0)
+        if (const auto parsedColumn = std::from_chars(parsedLine.ptr + 1, end, column); parsedColumn.ec != std::errc{} || line == 0)
             return diagnostic;
         diagnostic.category = ShaderCompilerDiagnosticCategory::Source;
         diagnostic.sourceIdentity = sourceIdentity;
