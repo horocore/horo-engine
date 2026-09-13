@@ -299,7 +299,8 @@ namespace {
     static_assert(std::is_nothrow_move_assignable_v<RenderFrameScope>);
     static_assert(!std::is_same_v<RenderMeshHandle, RenderMeshSourceHandle>);
 
-    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend(const RenderFrontendMemoryConfig memoryConfig = {}) {
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend(const RenderFrontendMemoryConfig &memoryConfig = {},
+                                                                         const RenderResourceUploadLimits &uploadLimits = {}) {
         RenderBackendRegistry registry;
         Check(registry
                   .Register(RenderBackendDescriptor{
@@ -309,7 +310,7 @@ namespace {
                   })
                   .HasValue());
         Check(registry.Seal().HasValue());
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, memoryConfig);
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, uploadLimits, memoryConfig);
         Check(created.HasValue());
         return std::move(created).Value();
     }
@@ -707,23 +708,11 @@ namespace {
 
     TEST_CASE("Frontend Upload Arena Aligns Reclaims And Preserves Staged Bytes", "[unit][runtime][renderer][resource][upload]") {
         lifecycleState = {};
-        RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
-                                              {.maximumPendingBytes = 16,
-                                               .maximumBytesPerDrain = 16,
-                                               .maximumRequestsPerDrain = 2,
-                                               .maximumPendingRequests = 2,
-                                               .stagingOffsetAlignment = 8});
-        REQUIRE(created.HasValue());
-        std::unique_ptr<RenderFrontend> frontend = std::move(created).Value();
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend({}, {.maximumPendingBytes = 16,
+                                                                               .maximumBytesPerDrain = 16,
+                                                                               .maximumRequestsPerDrain = 2,
+                                                                               .maximumPendingRequests = 2,
+                                                                               .stagingOffsetAlignment = 8});
 
         const std::array firstBytes{std::byte{0x11}, std::byte{0x12}, std::byte{0x13}};
         const std::array secondBytes{std::byte{0x21}, std::byte{0x22}, std::byte{0x23}};
