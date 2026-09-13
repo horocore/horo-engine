@@ -33,6 +33,17 @@ namespace {
         }};
     }
 
+    [[nodiscard]] RenderResourceRegistryLimits SubmissionLimits(const std::uint32_t retirementDrainBudget,
+                                                                const std::uint32_t maximumSubmissionPins) {
+        return {.maximumSlots = 2,
+                .maximumPendingRequests = 2,
+                .retirementDrainBudget = retirementDrainBudget,
+                .maximumOperationResults = 2,
+                .maximumSubmissionPins = maximumSubmissionPins,
+                .maximumTrackedQueues = 1,
+                .completionDrainBudget = 1};
+    }
+
     TEST_CASE("Resource registry publishes a pending generation and records completion", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
@@ -342,14 +353,7 @@ namespace {
     TEST_CASE("Submission completion validation is typed and capacity bounded", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
-        RenderResourceRegistry registry{owner.Value(),
-                                        {.maximumSlots = 2,
-                                         .maximumPendingRequests = 2,
-                                         .retirementDrainBudget = 1,
-                                         .maximumOperationResults = 2,
-                                         .maximumSubmissionPins = 1,
-                                         .maximumTrackedQueues = 1,
-                                         .completionDrainBudget = 1}};
+        RenderResourceRegistry registry{owner.Value(), SubmissionLimits(1, 1)};
         const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(buffer.HasValue());
         REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 1).HasValue());
@@ -371,14 +375,7 @@ namespace {
     TEST_CASE("Completion draining is bounded across pending queue uses", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
-        RenderResourceRegistry registry{owner.Value(),
-                                        {.maximumSlots = 2,
-                                         .maximumPendingRequests = 2,
-                                         .retirementDrainBudget = 2,
-                                         .maximumOperationResults = 2,
-                                         .maximumSubmissionPins = 3,
-                                         .maximumTrackedQueues = 1,
-                                         .completionDrainBudget = 1}};
+        RenderResourceRegistry registry{owner.Value(), SubmissionLimits(2, 3)};
         const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(buffer.HasValue());
         REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 1).HasValue());
