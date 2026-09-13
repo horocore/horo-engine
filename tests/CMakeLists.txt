@@ -1471,6 +1471,12 @@ add_executable(HoroRuntimeSaveOperationTests
 target_compile_features(HoroRuntimeSaveOperationTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveOperationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeSaveOperationTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveSafePointCoordinatorTests
+        unit/runtime/save/SaveSafePointCoordinatorTests.cpp
+)
+target_compile_features(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveTestCompositionsTests
         unit/runtime/save/SaveTestCompositionsTests.cpp
 )
@@ -2010,6 +2016,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveReferenceTests
         HoroRuntimeSaveSlotMetadataTests
         HoroRuntimeSaveOperationTests
+        HoroRuntimeSaveSafePointCoordinatorTests
         HoroRuntimeSaveTestCompositionsTests
         HoroRuntimeSceneTests
         HoroRuntimeSavedSceneBootstrapTests

@@ -240,6 +240,37 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor OperationAbandoned{kDomain, ErrorCode{"save.operation.abandoned"}, kError,
                                                  "The asynchronous save operation producer ended without a terminal result.",
                                                  "Keep the producer alive until it completes, fails, or observes cancellation."};
+    const ErrorCodeDescriptor LifecycleInvalid{kDomain, ErrorCode{"save.lifecycle.invalid"}, kError,
+                                               "Runtime Save lifecycle evidence is invalid.",
+                                               "Supply a non-zero operation and exact runtime, scene, and registry generations."};
+    const ErrorCodeDescriptor ThreadAffinityViolation{kDomain, ErrorCode{"save.lifecycle.thread_affinity_violation"}, kError,
+                                                      "Runtime Save lifecycle work ran on a non-owner thread.",
+                                                      "Route admission, transitions, and safe-point work to the runtime owner thread."};
+    const ErrorCodeDescriptor GenerationStale{kDomain, ErrorCode{"save.lifecycle.generation_stale"}, kError,
+                                              "Runtime Save work addresses a stale runtime, scene, or registry generation.",
+                                              "Discard the completion or restart work against the exact active generations."};
+    const ErrorCodeDescriptor SafePointInvalid{kDomain, ErrorCode{"save.lifecycle.safe_point_invalid"}, kError,
+                                               "Simulation-owned save work was requested outside its lifecycle commit safe point.",
+                                               "Run capture and restore publication inside CommitDeferredLifecycleChanges."};
+    const ErrorCodeDescriptor LifecycleSuspended{kDomain, ErrorCode{"save.lifecycle.suspended"}, kError,
+                                                 "Runtime Save safe-point work is deferred while the runtime is suspended.",
+                                                 "Keep the operation queued and retry after the runtime resumes."};
+    const ErrorCodeDescriptor LifecycleUnavailable{kDomain, ErrorCode{"save.lifecycle.unavailable"}, kError,
+                                                   "Runtime Save lifecycle admission is closed.",
+                                                   "Do not submit new work after host shutdown begins."};
+    const ErrorCodeDescriptor LifecycleCapacityExceeded{kDomain, ErrorCode{"save.lifecycle.capacity_exceeded"}, kError,
+                                                        "Runtime Save lifecycle operation capacity is exhausted.",
+                                                        "Retire acknowledged operations or revise the explicit session bound."};
+    const ErrorCodeDescriptor CompletionInvalid{kDomain, ErrorCode{"save.lifecycle.completion_invalid"}, kError,
+                                                "A Runtime Save worker completion contradicts its fenced operation.",
+                                                "Publish exactly one well-formed completion for detached work."};
+    const ErrorCodeDescriptor
+        LifecycleCallbackFailed{kDomain, ErrorCode{"save.lifecycle.callback_failed"}, kError,
+                                "A Runtime Save safe-point callback threw unexpectedly.",
+                                "Return expected failures through Result and keep safe-point callbacks non-throwing."};
+    const ErrorCodeDescriptor LifecycleReentrant{kDomain, ErrorCode{"save.lifecycle.reentrant"}, kError,
+                                                 "Runtime Save lifecycle mutation re-entered an active safe-point drain.",
+                                                 "Queue follow-up work and apply it after the current safe point returns."};
     const ErrorCodeDescriptor CompositionUnsupported{kDomain, ErrorCode{"save.composition.unsupported"}, kError,
                                                      "The selected save composition does not support persistence.",
                                                      "Select a save-capable product composition before admission."};

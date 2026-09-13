@@ -148,6 +148,26 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor OperationDeadlineExceeded;
     /** @brief The operation producer was released without publishing a terminal result. */
     extern const ErrorCodeDescriptor OperationAbandoned;
+    /** @brief A save lifecycle coordinator, operation descriptor, or generation is malformed. */
+    extern const ErrorCodeDescriptor LifecycleInvalid;
+    /** @brief Save lifecycle mutation or safe-point execution was attempted from a non-owner thread. */
+    extern const ErrorCodeDescriptor ThreadAffinityViolation;
+    /** @brief Save work addresses a runtime, scene, or registry generation that is no longer current. */
+    extern const ErrorCodeDescriptor GenerationStale;
+    /** @brief Save simulation work was requested outside CommitDeferredLifecycleChanges. */
+    extern const ErrorCodeDescriptor SafePointInvalid;
+    /** @brief Save safe-point work is deferred while the runtime is suspended. */
+    extern const ErrorCodeDescriptor LifecycleSuspended;
+    /** @brief Save lifecycle admission or mutation is closed during host teardown. */
+    extern const ErrorCodeDescriptor LifecycleUnavailable;
+    /** @brief The bounded save lifecycle operation store has no remaining capacity. */
+    extern const ErrorCodeDescriptor LifecycleCapacityExceeded;
+    /** @brief A detached worker completion is malformed or contradicts operation state. */
+    extern const ErrorCodeDescriptor CompletionInvalid;
+    /** @brief A host safe-point callback unexpectedly threw instead of returning a typed failure. */
+    extern const ErrorCodeDescriptor LifecycleCallbackFailed;
+    /** @brief Lifecycle mutation attempted to re-enter an active save safe-point drain. */
+    extern const ErrorCodeDescriptor LifecycleReentrant;
     /** @brief The selected save composition explicitly does not support persistence. */
     extern const ErrorCodeDescriptor CompositionUnsupported;
     /** @brief Deterministic composition limits or a submitted request are malformed. */

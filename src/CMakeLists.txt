@@ -207,6 +207,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveReference.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveOperation.cpp
+        runtime/save/SaveSafePointCoordinator.cpp
         runtime/save/SaveTestCompositions.cpp
 )
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
