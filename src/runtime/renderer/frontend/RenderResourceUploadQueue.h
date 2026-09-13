@@ -6,6 +6,7 @@
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <ranges>
