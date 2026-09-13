@@ -427,6 +427,8 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
     Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDocument.h
+    Horo/Prefab/PrefabSceneIdentityRemap.h
+    Horo/Prefab/PrefabSourceResolver.h
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
@@ -456,6 +458,10 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/ShaderManifestErrors.h
     Horo/Runtime/Render/ShaderPermutation.h
     Horo/Runtime/Render/ShaderPermutationErrors.h
+    Horo/Runtime/Render/ShaderReflection.h
+    Horo/Runtime/Render/ShaderReflectionErrors.h
+    Horo/Runtime/Render/StandardPbrMaterial.h
+    Horo/Runtime/Render/StandardPbrMaterialErrors.h
     Horo/Runtime/Render/TemporalHistory.h
     Horo/Runtime/Render/TemporalHistoryErrors.h
     Horo/Runtime/Render/Texture.h

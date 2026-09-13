@@ -119,6 +119,15 @@ namespace Horo::Render::FrontendErrors {
                                                           .retryable = false,
                                                           .userActionable = false};
 
+    const ErrorCodeDescriptor InvalidResourceRetirementLimits{.domain = Domain,
+                                                              .code = ErrorCode{"render.frontend.resource.invalid_retirement_limits"},
+                                                              .defaultSeverity = ErrorSeverity::Error,
+                                                              .summary = "Render resource retirement limits are invalid.",
+                                                              .remediationHint =
+                                                                  "Use finite non-zero completion, queue, and destruction bounds.",
+                                                              .retryable = false,
+                                                              .userActionable = false};
+
     const ErrorCodeDescriptor InvalidStaticMeshPass{.domain = Domain,
                                                     .code = ErrorCode{"render.frontend.invalid_static_mesh_pass"},
                                                     .defaultSeverity = ErrorSeverity::Error,
@@ -216,6 +225,32 @@ namespace Horo::Render::FrontendErrors {
                                                         .retryable = true,
                                                         .userActionable = false};
 
+    const ErrorCodeDescriptor ResourceCompletionInvalid{.domain = Domain,
+                                                        .code = ErrorCode{"render.frontend.resource.completion_invalid"},
+                                                        .defaultSeverity = ErrorSeverity::Error,
+                                                        .summary = "Render resource completion point is invalid.",
+                                                        .remediationHint = "Use a valid frontend-issued queue and timeline value.",
+                                                        .retryable = false,
+                                                        .userActionable = false};
+
+    const ErrorCodeDescriptor ResourceCompletionRegressed{.domain = Domain,
+                                                          .code = ErrorCode{"render.frontend.resource.completion_regressed"},
+                                                          .defaultSeverity = ErrorSeverity::Error,
+                                                          .summary = "Render resource completion timeline regressed.",
+                                                          .remediationHint =
+                                                              "Report monotonically increasing submitted and completed queue values.",
+                                                          .retryable = false,
+                                                          .userActionable = false};
+
+    const ErrorCodeDescriptor ResourceCompletionUnknownQueue{.domain = Domain,
+                                                             .code = ErrorCode{"render.frontend.resource.completion_unknown_queue"},
+                                                             .defaultSeverity = ErrorSeverity::Error,
+                                                             .summary = "Render resource completion queue is unknown.",
+                                                             .remediationHint =
+                                                                 "Acknowledge only queues with accepted resource submissions.",
+                                                             .retryable = false,
+                                                             .userActionable = false};
+
     const ErrorCodeDescriptor ResourceDependencyNotReady{.domain = Domain,
                                                          .code = ErrorCode{"render.frontend.resource.dependency_not_ready"},
                                                          .defaultSeverity = ErrorSeverity::Error,
@@ -299,9 +334,9 @@ namespace Horo::Render::FrontendErrors {
     const ErrorCodeDescriptor ResourceUploadCapacityExceeded{.domain = Domain,
                                                              .code = ErrorCode{"render.frontend.resource.upload_capacity_exceeded"},
                                                              .defaultSeverity = ErrorSeverity::Error,
-                                                             .summary = "Render resource upload queue byte capacity is exhausted.",
+                                                             .summary = "Render resource upload arena capacity is exhausted.",
                                                              .remediationHint =
-                                                                 "Drain pending uploads before submitting more initial data.",
+                                                                 "Drain pending uploads before submitting more resource work.",
                                                              .retryable = true,
                                                              .userActionable = false};
 
@@ -321,6 +356,16 @@ namespace Horo::Render::FrontendErrors {
                                                      .remediationHint = "Use a handle issued by the active frontend.",
                                                      .retryable = false,
                                                      .userActionable = false};
+
+    const ErrorCodeDescriptor
+        ResourceSubmissionCapacityExceeded{.domain = Domain,
+                                           .code = ErrorCode{"render.frontend.resource.submission_capacity_exceeded"},
+                                           .defaultSeverity = ErrorSeverity::Error,
+                                           .summary = "Render resource submission tracking capacity is exhausted.",
+                                           .remediationHint =
+                                               "Drain GPU completion acknowledgements before accepting more resource submissions.",
+                                           .retryable = true,
+                                           .userActionable = false};
 
     const ErrorCodeDescriptor ResourceStale{.domain = Domain,
                                             .code = ErrorCode{"render.frontend.resource.stale"},

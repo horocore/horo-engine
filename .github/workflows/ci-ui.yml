@@ -22,7 +22,7 @@ jobs:
       commit_list: ${{ steps.commits.outputs.commit_list }}
       since_sha:   ${{ steps.commits.outputs.since_sha }}
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
 
@@ -69,7 +69,7 @@ jobs:
     timeout-minutes: 25
     needs: report-commits
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Restore compiler cache
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
@@ -141,7 +141,7 @@ jobs:
     timeout-minutes: 25
     needs: report-commits
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Restore compiler cache
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
@@ -194,7 +194,7 @@ jobs:
     env:
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@1583d6b38d7b86129b83e1c73e4d8d455ca32f48

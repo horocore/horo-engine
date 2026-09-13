@@ -122,7 +122,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ReleaseOrCancelResource(Detail::RenderResourceRegistry &registry,
                                                            Detail::RenderResourceUploadQueue &queue, RenderMemoryBudget &memoryBudget,
                                                            const Detail::RenderResourceClass resourceClass,
-                                                           const Detail::RenderResourceIdentity identity) {
+                                                           const Detail::RenderResourceIdentity identity,
+                                                           const std::size_t maximumEmptyBlocksReclaimedPerDrain) {
             const auto state = registry.State(resourceClass, identity);
             if (state.HasError())
                 return Result<void>::Failure(state.ErrorValue());
@@ -134,8 +135,10 @@ namespace Horo::Render {
             } else {
                 released = registry.Release(resourceClass, identity);
             }
-            if (released.HasValue())
+            if (released.HasValue()) {
                 static_cast<void>(registry.DrainRetirements());
+                static_cast<void>(memoryBudget.ReclaimEmptyBlocks(maximumEmptyBlocksReclaimedPerDrain));
+            }
             return released;
         }
     }  // namespace
@@ -227,7 +230,7 @@ namespace Horo::Render {
         if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
-                                  "The bounded initial-upload byte queue has insufficient capacity."));
+                                  "The bounded upload arena has insufficient staging-byte or request capacity."));
 
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Buffer, [this, &descriptor] {
@@ -276,6 +279,11 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::InvalidMeshDescriptor,
                                   "Mesh layout or counts are incompatible with the referenced buffers."));
         }
+        if (!resourceUploadQueue_->CanEnqueue(0)) {
+            return Result<ResourceCreation<RenderMeshHandle>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                  "The bounded upload arena has insufficient request capacity."));
+        }
 
         const std::array dependencies{Identity(descriptor.vertexBuffer), Identity(descriptor.indexBuffer)};
         auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::Mesh, dependencies);
@@ -319,7 +327,7 @@ namespace Horo::Render {
         if (!resourceUploadQueue_->CanEnqueue(initialData.size()))
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
-                                  "The bounded initial-upload byte queue has insufficient capacity."));
+                                  "The bounded upload arena has insufficient staging-byte or request capacity."));
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Texture, [this, &descriptor] {
             return backend_->QueryTextureMemoryCost(descriptor);
@@ -366,6 +374,11 @@ namespace Horo::Render {
         }
         if (const Result<void> dependency = ValidateTextureViewDependency(descriptor); dependency.HasError())
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(dependency.ErrorValue());
+        if (!resourceUploadQueue_->CanEnqueue(0)) {
+            return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                  "The bounded upload arena has insufficient request capacity."));
+        }
         const std::array dependencies{Identity(descriptor.texture)};
         auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::TextureView, dependencies);
         if (reserved.HasError())
@@ -396,6 +409,11 @@ namespace Horo::Render {
         }
         if (const Result<void> dependencies = ValidateRenderTargetDependencies(descriptor); dependencies.HasError())
             return Result<ResourceCreation<RenderTargetHandle>>::Failure(dependencies.ErrorValue());
+        if (!resourceUploadQueue_->CanEnqueue(0)) {
+            return Result<ResourceCreation<RenderTargetHandle>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                  "The bounded upload arena has insufficient request capacity."));
+        }
         std::array<Detail::RenderResourceIdentity, 2> dependencies{};
         std::size_t dependencyCount = 0;
         if (descriptor.colorAttachment.IsValid())
@@ -443,15 +461,23 @@ namespace Horo::Render {
         std::size_t completedRequests = 0;
         std::size_t completedBytes = 0;
         while (!resourceUploadQueue_->Empty() && !resourceUploadQueue_->DrainLimitReached(completedRequests, completedBytes)) {
-            Detail::RenderResourceUploadQueue::Request request = resourceUploadQueue_->Pop();
-            completedBytes += request.initialData.size();
-            const Result<std::uint64_t> created = RealizeResourceRequest(*backend_, *resourceRegistry_, request);
+            const Detail::RenderResourceUploadQueue::Request &request = resourceUploadQueue_->Front();
+            const std::span<const std::byte> initialData = resourceUploadQueue_->FrontInitialData();
+            completedBytes += initialData.size();
+            const Result<std::uint64_t> created = RealizeResourceRequest(*backend_, *resourceRegistry_, request, initialData);
             CompleteResourceRequest(*backend_, *memoryBudget_, *resourceRegistry_, request, created);
+            static_cast<void>(resourceUploadQueue_->Pop());
             ++completedRequests;
         }
+        resourceUploadQueue_->CompleteBatch(completedRequests, completedBytes);
         static_cast<void>(resourceRegistry_->DrainRetirements());
         static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
         return Result<std::size_t>::Success(completedRequests);
+    }
+
+    /** @copydoc RenderFrontend::UploadSnapshot */
+    RenderResourceUploadSnapshot RenderFrontend::UploadSnapshot() const noexcept {
+        return resourceUploadQueue_->Snapshot();
     }
 
     /** @copydoc RenderFrontend::ResourceState(RenderBufferHandle) */
@@ -491,7 +517,7 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be released during an active frame."));
         }
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::Buffer,
-                                       Identity(buffer));
+                                       Identity(buffer), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseMesh */
@@ -501,7 +527,7 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A mesh cannot be released during an active frame."));
         }
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::Mesh,
-                                       Identity(mesh));
+                                       Identity(mesh), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseTexture */
@@ -510,7 +536,7 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be released during an active frame."));
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::Texture,
-                                       Identity(texture));
+                                       Identity(texture), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseTextureView */
@@ -519,7 +545,7 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture view cannot be released during an active frame."));
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::TextureView,
-                                       Identity(view));
+                                       Identity(view), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseRenderTarget */
@@ -527,8 +553,9 @@ namespace Horo::Render {
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A render target cannot be released during an active frame."));
-        const Result<void> released = ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_,
-                                                              Detail::RenderResourceClass::RenderTarget, Identity(target));
+        const Result<void> released =
+            ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::RenderTarget,
+                                    Identity(target), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
         if (released.HasValue() && target.slot < targets_.size())
             targets_[target.slot] = {};
         return released;
@@ -672,5 +699,41 @@ namespace Horo::Render {
     Result<std::uint64_t> Detail::RenderFrontendResourceAccess::BackendInstance(const RenderFrontend &frontend,
                                                                                 const RenderTargetHandle target) {
         return frontend.BackendInstance(target);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderBufferHandle buffer,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Buffer, Identity(buffer), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderMeshHandle mesh,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Mesh, Identity(mesh), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTextureHandle texture,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Texture, Identity(texture), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTextureViewHandle view,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::TextureView, Identity(view), completion);
+    }
+
+    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTargetHandle target,
+                                                                       const RenderTimelinePoint completion) {
+        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::RenderTarget, Identity(target), completion);
+    }
+
+    Result<std::size_t> Detail::RenderFrontendResourceAccess::AcknowledgeCompletion(RenderFrontend &frontend,
+                                                                                    const RenderTimelinePoint completion) {
+        auto acknowledged = frontend.resourceRegistry_->AcknowledgeCompletion(completion);
+        if (acknowledged.HasError()) {
+            return acknowledged;
+        }
+        static_cast<void>(frontend.resourceRegistry_->DrainRetirements());
+        static_cast<void>(frontend.memoryBudget_->ReclaimEmptyBlocks(frontend.memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
+        return acknowledged;
     }
 }  // namespace Horo::Render

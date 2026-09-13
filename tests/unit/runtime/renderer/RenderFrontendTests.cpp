@@ -13,7 +13,8 @@
 #include <utility>
 #include <vector>
 
-namespace {
+namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture state intentionally have internal linkage.
+
     class TrackingStaticMeshExecutor final : public Horo::Render::IStaticMeshPassExecutor {
     public:
         Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {
@@ -24,8 +25,8 @@ namespace {
         std::size_t executeCount{0};
     };
 
-    using namespace Horo;
-    using namespace Horo::Render;
+    using namespace Horo;          // NOSONAR(cpp:S1003) Limited to this test translation unit's anonymous namespace.
+    using namespace Horo::Render;  // NOSONAR(cpp:S1003) Keeps the renderer contract tests readable without public namespace pollution.
 
     void Check(const bool condition) {
         REQUIRE((condition));
@@ -38,7 +39,7 @@ namespace {
         Present,
     };
 
-    struct BackendLifecycleState {
+    struct BackendLifecycleState {  // NOSONAR(cpp:S1820) Flat assertion ledger keeps injected backend transitions directly observable.
         int initializeCount{0};
         int shutdownCount{0};
         int abortCount{0};
@@ -77,6 +78,11 @@ namespace {
 
     BackendLifecycleState lifecycleState;
 
+    class InjectedBackendException final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     class TrackingBackend final : public IRenderBackend {
     public:
         TrackingBackend()
@@ -90,7 +96,7 @@ namespace {
             ++lifecycleState.initializeCount;
             initialized_ = true;
             if (lifecycleState.throwDuringInitialize) {
-                throw std::runtime_error{"Injected initialization failure."};
+                throw InjectedBackendException{"Injected initialization failure."};
             }
             return Result<void>::Success();
         }
@@ -112,32 +118,12 @@ namespace {
                                            const RenderMemoryPlacement &) override {
             ++lifecycleState.createBufferCount;
             lifecycleState.lastBufferInitialData.assign(initialData.begin(), initialData.end());
-            if (lifecycleState.throwDuringResourceCreation) {
-                throw std::runtime_error{"Injected resource creation exception."};
-            }
-            if (lifecycleState.failResourceCreation) {
-                return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
-                                                       ErrorDomainId{"render.test"},
-                                                       ErrorSeverity::Error,
-                                                       "Injected resource creation failure.",
-                                                       {}});
-            }
-            return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
+            return CompleteResourceCreation();
         }
 
         Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
             ++lifecycleState.createMeshCount;
-            if (lifecycleState.throwDuringResourceCreation) {
-                throw std::runtime_error{"Injected resource creation exception."};
-            }
-            if (lifecycleState.failResourceCreation) {
-                return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
-                                                       ErrorDomainId{"render.test"},
-                                                       ErrorSeverity::Error,
-                                                       "Injected resource creation failure.",
-                                                       {}});
-            }
-            return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
+            return CompleteResourceCreation();
         }
 
         Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, const std::span<const std::byte> initialData,
@@ -182,7 +168,7 @@ namespace {
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Begin) {
                 lifecycleState.frameActive = true;
                 lifecycleState.activeFrame = FrameToken{descriptor.frameNumber};
-                throw std::runtime_error{"Injected begin failure."};
+                throw InjectedBackendException{"Injected begin failure."};
             }
             if (lifecycleState.failBeginAfterActivation) {
                 lifecycleState.frameActive = true;
@@ -208,7 +194,7 @@ namespace {
             Check(lifecycleState.frameActive);
             Check(plan.frame == lifecycleState.activeFrame);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Execute) {
-                throw std::runtime_error{"Injected execution failure."};
+                throw InjectedBackendException{"Injected execution failure."};
             }
             return Result<void>::Success();
         }
@@ -218,7 +204,7 @@ namespace {
             Check(lifecycleState.frameActive);
             Check(frame == lifecycleState.activeFrame);
             if (lifecycleState.frameThrowPoint == FrameThrowPoint::Present) {
-                throw std::runtime_error{"Injected presentation exception."};
+                throw InjectedBackendException{"Injected presentation exception."};
             }
             if (lifecycleState.failPresentation) {
                 return Result<void>::Failure({ErrorCode{"render.test.present_failed"},
@@ -251,7 +237,7 @@ namespace {
         Result<void> Resize(FramebufferExtent) override {
             ++lifecycleState.resizeCount;
             if (lifecycleState.throwDuringResize) {
-                throw std::runtime_error{"Injected resize failure."};
+                throw InjectedBackendException{"Injected resize failure."};
             }
             if (lifecycleState.failResize) {
                 return Result<void>::Failure({ErrorCode{"render.test.resize_failed"},
@@ -271,6 +257,20 @@ namespace {
         }
 
     private:
+        [[nodiscard]] Result<std::uint64_t> CompleteResourceCreation() {
+            if (lifecycleState.throwDuringResourceCreation) {
+                throw InjectedBackendException{"Injected resource creation exception."};
+            }
+            if (lifecycleState.failResourceCreation) {
+                return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
+                                                       ErrorDomainId{"render.test"},
+                                                       ErrorSeverity::Error,
+                                                       "Injected resource creation failure.",
+                                                       {}});
+            }
+            return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
+        }
+
         RenderBackendCapabilities capabilities_;
         bool initialized_{false};
     };
@@ -303,12 +303,46 @@ namespace {
     static_assert(std::is_nothrow_move_assignable_v<RenderFrameScope>);
     static_assert(!std::is_same_v<RenderMeshHandle, RenderMeshSourceHandle>);
 
-    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend(const RenderFrontendMemoryConfig memoryConfig = {}) {
+    [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend(const RenderFrontendMemoryConfig &memoryConfig = {},
+                                                                         const RenderResourceUploadLimits &uploadLimits = {}) {
         RenderBackendRegistry registry;
         RegisterTrackingBackend(registry);
-        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, memoryConfig);
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, uploadLimits, memoryConfig);
         Check(created.HasValue());
         return std::move(created).Value();
+    }
+
+    void VerifyUploadRequestLimit(RenderFrontend &frontend) {
+        const auto requestFull =
+            frontend.CreateTexture({.extent = {1, 1}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled});
+        REQUIRE(requestFull.HasError());
+        CHECK(requestFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+    }
+
+    void VerifyUploadCompaction(RenderFrontend &frontend, const RenderBufferHandle first, const std::span<const std::byte> secondBytes) {
+        REQUIRE(frontend.ReleaseBuffer(first).HasValue());
+        const RenderResourceUploadSnapshot compacted = frontend.UploadSnapshot();
+        CHECK(compacted.pendingPayloadBytes == secondBytes.size());
+        CHECK(compacted.occupiedStagingBytes == secondBytes.size());
+        CHECK(compacted.pendingRequests == 1);
+        CHECK(compacted.cancelledRequestCount == 1);
+
+        const std::array<std::byte, 9> paddingOverflow{};
+        const auto alignmentFull = frontend.CreateBuffer({.byteSize = paddingOverflow.size(),
+                                                          .usage = RenderBufferUsage::Vertex,
+                                                          .access = RenderBufferAccess::HostVisible},
+                                                         paddingOverflow);
+        REQUIRE(alignmentFull.HasError());
+        CHECK(alignmentFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+
+        REQUIRE(frontend.ProcessResourceRequests().HasValue());
+        CHECK(lifecycleState.lastBufferInitialData == std::vector<std::byte>(secondBytes.begin(), secondBytes.end()));
+        const RenderResourceUploadSnapshot completed = frontend.UploadSnapshot();
+        CHECK(completed.pendingPayloadBytes == 0);
+        CHECK(completed.occupiedStagingBytes == 0);
+        CHECK(completed.completedBatchCount == 1);
+        CHECK(completed.lastBatchPayloadBytes == secondBytes.size());
+        CHECK(completed.lastBatchRequestCount == 1);
     }
 
     [[nodiscard]] RenderMeshDescriptor MeshDescriptor(const RenderBufferHandle vertexBuffer, const RenderBufferHandle indexBuffer) {
@@ -624,6 +658,20 @@ namespace {
                                               {.maximumPendingBytes = 8, .maximumBytesPerDrain = 16, .maximumRequestsPerDrain = 1});
         Check(invalid.HasError());
         Check(invalid.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
+        auto invalidAlignment = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
+                                                       {.maximumPendingBytes = 16,
+                                                        .maximumBytesPerDrain = 8,
+                                                        .maximumRequestsPerDrain = 2,
+                                                        .stagingOffsetAlignment = 3});
+        Check(invalidAlignment.HasError());
+        Check(invalidAlignment.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
+        auto invalidRequestBounds = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
+                                                           {.maximumPendingBytes = 16,
+                                                            .maximumBytesPerDrain = 8,
+                                                            .maximumRequestsPerDrain = 2,
+                                                            .maximumPendingRequests = 1});
+        Check(invalidRequestBounds.HasError());
+        Check(invalidRequestBounds.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
 
         RenderFrontendMemoryConfig invalidMemory;
         invalidMemory.budget.hardCapBytes = 0;
@@ -631,6 +679,13 @@ namespace {
             RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, invalidMemory);
         Check(invalidMemoryFrontend.HasError());
         Check(invalidMemoryFrontend.ErrorValue().code.Value() == "render.frontend.memory.invalid_config");
+
+        RenderResourceRetirementLimits invalidRetirement;
+        invalidRetirement.maximumTrackedQueues = 0;
+        const auto invalidRetirementFrontend =
+            RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, {}, invalidRetirement);
+        Check(invalidRetirementFrontend.HasError());
+        Check(invalidRetirementFrontend.ErrorValue().code.Value() == "render.frontend.resource.invalid_retirement_limits");
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
                                               {.maximumPendingBytes = 16, .maximumBytesPerDrain = 8, .maximumRequestsPerDrain = 4});
@@ -665,6 +720,47 @@ namespace {
         Check(admitted.HasValue());
         Check(frontend->ProcessResourceRequests().Value() == 1);
         Check(frontend->ResourceState(admitted.Value().handle).Value() == RenderResourceState::Ready);
+        const RenderResourceUploadSnapshot drained = frontend->UploadSnapshot();
+        Check(drained.pendingPayloadBytes == 0);
+        Check(drained.pendingRequests == 0);
+        Check(drained.completedBatchCount == 3);
+        Check(drained.lastBatchPayloadBytes == oversizedForDrain.size());
+        Check(drained.lastBatchRequestCount == 1);
+        Check(drained.acceptingRequests);
+    }
+
+    TEST_CASE("Frontend Upload Arena Aligns Reclaims And Preserves Staged Bytes", "[unit][runtime][renderer][resource][upload]") {
+        lifecycleState = {};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend({}, {.maximumPendingBytes = 16,
+                                                                               .maximumBytesPerDrain = 16,
+                                                                               .maximumRequestsPerDrain = 2,
+                                                                               .maximumPendingRequests = 2,
+                                                                               .stagingOffsetAlignment = 8});
+
+        const std::array firstBytes{std::byte{0x11}, std::byte{0x12}, std::byte{0x13}};
+        const std::array secondBytes{std::byte{0x21}, std::byte{0x22}, std::byte{0x23}};
+        auto first = frontend->CreateBuffer({.byteSize = firstBytes.size(),
+                                             .usage = RenderBufferUsage::Vertex,
+                                             .access = RenderBufferAccess::HostVisible},
+                                            firstBytes);
+        auto second = frontend->CreateBuffer({.byteSize = secondBytes.size(),
+                                              .usage = RenderBufferUsage::Vertex,
+                                              .access = RenderBufferAccess::HostVisible},
+                                             secondBytes);
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        const RenderResourceUploadSnapshot aligned = frontend->UploadSnapshot();
+        CHECK(aligned.pendingPayloadBytes == 6);
+        CHECK(aligned.occupiedStagingBytes == 11);
+        CHECK(aligned.pendingRequests == 2);
+
+        SECTION("Rejects requests after reaching the request limit") {
+            VerifyUploadRequestLimit(*frontend);
+        }
+
+        SECTION("Compacts once after cancellation and preserves staged bytes") {
+            VerifyUploadCompaction(*frontend, first.Value().handle, secondBytes);
+        }
     }
 
     TEST_CASE("Frontend Rejects Unsupported And In-Frame Resource Mutations", "[unit][runtime][renderer][resource]") {
@@ -944,6 +1040,26 @@ namespace {
         const Result<void> inactive = frame.Present();
         Check(inactive.HasError());
         Check(inactive.ErrorValue().code.Value() == "render.frontend.frame_not_active");
+    }
+
+    TEST_CASE("Frontend Shutdown Leaves Resident Native Resource Cleanup To The Backend",
+              "[unit][runtime][renderer][resource][retirement]") {
+        lifecycleState = {};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend();
+        const std::array<std::byte, 16> bytes{};
+        const auto buffer = frontend->CreateBuffer({.byteSize = bytes.size(),
+                                                    .usage = RenderBufferUsage::Vertex,
+                                                    .access = RenderBufferAccess::DeviceLocal},
+                                                   bytes);
+        REQUIRE(buffer.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(lifecycleState.createBufferCount == 1);
+        CHECK(lifecycleState.destroyBufferCount == 0);
+
+        frontend.reset();
+
+        CHECK(lifecycleState.shutdownCount == 1);
+        CHECK(lifecycleState.destroyBufferCount == 0);
     }
 
     TEST_CASE("Frame Scope Move Assignment Aborts The Previous Frame And Transfers Ownership", "[unit][runtime][renderer]") {

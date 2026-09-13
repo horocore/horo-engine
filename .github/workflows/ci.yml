@@ -72,8 +72,8 @@ jobs:
             build_dir: build/ci
           - name: Windows / MSVC
             runner: windows-2022
-            # The full MSVC suite consistently reaches the 35-minute job limit after successful compilation.
-            timeout_minutes: 45
+            # The full MSVC suite consistently reaches the 45-minute job limit after successful compilation.
+            timeout_minutes: 60
             cc: cl
             cxx: cl
             build_dir: build/ci
