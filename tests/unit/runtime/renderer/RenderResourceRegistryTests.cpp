@@ -4,7 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <type_traits>
 
-namespace {
+namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally have internal linkage.
     using namespace Horo;
     using namespace Horo::Render;
     using namespace Horo::Render::Detail;
