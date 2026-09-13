@@ -97,8 +97,9 @@ namespace Horo::Physics::Detail {
             }
 
             [[nodiscard]] std::optional<Error> Drain() {
-                while (lock.test_and_set(std::memory_order_acquire)) {
-                }
+                if (lock.test_and_set(std::memory_order_acquire))
+                    return MakeError(PhysicsErrors::SolverFatalCondition,
+                                     "A native solver callback did not quiesce before the owner-thread drain boundary.");
                 const std::uint8_t emergency = emergencyKind.exchange(0, std::memory_order_acquire);
                 if (!occupied && emergency == 0) {
                     lock.clear(std::memory_order_release);
@@ -135,7 +136,8 @@ namespace Horo::Physics::Detail {
             DiagnosticInbox *inbox = activeDiagnosticInbox.load(std::memory_order_acquire);
             if (inbox == nullptr || format == nullptr)
                 return;
-            std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> message{};
+            thread_local std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> message{};
+            message.fill('\0');
             std::va_list arguments;
             va_start(arguments, format);
             const int formatted = std::vsnprintf(message.data(), message.size(), format, arguments);
@@ -152,7 +154,8 @@ namespace Horo::Physics::Detail {
             DiagnosticInbox *inbox = activeDiagnosticInbox.load(std::memory_order_acquire);
             if (inbox == nullptr)
                 return false;
-            std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> evidence{};
+            thread_local std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> evidence{};
+            evidence.fill('\0');
             std::snprintf(evidence.data(), evidence.size(), "%s%s%s", expression == nullptr ? "Native solver assertion" : expression,
                           message == nullptr ? "" : ": ", message == nullptr ? "" : message);
             inbox->Submit(CanonicalDiagnosticKind::Assertion, evidence.data());
