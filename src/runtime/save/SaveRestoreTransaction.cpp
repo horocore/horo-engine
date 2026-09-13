@@ -434,8 +434,6 @@ namespace Horo::Runtime {
                     result = Failure<void>(SaveErrors::RestoreTransitionInvalid);
                     break;
             }
-        } catch (const std::exception &) {
-            result = Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
         } catch (...) {  // NOSONAR -- Participant implementations are foreign contract boundaries and may throw non-standard values.
             result = Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
         }
