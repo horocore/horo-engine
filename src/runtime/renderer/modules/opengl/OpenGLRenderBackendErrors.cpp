@@ -101,6 +101,54 @@ namespace Horo::Render::OpenGLBackendErrors {
                                                   .retryable = false,
                                                   .userActionable = false};
 
+    const ErrorCodeDescriptor UnsupportedApiFamily{.domain = Domain,
+                                                   .code = ErrorCode{"render.opengl.unsupported_api_family"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "The realized context is not desktop OpenGL.",
+                                                   .remediationHint = "Select a desktop OpenGL driver; OpenGL ES is not supported.",
+                                                   .retryable = false,
+                                                   .userActionable = true};
+
+    const ErrorCodeDescriptor UnsupportedVersion{.domain = Domain,
+                                                 .code = ErrorCode{"render.opengl.unsupported_version"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "The realized OpenGL context version is below the required version.",
+                                                 .remediationHint = "Install a driver that provides desktop OpenGL 4.1 or newer.",
+                                                 .retryable = false,
+                                                 .userActionable = true};
+
+    const ErrorCodeDescriptor UnsupportedProfile{.domain = Domain,
+                                                 .code = ErrorCode{"render.opengl.unsupported_profile"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "The realized OpenGL context is not Core profile.",
+                                                 .remediationHint = "Configure the host to create an OpenGL Core profile context.",
+                                                 .retryable = false,
+                                                 .userActionable = true};
+
+    const ErrorCodeDescriptor MissingRequiredEntryPoints{.domain = Domain,
+                                                         .code = ErrorCode{"render.opengl.missing_required_entry_points"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "Required OpenGL command entry points are unavailable.",
+                                                         .remediationHint = "Update or repair the OpenGL driver installation.",
+                                                         .retryable = false,
+                                                         .userActionable = true};
+
+    const ErrorCodeDescriptor InvalidCapabilities{.domain = Domain,
+                                                  .code = ErrorCode{"render.opengl.invalid_capabilities"},
+                                                  .defaultSeverity = ErrorSeverity::Error,
+                                                  .summary = "The OpenGL driver reported invalid baseline limits.",
+                                                  .remediationHint = "Update the graphics driver and rerun renderer diagnostics.",
+                                                  .retryable = false,
+                                                  .userActionable = true};
+
+    const ErrorCodeDescriptor WrongThread{.domain = Domain,
+                                          .code = ErrorCode{"render.opengl.wrong_thread"},
+                                          .defaultSeverity = ErrorSeverity::Error,
+                                          .summary = "OpenGL context work was requested from a non-owner thread.",
+                                          .remediationHint = "Dispatch renderer lifecycle and frame work to the context owner thread.",
+                                          .retryable = true,
+                                          .userActionable = false};
+
     const ErrorCodeDescriptor PresentationInUse{.domain = Domain,
                                                 .code = ErrorCode{"render.opengl.presentation_in_use"},
                                                 .defaultSeverity = ErrorSeverity::Error,
