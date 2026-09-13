@@ -553,9 +553,9 @@ namespace Horo::Render {
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A render target cannot be released during an active frame."));
-        const Result<void> released = ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_,
-                                                              Detail::RenderResourceClass::RenderTarget, Identity(target),
-                                                              memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
+        const Result<void> released =
+            ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::RenderTarget,
+                                    Identity(target), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
         if (released.HasValue() && target.slot < targets_.size())
             targets_[target.slot] = {};
         return released;
