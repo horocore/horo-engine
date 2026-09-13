@@ -73,7 +73,7 @@ namespace Horo::Prefab {
             }
             if (const auto charged = Charge(budget); charged.HasError())
                 return charged;
-            nodes.try_emplace(record.id, PrefabDependencyNode{record.id, record.type, std::move(revision)});
+            nodes.try_emplace(record.id, record.id, record.type, std::move(revision));
             return Result<void>::Success();
         }
 
