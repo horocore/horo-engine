@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <utility>
 
-namespace {
+namespace ShaderReflectionTests {
     using namespace Horo;
     using namespace Horo::Render;
     using Tests::RequireError;
@@ -54,7 +54,23 @@ namespace {
     }
 
     const std::vector<std::string> AdmittedIncludes{"shaders/common.hlsli"};
-}  // namespace
+
+}  // namespace ShaderReflectionTests
+
+using Horo::Render::MapShaderSourceLocation;
+using Horo::Render::NormalizeShaderReflection;
+using Horo::Render::ShaderBindingId;
+using Horo::Render::ShaderManifest;
+using Horo::Render::ShaderReflectionCandidate;
+using Horo::Render::ShaderReflectionErrors;
+using Horo::Render::ShaderReflectionLimits;
+using Horo::Render::ShaderTargetBackend;
+using Horo::Render::ShaderTargetRequirement;
+using Horo::Tests::RequireError;
+using ShaderReflectionTests::AdmittedIncludes;
+using ShaderReflectionTests::Candidate;
+using ShaderReflectionTests::Manifest;
+using ShaderReflectionTests::Target;
 
 TEST_CASE("Shader reflection normalizes final target evidence and preserves inactive logical identities",
           "[runtime][renderer][shader-reflection]") {
