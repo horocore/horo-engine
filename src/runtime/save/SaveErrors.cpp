@@ -254,6 +254,57 @@ namespace Horo::Runtime::SaveErrors {
                                                        "Slot-generation recovery could not converge safely.",
                                                        "Quarantine slot mutation and preserve the journal for bounded operator recovery.",
                                                        true};
+    const ErrorCodeDescriptor StoragePolicyInvalid{kDomain, ErrorCode{"save.storage.policy_invalid"}, kError,
+                                                   "Save storage capacity or recovery policy evidence is invalid.",
+                                                   "Supply bounded ordered capacity evidence and a finite retry policy."};
+    const ErrorCodeDescriptor StorageDiskFull{kDomain,
+                                              ErrorCode{"save.storage.disk_full"},
+                                              kError,
+                                              "Physical storage lacks space for the save transaction peak.",
+                                              "Free space or explicitly remove a presented reclaimable generation.",
+                                              false,
+                                              true};
+    const ErrorCodeDescriptor StorageQuotaExceeded{kDomain,
+                                                   ErrorCode{"save.storage.quota_exceeded"},
+                                                   kError,
+                                                   "The storage provider quota cannot admit the save transaction peak.",
+                                                   "Free provider quota or select storage with sufficient capacity.",
+                                                   false,
+                                                   true};
+    const ErrorCodeDescriptor StoragePermissionDenied{kDomain,
+                                                      ErrorCode{"save.storage.permission_denied"},
+                                                      kError,
+                                                      "The storage authority denied the save operation.",
+                                                      "Correct storage permissions before retrying.",
+                                                      false,
+                                                      true};
+    const ErrorCodeDescriptor StorageReadOnly{kDomain,
+                                              ErrorCode{"save.storage.read_only"},
+                                              kError,
+                                              "The selected save storage is read-only.",
+                                              "Select writable storage or change the platform storage state.",
+                                              false,
+                                              true};
+    const ErrorCodeDescriptor StorageVolumeUnavailable{kDomain,
+                                                       ErrorCode{"save.storage.volume_unavailable"},
+                                                       kError,
+                                                       "The selected save storage volume is unavailable.",
+                                                       "Reconnect or remount the storage volume before retrying.",
+                                                       false,
+                                                       true};
+    const ErrorCodeDescriptor StorageTransientIo{kDomain,
+                                                 ErrorCode{"save.storage.transient_io"},
+                                                 kError,
+                                                 "A transient save storage I/O operation failed.",
+                                                 "Retry only within the admitted finite backoff budget.",
+                                                 true};
+    const ErrorCodeDescriptor StoragePermanentIo{kDomain,
+                                                 ErrorCode{"save.storage.permanent_io"},
+                                                 kError,
+                                                 "A permanent save storage I/O operation failed.",
+                                                 "Do not retry until external state or the request changes.",
+                                                 false,
+                                                 true};
     const ErrorCodeDescriptor OperationInvalid{kDomain, ErrorCode{"save.operation.invalid"}, kError,
                                                "An asynchronous save operation descriptor or handle is invalid.",
                                                "Use a non-zero application operation identity and finite callback capacity."};

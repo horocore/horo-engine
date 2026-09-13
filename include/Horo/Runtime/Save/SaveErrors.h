@@ -154,6 +154,22 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotCommitOutcomeUnknown;
     /** @brief Journal replay could not prove or converge to a safe old-or-new generation. */
     extern const ErrorCodeDescriptor SlotCommitRecoveryFailed;
+    /** @brief Storage capacity or failure-policy evidence is malformed or exceeds a bound. */
+    extern const ErrorCodeDescriptor StoragePolicyInvalid;
+    /** @brief Physical storage lacks the additional peak bytes required by the mutation. */
+    extern const ErrorCodeDescriptor StorageDiskFull;
+    /** @brief Provider or platform quota lacks the additional peak bytes required by the mutation. */
+    extern const ErrorCodeDescriptor StorageQuotaExceeded;
+    /** @brief The storage authority denied the required operation. */
+    extern const ErrorCodeDescriptor StoragePermissionDenied;
+    /** @brief The selected storage namespace currently permits reads only. */
+    extern const ErrorCodeDescriptor StorageReadOnly;
+    /** @brief The selected storage volume or container is unavailable. */
+    extern const ErrorCodeDescriptor StorageVolumeUnavailable;
+    /** @brief A storage I/O failure may be retried under an explicit finite retry budget. */
+    extern const ErrorCodeDescriptor StorageTransientIo;
+    /** @brief A storage I/O failure must not be retried without changing external state or policy. */
+    extern const ErrorCodeDescriptor StoragePermanentIo;
     /** @brief An asynchronous save operation descriptor or handle is invalid. */
     extern const ErrorCodeDescriptor OperationInvalid;
     /** @brief Asynchronous save operation state or callback storage could not be allocated. */
