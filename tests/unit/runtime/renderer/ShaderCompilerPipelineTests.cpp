@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/ShaderCompilerPipeline.h"
 #include "Horo/Runtime/Render/ShaderCompilerPipelineErrors.h"
 #include "Horo/Runtime/Render/ShaderManifestErrors.h"
+#include "support/TypedIdentityTestSupport.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -12,6 +13,7 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Render;
+    using Tests::RequireError;
 
     [[nodiscard]] Sha256Digest Digest(const std::uint8_t marker) {
         Sha256Digest result;
@@ -122,11 +124,6 @@ namespace {
         mutable std::vector<ShaderTargetBackend> backends;
     };
 
-    template <typename ValueT> void RequireError(const Result<ValueT> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
-    }
 }  // namespace
 
 TEST_CASE("Shader compiler pipeline produces one deterministic artifact per exact target", "[runtime][renderer][shader-compiler]") {

@@ -20,4 +20,9 @@ namespace Horo::Tests {
         CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
         CHECK(result.ErrorValue().code.Value() == expected.code.Value());
     }
+
+    /** @brief Concise alias for descriptor-aware result failure assertions. */
+    template <typename Value> void RequireError(const Result<Value> &result, const ErrorCodeDescriptor &expected) {
+        RequireFailureIdentity(result, expected);
+    }
 }  // namespace Horo::Tests
