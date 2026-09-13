@@ -215,6 +215,20 @@ if(HORO_BUILD_RENDER_OPENGL)
     find_package(OpenGL REQUIRED)
 endif()
 
+if(HORO_BUILD_RENDER_VULKAN)
+    # Vulkan headers are a pinned private build dependency. Runtime loading stays
+    # behind the host-owned loader lease and never requires an installed SDK.
+    set(HORO_VULKAN_HEADERS_REVISION "29f979ee5aa58b7b005f805ea8df7a855c39ff37")
+    set(VULKAN_HEADERS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        VulkanHeaders
+        GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+        GIT_TAG "${HORO_VULKAN_HEADERS_REVISION}"
+        GIT_SHALLOW FALSE
+    )
+    FetchContent_MakeAvailable(VulkanHeaders)
+endif()
+
 
 if(HORO_BUILD_EDITOR_GUI)
     set(HORO_SDL3_REVISION
