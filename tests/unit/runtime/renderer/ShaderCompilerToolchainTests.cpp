@@ -40,6 +40,23 @@ namespace {
         std::filesystem::path path_;
     };
 
+    class ExactToolCatalog final : public IVerifiedShaderCompilerToolCatalog {
+    public:
+        ExactToolCatalog(std::string hostPlatform, ShaderCompilerToolIdentity identity, const Sha256Digest &executableDigest)
+            : hostPlatform_(std::move(hostPlatform)), identity_(std::move(identity)), executableDigest_(executableDigest) {}
+
+        [[nodiscard]] bool Approves(const std::string_view hostPlatform, const ShaderCompilerToolIdentity &identity,
+                                    const Sha256Digest &executableDigest) const noexcept override {
+            return hostPlatform == hostPlatform_ && identity.tool == identity_.tool && identity.release == identity_.release &&
+                   identity.buildDigest == identity_.buildDigest && executableDigest == executableDigest_;
+        }
+
+    private:
+        std::string hostPlatform_;
+        ShaderCompilerToolIdentity identity_;
+        Sha256Digest executableDigest_;
+    };
+
     [[nodiscard]] std::vector<std::uint8_t> Read(const std::filesystem::path &path) {
         std::ifstream input(path, std::ios::binary);
         return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
@@ -180,6 +197,29 @@ TEST_CASE("Shader toolchain adapter rejects a missing process runner", "[runtime
     configuration.scratchRoot = temporary.Path() / "scratch";
     RequireError(ExternalShaderCompilerAdapter::Create(std::move(configuration), {}),
                  ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid);
+}
+
+TEST_CASE("Verified host catalogs admit exact tools without a built-in OS restriction", "[runtime][renderer][shader-compiler][toolchain]") {
+    for (const std::string hostPlatform : {"windows-x86_64", "macos-arm64"}) {
+        TemporaryDirectory temporary;
+        const std::filesystem::path executable = temporary.Path() / "tool";
+        {
+            std::ofstream output(executable, std::ios::binary);
+            output << hostPlatform;
+        }
+        const std::vector<std::uint8_t> executableBytes = Read(executable);
+        const Sha256Digest executableDigest = ComputeSha256(std::as_bytes(std::span{executableBytes}));
+        const auto hostBytes = std::as_bytes(std::span{hostPlatform.data(), hostPlatform.size()});
+        ShaderCompilerToolIdentity identity{ShaderCompilerTool::Dxc, "host-qualified", ComputeSha256(hostBytes)};
+
+        ShaderCompilerToolchainConfiguration configuration;
+        configuration.hostPlatform = hostPlatform;
+        configuration.scratchRoot = temporary.Path() / "scratch";
+        configuration.tools = {{identity, executable, executableDigest}};
+        configuration.verifiedCatalog = std::make_shared<ExactToolCatalog>(hostPlatform, identity, executableDigest);
+        auto processes = std::make_shared<NativeExternalProcessRunner>();
+        CHECK(ExternalShaderCompilerAdapter::Create(std::move(configuration), processes).HasValue());
+    }
 }
 
 TEST_CASE("Production shader adapter reports an unavailable required tool without fallback",

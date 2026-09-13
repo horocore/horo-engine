@@ -23,11 +23,33 @@ namespace Horo::Render {
         Sha256Digest executableDigest;       /**< Reviewed digest of the executable bytes at `executable`. */
     };
 
+    /**
+     * @brief Host trust capability for exact shader-tool artifacts not embedded in the engine binary.
+     * @details Production implementations are created only after a signed lock catalog has been verified against host-owned
+     * trusted roots. Approval covers the cook host, archive identity, and executable identity as one tuple. The adapter still
+     * hashes the executable bytes independently before use.
+     */
+    class IVerifiedShaderCompilerToolCatalog {
+    public:
+        virtual ~IVerifiedShaderCompilerToolCatalog() = default;
+        /**
+         * @brief Tests whether one exact tool tuple is authorized by the verified catalog snapshot.
+         * @param hostPlatform Exact cook-host OS and architecture identity.
+         * @param identity Required tool role, release, and archive digest.
+         * @param executableDigest Digest of the executable artifact selected by the host.
+         * @return True only when the complete tuple exists in the verified immutable snapshot.
+         */
+        [[nodiscard]] virtual bool Approves(std::string_view hostPlatform, const ShaderCompilerToolIdentity &identity,
+                                            const Sha256Digest &executableDigest) const noexcept = 0;
+    };
+
     /** @brief Host-owned paths and finite process/file bounds for production shader compilation. */
     struct ShaderCompilerToolchainConfiguration final {
-        std::string hostPlatform;                                          /**< Exact host lock-catalog identity. */
-        std::filesystem::path scratchRoot;                                 /**< Absolute host-owned isolated scratch root. */
-        std::vector<ShaderCompilerToolInstallation> tools;                 /**< Sorted unique installed tools. */
+        std::string hostPlatform;                          /**< Exact host lock-catalog identity. */
+        std::filesystem::path scratchRoot;                 /**< Absolute host-owned isolated scratch root. */
+        std::vector<ShaderCompilerToolInstallation> tools; /**< Sorted unique installed tools. */
+        std::shared_ptr<const IVerifiedShaderCompilerToolCatalog>
+            verifiedCatalog; /**< Optional signed host catalog for Windows, macOS, and additional qualified hosts. */
         std::chrono::milliseconds processTimeout{std::chrono::minutes{5}}; /**< Per-process timeout. */
         std::size_t maximumToolBinaryBytes{256U * 1024U * 1024U};          /**< Verification read bound. */
         std::size_t maximumProcessOutputBytes{1024U * 1024U};              /**< Per-invocation output bound. */
@@ -45,7 +67,7 @@ namespace Horo::Render {
     };
 
     /**
-     * @brief Returns the immutable built-in shader-tool lock catalog.
+     * @brief Returns the immutable built-in Linux shader-tool lock catalog.
      * @return Process-lifetime catalog sorted by host and tool role.
      */
     [[nodiscard]] std::span<const ApprovedShaderCompilerTool> ApprovedShaderCompilerTools() noexcept;

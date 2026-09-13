@@ -4,9 +4,12 @@
 
 This document records the reviewed executable set admitted by the production
 offline adapter implementing [ADR-035](../../adr/035-shader-source-and-intermediate-representation.md).
-The code-owned catalog returned by `ApprovedShaderCompilerTools()` is the
-machine-readable authority. An installed SDK default, matching version text, or
-executable with different bytes is not admitted.
+The code-owned Linux catalog returned by `ApprovedShaderCompilerTools()` is one
+machine-readable authority. Other cook hosts use a host-composed
+`IVerifiedShaderCompilerToolCatalog` capability backed by an immutable signed
+catalog verified against host-owned trusted roots. An installed SDK default,
+matching version text, unverified catalog, or executable with different bytes is
+not admitted.
 
 The host supplies absolute executable paths and an isolated scratch root. The
 adapter verifies the target's archive identity, the configured executable
@@ -29,6 +32,23 @@ verified on 2026-09-13.
 | SPIRV-Tools validator | Ubuntu Resolute `spirv-tools_2026.1-1_amd64.deb` | `24e972ed4f2e92ada6f64b32ff40550fda02038385656736af871ca3dcb2b867` | `spirv-val`: `85367fefdb7e93ae45654255ac2b7f8dc7056b6df78a6fdeb03ce395c7477239` | Apache-2.0 |
 | SPIRV-Cross | Ubuntu Resolute `spirv-cross_2021.01.15+1.4.335.0-1_amd64.deb` | `50d11b7efc263240d04b015fecfd419377a4a3e2a9cb59387f2229aae03e4e7f` | `spirv-cross`: `335caee5ce86daefc3dee5e13100c2118a1a1cccb183a8c6df817090e0cbb976` | Apache-2.0 |
 | DXIL validator | `v1.9.2607`, same Microsoft archive as DXC | same DXC archive digest | `dxv`: `87cc9c1e459a7d6a0dc52c7b319d627d0f6078a2be95621e5a98b3cf12f255cb` | NCSA and MIT files in the release |
+
+## Cross-host catalog contract
+
+Windows, macOS, and additional Linux cook hosts are not constrained to the
+built-in Ubuntu artifact set. Their application composition supplies a verified
+catalog capability whose immutable snapshot authorizes the complete tuple of
+cook-host identity, tool role, release, archive digest, and executable digest.
+The verifier must validate the signed catalog before constructing that
+capability; the adapter then hashes each selected executable independently and
+rejects any mismatch before process execution.
+
+This keeps target production independent from cook-host identity: a qualified
+Windows host may cook Vulkan, OpenGL, D3D12, and Null artifacts, while a
+qualified macOS host may cook Vulkan, OpenGL, Metal, and Null artifacts. A
+target is unavailable only when that host's verified snapshot lacks one of the
+exact required tools. There is no fallback to the Ubuntu catalog, an ambient
+SDK, another backend, or a locally invented digest.
 
 DXC's same-archive runtime companions are `libdxcompiler.so`
 (`be01593d3ff635fca6f20b044aa49c777f6409e50a28fb0242a0c87272620b62`)
@@ -54,9 +74,10 @@ SPIRV-Cross declares `libgcc-s1 >= 3.3.1` and `libstdc++6 >= 14`.
   visual claim.
 - Metal: the implementation requires DXC, SPIRV-Tools, SPIRV-Cross and a locked
   Apple `xcrun`/Metal toolchain, uses MSL 2.4 and macOS 14 deployment, and checks
-  the resulting `metallib`. No Apple tool artifact is in the catalog yet, so a
-  Metal cook currently returns typed `tool_not_approved`/`tool_missing` rather
-  than using an ambient Xcode installation or placeholder output.
+  the resulting `metallib`. No Apple tool artifact is in the built-in catalog;
+  a macOS product host must supply its signed, verified catalog snapshot. An
+  absent or unverified snapshot returns typed `tool_not_approved`/`tool_missing`
+  rather than using ambient Xcode or placeholder output.
 
 Release payloads never contain compiler debug information. A debug request
 creates a separate companion package, so enabling diagnostics does not mutate
@@ -90,9 +111,12 @@ The integration case is explicitly unavailable unless all four reviewed Linux
 paths are supplied through `HORO_TEST_SHADER_DXC`,
 `HORO_TEST_SHADER_SPIRV_VAL`, `HORO_TEST_SHADER_SPIRV_CROSS`, and
 `HORO_TEST_SHADER_DXIL_VALIDATOR`. A skipped route is not qualification evidence.
-Metal and a second host remain unqualified until their exact tool artifacts and
-successful repeatability results are added to the catalog and CI matrix. This
-document must not be edited to imply those gates passed.
+Each production host remains unqualified until its exact tool artifacts and
+successful repeatability results are present in its signed catalog and CI
+matrix. Contract tests run on the repository Windows, macOS, and Linux lanes;
+real-tool qualification evidence remains a separate release input and is never
+inferred from a mocked process test. This document must not be edited to imply a
+host-specific qualification gate passed when its signed snapshot is absent.
 
 ## Lock updates
 

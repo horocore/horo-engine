@@ -228,6 +228,32 @@ namespace Horo::Render {
                 bytes.push_back(static_cast<std::byte>(byte));
         }
 
+        void AppendTargetIdentity(std::vector<std::byte> &bytes, const ShaderCompilerTargetDescriptor &target) {
+            const auto &requirement = target.requirement;
+            AppendInteger(bytes, static_cast<std::uint8_t>(requirement.backend));
+            AppendInteger(bytes, static_cast<std::uint8_t>(requirement.payloadFormat));
+            AppendInteger(bytes, requirement.descriptorVersion);
+            AppendInteger(bytes, requirement.interfaceSchemaVersion);
+            AppendInteger(bytes, requirement.maximumBindings);
+            AppendInteger(bytes, requirement.maximumInlineConstantBytes);
+            AppendBool(bytes, requirement.supportsCompute);
+            AppendBool(bytes, requirement.supportsStorageResources);
+            AppendString(bytes, target.platformTriple);
+            AppendInteger(bytes, static_cast<std::uint8_t>(target.intermediateEnvironment));
+            AppendInteger(bytes, static_cast<std::uint8_t>(target.optimization));
+            AppendBool(bytes, target.emitDebugInformation);
+            AppendBool(bytes, target.enableFastMath);
+            AppendBool(bytes, target.columnMajorMatrices);
+            AppendBool(bytes, target.strictBufferLayout);
+            AppendBool(bytes, target.disableAutomaticDepthRemap);
+            AppendInteger(bytes, static_cast<std::uint32_t>(target.tools.size()));
+            for (const auto &tool : target.tools) {
+                AppendInteger(bytes, static_cast<std::uint8_t>(tool.tool));
+                AppendString(bytes, tool.release);
+                AppendDigest(bytes, tool.buildDigest);
+            }
+        }
+
         [[nodiscard]] Result<Sha256Digest> BuildArtifactKey(const ShaderCompilationRequest &request,
                                                             const ShaderCompilerTargetDescriptor &target,
                                                             const Sha256Digest &sourceDigest) {
@@ -255,29 +281,7 @@ namespace Horo::Render {
                     AppendString(bytes, define.name);
                     AppendString(bytes, define.value);
                 }
-                const auto &requirement = target.requirement;
-                AppendInteger(bytes, static_cast<std::uint8_t>(requirement.backend));
-                AppendInteger(bytes, static_cast<std::uint8_t>(requirement.payloadFormat));
-                AppendInteger(bytes, requirement.descriptorVersion);
-                AppendInteger(bytes, requirement.interfaceSchemaVersion);
-                AppendInteger(bytes, requirement.maximumBindings);
-                AppendInteger(bytes, requirement.maximumInlineConstantBytes);
-                AppendBool(bytes, requirement.supportsCompute);
-                AppendBool(bytes, requirement.supportsStorageResources);
-                AppendString(bytes, target.platformTriple);
-                AppendInteger(bytes, static_cast<std::uint8_t>(target.intermediateEnvironment));
-                AppendInteger(bytes, static_cast<std::uint8_t>(target.optimization));
-                AppendBool(bytes, target.emitDebugInformation);
-                AppendBool(bytes, target.enableFastMath);
-                AppendBool(bytes, target.columnMajorMatrices);
-                AppendBool(bytes, target.strictBufferLayout);
-                AppendBool(bytes, target.disableAutomaticDepthRemap);
-                AppendInteger(bytes, static_cast<std::uint32_t>(target.tools.size()));
-                for (const auto &tool : target.tools) {
-                    AppendInteger(bytes, static_cast<std::uint8_t>(tool.tool));
-                    AppendString(bytes, tool.release);
-                    AppendDigest(bytes, tool.buildDigest);
-                }
+                AppendTargetIdentity(bytes, target);
                 return Result<Sha256Digest>::Success(ComputeSha256(bytes));
             } catch (const std::bad_alloc &) {
                 return Result<Sha256Digest>::Failure(MakeError(ShaderCompilerPipelineErrors::ArtifactIdentityUnavailable));
