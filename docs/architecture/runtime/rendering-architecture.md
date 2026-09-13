@@ -1640,6 +1640,22 @@ before backend-frame acquisition, and retire prior surface generations safely.
 Native window size, offscreen editor viewport resolution, and scene dynamic
 resolution must not share a resize authority.
 
+`RenderSurfaceLifecycle` is the backend-neutral owner-thread state machine for the
+current single primary surface. It retains at most one pending command, reports an
+explicit superseded sequence when coalescing, and publishes that complete native-free
+candidate and a new snapshot revision before layout/extraction. It freezes exactly one
+immutable transition at a render safe point while keeping any later pending candidate
+separately observable. The private native owner completes that exact
+owner/generation/revision/sequence with `Ready`, `Suspended`, `Lost`,
+`PreserveActive`, or `Unattached`; mismatched and late completions cannot publish.
+Ready replacement advances the surface generation, while a preserved usable output
+keeps its prior generation and configuration. Close/loss commands cannot be replaced
+by later ordinary resize work. If an earlier native outcome makes the one queued
+candidate incompatible with the newly realized state, the next safe point reports
+that candidate as explicitly invalidated and frees the bounded queue. The contract
+owns no native handles, worker jobs, or waits; native retirement remains deferred in
+the concrete backend.
+
 ## Device Or Context Failure
 
 Backends classify failure as:
