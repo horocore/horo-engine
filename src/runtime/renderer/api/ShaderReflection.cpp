@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <new>
 #include <ranges>
 #include <string_view>
@@ -88,12 +89,12 @@ namespace Horo::Render {
         [[nodiscard]] const ShaderReflectedBinding *FindReflectedBinding(const ShaderReflectionCandidate &candidate,
                                                                          const ShaderBindingId id) noexcept {
             const auto found = std::ranges::lower_bound(candidate.bindings, id, {}, &ShaderReflectedBinding::id);
-            return found != candidate.bindings.end() && found->id == id ? &*found : nullptr;
+            return found != candidate.bindings.end() && found->id == id ? std::to_address(found) : nullptr;
         }
 
         [[nodiscard]] const ShaderResourceBinding *FindDeclaredBinding(const ShaderManifest &manifest, const ShaderBindingId id) noexcept {
             const auto found = std::ranges::lower_bound(manifest.bindings, id, {}, &ShaderResourceBinding::id);
-            return found != manifest.bindings.end() && found->id == id ? &*found : nullptr;
+            return found != manifest.bindings.end() && found->id == id ? std::to_address(found) : nullptr;
         }
 
         [[nodiscard]] Result<void> ValidateBindings(const ShaderManifest &manifest, const ShaderReflectionCandidate &candidate,
@@ -120,8 +121,8 @@ namespace Horo::Render {
             if (matrix) {
                 const std::uint32_t vectors = parameter.columnMajor ? parameter.columns : parameter.rows;
                 const std::uint32_t components = parameter.columnMajor ? parameter.rows : parameter.columns;
-                const std::uint64_t minimumStride = static_cast<std::uint64_t>(components) * 4U;
-                if (parameter.matrixStride < minimumStride || parameter.matrixStride % 4U != 0)
+                if (const std::uint64_t minimumStride = static_cast<std::uint64_t>(components) * 4U;
+                    parameter.matrixStride < minimumStride || parameter.matrixStride % 4U != 0)
                     return Result<std::uint32_t>::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
                 elementBytes = static_cast<std::uint64_t>(parameter.matrixStride) * vectors;
             } else if (parameter.matrixStride != 0) {
@@ -141,16 +142,23 @@ namespace Horo::Render {
             return Result<std::uint32_t>::Success(static_cast<std::uint32_t>(end));
         }
 
+        struct OccupiedRange final {
+            ShaderBindingId binding;
+            std::uint32_t begin{0};
+            std::uint32_t end{0};
+        };
+
+        [[nodiscard]] bool Overlaps(const std::vector<OccupiedRange> &ranges, const ShaderReflectedParameter &parameter,
+                                    const std::uint32_t end) noexcept {
+            return std::ranges::any_of(ranges, [&](const OccupiedRange &range) {
+                return range.binding == parameter.binding && parameter.byteOffset < range.end && end > range.begin;
+            });
+        }
+
         [[nodiscard]] Result<void> ValidateParameters(const ShaderManifest &manifest, const ShaderReflectionCandidate &candidate,
                                                       const ShaderReflectionLimits &limits) {
             if (candidate.parameters.size() != manifest.parameters.size() || candidate.parameters.size() > limits.maximumParameters)
                 return Result<void>::Failure(MakeError(ShaderReflectionErrors::ManifestMismatch));
-
-            struct OccupiedRange final {
-                ShaderBindingId binding;
-                std::uint32_t begin{0};
-                std::uint32_t end{0};
-            };
 
             try {
                 std::vector<OccupiedRange> ranges;
@@ -163,8 +171,8 @@ namespace Horo::Render {
                         return Result<void>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
                     if (!SameParameter(manifest.parameters[index], parameter))
                         return Result<void>::Failure(MakeError(ShaderReflectionErrors::ManifestMismatch));
-                    const ShaderReflectedBinding *binding = FindReflectedBinding(candidate, parameter.binding);
-                    if (binding == nullptr || parameter.active != binding->active)
+                    if (const ShaderReflectedBinding *binding = FindReflectedBinding(candidate, parameter.binding);
+                        binding == nullptr || parameter.active != binding->active)
                         return Result<void>::Failure(MakeError(ShaderReflectionErrors::ManifestMismatch));
                     if (!parameter.active) {
                         if (parameter.byteOffset != 0 || parameter.arrayStride != 0 || parameter.matrixStride != 0)
@@ -174,10 +182,8 @@ namespace Horo::Render {
                     auto end = ParameterEnd(parameter, limits.maximumBufferBytes);
                     if (end.HasError())
                         return Result<void>::Failure(std::move(end).ErrorValue());
-                    for (const OccupiedRange &range : ranges) {
-                        if (range.binding == parameter.binding && parameter.byteOffset < range.end && end.Value() > range.begin)
-                            return Result<void>::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
-                    }
+                    if (Overlaps(ranges, parameter, end.Value()))
+                        return Result<void>::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
                     ranges.push_back({parameter.binding, parameter.byteOffset, end.Value()});
                 }
             } catch (const std::bad_alloc &) {
@@ -187,11 +193,12 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr std::uint8_t NativeNamespace(const ShaderResourceKind kind, const ShaderTargetBackend backend) noexcept {
+            using enum ShaderTargetBackend;
             switch (backend) {
-                case ShaderTargetBackend::Null:
-                case ShaderTargetBackend::Vulkan:
+                case Null:
+                case Vulkan:
                     return 0;
-                case ShaderTargetBackend::OpenGL:
+                case OpenGL:
                     switch (kind) {
                         case ShaderResourceKind::UniformBuffer:
                             return 0;
@@ -204,13 +211,13 @@ namespace Horo::Render {
                             return 3;
                     }
                     break;
-                case ShaderTargetBackend::Metal:
+                case Metal:
                     if (kind == ShaderResourceKind::UniformBuffer || kind == ShaderResourceKind::StorageBuffer)
                         return 0;
                     if (kind == ShaderResourceKind::Sampler)
                         return 2;
                     return 1;
-                case ShaderTargetBackend::D3D12:
+                case D3D12:
                     switch (kind) {
                         case ShaderResourceKind::UniformBuffer:
                             return 0;
@@ -239,10 +246,10 @@ namespace Horo::Render {
                 const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
                 const ShaderReflectedBinding *reflection = FindReflectedBinding(candidate, mapping.id);
                 const auto key = std::pair{mapping.id, mapping.generatedHelperIndex};
-                const auto previousKey = index == 0 ? key
-                                                    : std::pair{candidate.targetBindings[index - 1].id,
-                                                                candidate.targetBindings[index - 1].generatedHelperIndex};
-                if (!mapping.id.IsValid() || (index > 0 && previousKey >= key) || reflection == nullptr ||
+                if (!mapping.id.IsValid() ||
+                    (index > 0 &&
+                     std::pair{candidate.targetBindings[index - 1].id, candidate.targetBindings[index - 1].generatedHelperIndex} >= key) ||
+                    reflection == nullptr ||
                     (mapping.generatedHelperIndex > 0 &&
                      (index == 0 || candidate.targetBindings[index - 1].id != mapping.id ||
                       candidate.targetBindings[index - 1].generatedHelperIndex + 1U != mapping.generatedHelperIndex)) ||
@@ -269,8 +276,8 @@ namespace Horo::Render {
                 return Result<void>::Success();
             const ShaderResourceBinding *logical = FindDeclaredBinding(manifest, mapping.id);
             const ShaderResourceBinding *sampler = FindDeclaredBinding(manifest, mapping.pairedSampler);
-            const ShaderReflectedBinding *reflectedSampler = FindReflectedBinding(candidate, mapping.pairedSampler);
-            if (logical == nullptr || logical->kind != ShaderResourceKind::SampledTexture || sampler == nullptr ||
+            if (const ShaderReflectedBinding *reflectedSampler = FindReflectedBinding(candidate, mapping.pairedSampler);
+                logical == nullptr || logical->kind != ShaderResourceKind::SampledTexture || sampler == nullptr ||
                 sampler->kind != ShaderResourceKind::Sampler || !reflection.active || reflectedSampler == nullptr ||
                 !reflectedSampler->active)
                 return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
