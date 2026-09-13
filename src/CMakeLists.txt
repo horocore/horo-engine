@@ -741,6 +741,7 @@ target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
 
 add_library(HoroPrefabAuthoring STATIC
+        runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabDocument.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
@@ -827,6 +828,8 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrontend.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
+        runtime/renderer/frontend/RenderMemoryBudget.cpp
+        runtime/renderer/frontend/RenderMemoryBudgetErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp
