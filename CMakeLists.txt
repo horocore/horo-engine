@@ -46,6 +46,7 @@ if(APPLE AND HORO_BUILD_EDITOR_GUI)
     set(_HORO_BUILD_RENDER_METAL_DEFAULT ON)
 endif()
 option(HORO_BUILD_RENDER_METAL "Build the Metal renderer backend" ${_HORO_BUILD_RENDER_METAL_DEFAULT})
+option(HORO_BUILD_RENDER_VULKAN "Build the Vulkan renderer backend" OFF)
 option(HORO_ENABLE_GPU_SMOKE_TESTS "Register tests that require a display server and hardware graphics context" OFF)
 option(HORO_ENABLE_IMGUI_UI_TESTS "Build headless Dear ImGui UI automation tests" OFF)
 option(HORO_ENABLE_TELEMETRY "Compile Horo telemetry producer instrumentation" ON)
@@ -64,6 +65,10 @@ endif()
 
 if(HORO_BUILD_RENDER_METAL AND NOT APPLE)
     message(FATAL_ERROR "HORO_BUILD_RENDER_METAL is supported only on Apple platforms")
+endif()
+
+if(HORO_BUILD_RENDER_VULKAN AND NOT (WIN32 OR (UNIX AND NOT APPLE)))
+    message(FATAL_ERROR "HORO_BUILD_RENDER_VULKAN is supported only on native Windows and Linux platforms")
 endif()
 
 if(HORO_BUILD_EDITOR_GUI AND NOT HORO_BUILD_RENDER_OPENGL AND NOT HORO_BUILD_RENDER_METAL)

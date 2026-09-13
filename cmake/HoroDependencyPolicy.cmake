@@ -64,6 +64,7 @@ horo_allow_target_dependencies(TARGET HoroSceneModel DEPENDENCIES HoroFoundation
 horo_allow_target_dependencies(TARGET HoroRenderNull DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderOpenGL)
 horo_allow_target_dependencies(TARGET HoroRenderMetal)
+horo_allow_target_dependencies(TARGET HoroRenderVulkan)
 
 horo_allow_target_dependencies(TARGET HoroEditorModel
     DEPENDENCIES HoroFoundation HoroPrefab HoroSceneModel HoroRuntimeScene)
@@ -144,6 +145,12 @@ horo_allow_temporary_dependency_exception(
     REASON "Static backend registration predates the renderer module host")
 horo_allow_temporary_dependency_exception(
     TARGET HoroRenderMetal
+    DEPENDENCY HoroRenderBackendRegistry
+    OWNER "Rendering"
+    REMOVAL_TICKET "#62"
+    REASON "Static backend registration predates the renderer module host")
+horo_allow_temporary_dependency_exception(
+    TARGET HoroRenderVulkan
     DEPENDENCY HoroRenderBackendRegistry
     OWNER "Rendering"
     REMOVAL_TICKET "#62"

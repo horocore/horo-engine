@@ -1837,6 +1837,24 @@ if (HORO_BUILD_RENDER_METAL)
     endif ()
 endif ()
 
+if (HORO_BUILD_RENDER_VULKAN)
+    add_executable(HoroRenderVulkanTests
+            unit/runtime/renderer/VulkanRenderBackendTests.cpp
+    )
+    target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
+    target_include_directories(HoroRenderVulkanTests PRIVATE
+            ${PROJECT_SOURCE_DIR}/src
+            ${PROJECT_SOURCE_DIR}/tests/support
+    )
+    target_link_libraries(HoroRenderVulkanTests PRIVATE
+            Catch2::Catch2WithMain
+            HoroEngine::RenderFrontend
+            HoroEngine::RenderVulkan
+            Vulkan::Headers
+    )
+    add_test(NAME HoroRenderVulkanTests COMMAND HoroRenderVulkanTests)
+endif ()
+
 set(HORO_CATCH_TEST_TARGETS
         HoroInputTests
         HoroGameplayRuntimeTests

@@ -942,6 +942,24 @@ if (HORO_BUILD_RENDER_METAL)
     )
 endif ()
 
+if (HORO_BUILD_RENDER_VULKAN)
+    add_library(HoroRenderVulkan STATIC
+            runtime/renderer/modules/vulkan/VulkanAdapterDiscovery.cpp
+            runtime/renderer/modules/vulkan/VulkanBackendModule.cpp
+            runtime/renderer/modules/vulkan/VulkanNativeIdentity.cpp
+            runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
+            runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
+    )
+    add_library(HoroEngine::RenderVulkan ALIAS HoroRenderVulkan)
+
+    target_compile_features(HoroRenderVulkan PUBLIC cxx_std_20)
+    target_link_libraries(HoroRenderVulkan
+            PUBLIC HoroEngine::RenderBackendRegistry
+            PRIVATE Vulkan::Headers
+    )
+endif ()
+
 add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
         editor/document/SceneDocument.cpp
