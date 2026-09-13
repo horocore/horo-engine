@@ -6,10 +6,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 
-namespace {
+namespace project_migration_tests {
     const Horo::ErrorCodeDescriptor TestFailure{
         .domain = Horo::ErrorDomainId("test.project_migration"),
         .code = Horo::ErrorCode("test.project_migration.failed"),
@@ -39,9 +40,11 @@ namespace {
     }
 
     [[nodiscard]] std::string Text(const std::span<const std::byte> bytes) {
-        if (bytes.empty())
-            return {};
-        return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+        std::string text(bytes.size(), '\0');
+        std::ranges::transform(bytes, text.begin(), [](const std::byte value) {
+            return static_cast<char>(std::to_integer<unsigned char>(value));
+        });
+        return text;
     }
 
     class AppendStage final : public Horo::Application::IProjectMigrationDocumentStage {
@@ -156,25 +159,30 @@ namespace {
     public:
         TemporaryProject() {
             const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            root = std::filesystem::temp_directory_path() / ("horo-migration-test-" + std::to_string(stamp) + "-" +
-                                                             std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)));
+            root = std::filesystem::current_path() / ".horo-test-artifacts" /
+                   std::format("horo-migration-test-{}-{}", stamp, sequence.fetch_add(1));
             std::error_code error;
             REQUIRE((std::filesystem::create_directories(root / ".horo/local", error)));
             REQUIRE_FALSE((error));
             REQUIRE((std::filesystem::create_directories(root / "assets", error)));
             REQUIRE_FALSE((error));
-            Write(".horo/project.json", "{\"horoVersion\":\"0.0.1\"}");
+            Write(".horo/project.json", R"({"horoVersion":"0.0.1"})");
             Write(".horo/local/ignored.txt", "ignored");
             Write("assets/a.txt", "alpha");
             Write("assets/b.txt", "beta");
         }
+
+        TemporaryProject(const TemporaryProject &) = delete;
+        TemporaryProject &operator=(const TemporaryProject &) = delete;
+        TemporaryProject(TemporaryProject &&) = delete;
+        TemporaryProject &operator=(TemporaryProject &&) = delete;
 
         ~TemporaryProject() {
             std::error_code ignored;
             std::filesystem::remove_all(root, ignored);
         }
 
-        void Write(const std::filesystem::path &relative, const std::string &value) {
+        void Write(const std::filesystem::path &relative, const std::string &value) const {
             std::error_code error;
             std::filesystem::create_directories((root / relative).parent_path(), error);
             REQUIRE_FALSE((error));
@@ -241,9 +249,9 @@ namespace {
                                 Pipeline("test.first", "A", "A"));
         auto alternative = Definition("test.alternative", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.0.1", "0.1.1",
                                       1, 4, Pipeline("test.alternative", "X", "X"));
-        auto final = Definition("test.final", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.1.0", "0.2.0", 2, 3,
-                                Pipeline("test.final", "B", "B"));
-        const std::vector definitions{first, alternative, final};
+        auto terminal = Definition("test.final", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.1.0", "0.2.0", 2, 3,
+                                   Pipeline("test.final", "B", "B"));
+        const std::vector definitions{first, alternative, terminal};
         const auto registry = Horo::Application::ProjectMigrationRegistry::Create(definitions);
         REQUIRE((registry.HasValue()));
         Horo::Application::ProjectMigrationSupportDescriptor support{.target = Version("0.2.0"),
@@ -255,8 +263,8 @@ namespace {
         REQUIRE((ambiguous.HasError()));
         REQUIRE((ambiguous.ErrorValue().code.Value() == "project.migration.ambiguous"));
 
-        first.requiredProviders.push_back({"plugin.test"});
-        const std::vector providerDefinitions{first, final};
+        first.requiredProviders.emplace_back("plugin.test");
+        const std::vector providerDefinitions{first, terminal};
         const auto providerRegistry = Horo::Application::ProjectMigrationRegistry::Create(providerDefinitions);
         REQUIRE((providerRegistry.HasValue()));
         const auto unavailable = providerRegistry.Value().Plan(Version("0.0.1"), Contract(1), support);
@@ -359,10 +367,9 @@ namespace {
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
-    TEST_CASE("Production Compression Migration Validates Supported And Invalid Values", "[unit][application]") {
+    TEST_CASE("Production Compression Migration Accepts Supported Values", "[unit][application]") {
         const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        const auto support = Horo::Application::BuildBuiltInProjectMigrationSupportDescriptor();
-        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1 && support.HasValue()));
+        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1));
         Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
                                                      .target = catalog.Value().front().to,
                                                      .definitions = {catalog.Value().front()}};
@@ -373,8 +380,10 @@ namespace {
         for (const char *asset : assetValues)
             for (const char *texture : textureValues) {
                 TemporaryProject project;
-                project.Write(".horo/project.json", std::string{"{\"projectId\":\"supported\",\"settings\":{\"assetCompression\":\""} +
-                                                        asset + "\",\"textureCompression\":\"" + texture + "\"}}\n");
+                project.Write(".horo/project.json",
+                              std::format(R"({{"projectId":"supported","settings":{{"assetCompression":"{}","textureCompression":"{}"}}}})"
+                                          "\n",
+                                          asset, texture));
                 auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(project.root,
                                                                                      project.root.parent_path() /
                                                                                          (project.root.filename().string() + "-candidate"),
@@ -386,14 +395,27 @@ namespace {
                 REQUIRE((migrated.find(std::string{"\"assetCompression\": \""} + asset + "\"") != std::string::npos));
                 REQUIRE((migrated.find(std::string{"\"textureCompression\": \""} + texture + "\"") != std::string::npos));
             }
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
 
+    TEST_CASE("Production Compression Migration Rejects Invalid Values Without Mutation", "[unit][application]") {
+        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
+        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1));
+        Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
+                                                     .target = catalog.Value().front().to,
+                                                     .definitions = {catalog.Value().front()}};
+        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16});
         constexpr std::array
-            invalidSettings{"{\"projectId\":\"invalid\",\"settings\":{\"assetCompression\":\"\",\"textureCompression\":\"bc7\"}}",
-                            "{\"projectId\":\"invalid\",\"settings\":{\"assetCompression\":17,\"textureCompression\":\"bc7\"}}",
-                            "{\"projectId\":\"invalid\",\"settings\":{\"assetCompression\":\"brotli\",\"textureCompression\":\"bc7\"}}"};
+            invalidSettings{R"({"projectId":"invalid","settings":{"assetCompression":"","textureCompression":"bc7"}})",
+                            R"({"projectId":"invalid","settings":{"assetCompression":17,"textureCompression":"bc7"}})",
+                            R"({"projectId":"invalid","settings":{"assetCompression":"brotli","textureCompression":"bc7"}})",
+                            R"({"projectId":"invalid","settings":{"assetCompression":"lz4","textureCompression":""}})",
+                            R"({"projectId":"invalid","settings":{"assetCompression":"lz4","textureCompression":17}})",
+                            R"({"projectId":"invalid","settings":{"assetCompression":"lz4","textureCompression":"etc2"}})"};
         for (const char *invalid : invalidSettings) {
             TemporaryProject project;
             project.Write(".horo/project.json", invalid);
+            const std::string authoritative = project.Read(".horo/project.json");
             auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(project.root,
                                                                                  project.root.parent_path() /
                                                                                      (project.root.filename().string() + "-candidate"),
@@ -401,11 +423,23 @@ namespace {
             REQUIRE((prepared.HasError()));
             REQUIRE((prepared.ErrorValue().message.find("core.project_settings.compression_defaults") != std::string::npos));
             REQUIRE((prepared.ErrorValue().message.find("validate_compression_postconditions") != std::string::npos));
+            REQUIRE((project.Read(".horo/project.json") == authoritative));
         }
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
 
+    TEST_CASE("Production Compression Migration Attributes Target Validation Failure", "[unit][application]") {
+        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
+        const auto support = Horo::Application::BuildBuiltInProjectMigrationSupportDescriptor();
+        REQUIRE((catalog.HasValue() && catalog.Value().size() == 1 && support.HasValue()));
+        Horo::Application::ProjectMigrationPlan plan{.source = catalog.Value().front().from,
+                                                     .target = catalog.Value().front().to,
+                                                     .definitions = {catalog.Value().front()}};
+        Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16});
         TemporaryProject finalProject;
-        finalProject.Write(".horo/project.json", "{\"projectId\":\"target-attribution\",\"settings\":{\"assetCompression\":\"lz4\","
-                                                 "\"textureCompression\":\"bc7\"}}\n");
+        finalProject.Write(".horo/project.json",
+                           R"({"projectId":"target-attribution","settings":{"assetCompression":"lz4","textureCompression":"bc7"}})"
+                           "\n");
         auto prepared = Horo::Application::ProjectMigrationExecutor::Prepare(finalProject.root,
                                                                              finalProject.root.parent_path() /
                                                                                  (finalProject.root.filename().string() + "-candidate"),
@@ -429,8 +463,8 @@ namespace {
                  // Transaction-owned root/history overlay is intentionally absent from this definition-level dry run.
                  .targetValidator = {}};
         TemporaryProject project;
-        project.Write(".horo/project.json", "{\"projectId\":\"dry-run\",\"settings\":{\"renderBackend\":\"opengl\"},"
-                                            "\"unknown\":[1,true,null]}\n");
+        project.Write(".horo/project.json", R"({"projectId":"dry-run","settings":{"renderBackend":"opengl"},"unknown":[1,true,null]})"
+                                            "\n");
         const std::string before = project.Read(".horo/project.json");
         Horo::JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 8});
         const auto dryRun = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, plan, jobs);
@@ -439,4 +473,4 @@ namespace {
         REQUIRE((project.Read(".horo/project.json") == before));
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
-}  // namespace
+}  // namespace project_migration_tests
