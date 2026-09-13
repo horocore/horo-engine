@@ -32,42 +32,40 @@ namespace Horo::Editor {
             return Result<bool>::Failure(state.ErrorValue());
         }
 
-        [[nodiscard]] Result<bool> AdvanceTexture(Render::RenderFrontend &frontend, const Render::RenderMemoryScopeId memoryScope,
-                                                  const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureHandle &handle,
-                                                  Render::ResourceOperationId &operation) {
+        template <typename Handle, typename Create>
+        [[nodiscard]] Result<bool> AdvanceResource(Render::RenderFrontend &frontend, Handle &handle, Render::ResourceOperationId &operation,
+                                                   Create &&create) {
             if (!handle.IsValid()) {
-                auto created = frontend.CreateTexture(memoryScope, descriptor);
+                auto created = std::forward<Create>(create)();
                 if (created.HasError())
                     return Result<bool>::Failure(created.ErrorValue());
                 handle = created.Value().handle;
                 operation = created.Value().operation;
             }
             return ResourceReady(frontend, handle, operation);
+        }
+
+        [[nodiscard]] Result<bool> AdvanceTexture(Render::RenderFrontend &frontend, const Render::RenderMemoryScopeId memoryScope,
+                                                  const Render::RenderTextureDescriptor &descriptor, Render::RenderTextureHandle &handle,
+                                                  Render::ResourceOperationId &operation) {
+            return AdvanceResource(frontend, handle, operation, [&] {
+                return frontend.CreateTexture(memoryScope, descriptor);
+            });
         }
 
         [[nodiscard]] Result<bool> AdvanceTextureView(Render::RenderFrontend &frontend,
                                                       const Render::RenderTextureViewDescriptor &descriptor,
                                                       Render::RenderTextureViewHandle &handle, Render::ResourceOperationId &operation) {
-            if (!handle.IsValid()) {
-                auto created = frontend.CreateTextureView(descriptor);
-                if (created.HasError())
-                    return Result<bool>::Failure(created.ErrorValue());
-                handle = created.Value().handle;
-                operation = created.Value().operation;
-            }
-            return ResourceReady(frontend, handle, operation);
+            return AdvanceResource(frontend, handle, operation, [&] {
+                return frontend.CreateTextureView(descriptor);
+            });
         }
 
         [[nodiscard]] Result<bool> AdvanceRenderTarget(Render::RenderFrontend &frontend, const Render::RenderTargetDescriptor &descriptor,
                                                        Render::RenderTargetHandle &handle, Render::ResourceOperationId &operation) {
-            if (!handle.IsValid()) {
-                auto created = frontend.CreateRenderTarget(descriptor);
-                if (created.HasError())
-                    return Result<bool>::Failure(created.ErrorValue());
-                handle = created.Value().handle;
-                operation = created.Value().operation;
-            }
-            return ResourceReady(frontend, handle, operation);
+            return AdvanceResource(frontend, handle, operation, [&] {
+                return frontend.CreateRenderTarget(descriptor);
+            });
         }
     }  // namespace
 

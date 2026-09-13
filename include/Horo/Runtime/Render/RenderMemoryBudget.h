@@ -34,12 +34,8 @@ namespace Horo::Render {
         }
     };
 
-    /** @brief Non-additive accounting and fragmentation snapshot for one compatible memory pool. */
-    struct RenderMemoryPoolSnapshot {
-        RenderMemoryPoolId pool;
-        RenderMemoryScopeId scope;
-        RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice};
-        RenderMemoryCompatibilityId compatibility;
+    /** @brief Accounting fields shared by compatible-pool and whole-ledger snapshots. */
+    struct RenderMemoryAccountingSnapshot {
         std::size_t reservedUnallocatedBytes{0}; /**< Whole blocks charged before native allocation succeeds. */
         std::size_t committedBackingBytes{0};    /**< Whole native backing charged exactly once. */
         std::size_t reservedPayloadBytes{0};     /**< Payload represented by unconsumed reservations. */
@@ -52,23 +48,21 @@ namespace Horo::Render {
         std::uint32_t externalFragmentationBasisPoints{0}; /**< Zero to 10,000 within this compatible pool. */
     };
 
+    /** @brief Non-additive accounting and fragmentation snapshot for one compatible memory pool. */
+    struct RenderMemoryPoolSnapshot : RenderMemoryAccountingSnapshot {
+        RenderMemoryPoolId pool;
+        RenderMemoryScopeId scope;
+        RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice};
+        RenderMemoryCompatibilityId compatibility;
+    };
+
     /** @brief Non-additive accounting snapshot for one frontend memory envelope. */
-    struct RenderMemoryBudgetSnapshot {
+    struct RenderMemoryBudgetSnapshot : RenderMemoryAccountingSnapshot {
         std::uint64_t revision{0};
         std::size_t hardCapBytes{0};
-        std::size_t reservedUnallocatedBytes{0}; /**< Whole blocks charged before native allocation succeeds. */
-        std::size_t committedBackingBytes{0};    /**< Whole native backing charged exactly once. */
-        std::size_t reservedPayloadBytes{0};     /**< Payload represented by unconsumed reservations. */
-        std::size_t livePayloadBytes{0};         /**< Payload represented by live allocations. */
-        std::size_t retiringPayloadBytes{0};     /**< Payload awaiting reader-retirement acknowledgement. */
-        std::size_t reusableSlackBytes{0};       /**< Sum of free bytes in compatible shared pools. */
-        std::size_t peakChargedBytes{0};         /**< Historical peak of committed plus reserved backing. */
+        std::size_t peakChargedBytes{0}; /**< Historical peak of committed plus reserved backing. */
         std::uint64_t failedReservationCount{0};
         std::uint32_t poolCount{0};
-        std::uint32_t blockCount{0};
-        std::uint32_t reservationCount{0};
-        std::uint32_t allocationCount{0};
-        std::uint32_t externalFragmentationBasisPoints{0}; /**< Worst compatible pool, zero to 10,000. */
         bool overBudget{false};
         bool acceptingReservations{false};
     };

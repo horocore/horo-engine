@@ -49,9 +49,7 @@ namespace Horo::Render::Detail {
                             .buffer = descriptor,
                             .memoryReservation = memoryReservation,
                             .memoryPlacement = memoryPlacement};
-            request.initialData.assign(initialData.begin(), initialData.end());
-            requests_.push_back(std::move(request));
-            pendingBytes_ += requests_.back().initialData.size();
+            EnqueueWithInitialData(std::move(request), initialData);
         }
 
         void EnqueueMesh(const RenderResourceIdentity identity, const RenderMeshDescriptor &descriptor,
@@ -67,9 +65,7 @@ namespace Horo::Render::Detail {
                             .texture = descriptor,
                             .memoryReservation = memoryReservation,
                             .memoryPlacement = memoryPlacement};
-            request.initialData.assign(initialData.begin(), initialData.end());
-            requests_.push_back(std::move(request));
-            pendingBytes_ += requests_.back().initialData.size();
+            EnqueueWithInitialData(std::move(request), initialData);
         }
 
         void EnqueueTextureView(const RenderResourceIdentity identity, const RenderTextureViewDescriptor &descriptor) {
@@ -122,6 +118,12 @@ namespace Horo::Render::Detail {
         }
 
     private:
+        void EnqueueWithInitialData(Request request, const std::span<const std::byte> initialData) {
+            request.initialData.assign(initialData.begin(), initialData.end());
+            requests_.push_back(std::move(request));
+            pendingBytes_ += requests_.back().initialData.size();
+        }
+
         RenderResourceUploadLimits limits_;
         std::deque<Request> requests_;
         std::size_t pendingBytes_{0};
