@@ -8,6 +8,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
     std::atomic<std::size_t> gAllocations{};
@@ -90,6 +91,14 @@ namespace {
         std::filesystem::create_directories(root / ".horo");
         std::filesystem::create_directories(root / "assets/models");
         return root;
+    }
+
+    AssetRegistryBuildReport RebuildSingleDegradedAsset(AssetRegistry &registry, const std::filesystem::path &root) {
+        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE((rebuilt.HasValue()));
+        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Degraded));
+        REQUIRE((rebuilt.Value().registeredAssets == 1));
+        return std::move(rebuilt).Value();
     }
 
     TEST_CASE("Stable Identities Are Canonical", "[unit][runtime][assets]") {
@@ -182,13 +191,10 @@ namespace {
         std::filesystem::create_symlink(root / "assets/models/good.obj", root / "assets/models/link.obj", symlinkError);
 
         AssetRegistry registry;
-        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
-        REQUIRE((rebuilt.HasValue()));
-        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Degraded));
-        REQUIRE((rebuilt.Value().registeredAssets == 1));
+        const AssetRegistryBuildReport rebuilt = RebuildSingleDegradedAsset(registry, root);
         REQUIRE((!std::filesystem::exists(root / ".horo/asset_index.json")));
         std::vector<std::string> codes;
-        for (const auto &diagnostic : rebuilt.Value().diagnostics)
+        for (const auto &diagnostic : rebuilt.diagnostics)
             codes.push_back(diagnostic.error.code.Value());
         REQUIRE((std::ranges::find(codes, "asset.registry.sidecar_missing") != codes.end()));
         REQUIRE((std::ranges::find(codes, "asset.registry.identity_missing") != codes.end()));
@@ -256,16 +262,11 @@ namespace {
               R"({"schemaVersion":1,"assetId":"21112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
 
         AssetRegistry registry;
-        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
-        REQUIRE((rebuilt.HasValue()));
-        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Degraded));
-        REQUIRE((rebuilt.Value().registeredAssets == 1));
-        REQUIRE(
-            (std::ranges::count(rebuilt.Value().diagnostics, "asset.registry.type_mismatch", [](const AssetRegistryDiagnostic &diagnostic) {
+        const AssetRegistryBuildReport rebuilt = RebuildSingleDegradedAsset(registry, root);
+        REQUIRE((std::ranges::count(rebuilt.diagnostics, "asset.registry.type_mismatch", [](const AssetRegistryDiagnostic &diagnostic) {
             return diagnostic.error.code.Value();
         }) == 2));
-        REQUIRE((std::ranges::count(rebuilt.Value().diagnostics, "asset.registry.sidecar_missing",
-                                    [](const AssetRegistryDiagnostic &diagnostic) {
+        REQUIRE((std::ranges::count(rebuilt.diagnostics, "asset.registry.sidecar_missing", [](const AssetRegistryDiagnostic &diagnostic) {
             return diagnostic.error.code.Value();
         }) == 1));
 
@@ -330,12 +331,9 @@ namespace {
         Write(root / "assets/prefabs/malformed.prefab.horo", "{");
 
         AssetRegistry registry;
-        auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
-        REQUIRE((rebuilt.HasValue()));
-        REQUIRE((rebuilt.Value().status == AssetRegistryBuildStatus::Degraded));
-        REQUIRE((rebuilt.Value().registeredAssets == 1));
+        const AssetRegistryBuildReport rebuilt = RebuildSingleDegradedAsset(registry, root);
         REQUIRE((registry.Snapshot().Find(Id("00112233-4455-6677-8899-aabbccddeeff")) != nullptr));
-        REQUIRE((std::ranges::any_of(rebuilt.Value().diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
+        REQUIRE((std::ranges::any_of(rebuilt.diagnostics, [](const AssetRegistryDiagnostic &diagnostic) {
             return diagnostic.error.code.Value() == "asset.registry.sidecar_malformed";
         })));
         std::filesystem::remove_all(root);
