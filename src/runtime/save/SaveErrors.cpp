@@ -224,6 +224,21 @@ namespace Horo::Runtime::SaveErrors {
                                                         "Private save-slot index reconstruction storage could not be allocated.",
                                                         "Keep the previous index and retry after reducing memory pressure.",
                                                         true};
+    const ErrorCodeDescriptor StorageOperationInvalid{kDomain, ErrorCode{"save.storage.operation_invalid"}, kError,
+                                                      "A local save storage operation is invalid.",
+                                                      "Supply a valid typed namespace, slot, payload, and operation bound."};
+    const ErrorCodeDescriptor StorageCapabilityUnsupported{kDomain, ErrorCode{"save.storage.capability_unsupported"}, kError,
+                                                           "The local save storage provider does not support this operation.",
+                                                           "Select a provider that explicitly advertises the required capability."};
+    const ErrorCodeDescriptor StorageResultInvalid{kDomain, ErrorCode{"save.storage.result_invalid"}, kError,
+                                                   "The local save storage provider returned a contradictory result.",
+                                                   "Fix the provider to return the exact bounded immutable result type requested."};
+    const ErrorCodeDescriptor StorageAllocationFailed{kDomain,
+                                                      ErrorCode{"save.storage.allocation_failed"},
+                                                      kError,
+                                                      "Local save storage operation state could not be allocated.",
+                                                      "Release retained operation data and retry later.",
+                                                      true};
     const ErrorCodeDescriptor OperationInvalid{kDomain, ErrorCode{"save.operation.invalid"}, kError,
                                                "An asynchronous save operation descriptor or handle is invalid.",
                                                "Use a non-zero application operation identity and finite callback capacity."};
