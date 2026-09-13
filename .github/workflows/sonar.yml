@@ -122,6 +122,7 @@ jobs:
             -DHORO_ENABLE_EDITOR=ON \
             -DHORO_ENABLE_IMGUI_UI_TESTS=ON \
             -DHORO_ENABLE_GPU_SMOKE_TESTS=ON \
+            -DHORO_BUILD_RENDER_VULKAN=ON \
             -DHORO_ENABLE_TELEMETRY=ON \
             -DHORO_ENABLE_OPENTELEMETRY=ON
           cmake --build build/sonar --parallel
