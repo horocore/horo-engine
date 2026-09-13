@@ -680,6 +680,13 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         Check(invalidMemoryFrontend.HasError());
         Check(invalidMemoryFrontend.ErrorValue().code.Value() == "render.frontend.memory.invalid_config");
 
+        RenderResourceRetirementLimits invalidRetirement;
+        invalidRetirement.maximumTrackedQueues = 0;
+        const auto invalidRetirementFrontend =
+            RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, {}, {}, invalidRetirement);
+        Check(invalidRetirementFrontend.HasError());
+        Check(invalidRetirementFrontend.ErrorValue().code.Value() == "render.frontend.resource.invalid_retirement_limits");
+
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
                                               {.maximumPendingBytes = 16, .maximumBytesPerDrain = 8, .maximumRequestsPerDrain = 4});
         Check(created.HasValue());
@@ -1033,6 +1040,26 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         const Result<void> inactive = frame.Present();
         Check(inactive.HasError());
         Check(inactive.ErrorValue().code.Value() == "render.frontend.frame_not_active");
+    }
+
+    TEST_CASE("Frontend Shutdown Leaves Resident Native Resource Cleanup To The Backend",
+              "[unit][runtime][renderer][resource][retirement]") {
+        lifecycleState = {};
+        std::unique_ptr<RenderFrontend> frontend = CreateTrackingFrontend();
+        const std::array<std::byte, 16> bytes{};
+        const auto buffer = frontend->CreateBuffer({.byteSize = bytes.size(),
+                                                    .usage = RenderBufferUsage::Vertex,
+                                                    .access = RenderBufferAccess::DeviceLocal},
+                                                   bytes);
+        REQUIRE(buffer.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(lifecycleState.createBufferCount == 1);
+        CHECK(lifecycleState.destroyBufferCount == 0);
+
+        frontend.reset();
+
+        CHECK(lifecycleState.shutdownCount == 1);
+        CHECK(lifecycleState.destroyBufferCount == 0);
     }
 
     TEST_CASE("Frame Scope Move Assignment Aborts The Previous Frame And Transfers Ownership", "[unit][runtime][renderer]") {
