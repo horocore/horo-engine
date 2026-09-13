@@ -239,6 +239,21 @@ namespace Horo::Runtime::SaveErrors {
                                                       "Local save storage operation state could not be allocated.",
                                                       "Release retained operation data and retry later.",
                                                       true};
+    const ErrorCodeDescriptor SlotCommitInvalid{kDomain, ErrorCode{"save.slot_commit.invalid"}, kError,
+                                                "A slot-generation commit record is invalid.",
+                                                "Use one valid leased slot, a new generation, and complete finalized archive metadata."};
+    const ErrorCodeDescriptor SlotCommitOutcomeUnknown{kDomain,
+                                                       ErrorCode{"save.slot_commit.outcome_unknown"},
+                                                       kError,
+                                                       "Atomic slot publication has an unknown outcome.",
+                                                       "Keep the slot lease and reconcile the durable journal against catalog evidence.",
+                                                       true};
+    const ErrorCodeDescriptor SlotCommitRecoveryFailed{kDomain,
+                                                       ErrorCode{"save.slot_commit.recovery_failed"},
+                                                       kError,
+                                                       "Slot-generation recovery could not converge safely.",
+                                                       "Quarantine slot mutation and preserve the journal for bounded operator recovery.",
+                                                       true};
     const ErrorCodeDescriptor OperationInvalid{kDomain, ErrorCode{"save.operation.invalid"}, kError,
                                                "An asynchronous save operation descriptor or handle is invalid.",
                                                "Use a non-zero application operation identity and finite callback capacity."};

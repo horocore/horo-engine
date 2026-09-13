@@ -12,27 +12,6 @@ namespace Horo::Runtime {
     namespace {
         using namespace Test;
 
-        [[nodiscard]] Sha256Digest Digest(const std::uint8_t suffix) {
-            Sha256Digest value{};
-            value.bytes.back() = suffix;
-            return value;
-        }
-
-        [[nodiscard]] SaveSlotCatalogEntry Entry(const std::uint8_t slot, const std::uint8_t generation) {
-            return {.publication = {.slot = Id<SaveGameSlotId>(slot),
-                                    .generation = Id<SlotGenerationId>(generation),
-                                    .kind = SaveSlotKind::Manual,
-                                    .savedAtUnixMilliseconds = 1'700'000'000'000ULL,
-                                    .playTimeNanoseconds = 42,
-                                    .baseScene = Id<SaveBaseSceneId>(3),
-                                    .productCompatibility = V<ProductSaveCompatibilityVersion>(1),
-                                    .saveSchema = V<SaveSchemaVersion>(1),
-                                    .projectBuildId = "test-build",
-                                    .canonicalState = {.value = Digest(generation)},
-                                    .archiveContent = {.value = Digest(static_cast<std::uint8_t>(generation + 40))}},
-                    .display = {.displayName = "Slot"}};
-        }
-
         [[nodiscard]] SaveSlotArtifactObservation Committed(const std::uint8_t slot, const std::uint8_t generation) {
             return {.state = SaveSlotArtifactState::Committed, .entry = Entry(slot, generation)};
         }
