@@ -11,7 +11,7 @@
 #include <vector>
 
 namespace Horo::Prefab {
-    namespace {
+    namespace SceneIdentityRemapTests {
         Assets::AssetId RemapAsset(const std::uint8_t suffix) {
             std::array<std::uint8_t, 16> bytes{};
             bytes.back() = suffix;
@@ -126,5 +126,5 @@ namespace Horo::Prefab {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == PrefabErrors::ReferenceCountExceeded.code.Value());
         }
-    }  // namespace
+    }  // namespace SceneIdentityRemapTests
 }  // namespace Horo::Prefab
