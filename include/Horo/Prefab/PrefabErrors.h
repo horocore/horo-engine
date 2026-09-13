@@ -46,4 +46,8 @@ namespace Horo::Prefab::PrefabErrors {
     extern const ErrorCodeDescriptor DependencyRevisionMismatch;
     /** @brief A completed prefab resolution no longer matches the authoritative publication context. */
     extern const ErrorCodeDescriptor ResolutionStale;
+    /** @brief A generated prefab scene identity collides with an authored or expanded identity. */
+    extern const ErrorCodeDescriptor IdentityCollision;
+    /** @brief A typed prefab reference cannot be rewritten without ambiguity or data loss. */
+    extern const ErrorCodeDescriptor ReferenceRewriteInvalid;
 }  // namespace Horo::Prefab::PrefabErrors
