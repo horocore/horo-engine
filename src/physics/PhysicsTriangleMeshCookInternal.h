@@ -26,7 +26,6 @@ namespace Horo::Physics::Detail {
         std::uint32_t first{};
         std::uint32_t second{};
         bool forward{};
-        auto operator<=>(const TriangleMeshEdgeUse &) const noexcept = default;
     };
 
     inline void AppendTriangleMeshEdges(std::vector<TriangleMeshEdgeUse> &edges, const std::array<std::uint32_t, 3> &indices) {
@@ -40,13 +39,18 @@ namespace Horo::Physics::Detail {
 
     template <typename InvalidResult>
     [[nodiscard]] Result<void> ValidateTriangleMeshEdges(std::vector<TriangleMeshEdgeUse> &edges, InvalidResult &&invalidResult) {
-        std::ranges::sort(edges);
+        std::ranges::sort(edges, [](const TriangleMeshEdgeUse &left, const TriangleMeshEdgeUse &right) {
+            if (left.first != right.first)
+                return left.first < right.first;
+            if (left.second != right.second)
+                return left.second < right.second;
+            return left.forward < right.forward;
+        });
         for (auto first = edges.begin(); first != edges.end();) {
             const auto last = std::find_if(first, edges.end(), [first](const TriangleMeshEdgeUse &edge) {
                 return edge.first != first->first || edge.second != first->second;
             });
-            const auto count = last - first;
-            if (count > 2 || (count == 2 && first->forward == (first + 1)->forward))
+            if (const auto count = last - first; count > 2 || (count == 2 && first->forward == (first + 1)->forward))
                 return std::forward<InvalidResult>(invalidResult)();
             first = last;
         }

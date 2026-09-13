@@ -59,9 +59,9 @@ namespace Horo::Physics {
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::ShapeCookSourceInvalid,
                               SourceMessage(request, "vertices, triangles and the declared material-slot table must all be non-empty.")));
-            const auto &limits = request.settings.limits;
-            if (request.vertices.size() > limits.maxSourceVertices || request.triangles.size() > limits.maxTriangles ||
-                request.materialSlots.size() > limits.maxMaterialSlots)
+            if (const auto &limits = request.settings.limits; request.vertices.size() > limits.maxSourceVertices ||
+                                                              request.triangles.size() > limits.maxTriangles ||
+                                                              request.materialSlots.size() > limits.maxMaterialSlots)
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::ShapeCookLimitExceeded,
                               SourceMessage(request,
@@ -217,7 +217,8 @@ namespace Horo::Physics {
                     MakeError(PhysicsErrors::ShapeCookSourceInvalid,
                               SourceMessage(request, std::format("triangle {} is degenerate at the cook tolerance.",
                                                                  sourceTriangle.subshape.Value()))));
-            mesh.triangles.push_back({CanonicalRotation(indices), sourceTriangle.subshape, sourceTriangle.materialSlot});
+            mesh.triangles.emplace_back(
+                LoadedPhysicsTriangle{CanonicalRotation(indices), sourceTriangle.subshape, sourceTriangle.materialSlot});
             return Result<void>::Success();
         }
 
@@ -413,9 +414,10 @@ namespace Horo::Physics {
 
     /** @copydoc ValidatePhysicsTriangleMeshMotion */
     Result<void> ValidatePhysicsTriangleMeshMotion(const PhysicsMotionType motion) {
-        if (motion == PhysicsMotionType::Static)
+        using enum PhysicsMotionType;
+        if (motion == Static)
             return Result<void>::Success();
-        if (motion == PhysicsMotionType::Kinematic || motion == PhysicsMotionType::Dynamic)
+        if (motion == Kinematic || motion == Dynamic)
             return Result<void>::Failure(
                 MakeError(PhysicsErrors::ShapeMotionUnsupported, "Triangle-mesh collision supports static bodies only in CanonicalV1."));
         return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown body motion mode."));
