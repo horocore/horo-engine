@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
+#include "renderer/RenderMemoryTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -99,20 +100,12 @@ namespace {
         }
 
         Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
-            return Result<RenderMemoryCostPlan>::Success({.allocationClass = RenderMemoryAllocationClass::Dedicated,
-                                                          .compatibility = RenderMemoryCompatibilityId{1},
-                                                          .payloadBytes = descriptor.byteSize,
-                                                          .requiredBytes = descriptor.byteSize,
-                                                          .alignment = 1});
+            return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(descriptor.byteSize, 1));
         }
 
         Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
             const std::size_t bytes = RenderTextureBaseLevelByteSize(descriptor).value_or(0);
-            return Result<RenderMemoryCostPlan>::Success({.allocationClass = RenderMemoryAllocationClass::Dedicated,
-                                                          .compatibility = RenderMemoryCompatibilityId{2},
-                                                          .payloadBytes = bytes,
-                                                          .requiredBytes = bytes,
-                                                          .alignment = 1});
+            return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(bytes, 2));
         }
 
         Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, const std::span<const std::byte> initialData,
@@ -293,6 +286,17 @@ namespace {
         return std::make_unique<TrackingBackendProvider>();
     }
 
+    void RegisterTrackingBackend(RenderBackendRegistry &registry) {
+        Check(registry
+                  .Register(RenderBackendDescriptor{
+                      .id = RenderBackendId{"tracking"},
+                      .displayName = "Tracking",
+                      .provider = MakeTrackingBackendProvider(),
+                  })
+                  .HasValue());
+        Check(registry.Seal().HasValue());
+    }
+
     static_assert(!std::is_copy_constructible_v<RenderFrameScope>);
     static_assert(!std::is_copy_assignable_v<RenderFrameScope>);
     static_assert(std::is_nothrow_move_constructible_v<RenderFrameScope>);
@@ -302,14 +306,7 @@ namespace {
     [[nodiscard]] std::unique_ptr<RenderFrontend> CreateTrackingFrontend(const RenderFrontendMemoryConfig &memoryConfig = {},
                                                                          const RenderResourceUploadLimits &uploadLimits = {}) {
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{}, uploadLimits, memoryConfig);
         Check(created.HasValue());
         return std::move(created).Value();
@@ -656,14 +653,7 @@ namespace {
     TEST_CASE("Frontend Enforces Upload Byte And Drain Budgets", "[unit][runtime][renderer][resource]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
         auto invalid = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
                                               {.maximumPendingBytes = 8, .maximumBytesPerDrain = 16, .maximumRequestsPerDrain = 1});
         Check(invalid.HasError());
@@ -1131,14 +1121,7 @@ namespace {
     TEST_CASE("Frontend Initializes And Owns Selected Backend Lifetime", "[unit][runtime][renderer]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1181,14 +1164,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.failPresentation = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1210,14 +1186,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.throwDuringInitialize = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasError());
@@ -1232,14 +1201,7 @@ namespace {
             lifecycleState = {};
             lifecycleState.frameThrowPoint = throwPoint;
             RenderBackendRegistry registry;
-            Check(registry
-                      .Register(RenderBackendDescriptor{
-                          .id = RenderBackendId{"tracking"},
-                          .displayName = "Tracking",
-                          .provider = MakeTrackingBackendProvider(),
-                      })
-                      .HasValue());
-            Check(registry.Seal().HasValue());
+            RegisterTrackingBackend(registry);
 
             auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
             Check(created.HasValue());
@@ -1261,14 +1223,7 @@ namespace {
     TEST_CASE("Frontend Owns Resize Boundary And Contains Backend Exceptions", "[unit][runtime][renderer]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1298,14 +1253,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.returnInvalidFrameToken = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1327,14 +1275,7 @@ namespace {
         lifecycleState = {};
         lifecycleState.failBeginAfterActivation = true;
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{
-                      .id = RenderBackendId{"tracking"},
-                      .displayName = "Tracking",
-                      .provider = MakeTrackingBackendProvider(),
-                  })
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
 
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
@@ -1357,12 +1298,7 @@ namespace {
     TEST_CASE("Frontend Owns Static Mesh Executor Attachment And Rejects Missing Execution", "[unit][runtime][renderer]") {
         lifecycleState = {};
         RenderBackendRegistry registry;
-        Check(registry
-                  .Register(RenderBackendDescriptor{.id = RenderBackendId{"tracking"},
-                                                    .displayName = "Tracking",
-                                                    .provider = MakeTrackingBackendProvider()})
-                  .HasValue());
-        Check(registry.Seal().HasValue());
+        RegisterTrackingBackend(registry);
         auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{});
         Check(created.HasValue());
         std::unique_ptr<RenderFrontend> frontend = std::move(created).Value();

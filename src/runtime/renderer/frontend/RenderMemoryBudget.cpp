@@ -54,20 +54,7 @@ namespace Horo::Render {
                                                       "Reservation is malformed, foreign, stale, or already consumed.");
             const Block &block = blocks_[found->block];
             const Region &region = regions_[found->region];
-            const Pool *pool = FindPool(block.pool);
-            return Result<RenderMemoryPlacement>::Success(
-                {.pool = block.pool,
-                 .scope = pool->scope,
-                 .attempt = region.attempt,
-                 .memoryClass = pool->memoryClass,
-                 .compatibility = pool->compatibility,
-                 .provenance = region.provenance,
-                 .budgetRevision = region.budgetRevision,
-                 .offsetBytes = region.offset,
-                 .payloadBytes = region.payloadBytes,
-                 .requiredBytes = region.requiredBytes,
-                 .backingBytes = block.capacity,
-                 .allocationClass = block.dedicated ? RenderMemoryAllocationClass::Dedicated : RenderMemoryAllocationClass::Suballocated});
+            return Result<RenderMemoryPlacement>::Success(DescribePlacement(block, region));
         }
 
         [[nodiscard]] Result<RenderMemoryAllocation> Commit(const RenderMemoryReservationId reservation) {
@@ -83,21 +70,11 @@ namespace Horo::Render {
             --reservationCount_;
             ++allocationCount_;
             block.committed = true;
-            const Pool *pool = FindPool(block.pool);
-            return Result<RenderMemoryAllocation>::Success(
-                {.id = RenderMemoryAllocationId{renderer_, region.allocation},
-                 .pool = block.pool,
-                 .scope = pool->scope,
-                 .attempt = region.attempt,
-                 .memoryClass = pool->memoryClass,
-                 .compatibility = pool->compatibility,
-                 .provenance = region.provenance,
-                 .budgetRevision = region.budgetRevision,
-                 .offsetBytes = region.offset,
-                 .payloadBytes = region.payloadBytes,
-                 .requiredBytes = region.requiredBytes,
-                 .backingBytes = block.capacity,
-                 .allocationClass = block.dedicated ? RenderMemoryAllocationClass::Dedicated : RenderMemoryAllocationClass::Suballocated});
+            const RenderMemoryPlacement placement = DescribePlacement(block, region);
+            RenderMemoryAllocation allocation;
+            static_cast<RenderMemoryPlacement &>(allocation) = placement;
+            allocation.id = RenderMemoryAllocationId{renderer_, region.allocation};
+            return Result<RenderMemoryAllocation>::Success(std::move(allocation));
         }
 
         [[nodiscard]] Result<void> BeginRetire(const RenderMemoryAllocationId allocation) {
@@ -142,15 +119,16 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] RenderMemoryBudgetSnapshot Snapshot() const noexcept {
-            RenderMemoryBudgetSnapshot snapshot{.revision = config_.revision,
-                                                .hardCapBytes = config_.hardCapBytes,
-                                                .peakChargedBytes = peakChargedBytes_,
-                                                .failedReservationCount = failedReservationCount_,
-                                                .poolCount = static_cast<std::uint32_t>(pools_.size()),
-                                                .blockCount = static_cast<std::uint32_t>(blocks_.size()),
-                                                .reservationCount = reservationCount_,
-                                                .allocationCount = allocationCount_,
-                                                .acceptingReservations = acceptingReservations_};
+            RenderMemoryBudgetSnapshot snapshot;
+            snapshot.revision = config_.revision;
+            snapshot.hardCapBytes = config_.hardCapBytes;
+            snapshot.peakChargedBytes = peakChargedBytes_;
+            snapshot.failedReservationCount = failedReservationCount_;
+            snapshot.poolCount = static_cast<std::uint32_t>(pools_.size());
+            snapshot.blockCount = static_cast<std::uint32_t>(blocks_.size());
+            snapshot.reservationCount = reservationCount_;
+            snapshot.allocationCount = allocationCount_;
+            snapshot.acceptingReservations = acceptingReservations_;
             for (const Block &block : blocks_) {
                 if (block.committed)
                     snapshot.committedBackingBytes += block.capacity;
@@ -202,6 +180,23 @@ namespace Horo::Render {
         }
 
     private:
+        [[nodiscard]] RenderMemoryPlacement DescribePlacement(const Block &block, const Region &region) const {
+            const Pool *pool = FindPool(block.pool);
+            return {.pool = block.pool,
+                    .scope = pool->scope,
+                    .attempt = region.attempt,
+                    .memoryClass = pool->memoryClass,
+                    .compatibility = pool->compatibility,
+                    .provenance = region.provenance,
+                    .budgetRevision = region.budgetRevision,
+                    .offsetBytes = region.offset,
+                    .payloadBytes = region.payloadBytes,
+                    .requiredBytes = region.requiredBytes,
+                    .backingBytes = block.capacity,
+                    .allocationClass =
+                        block.dedicated ? RenderMemoryAllocationClass::Dedicated : RenderMemoryAllocationClass::Suballocated};
+        }
+
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, const char *message) const {
             return Result<T>::Failure(MemoryBudgetError(descriptor, message));
         }
@@ -346,23 +341,23 @@ namespace Horo::Render {
         [[nodiscard]] std::optional<MemoryLocation> FindReservation(const RenderMemoryReservationId id) const noexcept {
             if (!id.IsValid() || id.renderer != renderer_)
                 return std::nullopt;
-            for (std::size_t regionIndex = 0; regionIndex < regions_.size(); ++regionIndex) {
-                const Region &region = regions_[regionIndex];
-                if (region.active && region.state == RegionState::Reserved && region.reservation == id.value) {
-                    const auto block = std::ranges::find(blocks_, region.block, &Block::id);
-                    if (block != blocks_.end())
-                        return MemoryLocation{static_cast<std::size_t>(block - blocks_.begin()), regionIndex};
-                }
-            }
-            return std::nullopt;
+            return FindRegionLocation([id](const Region &region) {
+                return region.active && region.state == RegionState::Reserved && region.reservation == id.value;
+            });
         }
 
         [[nodiscard]] std::optional<MemoryLocation> FindAllocationLocation(const RenderMemoryAllocationId id) noexcept {
             if (!id.IsValid() || id.renderer != renderer_)
                 return std::nullopt;
+            return FindRegionLocation([id](const Region &region) {
+                return region.active && region.state != RegionState::Reserved && region.allocation == id.value;
+            });
+        }
+
+        template <typename Predicate> [[nodiscard]] std::optional<MemoryLocation> FindRegionLocation(Predicate &&matches) const noexcept {
             for (std::size_t regionIndex = 0; regionIndex < regions_.size(); ++regionIndex) {
                 const Region &region = regions_[regionIndex];
-                if (region.active && region.state != RegionState::Reserved && region.allocation == id.value) {
+                if (std::forward<Predicate>(matches)(region)) {
                     const auto block = std::ranges::find(blocks_, region.block, &Block::id);
                     if (block != blocks_.end())
                         return MemoryLocation{static_cast<std::size_t>(block - blocks_.begin()), regionIndex};
@@ -414,10 +409,11 @@ namespace Horo::Render {
 
         [[nodiscard]] RenderMemoryPoolSnapshot MakePoolSnapshot(const Pool &pool,
                                                                 const std::span<const Region *const> sortedRegions) const noexcept {
-            RenderMemoryPoolSnapshot snapshot{.pool = pool.id,
-                                              .scope = pool.scope,
-                                              .memoryClass = pool.memoryClass,
-                                              .compatibility = pool.compatibility};
+            RenderMemoryPoolSnapshot snapshot;
+            snapshot.pool = pool.id;
+            snapshot.scope = pool.scope;
+            snapshot.memoryClass = pool.memoryClass;
+            snapshot.compatibility = pool.compatibility;
             std::size_t largestFreeRegion = 0;
             for (const Block &block : blocks_) {
                 if (block.pool != pool.id)

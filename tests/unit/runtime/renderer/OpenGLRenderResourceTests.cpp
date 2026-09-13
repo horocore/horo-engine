@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
+#include "renderer/RenderMemoryTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -176,20 +177,6 @@ namespace {
         std::uint64_t target{0};
     };
 
-    [[nodiscard]] RenderMemoryPlacement PlacementFor(const RenderMemoryCostPlan &plan, const std::uint64_t attempt) {
-        return {.pool = {{1}, attempt},
-                .scope = {1, 1},
-                .attempt = {attempt},
-                .memoryClass = plan.memoryClass,
-                .compatibility = plan.compatibility,
-                .provenance = plan.provenance,
-                .budgetRevision = 1,
-                .payloadBytes = plan.payloadBytes,
-                .requiredBytes = plan.requiredBytes,
-                .backingBytes = plan.requiredBytes,
-                .allocationClass = plan.allocationClass};
-    }
-
     /** @brief Creates one triangle's generic buffer and mesh resources. */
     void CreateMeshResources(IRenderBackend &backend, ResourceInstances &resources) {
         const std::array<std::byte, sizeof(MeshVertex) * 3> vertices{};
@@ -202,8 +189,8 @@ namespace {
                                                      .access = RenderBufferAccess::DeviceLocal};
         const auto vertexPlan = backend.QueryBufferMemoryCost(vertexDescriptor).Value();
         const auto indexPlan = backend.QueryBufferMemoryCost(indexDescriptor).Value();
-        auto vertex = backend.CreateBuffer(vertexDescriptor, {}, PlacementFor(vertexPlan, 1));
-        auto index = backend.CreateBuffer(indexDescriptor, indices, PlacementFor(indexPlan, 2));
+        auto vertex = backend.CreateBuffer(vertexDescriptor, {}, TestSupport::PlacementFor(vertexPlan, 1, 1));
+        auto index = backend.CreateBuffer(indexDescriptor, indices, TestSupport::PlacementFor(indexPlan, 2, 2));
         Check(vertex.HasValue() && index.HasValue());
         auto mesh = backend.CreateMesh({.vertexBuffer = {{1}, 1, 1},
                                         .indexBuffer = {{1}, 2, 1},
@@ -228,8 +215,8 @@ namespace {
                                                       .usage = RenderTextureUsage::RenderAttachment};
         const auto colorPlan = backend.QueryTextureMemoryCost(colorDescriptor).Value();
         const auto depthPlan = backend.QueryTextureMemoryCost(depthDescriptor).Value();
-        auto color = backend.CreateTexture(colorDescriptor, {}, PlacementFor(colorPlan, 3));
-        auto depth = backend.CreateTexture(depthDescriptor, {}, PlacementFor(depthPlan, 4));
+        auto color = backend.CreateTexture(colorDescriptor, {}, TestSupport::PlacementFor(colorPlan, 3, 3));
+        auto depth = backend.CreateTexture(depthDescriptor, {}, TestSupport::PlacementFor(depthPlan, 4, 4));
         Check(color.HasValue() && depth.HasValue());
         auto colorView = backend.CreateTextureView({.texture = {{1}, 3, 1},
                                                     .format = RenderTextureFormat::Rgba8Unorm,

@@ -262,23 +262,10 @@ namespace Horo::Render {
         std::span<const RenderPassDescriptor> orderedPasses;
     };
 
-    /**
-     * @brief Coarse renderer backend interface implemented by engine-internal backend modules.
-     *
-     * Implementations own native device/context state. Calls are restricted to the
-     * host-declared render-capable thread. Implementations must release remaining
-     * resources safely from their destructor; explicit Shutdown remains the
-     * deterministic lifecycle path and must be idempotent.
-     */
-    class IRenderBackend {
+    /** @brief Backend-neutral resource allocation and destruction contract. */
+    class IRenderResourceBackend {
     public:
-        virtual ~IRenderBackend() = default;
-
-        /** @brief Initializes the inert backend instance and acquires its runtime resources. */
-        [[nodiscard]] virtual Result<void> Initialize(const RenderBackendConfig &config) = 0;
-
-        /** @brief Returns the immutable capability snapshot for this backend instance. */
-        [[nodiscard]] virtual const RenderBackendCapabilities &Capabilities() const noexcept = 0;
+        virtual ~IRenderResourceBackend() = default;
 
         /**
          * @brief Queries native-free backing requirements before a buffer allocation is admitted.
@@ -368,6 +355,25 @@ namespace Horo::Render {
          * @param backendInstance Backend-private identity previously returned by CreateRenderTarget.
          */
         virtual void DestroyRenderTarget(std::uint64_t backendInstance) noexcept = 0;
+    };
+
+    /**
+     * @brief Coarse renderer backend interface implemented by engine-internal backend modules.
+     *
+     * Implementations own native device/context state. Calls are restricted to the
+     * host-declared render-capable thread. Implementations must release remaining
+     * resources safely from their destructor; explicit Shutdown remains the
+     * deterministic lifecycle path and must be idempotent.
+     */
+    class IRenderBackend : public IRenderResourceBackend {
+    public:
+        ~IRenderBackend() override = default;
+
+        /** @brief Initializes the inert backend instance and acquires its runtime resources. */
+        [[nodiscard]] virtual Result<void> Initialize(const RenderBackendConfig &config) = 0;
+
+        /** @brief Returns the immutable capability snapshot for this backend instance. */
+        [[nodiscard]] virtual const RenderBackendCapabilities &Capabilities() const noexcept = 0;
 
         /** @brief Starts one frame and returns the token required by later frame operations. */
         [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;
