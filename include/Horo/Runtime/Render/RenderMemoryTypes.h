@@ -118,28 +118,11 @@ namespace Horo::Render {
         }
     };
 
-    /** @brief Immutable placement returned only after a reservation is committed. */
-    struct RenderMemoryAllocation {
-        RenderMemoryAllocationId id;                                        /**< Committed allocation identity. */
-        RenderMemoryPoolId pool;                                            /**< Accounted backing pool identity. */
-        RenderMemoryScopeId scope;                                          /**< Charged logical scope. */
-        ResourceOperationId attempt;                                        /**< Resource creation attempt that consumed the reservation. */
-        RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice}; /**< Accounted memory class. */
-        RenderMemoryCompatibilityId compatibility;                          /**< Pool compatibility class. */
-        RenderMemoryCostProvenance provenance{RenderMemoryCostProvenance::Exact}; /**< Requirement confidence. */
-        std::uint64_t budgetRevision{0};                                          /**< Ledger revision that admitted the reservation. */
-        std::size_t offsetBytes{0};                                               /**< Byte offset within the backing allocation. */
-        std::size_t payloadBytes{0};                                              /**< Logical resource payload in bytes. */
-        std::size_t requiredBytes{0};                                             /**< Native backing requirement in bytes. */
-        std::size_t backingBytes{0};                                              /**< Total bytes charged for the backing allocation. */
-        RenderMemoryAllocationClass allocationClass{RenderMemoryAllocationClass::Suballocated}; /**< Placement policy. */
-    };
-
-    /** @brief Immutable native-free placement of one admitted but unconsumed reservation. */
+    /** @brief Fields shared by admitted placement and committed allocation records. */
     struct RenderMemoryPlacement {
         RenderMemoryPoolId pool;                                            /**< Accounted backing pool identity. */
         RenderMemoryScopeId scope;                                          /**< Charged logical scope. */
-        ResourceOperationId attempt;                                        /**< Resource creation attempt authorized by this placement. */
+        ResourceOperationId attempt;                                        /**< Resource creation attempt that consumed the reservation. */
         RenderMemoryClass memoryClass{RenderMemoryClass::PersistentDevice}; /**< Accounted memory class. */
         RenderMemoryCompatibilityId compatibility;                          /**< Pool compatibility class. */
         RenderMemoryCostProvenance provenance{RenderMemoryCostProvenance::Exact}; /**< Requirement confidence. */
@@ -161,5 +144,10 @@ namespace Horo::Render {
                    compatibility.IsValid() && budgetRevision != 0 && payloadBytes > 0 && requiredBytes >= payloadBytes &&
                    backingBytes >= requiredBytes && offsetBytes <= backingBytes - requiredBytes;
         }
+    };
+
+    /** @brief Immutable placement returned only after a reservation is committed. */
+    struct RenderMemoryAllocation : RenderMemoryPlacement {
+        RenderMemoryAllocationId id; /**< Committed allocation identity. */
     };
 }  // namespace Horo::Render

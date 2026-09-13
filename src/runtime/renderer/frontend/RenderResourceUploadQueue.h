@@ -63,8 +63,7 @@ namespace Horo::Render::Detail {
                             .stagingByteCount = initialData.size(),
                             .memoryReservation = memoryReservation,
                             .memoryPlacement = memoryPlacement};
-            requests_.push_back(std::move(request));
-            StageBack(initialData);
+            EnqueueWithInitialData(std::move(request), initialData);
         }
 
         void EnqueueMesh(const RenderResourceIdentity identity, const RenderMeshDescriptor &descriptor,
@@ -82,8 +81,7 @@ namespace Horo::Render::Detail {
                             .stagingByteCount = initialData.size(),
                             .memoryReservation = memoryReservation,
                             .memoryPlacement = memoryPlacement};
-            requests_.push_back(std::move(request));
-            StageBack(initialData);
+            EnqueueWithInitialData(std::move(request), initialData);
         }
 
         void EnqueueTextureView(const RenderResourceIdentity identity, const RenderTextureViewDescriptor &descriptor) {
@@ -166,6 +164,11 @@ namespace Horo::Render::Detail {
         }
 
     private:
+        void EnqueueWithInitialData(Request request, const std::span<const std::byte> initialData) {
+            requests_.push_back(std::move(request));
+            StageBack(initialData);
+        }
+
         [[nodiscard]] std::optional<std::size_t> AlignedOffset(const std::size_t offset) const noexcept {
             const std::size_t mask = limits_.stagingOffsetAlignment - 1U;
             if (offset > std::numeric_limits<std::size_t>::max() - mask)
@@ -208,18 +211,16 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] std::size_t PendingRequestCount() const noexcept {
             return requests_.size() - readIndex_;
-        }
-
-        RenderResourceUploadLimits limits_;
-        std::vector<Request> requests_;
-        std::size_t readIndex_{0};
-        std::vector<std::byte> stagingStorage_;
-        std::size_t pendingPayloadBytes_{0};
-        std::size_t occupiedStagingBytes_{0};
-        std::uint64_t completedBatchCount_{0};
-        std::uint64_t cancelledRequestCount_{0};
-        std::size_t lastBatchPayloadBytes_{0};
-        std::uint32_t lastBatchRequestCount_{0};
-        bool acceptingRequests_{true};
-    };
-}  // namespace Horo::Render::Detail
+            RenderResourceUploadLimits limits_;
+            std::vector<Request> requests_;
+            std::size_t readIndex_{0};
+            std::vector<std::byte> stagingStorage_;
+            std::size_t pendingPayloadBytes_{0};
+            std::size_t occupiedStagingBytes_{0};
+            std::uint64_t completedBatchCount_{0};
+            std::uint64_t cancelledRequestCount_{0};
+            std::size_t lastBatchPayloadBytes_{0};
+            std::uint32_t lastBatchRequestCount_{0};
+            bool acceptingRequests_{true};
+        };
+    }  // namespace Horo::Render::Detail
