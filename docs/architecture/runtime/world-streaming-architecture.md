@@ -654,6 +654,31 @@ residency, queue, budget and operation behavior remain identical. Event records 
 read-only evidence for later observability adapters; they are not emitted directly
 to logs, metrics, EngineDataBus, overlays, CLI or MCP from this boundary.
 
+`WorldStreamingMetricBinding` is the separate WST-010.3 adapter from one mounted
+authority owner lifetime to process Telemetry. Host composition registers and
+pre-binds every instrument before activation; the authority owner thread publishes
+one complete revisioned safe-point sample. The core family measures complete
+operation latency, loaded/retired bytes, operation/completion queue depth, aggregate
+Loading/Resident/Active/Evicting counts, bounded drops and typed failure causes.
+Detailed collection adds only the fixed asset-read, decode, provider-stage,
+activation and retirement latency series.
+
+Metric dimensions use the closed `stage`, `flow`, `queue`, `state` and `reason`
+vocabularies declared by the binding. Partition, cell, asset, provider, operation,
+source and diagnostic-event identities are correlation facts for bounded snapshots,
+logs or captures and are prohibited as metric dimensions. Every descriptor declares
+an exact `maxSeries`; publisher input contains arrays sized by those vocabularies, so
+no runtime string or new series can enter the authority path.
+
+Binding replacement is a same-owner, strictly newer binding revision transaction
+and accepts only a same-or-newer runtime-composition revision. Samples carry the
+exact owner, composition revision, monotonic sample revision and correlated
+diagnostic revision. Malformed, stale, unsupported or over-capacity samples emit
+nothing and do not advance the sample fence. Cancellation closes publication
+immediately; shutdown closes idempotently and releases the handles. Telemetry
+backpressure or shutdown may lose observations but never changes streaming control
+flow, budget admission, residency or retirement.
+
 ## Scene, Prefab And Navigation Reconciliation
 
 Cell CoreEcs packages use ADR-017 Tier 0-style offline expansion: placed prefab
@@ -919,6 +944,7 @@ different target policy. A later policy or world replacement makes old evidence 
 for new passes; already owned immutable decisions retain their captured meaning.
 Policy replacement preserves stable policy identity, requires its exact non-wrapping
 revision successor and is rejected during cancellation or after shutdown.
+
 ### Layer Loaded and Activated state
 
 `WorldLayerStateRecord` is the inert WST-006.2 state-machine publication for one
