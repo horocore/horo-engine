@@ -56,24 +56,30 @@ namespace Horo::Prefab {
             REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
         }
 
+        /** @brief Builds the shared two-source nested resolver fixture with a caller-selected placement and inner hierarchy. */
+        Result<PrefabSourceResolverSnapshot> BuildNestedResolverSnapshot(Assets::AssetRegistry &registry, const LocalObjectId placement,
+                                                                         std::vector<PrefabObjectNode> nestedObjects) {
+            const Assets::AssetId outer = ResolverAsset(1);
+            const Assets::AssetId nested = ResolverAsset(2);
+            const PrefabSourceRevision nestedRevision = ResolverRevision(2);
+            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
+                                               ResolverRecord(nested, "assets/prefabs/nested.prefab")});
+            PrefabComposition composition{.nestedPlacements = {{.placementLocalId = placement,
+                                                                .sourcePrefab = PrefabAssetReference::Create(nested).Value(),
+                                                                .authoredAgainst = nestedRevision}}};
+            return BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                     {{ResolverDocument(outer, {ResolverObject(0)}, std::move(composition), {nested}),
+                                                       ResolverRevision(1)},
+                                                      {ResolverDocument(nested, std::move(nestedObjects)), nestedRevision}},
+                                                     ResolverLimits());
+        }
+
         TEST_CASE("Prefab source resolver pins one registry and document context across nested expansion", "[unit][prefab][resolver]") {
             const auto outer = ResolverAsset(1);
             const auto nested = ResolverAsset(2);
-            const auto nestedRevision = ResolverRevision(2);
             Assets::AssetRegistry registry;
-            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
-                                               ResolverRecord(nested, "assets/prefabs/nested.prefab")});
-
-            PrefabComposition composition{.nestedPlacements = {{.placementLocalId = {7},
-                                                                .sourcePrefab = PrefabAssetReference::Create(nested).Value(),
-                                                                .authoredAgainst = nestedRevision}}};
             auto snapshot =
-                BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
-                                                  {{ResolverDocument(outer, {ResolverObject(0)}, std::move(composition), {nested}),
-                                                    ResolverRevision(1)},
-                                                   {ResolverDocument(nested, {ResolverObject(0), ResolverObject(4, LocalObjectId{0})}),
-                                                    nestedRevision}},
-                                                  ResolverLimits());
+                BuildNestedResolverSnapshot(registry, LocalObjectId{7}, {ResolverObject(0), ResolverObject(4, LocalObjectId{0})});
             REQUIRE(snapshot.HasValue());
 
             auto candidate = snapshot.Value().Resolve(outer, PrefabInstanceId::Create(11).Value(), ResolverLimits());
@@ -91,21 +97,8 @@ namespace Horo::Prefab {
         TEST_CASE("Prefab source resolver enforces aggregate object and recursion boundaries transactionally",
                   "[unit][prefab][resolver][boundary]") {
             const auto outer = ResolverAsset(1);
-            const auto nested = ResolverAsset(2);
-            const auto nestedRevision = ResolverRevision(2);
             Assets::AssetRegistry registry;
-            PublishResolverRegistry(registry, {ResolverRecord(outer, "assets/prefabs/outer.prefab"),
-                                               ResolverRecord(nested, "assets/prefabs/nested.prefab")});
-            PrefabComposition composition{.nestedPlacements = {{.placementLocalId = {1},
-                                                                .sourcePrefab = PrefabAssetReference::Create(nested).Value(),
-                                                                .authoredAgainst = nestedRevision}}};
-            auto snapshot =
-                BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
-                                                  {{ResolverDocument(outer, {ResolverObject(0)}, std::move(composition), {nested}),
-                                                    ResolverRevision(1)},
-                                                   {ResolverDocument(nested, {ResolverObject(0)}), nestedRevision}},
-                                                  ResolverLimits())
-                    .Value();
+            auto snapshot = BuildNestedResolverSnapshot(registry, LocalObjectId{1}, {ResolverObject(0)}).Value();
             PrefabProjectPolicy policy;
             policy.maximumObjectCount = 1;
             auto result = snapshot.Resolve(outer, PrefabInstanceId::Create(1).Value(), ResolverLimits(policy));
