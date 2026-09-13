@@ -104,11 +104,11 @@ namespace Horo::Prefab {
 
         [[nodiscard]] PrefabProviderStatus InspectBehavior(const Gameplay::BehaviorComponent &component,
                                                            const Gameplay::BehaviorDescriptor *descriptor,
-                                                           const std::span<const Gameplay::BehaviorComponent> siblings) noexcept {
+                                                           std::span<const Gameplay::BehaviorComponent> siblings) noexcept {
             if (descriptor == nullptr)
                 return PrefabProviderStatus::Missing;
-            const std::size_t occurrenceCount = std::ranges::count(siblings, component.typeId, &Gameplay::BehaviorComponent::typeId);
-            if (component.schemaVersion != descriptor->schemaVersion || !BehaviorFieldsMatch(component, *descriptor) ||
+            if (const std::size_t occurrenceCount = std::ranges::count(siblings, component.typeId, &Gameplay::BehaviorComponent::typeId);
+                component.schemaVersion != descriptor->schemaVersion || !BehaviorFieldsMatch(component, *descriptor) ||
                 (!descriptor->allowMultiple && occurrenceCount > 1))
                 return PrefabProviderStatus::IncompatibleSchema;
             return PrefabProviderStatus::Current;
@@ -121,13 +121,13 @@ namespace Horo::Prefab {
                 auto inspected = components.Inspect(component.component);
                 if (inspected.HasError())
                     return Result<void>::Failure(inspected.ErrorValue());
-                result.components.push_back(
-                    {object.localId, component.instance, component.component.typeId, ToPrefabStatus(inspected.Value().status)});
+                result.components.emplace_back(object.localId, component.instance, component.component.typeId,
+                                               ToPrefabStatus(inspected.Value().status));
             }
             for (const Gameplay::BehaviorComponent &behavior : object.behaviors) {
-                result.behaviors.push_back(
-                    {object.localId, behavior.instanceId, behavior.typeId,
-                     InspectBehavior(behavior, FindBehaviorDescriptor(behaviors, behavior.typeId), object.behaviors)});
+                result.behaviors.emplace_back(object.localId, behavior.instanceId, behavior.typeId,
+                                              InspectBehavior(behavior, FindBehaviorDescriptor(behaviors, behavior.typeId),
+                                                              object.behaviors));
             }
             return Result<void>::Success();
         }
@@ -138,12 +138,12 @@ namespace Horo::Prefab {
             std::vector<Assets::AssetId> identities;
             identities.reserve(referencedGameAssets.size());
             for (const PrefabReferencedGameAsset &asset : referencedGameAssets) {
-                const Assets::AssetRecord *record = assets.Find(asset.assetId);
-                if (!asset.assetId.IsValid() || record == nullptr || !record->type.Value().starts_with("game.") ||
+                if (const Assets::AssetRecord *record = assets.Find(asset.assetId);
+                    !asset.assetId.IsValid() || record == nullptr || !record->type.Value().starts_with("game.") ||
                     !ContainsAsset(document.referencedAssets, asset.assetId) || ContainsAsset(identities, asset.assetId) ||
                     (asset.payload != nullptr && asset.payload->typeId.Value() != record->type.Value()))
                     return Result<void>::Failure(MakeError(PrefabErrors::ReferenceInvalid));
-                identities.push_back(asset.assetId);
+                identities.emplace_back(asset.assetId);
             }
             return Result<void>::Success();
         }
@@ -163,22 +163,22 @@ namespace Horo::Prefab {
             for (const Assets::AssetId assetId : document.referencedAssets) {
                 const Assets::AssetRecord *record = assets.Find(assetId);
                 if (record == nullptr) {
-                    result.assets.push_back({assetId, std::nullopt, PrefabProviderStatus::Missing});
+                    result.assets.emplace_back(assetId, std::nullopt, PrefabProviderStatus::Missing);
                     continue;
                 }
                 if (!record->type.Value().starts_with("game.")) {
-                    result.assets.push_back({assetId, record->type, PrefabProviderStatus::Current});
+                    result.assets.emplace_back(assetId, record->type, PrefabProviderStatus::Current);
                     continue;
                 }
                 const PrefabReferencedGameAsset *asset = FindReferencedGameAsset(referencedGameAssets, assetId);
                 if (asset == nullptr || asset->payload == nullptr) {
-                    result.assets.push_back({assetId, record->type, PrefabProviderStatus::Missing});
+                    result.assets.emplace_back(assetId, record->type, PrefabProviderStatus::Missing);
                     continue;
                 }
                 auto inspected = gameAssetTypes.Inspect(*asset->payload);
                 if (inspected.HasError())
                     return Result<void>::Failure(inspected.ErrorValue());
-                result.assets.push_back({assetId, record->type, ToPrefabStatus(inspected.Value().status)});
+                result.assets.emplace_back(assetId, record->type, ToPrefabStatus(inspected.Value().status));
             }
             return Result<void>::Success();
         }
