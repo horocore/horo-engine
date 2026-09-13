@@ -18,7 +18,7 @@ jobs:
       contents: write
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
           fetch-tags: true
@@ -122,7 +122,7 @@ jobs:
       contents: write
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
           fetch-tags: true
@@ -186,7 +186,7 @@ jobs:
     env:
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
     steps:
-      - uses: actions/checkout@34e114876b0bcc4bdc19589f0744243e5f68de61
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
           fetch-tags: true
