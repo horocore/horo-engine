@@ -28,7 +28,7 @@ namespace Horo::Render {
             if (const Result<void> validation = ValidateReservationRequest(scope, attempt, plan); validation.HasError())
                 return Result<RenderMemoryReservationId>::Failure(validation.ErrorValue());
 
-            Pool *pool = FindPool(scope, plan.memoryClass, plan.compatibility);
+            const Pool *pool = FindPool(scope, plan.memoryClass, plan.compatibility);
             if (auto existing = TryReserveExistingBlock(pool, attempt, plan); existing.has_value())
                 return std::move(*existing);
             return ReserveNewBlock(pool, scope, attempt, plan);
@@ -240,7 +240,7 @@ namespace Horo::Render {
                                                           "Suballocated requirements exceed the configured maximum block size.");
             if (pool == nullptr)
                 return std::nullopt;
-            for (Block &block : blocks_) {
+            for (const Block &block : blocks_) {
                 if (block.pool != pool->id || block.dedicated)
                     continue;
                 if (const auto offset = Detail::FindFirstMemoryFit(block, regions_, plan.requiredBytes, plan.alignment); offset.has_value())
