@@ -22,6 +22,9 @@ namespace Horo::Assets::AssetErrors {
                                                       "Restore a canonical UUID or explicitly re-import the asset."};
     const ErrorCodeDescriptor SidecarMalformed{kDomain, ErrorCode{"asset.registry.sidecar_malformed"}, kError,
                                                "An asset sidecar is malformed.", "Repair or re-import the asset."};
+    const ErrorCodeDescriptor TypeMismatch{kDomain, ErrorCode{"asset.registry.type_mismatch"}, kError,
+                                           "An asset source and its declared asset type do not match.",
+                                           "Restore the source sidecar's canonical asset type or explicitly re-import the asset."};
     const ErrorCodeDescriptor SchemaUnsupported{kDomain, ErrorCode{"asset.registry.schema_unsupported"}, kError,
                                                 "The asset metadata schema is unsupported.",
                                                 "Use a compatible engine version or migrate the sidecar."};
