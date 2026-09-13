@@ -1,6 +1,6 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
-#include "renderer/RenderMemoryTestSupport.h"
+#include "RenderMemoryTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
