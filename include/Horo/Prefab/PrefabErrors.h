@@ -44,4 +44,6 @@ namespace Horo::Prefab::PrefabErrors {
     extern const ErrorCodeDescriptor DependencyTypeMismatch;
     /** @brief A prefab dependency edge was authored against a different source revision. */
     extern const ErrorCodeDescriptor DependencyRevisionMismatch;
+    /** @brief A completed prefab resolution no longer matches the authoritative publication context. */
+    extern const ErrorCodeDescriptor ResolutionStale;
 }  // namespace Horo::Prefab::PrefabErrors
