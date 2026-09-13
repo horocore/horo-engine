@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -91,15 +92,12 @@ namespace Horo::Prefab {
         }
 
         [[nodiscard]] Result<void> ValidateBehaviorDescriptors(const std::span<const Gameplay::BehaviorDescriptor> descriptors) {
-            std::vector<Gameplay::BehaviorTypeId> types;
+            std::unordered_set<std::string_view> types;
             types.reserve(descriptors.size());
             for (const Gameplay::BehaviorDescriptor &descriptor : descriptors) {
                 if (!descriptor.typeId.IsValid() || descriptor.schemaVersion == 0 || descriptor.displayName.empty() ||
-                    std::ranges::any_of(types, [&descriptor](const Gameplay::BehaviorTypeId &type) {
-                    return type == descriptor.typeId;
-                }))
+                    !types.emplace(descriptor.typeId.Value()).second)
                     return Result<void>::Failure(MakeError(PrefabErrors::DocumentInvalid));
-                types.push_back(descriptor.typeId);
             }
             return Result<void>::Success();
         }
@@ -114,6 +112,75 @@ namespace Horo::Prefab {
                 (!descriptor->allowMultiple && occurrenceCount > 1))
                 return PrefabProviderStatus::IncompatibleSchema;
             return PrefabProviderStatus::Current;
+        }
+
+        [[nodiscard]] Result<void> InspectObjectProviders(const PrefabObjectNode &object, const Gameplay::ComponentRegistry &components,
+                                                          const std::span<const Gameplay::BehaviorDescriptor> behaviors,
+                                                          PrefabProviderInspection &result) {
+            for (const RawComponentPayload &component : object.components) {
+                auto inspected = components.Inspect(component.component);
+                if (inspected.HasError())
+                    return Result<void>::Failure(inspected.ErrorValue());
+                result.components.push_back(
+                    {object.localId, component.instance, component.component.typeId, ToPrefabStatus(inspected.Value().status)});
+            }
+            for (const Gameplay::BehaviorComponent &behavior : object.behaviors) {
+                result.behaviors.push_back(
+                    {object.localId, behavior.instanceId, behavior.typeId,
+                     InspectBehavior(behavior, FindBehaviorDescriptor(behaviors, behavior.typeId), object.behaviors)});
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateReferencedGameAssets(const PrefabDocumentData &document,
+                                                                const Assets::AssetRegistrySnapshot &assets,
+                                                                const std::span<const PrefabReferencedGameAsset> referencedGameAssets) {
+            std::vector<Assets::AssetId> identities;
+            identities.reserve(referencedGameAssets.size());
+            for (const PrefabReferencedGameAsset &asset : referencedGameAssets) {
+                const Assets::AssetRecord *record = assets.Find(asset.assetId);
+                if (!asset.assetId.IsValid() || record == nullptr || !record->type.Value().starts_with("game.") ||
+                    !ContainsAsset(document.referencedAssets, asset.assetId) || ContainsAsset(identities, asset.assetId) ||
+                    (asset.payload != nullptr && asset.payload->typeId.Value() != record->type.Value()))
+                    return Result<void>::Failure(MakeError(PrefabErrors::ReferenceInvalid));
+                identities.push_back(asset.assetId);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] const PrefabReferencedGameAsset *FindReferencedGameAsset(const std::span<const PrefabReferencedGameAsset> assets,
+                                                                               const Assets::AssetId assetId) noexcept {
+            const auto found = std::ranges::find(assets, assetId, &PrefabReferencedGameAsset::assetId);
+            return found == assets.end() ? nullptr : std::to_address(found);
+        }
+
+        [[nodiscard]] Result<void> InspectGameAssetProviders(const PrefabDocumentData &document,
+                                                             const Assets::AssetRegistrySnapshot &assets,
+                                                             const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
+                                                             const std::span<const PrefabReferencedGameAsset> referencedGameAssets,
+                                                             PrefabProviderInspection &result) {
+            result.assets.reserve(document.referencedAssets.size());
+            for (const Assets::AssetId assetId : document.referencedAssets) {
+                const Assets::AssetRecord *record = assets.Find(assetId);
+                if (record == nullptr) {
+                    result.assets.push_back({assetId, std::nullopt, PrefabProviderStatus::Missing});
+                    continue;
+                }
+                if (!record->type.Value().starts_with("game.")) {
+                    result.assets.push_back({assetId, record->type, PrefabProviderStatus::Current});
+                    continue;
+                }
+                const PrefabReferencedGameAsset *asset = FindReferencedGameAsset(referencedGameAssets, assetId);
+                if (asset == nullptr || asset->payload == nullptr) {
+                    result.assets.push_back({assetId, record->type, PrefabProviderStatus::Missing});
+                    continue;
+                }
+                auto inspected = gameAssetTypes.Inspect(*asset->payload);
+                if (inspected.HasError())
+                    return Result<void>::Failure(inspected.ErrorValue());
+                result.assets.push_back({assetId, record->type, ToPrefabStatus(inspected.Value().status)});
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Validates unique component occurrences and accounts for their dynamic bytes. */
@@ -315,56 +382,35 @@ namespace Horo::Prefab {
             return entry.status != PrefabProviderStatus::Current;
         };
         return std::ranges::any_of(components, degraded) || std::ranges::any_of(behaviors, degraded) ||
-               std::ranges::any_of(gameAssets, degraded);
+               std::ranges::any_of(assets, degraded);
     }
 
     /** @copydoc PrefabDocument::InspectProviders */
     Result<PrefabProviderInspection> PrefabDocument::InspectProviders(
-        const Gameplay::ComponentRegistry &components, const std::span<const Gameplay::BehaviorDescriptor> behaviors,
-        const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
+        const Assets::AssetRegistrySnapshot &assets, const Gameplay::ComponentRegistry &components,
+        const std::span<const Gameplay::BehaviorDescriptor> behaviors, const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
         const std::span<const PrefabReferencedGameAsset> referencedGameAssets) const {
         if (const auto validDescriptors = ValidateBehaviorDescriptors(behaviors); validDescriptors.HasError())
             return Result<PrefabProviderInspection>::Failure(validDescriptors.ErrorValue());
+        if (const auto validAssets = ValidateReferencedGameAssets(data_, assets, referencedGameAssets); validAssets.HasError())
+            return Result<PrefabProviderInspection>::Failure(validAssets.ErrorValue());
 
         PrefabProviderInspection result;
+        std::size_t componentCount{};
+        std::size_t behaviorCount{};
         for (const PrefabObjectNode &object : data_.objects) {
-            result.components.reserve(result.components.size() + object.components.size());
-            for (const RawComponentPayload &component : object.components) {
-                auto inspected = components.Inspect(component.component);
-                if (inspected.HasError())
-                    return Result<PrefabProviderInspection>::Failure(inspected.ErrorValue());
-                result.components.push_back(
-                    {object.localId, component.instance, component.component.typeId, ToPrefabStatus(inspected.Value().status)});
-            }
-
-            result.behaviors.reserve(result.behaviors.size() + object.behaviors.size());
-            for (const Gameplay::BehaviorComponent &behavior : object.behaviors) {
-                result.behaviors.push_back(
-                    {object.localId, behavior.instanceId, behavior.typeId,
-                     InspectBehavior(behavior, FindBehaviorDescriptor(behaviors, behavior.typeId), object.behaviors)});
-            }
+            componentCount += object.components.size();
+            behaviorCount += object.behaviors.size();
         }
-
-        std::vector<const PrefabReferencedGameAsset *> orderedAssets;
-        orderedAssets.reserve(referencedGameAssets.size());
-        for (const PrefabReferencedGameAsset &asset : referencedGameAssets) {
-            if (!asset.assetId.IsValid() || asset.payload == nullptr || !ContainsAsset(data_.referencedAssets, asset.assetId) ||
-                std::ranges::any_of(orderedAssets, [&asset](const PrefabReferencedGameAsset *other) {
-                return other->assetId == asset.assetId;
-            }))
-                return Result<PrefabProviderInspection>::Failure(MakeError(PrefabErrors::ReferenceInvalid));
-            orderedAssets.push_back(&asset);
+        result.components.reserve(componentCount);
+        result.behaviors.reserve(behaviorCount);
+        for (const PrefabObjectNode &object : data_.objects) {
+            if (const auto inspectedObject = InspectObjectProviders(object, components, behaviors, result); inspectedObject.HasError())
+                return Result<PrefabProviderInspection>::Failure(inspectedObject.ErrorValue());
         }
-        std::ranges::sort(orderedAssets, {}, [](const PrefabReferencedGameAsset *asset) {
-            return asset->assetId;
-        });
-        result.gameAssets.reserve(orderedAssets.size());
-        for (const PrefabReferencedGameAsset *asset : orderedAssets) {
-            auto inspected = gameAssetTypes.Inspect(*asset->payload);
-            if (inspected.HasError())
-                return Result<PrefabProviderInspection>::Failure(inspected.ErrorValue());
-            result.gameAssets.push_back({asset->assetId, asset->payload->typeId, ToPrefabStatus(inspected.Value().status)});
-        }
+        if (const auto inspectedAssets = InspectGameAssetProviders(data_, assets, gameAssetTypes, referencedGameAssets, result);
+            inspectedAssets.HasError())
+            return Result<PrefabProviderInspection>::Failure(inspectedAssets.ErrorValue());
         return Result<PrefabProviderInspection>::Success(std::move(result));
     }
 }  // namespace Horo::Prefab

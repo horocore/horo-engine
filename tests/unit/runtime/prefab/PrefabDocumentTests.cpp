@@ -42,6 +42,16 @@ namespace Horo::Prefab {
             return Gameplay::GameAssetTypeId::Parse("game.tests.prefab_asset").Value();
         }
 
+        Assets::AssetRegistrySnapshot AssetProviders() {
+            Assets::AssetRegistry registry;
+            std::vector<Assets::AssetRecord> records;
+            records.push_back({Asset(2), Assets::AssetTypeId::Parse(GameAssetType().Value()).Value(),
+                               ProjectPath::Parse("assets/prefab/test.asset").Value(),
+                               ProjectPath::Parse("assets/prefab/test.asset.meta").Value()});
+            REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+            return registry.Snapshot();
+        }
+
         RawComponentPayload Component(const std::uint64_t instance, const std::size_t payloadBytes = 0) {
             return {
                 .instance = PrefabComponentInstanceId::Create(instance).Value(),
@@ -100,6 +110,22 @@ namespace Horo::Prefab {
                                .editor = {.displayName = "Prefab Asset", .category = "Tests", .iconName = "asset-test"}},
                 .handler = {.importAsset = &ImportGameAsset, .serializeAsset = &SerializeGameAsset, .cookAsset = &CookGameAsset},
             };
+        }
+
+        Gameplay::ComponentRegistry ComponentProviders(const std::uint32_t schemaVersion = 0) {
+            Gameplay::ComponentRegistry registry;
+            if (schemaVersion != 0)
+                REQUIRE(registry.Register(ComponentDescriptor(schemaVersion)).HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            return registry;
+        }
+
+        Gameplay::GameAssetTypeRegistry GameAssetProviders(const std::uint32_t schemaVersion = 0) {
+            Gameplay::GameAssetTypeRegistry registry{"game.tests"};
+            if (schemaVersion != 0)
+                REQUIRE(registry.Register(GameAssetRegistration(schemaVersion)).HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            return registry;
         }
 
         PrefabObjectNode Root() {
@@ -328,36 +354,37 @@ namespace Horo::Prefab {
             Gameplay::SerializedGameAsset gameAsset = GameAsset();
             const Gameplay::SerializedGameAsset originalAsset = gameAsset;
 
-            Gameplay::ComponentRegistry missingComponents;
-            REQUIRE(missingComponents.Freeze().HasValue());
-            Gameplay::GameAssetTypeRegistry missingAssets{"game.tests"};
-            REQUIRE(missingAssets.Freeze().HasValue());
+            Gameplay::ComponentRegistry missingComponents = ComponentProviders();
+            Gameplay::GameAssetTypeRegistry missingAssets = GameAssetProviders();
+            const Assets::AssetRegistrySnapshot assetProviders = AssetProviders();
             const std::array referencedAssets{PrefabReferencedGameAsset{Asset(2), &gameAsset}};
 
-            const auto missing = document.Value().InspectProviders(missingComponents, {}, missingAssets, referencedAssets);
+            const auto missing = document.Value().InspectProviders(assetProviders, missingComponents, {}, missingAssets, referencedAssets);
             REQUIRE(missing.HasValue());
             REQUIRE(missing.Value().IsDegraded());
             REQUIRE(missing.Value().components.front().status == PrefabProviderStatus::Missing);
             REQUIRE(missing.Value().behaviors.front().status == PrefabProviderStatus::Missing);
-            REQUIRE(missing.Value().gameAssets.front().status == PrefabProviderStatus::Missing);
+            REQUIRE(missing.Value().assets.front().status == PrefabProviderStatus::Missing);
             REQUIRE(document.Value().Data() == originalDocument);
             REQUIRE(gameAsset == originalAsset);
 
-            Gameplay::ComponentRegistry restoredComponents;
-            REQUIRE(restoredComponents.Register(ComponentDescriptor()).HasValue());
-            REQUIRE(restoredComponents.Freeze().HasValue());
-            Gameplay::GameAssetTypeRegistry restoredAssets{"game.tests"};
-            REQUIRE(restoredAssets.Register(GameAssetRegistration()).HasValue());
-            REQUIRE(restoredAssets.Freeze().HasValue());
+            const auto absentAssetPayloads = document.Value().InspectProviders(assetProviders, missingComponents, {}, missingAssets);
+            REQUIRE(absentAssetPayloads.HasValue());
+            REQUIRE(absentAssetPayloads.Value().IsDegraded());
+            REQUIRE(absentAssetPayloads.Value().assets.front().status == PrefabProviderStatus::Missing);
+            REQUIRE(absentAssetPayloads.Value().assets.front().type.has_value());
+
+            Gameplay::ComponentRegistry restoredComponents = ComponentProviders(1);
+            Gameplay::GameAssetTypeRegistry restoredAssets = GameAssetProviders(1);
             const std::array behaviorDescriptors{BehaviorDescriptor()};
 
-            const auto restored =
-                document.Value().InspectProviders(restoredComponents, behaviorDescriptors, restoredAssets, referencedAssets);
+            const auto restored = document.Value().InspectProviders(assetProviders, restoredComponents, behaviorDescriptors, restoredAssets,
+                                                                    referencedAssets);
             REQUIRE(restored.HasValue());
             REQUIRE_FALSE(restored.Value().IsDegraded());
             REQUIRE(restored.Value().components.front().status == PrefabProviderStatus::Current);
             REQUIRE(restored.Value().behaviors.front().status == PrefabProviderStatus::Current);
-            REQUIRE(restored.Value().gameAssets.front().status == PrefabProviderStatus::Current);
+            REQUIRE(restored.Value().assets.front().status == PrefabProviderStatus::Current);
             REQUIRE(document.Value().Data() == originalDocument);
             REQUIRE(gameAsset == originalAsset);
         }
@@ -375,23 +402,23 @@ namespace Horo::Prefab {
             Gameplay::ComponentRegistry components;
             REQUIRE(components.Register(std::move(migratedDescriptor)).HasValue());
             REQUIRE(components.Freeze().HasValue());
-            Gameplay::GameAssetTypeRegistry assets{"game.tests"};
-            REQUIRE(assets.Register(GameAssetRegistration(2)).HasValue());
-            REQUIRE(assets.Freeze().HasValue());
+            Gameplay::GameAssetTypeRegistry assets = GameAssetProviders(2);
             const std::array behaviorDescriptors{BehaviorDescriptor(2)};
             Gameplay::SerializedGameAsset gameAsset = GameAsset();
+            const Assets::AssetRegistrySnapshot assetProviders = AssetProviders();
             const std::array referencedAssets{PrefabReferencedGameAsset{Asset(2), &gameAsset}};
 
-            const auto incompatible = document.Value().InspectProviders(components, behaviorDescriptors, assets, referencedAssets);
+            const auto incompatible =
+                document.Value().InspectProviders(assetProviders, components, behaviorDescriptors, assets, referencedAssets);
             REQUIRE(incompatible.HasValue());
             REQUIRE(incompatible.Value().IsDegraded());
             REQUIRE(incompatible.Value().components.front().status == PrefabProviderStatus::MigrationRequired);
             REQUIRE(incompatible.Value().behaviors.front().status == PrefabProviderStatus::IncompatibleSchema);
             REQUIRE(incompatible.Value().behaviors.back().status == PrefabProviderStatus::IncompatibleSchema);
-            REQUIRE(incompatible.Value().gameAssets.front().status == PrefabProviderStatus::IncompatibleSchema);
+            REQUIRE(incompatible.Value().assets.front().status == PrefabProviderStatus::IncompatibleSchema);
 
             const std::array foreignAsset{PrefabReferencedGameAsset{Asset(3), &gameAsset}};
-            REQUIRE(document.Value().InspectProviders(components, behaviorDescriptors, assets, foreignAsset).HasError());
+            REQUIRE(document.Value().InspectProviders(assetProviders, components, behaviorDescriptors, assets, foreignAsset).HasError());
         }
     }  // namespace
 }  // namespace Horo::Prefab

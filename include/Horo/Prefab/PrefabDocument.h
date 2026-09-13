@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Application/ProjectVersion.h"
+#include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
@@ -108,9 +109,9 @@ namespace Horo::Prefab {
     };
 
     /** @brief Provider compatibility for one referenced project-owned asset payload. */
-    struct PrefabGameAssetProviderInspection final {
+    struct PrefabAssetProviderInspection final {
         Assets::AssetId assetId;
-        Gameplay::GameAssetTypeId type;
+        std::optional<Assets::AssetTypeId> type;
         PrefabProviderStatus status{PrefabProviderStatus::Missing};
     };
 
@@ -118,7 +119,7 @@ namespace Horo::Prefab {
     struct PrefabProviderInspection final {
         std::vector<PrefabComponentProviderInspection> components;
         std::vector<PrefabBehaviorProviderInspection> behaviors;
-        std::vector<PrefabGameAssetProviderInspection> gameAssets;
+        std::vector<PrefabAssetProviderInspection> assets;
 
         /** @brief Reports whether any preserved payload cannot currently be reclaimed. @return True for a degraded projection. */
         [[nodiscard]] bool IsDegraded() const noexcept;
@@ -140,6 +141,7 @@ namespace Horo::Prefab {
 
         /**
          * @brief Inspects preserved project payloads against one explicit provider snapshot without changing the document.
+         * @param assets Pinned Asset Registry snapshot owning referenced identities and type classification.
          * @param components Available component schema registry.
          * @param behaviors Available inert behavior descriptors.
          * @param gameAssetTypes Available project-owned asset type registry.
@@ -147,8 +149,8 @@ namespace Horo::Prefab {
          * @return Stable per-occurrence compatibility projection, or a validation error for malformed provider input.
          */
         [[nodiscard]] Result<PrefabProviderInspection> InspectProviders(
-            const Gameplay::ComponentRegistry &components, std::span<const Gameplay::BehaviorDescriptor> behaviors,
-            const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
+            const Assets::AssetRegistrySnapshot &assets, const Gameplay::ComponentRegistry &components,
+            std::span<const Gameplay::BehaviorDescriptor> behaviors, const Gameplay::GameAssetTypeRegistry &gameAssetTypes,
             std::span<const PrefabReferencedGameAsset> referencedGameAssets = {}) const;
 
     private:
