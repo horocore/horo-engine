@@ -32,87 +32,76 @@ namespace Horo::Prefab {
             std::vector<ValueT> &values_;
         };
 
-        [[nodiscard]] Result<void> ExpandSource(std::span<const PrefabDependencySource> sources, const PrefabDependencySource &source,
-                                                PrefabInstanceId instance, std::vector<LocalObjectId> &scope,
-                                                std::vector<Assets::AssetId> &active, std::vector<ResolvedPrefabObject> &objects,
-                                                PrefabExpansionBudget &budget, const PrefabLimitProfile &limits, std::size_t nestedDepth,
+        struct ExpansionState final {
+            std::span<const PrefabDependencySource> sources;
+            PrefabInstanceId instance;
+            std::vector<LocalObjectId> &scope;
+            std::vector<Assets::AssetId> &active;
+            std::vector<ResolvedPrefabObject> &objects;
+            PrefabExpansionBudget &budget;
+            const PrefabLimitProfile &limits;
+        };
+
+        [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
                                                 std::size_t variantDepth);
 
-        [[nodiscard]] Result<void> MaterializeVariantParent(const std::span<const PrefabDependencySource> sources,
-                                                            const PrefabDependencySource &source, const PrefabInstanceId instance,
-                                                            std::vector<LocalObjectId> &scope, std::vector<Assets::AssetId> &active,
-                                                            std::vector<ResolvedPrefabObject> &objects, PrefabExpansionBudget &budget,
-                                                            const PrefabLimitProfile &limits, const std::size_t nestedDepth,
-                                                            const std::size_t variantDepth) {
-            if (variantDepth >= limits.Policy().maximumVariantInheritanceDepth)
+        [[nodiscard]] Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source,
+                                                            const std::size_t nestedDepth, const std::size_t variantDepth) {
+            if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
                 return Result<void>::Failure(MakeError(PrefabErrors::HierarchyDepthExceeded));
             const PrefabDocumentData &document = source.document.Data();
-            const PrefabDependencySource *parent = FindSource(sources, document.composition->variantParent->Asset());
+            const PrefabDependencySource *parent = FindSource(state.sources, document.composition->variantParent->Asset());
             if (parent == nullptr)
                 return Result<void>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-            return ExpandSource(sources, *parent, instance, scope, active, objects, budget, limits, nestedDepth, variantDepth + 1);
+            return ExpandSource(state, *parent, nestedDepth, variantDepth + 1);
         }
 
-        [[nodiscard]] Result<void> MaterializeLocalObjects(const PrefabDocumentData &document, const PrefabInstanceId instance,
-                                                           const std::span<const LocalObjectId> scope,
-                                                           std::vector<ResolvedPrefabObject> &objects, PrefabExpansionBudget &budget,
-                                                           const PrefabLimitProfile &limits) {
+        [[nodiscard]] Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document) {
             for (const PrefabObjectNode &object : document.objects) {
-                if (objects.size() >= limits.Policy().maximumObjectCount)
+                if (state.objects.size() >= state.limits.Policy().maximumObjectCount)
                     return Result<void>::Failure(MakeError(PrefabErrors::ObjectCountExceeded));
-                if (const auto charged = budget.Consume(1); charged.HasError())
+                if (const auto charged = state.budget.Consume(1); charged.HasError())
                     return charged;
-                auto address = PrefabObjectAddress::Create(scope, object.localId);
+                auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
                     return Result<void>::Failure(address.ErrorValue());
-                objects.push_back({document.assetId, ExpandedPrefabObjectKey{instance, std::move(address).Value()}, object});
+                state.objects.push_back({document.assetId, ExpandedPrefabObjectKey{state.instance, std::move(address).Value()}, object});
             }
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> MaterializeNestedPlacements(const std::span<const PrefabDependencySource> sources,
-                                                               const PrefabDocumentData &document, const PrefabInstanceId instance,
-                                                               std::vector<LocalObjectId> &scope, std::vector<Assets::AssetId> &active,
-                                                               std::vector<ResolvedPrefabObject> &objects, PrefabExpansionBudget &budget,
-                                                               const PrefabLimitProfile &limits, const std::size_t nestedDepth,
-                                                               const std::size_t variantDepth) {
+        [[nodiscard]] Result<void> MaterializeNestedPlacements(ExpansionState &state, const PrefabDocumentData &document,
+                                                               const std::size_t nestedDepth, const std::size_t variantDepth) {
             if (!document.composition)
                 return Result<void>::Success();
             for (const NestedPrefabPlacement &placement : document.composition->nestedPlacements) {
-                if (nestedDepth >= limits.Policy().maximumNestedPrefabDepth)
+                if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
                     return Result<void>::Failure(MakeError(PrefabErrors::HierarchyDepthExceeded));
-                const PrefabDependencySource *nested = FindSource(sources, placement.sourcePrefab.Asset());
+                const PrefabDependencySource *nested = FindSource(state.sources, placement.sourcePrefab.Asset());
                 if (nested == nullptr)
                     return Result<void>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-                scope.push_back(placement.placementLocalId);
-                const PopBackGuard scopeGuard{scope};
-                if (auto expanded =
-                        ExpandSource(sources, *nested, instance, scope, active, objects, budget, limits, nestedDepth + 1, variantDepth);
-                    expanded.HasError())
+                state.scope.push_back(placement.placementLocalId);
+                const PopBackGuard scopeGuard{state.scope};
+                if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth); expanded.HasError())
                     return expanded;
             }
             return Result<void>::Success();
         }
 
         /** @brief Recursively materializes one source using only immutable resolver-owned documents. */
-        [[nodiscard]] Result<void> ExpandSource(const std::span<const PrefabDependencySource> sources, const PrefabDependencySource &source,
-                                                const PrefabInstanceId instance, std::vector<LocalObjectId> &scope,
-                                                std::vector<Assets::AssetId> &active, std::vector<ResolvedPrefabObject> &objects,
-                                                PrefabExpansionBudget &budget, const PrefabLimitProfile &limits,
-                                                const std::size_t nestedDepth, const std::size_t variantDepth) {
-            if (std::ranges::find(active, source.document.Data().assetId) != active.end())
+        [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, const std::size_t nestedDepth,
+                                                const std::size_t variantDepth) {
+            if (std::ranges::find(state.active, source.document.Data().assetId) != state.active.end())
                 return Result<void>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
-            active.push_back(source.document.Data().assetId);
-            const PopBackGuard activeGuard{active};
+            state.active.push_back(source.document.Data().assetId);
+            const PopBackGuard activeGuard{state.active};
 
             const PrefabDocumentData &document = source.document.Data();
             if (document.composition && document.composition->variantParent)
-                return MaterializeVariantParent(sources, source, instance, scope, active, objects, budget, limits, nestedDepth,
-                                                variantDepth);
-            if (auto local = MaterializeLocalObjects(document, instance, scope, objects, budget, limits); local.HasError())
+                return MaterializeVariantParent(state, source, nestedDepth, variantDepth);
+            if (auto local = MaterializeLocalObjects(state, document); local.HasError())
                 return local;
-            return MaterializeNestedPlacements(sources, document, instance, scope, active, objects, budget, limits, nestedDepth,
-                                               variantDepth);
+            return MaterializeNestedPlacements(state, document, nestedDepth, variantDepth);
         }
     }  // namespace
 
@@ -165,7 +154,8 @@ namespace Horo::Prefab {
         std::vector<Assets::AssetId> active;
         std::vector<ResolvedPrefabObject> objects;
         objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
-        if (auto expanded = ExpandSource(sources_, *root, instance, scope, active, objects, budget, limits, 1, 1); expanded.HasError())
+        ExpansionState state{sources_, instance, scope, active, objects, budget, limits};
+        if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError())
             return Result<EffectivePrefabCandidate>::Failure(expanded.ErrorValue());
 
         return Result<EffectivePrefabCandidate>::Success(
