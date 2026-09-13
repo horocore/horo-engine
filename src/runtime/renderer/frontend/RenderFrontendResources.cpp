@@ -122,7 +122,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ReleaseOrCancelResource(Detail::RenderResourceRegistry &registry,
                                                            Detail::RenderResourceUploadQueue &queue, RenderMemoryBudget &memoryBudget,
                                                            const Detail::RenderResourceClass resourceClass,
-                                                           const Detail::RenderResourceIdentity identity) {
+                                                           const Detail::RenderResourceIdentity identity,
+                                                           const std::size_t maximumEmptyBlocksReclaimedPerDrain) {
             const auto state = registry.State(resourceClass, identity);
             if (state.HasError())
                 return Result<void>::Failure(state.ErrorValue());
@@ -134,8 +135,10 @@ namespace Horo::Render {
             } else {
                 released = registry.Release(resourceClass, identity);
             }
-            if (released.HasValue())
+            if (released.HasValue()) {
                 static_cast<void>(registry.DrainRetirements());
+                static_cast<void>(memoryBudget.ReclaimEmptyBlocks(maximumEmptyBlocksReclaimedPerDrain));
+            }
             return released;
         }
     }  // namespace
@@ -514,7 +517,7 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be released during an active frame."));
         }
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::Buffer,
-                                       Identity(buffer));
+                                       Identity(buffer), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseMesh */
@@ -524,7 +527,7 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A mesh cannot be released during an active frame."));
         }
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::Mesh,
-                                       Identity(mesh));
+                                       Identity(mesh), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseTexture */
@@ -533,7 +536,7 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be released during an active frame."));
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::Texture,
-                                       Identity(texture));
+                                       Identity(texture), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseTextureView */
@@ -542,7 +545,7 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture view cannot be released during an active frame."));
         return ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_, Detail::RenderResourceClass::TextureView,
-                                       Identity(view));
+                                       Identity(view), memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
     }
 
     /** @copydoc RenderFrontend::ReleaseRenderTarget */
@@ -551,7 +554,8 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A render target cannot be released during an active frame."));
         const Result<void> released = ReleaseOrCancelResource(*resourceRegistry_, *resourceUploadQueue_, *memoryBudget_,
-                                                              Detail::RenderResourceClass::RenderTarget, Identity(target));
+                                                              Detail::RenderResourceClass::RenderTarget, Identity(target),
+                                                              memoryConfig_.maximumEmptyBlocksReclaimedPerDrain);
         if (released.HasValue() && target.slot < targets_.size())
             targets_[target.slot] = {};
         return released;
