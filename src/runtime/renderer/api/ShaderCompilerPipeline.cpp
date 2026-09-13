@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <new>
 #include <ranges>
 #include <span>
@@ -63,14 +64,15 @@ namespace Horo::Render {
                 return false;
             std::size_t segmentStart = 0;
             while (segmentStart < value.size()) {
-                const std::size_t separator = value.find('/', segmentStart);
-                const std::string_view segment{value.data() + segmentStart,
-                                               (separator == std::string::npos ? value.size() : separator) - segmentStart};
-                if (segment.empty() || segment == "." || segment == "..")
-                    return false;
-                if (separator == std::string::npos)
-                    break;
-                segmentStart = separator + 1U;
+                if (const std::size_t separator = value.find('/', segmentStart); separator == std::string::npos) {
+                    const std::string_view segment{value.data() + segmentStart, value.size() - segmentStart};
+                    return !segment.empty() && segment != "." && segment != "..";
+                } else {
+                    const std::string_view segment{value.data() + segmentStart, separator - segmentStart};
+                    if (segment.empty() || segment == "." || segment == "..")
+                        return false;
+                    segmentStart = separator + 1U;
+                }
             }
             return true;
         }
@@ -102,23 +104,23 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] std::span<const ShaderCompilerTool> RequiredTools(const ShaderTargetBackend backend) noexcept {
+            using enum ShaderCompilerTool;
             static constexpr std::array<ShaderCompilerTool, 0> NullTools{};
-            static constexpr std::array VulkanTools{ShaderCompilerTool::Dxc, ShaderCompilerTool::SpirvTools};
-            static constexpr std::array OpenGlTools{ShaderCompilerTool::Dxc, ShaderCompilerTool::SpirvTools,
-                                                    ShaderCompilerTool::SpirvCross};
-            static constexpr std::array MetalTools{ShaderCompilerTool::Dxc, ShaderCompilerTool::SpirvTools, ShaderCompilerTool::SpirvCross,
-                                                   ShaderCompilerTool::AppleMetal};
-            static constexpr std::array D3d12Tools{ShaderCompilerTool::Dxc, ShaderCompilerTool::DxilValidator};
+            static constexpr std::array VulkanTools{Dxc, SpirvTools};
+            static constexpr std::array OpenGlTools{Dxc, SpirvTools, SpirvCross};
+            static constexpr std::array MetalTools{Dxc, SpirvTools, SpirvCross, AppleMetal};
+            static constexpr std::array D3d12Tools{Dxc, DxilValidator};
+            using enum ShaderTargetBackend;
             switch (backend) {
-                case ShaderTargetBackend::Null:
+                case Null:
                     return NullTools;
-                case ShaderTargetBackend::OpenGL:
+                case OpenGL:
                     return OpenGlTools;
-                case ShaderTargetBackend::Vulkan:
+                case Vulkan:
                     return VulkanTools;
-                case ShaderTargetBackend::Metal:
+                case Metal:
                     return MetalTools;
-                case ShaderTargetBackend::D3D12:
+                case D3D12:
                     return D3d12Tools;
             }
             return {};
@@ -144,31 +146,26 @@ namespace Horo::Render {
             const auto backend = target.requirement.backend;
             const auto format = target.requirement.payloadFormat;
             const auto environment = target.intermediateEnvironment;
+            using enum ShaderTargetBackend;
+            using enum ShaderPayloadFormat;
+            constexpr auto NoIntermediate = ShaderIntermediateEnvironment::None;
+            constexpr auto VulkanIntermediate = ShaderIntermediateEnvironment::Vulkan13SpirV16;
             switch (backend) {
-                case ShaderTargetBackend::Null:
-                    return format == ShaderPayloadFormat::ValidationFixture && environment == ShaderIntermediateEnvironment::None;
-                case ShaderTargetBackend::OpenGL:
-                    return format == ShaderPayloadFormat::Glsl410 && environment == ShaderIntermediateEnvironment::Vulkan13SpirV16;
-                case ShaderTargetBackend::Vulkan:
-                    return format == ShaderPayloadFormat::SpirV16 && environment == ShaderIntermediateEnvironment::Vulkan13SpirV16;
-                case ShaderTargetBackend::Metal:
-                    return format == ShaderPayloadFormat::MetalLibrary24 && environment == ShaderIntermediateEnvironment::Vulkan13SpirV16;
-                case ShaderTargetBackend::D3D12:
-                    return format == ShaderPayloadFormat::Dxil60 && environment == ShaderIntermediateEnvironment::None;
+                case Null:
+                    return format == ValidationFixture && environment == NoIntermediate;
+                case OpenGL:
+                    return format == Glsl410 && environment == VulkanIntermediate;
+                case Vulkan:
+                    return format == SpirV16 && environment == VulkanIntermediate;
+                case Metal:
+                    return format == MetalLibrary24 && environment == VulkanIntermediate;
+                case D3D12:
+                    return format == Dxil60 && environment == NoIntermediate;
             }
             return false;
         }
 
-        [[nodiscard]] Result<void> ValidateRequest(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
-            if (request.source.empty() || request.source.size() > limits.maximumSourceBytes || request.targets.empty() ||
-                request.targets.size() > limits.maximumTargets || request.targets.size() != request.manifest.targets.size() ||
-                request.dependencies.size() > limits.maximumDependencies || request.defines.size() > limits.maximumDefines)
-                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
-
-            const auto manifestResult = ValidateShaderManifest(request.manifest);
-            if (manifestResult.HasError())
-                return Result<void>::Failure(WrapError(ShaderCompilerPipelineErrors::InvalidRequest, manifestResult.ErrorValue()));
-
+        [[nodiscard]] Result<void> ValidateDependencies(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
             std::size_t totalDependencyBytes = 0;
             for (std::size_t index = 0; index < request.dependencies.size(); ++index) {
                 const auto &dependency = request.dependencies[index];
@@ -181,6 +178,10 @@ namespace Horo::Render {
                 if (index > 0 && request.dependencies[index - 1].logicalPath >= dependency.logicalPath)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::NonCanonicalInput));
             }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateDefines(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
             for (std::size_t index = 0; index < request.defines.size(); ++index) {
                 const auto &define = request.defines[index];
                 if (!IsValidDefineName(define.name, limits.maximumIdentityBytes) ||
@@ -189,6 +190,10 @@ namespace Horo::Render {
                 if (index > 0 && request.defines[index - 1].name >= define.name)
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::NonCanonicalInput));
             }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateTargets(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
             for (std::size_t index = 0; index < request.targets.size(); ++index) {
                 const auto &target = request.targets[index];
                 if (!SameRequirement(target.requirement, request.manifest.targets[index]) ||
@@ -202,6 +207,21 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::UnpinnedToolchain));
             }
             return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateRequest(const ShaderCompilationRequest &request, const ShaderCompilerLimits &limits) {
+            if (request.source.empty() || request.source.size() > limits.maximumSourceBytes || request.targets.empty() ||
+                request.targets.size() > limits.maximumTargets || request.targets.size() != request.manifest.targets.size() ||
+                request.dependencies.size() > limits.maximumDependencies || request.defines.size() > limits.maximumDefines)
+                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidRequest));
+
+            if (const auto manifestResult = ValidateShaderManifest(request.manifest); manifestResult.HasError())
+                return Result<void>::Failure(WrapError(ShaderCompilerPipelineErrors::InvalidRequest, manifestResult.ErrorValue()));
+            if (auto result = ValidateDependencies(request, limits); result.HasError())
+                return result;
+            if (auto result = ValidateDefines(request, limits); result.HasError())
+                return result;
+            return ValidateTargets(request, limits);
         }
 
         template <typename ValueT> void AppendInteger(std::vector<std::byte> &bytes, const ValueT value) {
@@ -316,8 +336,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<ShaderCompilerAdapterOutput> InvokeAdapter(const IShaderCompilerAdapter &adapter,
                                                                         const ShaderCompilerInvocation &invocation,
                                                                         const CancellationToken &cancellation) {
-            const std::string context = "Shader compiler adapter failed target backend " +
-                                        std::to_string(static_cast<std::uint8_t>(invocation.target.requirement.backend)) + ".";
+            const std::string context = std::format("Shader compiler adapter failed target backend {}.",
+                                                    static_cast<std::uint8_t>(invocation.target.requirement.backend));
             try {
                 auto output = adapter.Compile(invocation, cancellation);
                 if (output.HasError())
@@ -335,8 +355,7 @@ namespace Horo::Render {
                                                         const CancellationToken &cancellation, const ShaderCompilerLimits &limits) {
         if (!IsValidLimits(limits))
             return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidLimits));
-        const auto validation = ValidateRequest(request, limits);
-        if (validation.HasError())
+        if (const auto validation = ValidateRequest(request, limits); validation.HasError())
             return Result<ShaderCompilationBatch>::Failure(validation.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
@@ -346,7 +365,7 @@ namespace Horo::Render {
             ShaderCompilationBatch batch{sourceDigest, {}, {}};
             batch.dependencies.reserve(request.dependencies.size());
             for (const ShaderCompilerDependency &dependency : request.dependencies)
-                batch.dependencies.push_back({dependency.logicalPath, dependency.digest});
+                batch.dependencies.emplace_back(dependency.logicalPath, dependency.digest);
             batch.artifacts.reserve(request.targets.size());
             for (const ShaderCompilerTargetDescriptor &target : request.targets) {
                 if (cancellation.IsCancellationRequested())
@@ -366,8 +385,8 @@ namespace Horo::Render {
                     return Result<ShaderCompilationBatch>::Failure(MakeError(ShaderCompilerPipelineErrors::InvalidAdapterOutput));
 
                 auto value = std::move(output).Value();
-                batch.artifacts.push_back(CompiledShaderArtifact{value.backend, value.payloadFormat, key.Value(), std::move(value.payload),
-                                                                 std::move(value.debugPayload), std::move(value.diagnostics)});
+                batch.artifacts.emplace_back(value.backend, value.payloadFormat, key.Value(), std::move(value.payload),
+                                             std::move(value.debugPayload), std::move(value.diagnostics));
             }
             return Result<ShaderCompilationBatch>::Success(std::move(batch));
         } catch (const std::bad_alloc &) {
