@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -22,46 +24,44 @@ namespace Horo::WorldStreaming {
                                                                                                  "activation"};
 
         [[nodiscard]] Telemetry::DimensionDescriptor Dimension(std::string key, const auto &values) {
-            Telemetry::DimensionDescriptor result{.key = std::move(key)};
-            result.allowedValues.reserve(values.size());
-            for (const std::string_view value : values)
-                result.allowedValues.emplace_back(value);
-            return result;
+            std::vector<std::string> allowedValues;
+            allowedValues.reserve(values.size());
+            std::ranges::transform(values, std::back_inserter(allowedValues), [](const std::string_view value) {
+                return std::string{value};
+            });
+            return {.key = std::move(key), .allowedValues = std::move(allowedValues)};
         }
 
         [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(Telemetry::InstrumentKind kind, std::string name, std::string unit,
                                                                  std::string description, Telemetry::MetricCollectionLevel level,
-                                                                 std::vector<Telemetry::DimensionDescriptor> dimensions = {}) {
-            const auto maximumSeries = dimensions.empty() ? 1U : static_cast<std::uint32_t>(dimensions.front().allowedValues.size());
-            return {.kind = kind,
-                    .name = std::move(name),
-                    .subsystem = "world_streaming",
-                    .unit = std::move(unit),
-                    .description = std::move(description),
-                    .dimensions = std::move(dimensions),
-                    .maxSeries = maximumSeries,
-                    .minimumCollectionLevel = level};
-        }
-
-        template <typename Handle, std::size_t Size>
-        void BindHandles(std::array<Handle, Size> &output, const Handle &root, const std::string_view dimension,
-                         const std::array<std::string_view, Size> &values) {
-            for (std::size_t index = 0; index < Size; ++index) {
-                const std::array selection{Telemetry::DimensionValue{dimension, values[index]}};
-                output[index] = root.WithDimensions(selection);
+                                                                 std::optional<Telemetry::DimensionDescriptor> dimension = std::nullopt) {
+            Telemetry::InstrumentDescriptor descriptor{.kind = kind,
+                                                       .name = std::move(name),
+                                                       .subsystem = "world_streaming",
+                                                       .unit = std::move(unit),
+                                                       .description = std::move(description),
+                                                       .minimumCollectionLevel = level};
+            if (dimension.has_value()) {
+                descriptor.maxSeries = static_cast<std::uint32_t>(dimension->allowedValues.size());
+                descriptor.dimensions.emplace_back(std::move(*dimension));
             }
-        }
-
-        template <typename Handle, std::size_t Size>
-        [[nodiscard]] bool AllHandlesAvailable(const std::array<Handle, Size> &handles) noexcept {
-            return std::ranges::all_of(handles, [](const Handle &handle) {
-                return static_cast<bool>(handle);
-            });
+            return descriptor;
         }
 
         [[nodiscard]] bool CoreHandlesAvailable(const StreamingMetricHandles &handles) noexcept {
-            return handles.operationLatency && AllHandlesAvailable(handles.bytes) && AllHandlesAvailable(handles.queueDepth) &&
-                   AllHandlesAvailable(handles.residency) && AllHandlesAvailable(handles.drops) && AllHandlesAvailable(handles.failures);
+            const auto allAvailable = [](const auto &group) {
+                return std::ranges::all_of(group, [](const auto &handle) {
+                    return static_cast<bool>(handle);
+                });
+            };
+            return handles.operationLatency && allAvailable(handles.bytes) && allAvailable(handles.queueDepth) &&
+                   allAvailable(handles.residency) && allAvailable(handles.drops) && allAvailable(handles.failures);
+        }
+
+        [[nodiscard]] bool StageHandlesAvailable(const StreamingMetricHandles &handles) noexcept {
+            return std::ranges::all_of(handles.stageLatencies, [](const auto &handle) {
+                return static_cast<bool>(handle);
+            });
         }
 
         [[nodiscard]] bool IsKnownAvailability(const StreamingMetricAvailability value) noexcept {
@@ -105,8 +105,7 @@ namespace Horo::WorldStreaming {
                 return Internal::Failure<void>(WorldStreamingErrors::MetricCapabilityUnavailable);
             if (availability != StreamingMetricAvailability::Available)
                 return Result<void>::Success();
-            const bool detailedAvailable =
-                level != Telemetry::MetricCollectionLevel::Detailed || AllHandlesAvailable(handles.stageLatencies);
+            const bool detailedAvailable = level != Telemetry::MetricCollectionLevel::Detailed || StageHandlesAvailable(handles);
             return CoreHandlesAvailable(handles) && detailedAvailable
                        ? Result<void>::Success()
                        : Internal::Failure<void>(WorldStreamingErrors::MetricCapabilityUnavailable);
@@ -203,40 +202,49 @@ namespace Horo::WorldStreaming {
         if (level == Off || level > Detailed)
             return handles;
 
+        const auto bindHandles = []<typename Handle, std::size_t Size>(std::array<Handle, Size> &output, const Handle &root,
+                                                                       const std::string_view dimension,
+                                                                       const std::array<std::string_view, Size> &values) {
+            std::ranges::transform(values, output.begin(), [&root, dimension](const std::string_view value) {
+                const std::array selection{Telemetry::DimensionValue{dimension, value}};
+                return root.WithDimensions(selection);
+            });
+        };
+
         handles.operationLatency = Telemetry::Runtime::RegisterHistogram(
             Descriptor(Telemetry::InstrumentKind::Histogram, "horo.world_streaming.operation.duration", "seconds",
                        "Complete World Streaming authority operation latency.", Core));
 
         auto byteRoot = Telemetry::Runtime::RegisterCounter(Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.bytes",
                                                                        "bytes", "World Streaming byte movement by closed flow category.",
-                                                                       Core, {Dimension("flow", kByteFlowValues)}));
-        BindHandles(handles.bytes, byteRoot, "flow", kByteFlowValues);
+                                                                       Core, Dimension("flow", kByteFlowValues)));
+        bindHandles(handles.bytes, byteRoot, "flow", kByteFlowValues);
 
         auto queueRoot = Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.world_streaming.queue.depth",
                                                                       "items", "Current bounded World Streaming queue depth.", Core,
-                                                                      {Dimension("queue", kQueueValues)}));
-        BindHandles(handles.queueDepth, queueRoot, "queue", kQueueValues);
+                                                                      Dimension("queue", kQueueValues)));
+        bindHandles(handles.queueDepth, queueRoot, "queue", kQueueValues);
 
         auto residencyRoot = Telemetry::Runtime::RegisterGauge(
             Descriptor(Telemetry::InstrumentKind::Gauge, "horo.world_streaming.residency.count", "cells",
-                       "Current aggregate cell residency count.", Core, {Dimension("state", kResidencyValues)}));
-        BindHandles(handles.residency, residencyRoot, "state", kResidencyValues);
+                       "Current aggregate cell residency count.", Core, Dimension("state", kResidencyValues)));
+        bindHandles(handles.residency, residencyRoot, "state", kResidencyValues);
 
         auto dropRoot = Telemetry::Runtime::RegisterCounter(Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.drop",
                                                                        "events", "World Streaming observation and admission drops.", Core,
-                                                                       {Dimension("reason", kDropValues)}));
-        BindHandles(handles.drops, dropRoot, "reason", kDropValues);
+                                                                       Dimension("reason", kDropValues)));
+        bindHandles(handles.drops, dropRoot, "reason", kDropValues);
 
         auto failureRoot = Telemetry::Runtime::RegisterCounter(
             Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.failure", "events",
-                       "Terminal World Streaming failures by closed cause.", Core, {Dimension("reason", kFailureValues)}));
-        BindHandles(handles.failures, failureRoot, "reason", kFailureValues);
+                       "Terminal World Streaming failures by closed cause.", Core, Dimension("reason", kFailureValues)));
+        bindHandles(handles.failures, failureRoot, "reason", kFailureValues);
 
         if (level == Detailed) {
             auto stageRoot = Telemetry::Runtime::RegisterHistogram(
                 Descriptor(Telemetry::InstrumentKind::Histogram, "horo.world_streaming.stage.duration", "seconds",
-                           "World Streaming pipeline stage latency.", Detailed, {Dimension("stage", kStageValues)}));
-            BindHandles(handles.stageLatencies, stageRoot, "stage", kStageValues);
+                           "World Streaming pipeline stage latency.", Detailed, Dimension("stage", kStageValues)));
+            bindHandles(handles.stageLatencies, stageRoot, "stage", kStageValues);
         }
         return handles;
     }
