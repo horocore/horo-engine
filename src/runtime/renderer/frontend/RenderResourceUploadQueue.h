@@ -6,8 +6,10 @@
 #include "RenderResourceRegistry.h"
 
 #include <algorithm>
-#include <deque>
+#include <cstring>
+#include <limits>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace Horo::Render::Detail {
@@ -29,16 +31,25 @@ namespace Horo::Render::Detail {
             RenderTextureDescriptor texture;
             RenderTextureViewDescriptor textureView;
             RenderTargetDescriptor renderTarget;
-            std::vector<std::byte> initialData;
+            std::size_t stagingOffset{0};
+            std::size_t stagingByteCount{0};
             RenderMemoryReservationId memoryReservation;
             RenderMemoryPlacement memoryPlacement;
             std::optional<RenderResourceIdentity> replacedMesh;
         };
 
-        explicit RenderResourceUploadQueue(RenderResourceUploadLimits limits) : limits_(limits) {}
+        explicit RenderResourceUploadQueue(const RenderResourceUploadLimits limits) : limits_(limits) {
+            requests_.reserve(limits.maximumPendingRequests);
+            stagingStorage_.reserve(limits.maximumPendingBytes);
+        }
 
         [[nodiscard]] bool CanEnqueue(const std::size_t byteCount) const noexcept {
-            return pendingBytes_ <= limits_.maximumPendingBytes && byteCount <= limits_.maximumPendingBytes - pendingBytes_;
+            if (!acceptingRequests_ || requests_.size() >= limits_.maximumPendingRequests)
+                return false;
+            if (byteCount == 0)
+                return true;
+            const auto offset = AlignedOffset(occupiedStagingBytes_);
+            return offset.has_value() && *offset <= limits_.maximumPendingBytes && byteCount <= limits_.maximumPendingBytes - *offset;
         }
 
         void EnqueueBuffer(const RenderResourceIdentity identity, const RenderBufferDescriptor &descriptor,
@@ -47,11 +58,12 @@ namespace Horo::Render::Detail {
             Request request{.kind = RequestKind::Buffer,
                             .identity = identity,
                             .buffer = descriptor,
+                            .stagingOffset = initialData.empty() ? 0 : *AlignedOffset(occupiedStagingBytes_),
+                            .stagingByteCount = initialData.size(),
                             .memoryReservation = memoryReservation,
                             .memoryPlacement = memoryPlacement};
-            request.initialData.assign(initialData.begin(), initialData.end());
             requests_.push_back(std::move(request));
-            pendingBytes_ += requests_.back().initialData.size();
+            StageBack(initialData);
         }
 
         void EnqueueMesh(const RenderResourceIdentity identity, const RenderMeshDescriptor &descriptor,
@@ -65,11 +77,12 @@ namespace Horo::Render::Detail {
             Request request{.kind = RequestKind::Texture,
                             .identity = identity,
                             .texture = descriptor,
+                            .stagingOffset = initialData.empty() ? 0 : *AlignedOffset(occupiedStagingBytes_),
+                            .stagingByteCount = initialData.size(),
                             .memoryReservation = memoryReservation,
                             .memoryPlacement = memoryPlacement};
-            request.initialData.assign(initialData.begin(), initialData.end());
             requests_.push_back(std::move(request));
-            pendingBytes_ += requests_.back().initialData.size();
+            StageBack(initialData);
         }
 
         void EnqueueTextureView(const RenderResourceIdentity identity, const RenderTextureViewDescriptor &descriptor) {
@@ -92,17 +105,25 @@ namespace Horo::Render::Detail {
             return requests_.front();
         }
 
+        [[nodiscard]] std::span<const std::byte> FrontInitialData() const noexcept {
+            const Request &request = requests_.front();
+            return std::span<const std::byte>{stagingStorage_.data(), stagingStorage_.size()}.subspan(request.stagingOffset,
+                                                                                                      request.stagingByteCount);
+        }
+
         [[nodiscard]] bool DrainLimitReached(const std::size_t completedRequests, const std::size_t completedBytes) const noexcept {
             if (completedRequests >= limits_.maximumRequestsPerDrain) {
                 return true;
             }
-            return completedRequests > 0 && completedBytes + requests_.front().initialData.size() > limits_.maximumBytesPerDrain;
+            return completedRequests > 0 && (completedBytes >= limits_.maximumBytesPerDrain ||
+                                             requests_.front().stagingByteCount > limits_.maximumBytesPerDrain - completedBytes);
         }
 
         Request Pop() {
             Request request = std::move(requests_.front());
-            requests_.pop_front();
-            pendingBytes_ -= request.initialData.size();
+            requests_.erase(requests_.begin());
+            pendingPayloadBytes_ -= request.stagingByteCount;
+            Repack();
             return request;
         }
 
@@ -111,19 +132,82 @@ namespace Horo::Render::Detail {
             if (found == requests_.end())
                 return std::nullopt;
             Request request = std::move(*found);
-            pendingBytes_ -= request.initialData.size();
+            pendingPayloadBytes_ -= request.stagingByteCount;
             requests_.erase(found);
+            ++cancelledRequestCount_;
+            Repack();
             return request;
         }
 
-        void Clear() noexcept {
-            requests_.clear();
-            pendingBytes_ = 0;
+        void StopAdmission() noexcept {
+            acceptingRequests_ = false;
+        }
+
+        void CompleteBatch(const std::size_t requestCount, const std::size_t payloadBytes) noexcept {
+            if (requestCount == 0)
+                return;
+            ++completedBatchCount_;
+            lastBatchRequestCount_ = static_cast<std::uint32_t>(requestCount);
+            lastBatchPayloadBytes_ = payloadBytes;
+        }
+
+        [[nodiscard]] RenderResourceUploadSnapshot Snapshot() const noexcept {
+            return {.pendingPayloadBytes = pendingPayloadBytes_,
+                    .occupiedStagingBytes = occupiedStagingBytes_,
+                    .pendingRequests = static_cast<std::uint32_t>(requests_.size()),
+                    .completedBatchCount = completedBatchCount_,
+                    .cancelledRequestCount = cancelledRequestCount_,
+                    .lastBatchPayloadBytes = lastBatchPayloadBytes_,
+                    .lastBatchRequestCount = lastBatchRequestCount_,
+                    .acceptingRequests = acceptingRequests_};
         }
 
     private:
+        [[nodiscard]] std::optional<std::size_t> AlignedOffset(const std::size_t offset) const noexcept {
+            const std::size_t mask = limits_.stagingOffsetAlignment - 1U;
+            if (offset > std::numeric_limits<std::size_t>::max() - mask)
+                return std::nullopt;
+            return (offset + mask) & ~mask;
+        }
+
+        void StageBack(const std::span<const std::byte> initialData) noexcept {
+            Request &request = requests_.back();
+            if (initialData.empty())
+                return;
+            stagingStorage_.resize(request.stagingOffset + request.stagingByteCount);
+            std::memcpy(stagingStorage_.data() + request.stagingOffset, initialData.data(), initialData.size());
+            pendingPayloadBytes_ += initialData.size();
+            occupiedStagingBytes_ = request.stagingOffset + initialData.size();
+        }
+
+        void Repack() noexcept {
+            std::size_t nextOffset = 0;
+            for (Request &request : requests_) {
+                if (request.stagingByteCount == 0) {
+                    request.stagingOffset = 0;
+                    continue;
+                }
+                const std::size_t destination = *AlignedOffset(nextOffset);
+                if (destination != request.stagingOffset) {
+                    std::memmove(stagingStorage_.data() + destination, stagingStorage_.data() + request.stagingOffset,
+                                 request.stagingByteCount);
+                    request.stagingOffset = destination;
+                }
+                nextOffset = destination + request.stagingByteCount;
+            }
+            occupiedStagingBytes_ = nextOffset;
+            stagingStorage_.resize(occupiedStagingBytes_);
+        }
+
         RenderResourceUploadLimits limits_;
-        std::deque<Request> requests_;
-        std::size_t pendingBytes_{0};
+        std::vector<Request> requests_;
+        std::vector<std::byte> stagingStorage_;
+        std::size_t pendingPayloadBytes_{0};
+        std::size_t occupiedStagingBytes_{0};
+        std::uint64_t completedBatchCount_{0};
+        std::uint64_t cancelledRequestCount_{0};
+        std::size_t lastBatchPayloadBytes_{0};
+        std::uint32_t lastBatchRequestCount_{0};
+        bool acceptingRequests_{true};
     };
 }  // namespace Horo::Render::Detail

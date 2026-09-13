@@ -195,7 +195,7 @@ namespace Horo::Render {
         if (!resourceUploadQueue_->CanEnqueue(initialData.size())) {
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
-                                  "The bounded initial-upload byte queue has insufficient capacity."));
+                                  "The bounded upload arena has insufficient staging-byte or request capacity."));
         }
 
         auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::Buffer);
@@ -257,6 +257,11 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::InvalidMeshDescriptor,
                                   "Mesh layout or counts are incompatible with the referenced buffers."));
         }
+        if (!resourceUploadQueue_->CanEnqueue(0)) {
+            return Result<ResourceCreation<RenderMeshHandle>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                  "The bounded upload arena has insufficient request capacity."));
+        }
 
         const std::array dependencies{Identity(descriptor.vertexBuffer), Identity(descriptor.indexBuffer)};
         auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::Mesh, dependencies);
@@ -305,7 +310,7 @@ namespace Horo::Render {
         if (!resourceUploadQueue_->CanEnqueue(initialData.size())) {
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
-                                  "The bounded initial-upload byte queue has insufficient capacity."));
+                                  "The bounded upload arena has insufficient staging-byte or request capacity."));
         }
         auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::Texture);
         if (reserved.HasError())
@@ -364,6 +369,11 @@ namespace Horo::Render {
         }
         if (const Result<void> dependency = ValidateTextureViewDependency(descriptor); dependency.HasError())
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(dependency.ErrorValue());
+        if (!resourceUploadQueue_->CanEnqueue(0)) {
+            return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                  "The bounded upload arena has insufficient request capacity."));
+        }
         const std::array dependencies{Identity(descriptor.texture)};
         auto reserved = resourceRegistry_->Reserve(Detail::RenderResourceClass::TextureView, dependencies);
         if (reserved.HasError())
@@ -394,6 +404,11 @@ namespace Horo::Render {
         }
         if (const Result<void> dependencies = ValidateRenderTargetDependencies(descriptor); dependencies.HasError())
             return Result<ResourceCreation<RenderTargetHandle>>::Failure(dependencies.ErrorValue());
+        if (!resourceUploadQueue_->CanEnqueue(0)) {
+            return Result<ResourceCreation<RenderTargetHandle>>::Failure(
+                MakeFrontendError(FrontendErrors::ResourceUploadCapacityExceeded,
+                                  "The bounded upload arena has insufficient request capacity."));
+        }
         std::array<Detail::RenderResourceIdentity, 2> dependencies{};
         std::size_t dependencyCount = 0;
         if (descriptor.colorAttachment.IsValid())
@@ -441,15 +456,23 @@ namespace Horo::Render {
         std::size_t completedRequests = 0;
         std::size_t completedBytes = 0;
         while (!resourceUploadQueue_->Empty() && !resourceUploadQueue_->DrainLimitReached(completedRequests, completedBytes)) {
-            Detail::RenderResourceUploadQueue::Request request = resourceUploadQueue_->Pop();
-            completedBytes += request.initialData.size();
-            const Result<std::uint64_t> created = RealizeResourceRequest(*backend_, *resourceRegistry_, request);
+            const Detail::RenderResourceUploadQueue::Request &request = resourceUploadQueue_->Front();
+            const std::span<const std::byte> initialData = resourceUploadQueue_->FrontInitialData();
+            completedBytes += initialData.size();
+            const Result<std::uint64_t> created = RealizeResourceRequest(*backend_, *resourceRegistry_, request, initialData);
             CompleteResourceRequest(*backend_, *memoryBudget_, *resourceRegistry_, request, created);
+            static_cast<void>(resourceUploadQueue_->Pop());
             ++completedRequests;
         }
+        resourceUploadQueue_->CompleteBatch(completedRequests, completedBytes);
         static_cast<void>(resourceRegistry_->DrainRetirements());
         static_cast<void>(memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
         return Result<std::size_t>::Success(completedRequests);
+    }
+
+    /** @copydoc RenderFrontend::UploadSnapshot */
+    RenderResourceUploadSnapshot RenderFrontend::UploadSnapshot() const noexcept {
+        return resourceUploadQueue_->Snapshot();
     }
 
     /** @copydoc RenderFrontend::ResourceState(RenderBufferHandle) */

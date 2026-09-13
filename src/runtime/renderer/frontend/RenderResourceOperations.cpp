@@ -138,16 +138,16 @@ namespace Horo::Render {
     }
 
     Result<std::uint64_t> RealizeResourceRequest(IRenderBackend &backend, const Detail::RenderResourceRegistry &registry,
-                                                 const UploadRequest &request) {
+                                                 const UploadRequest &request, const std::span<const std::byte> initialData) {
         try {
             using enum UploadRequestKind;
             switch (request.kind) {
                 case Buffer:
-                    return backend.CreateBuffer(request.buffer, request.initialData, request.memoryPlacement);
+                    return backend.CreateBuffer(request.buffer, initialData, request.memoryPlacement);
                 case Mesh:
                     return RealizeMeshRequest(backend, registry, request.mesh);
                 case Texture:
-                    return backend.CreateTexture(request.texture, request.initialData, request.memoryPlacement);
+                    return backend.CreateTexture(request.texture, initialData, request.memoryPlacement);
                 case TextureView:
                     return RealizeTextureViewRequest(backend, registry, request.textureView);
                 case RenderTarget:

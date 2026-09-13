@@ -634,6 +634,20 @@ namespace {
                                               {.maximumPendingBytes = 8, .maximumBytesPerDrain = 16, .maximumRequestsPerDrain = 1});
         Check(invalid.HasError());
         Check(invalid.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
+        auto invalidAlignment = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
+                                                       {.maximumPendingBytes = 16,
+                                                        .maximumBytesPerDrain = 8,
+                                                        .maximumRequestsPerDrain = 2,
+                                                        .stagingOffsetAlignment = 3});
+        Check(invalidAlignment.HasError());
+        Check(invalidAlignment.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
+        auto invalidRequestBounds = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
+                                                           {.maximumPendingBytes = 16,
+                                                            .maximumBytesPerDrain = 8,
+                                                            .maximumRequestsPerDrain = 2,
+                                                            .maximumPendingRequests = 1});
+        Check(invalidRequestBounds.HasError());
+        Check(invalidRequestBounds.ErrorValue().code.Value() == "render.frontend.resource.invalid_upload_limits");
 
         RenderFrontendMemoryConfig invalidMemory;
         invalidMemory.budget.hardCapBytes = 0;
@@ -675,6 +689,80 @@ namespace {
         Check(admitted.HasValue());
         Check(frontend->ProcessResourceRequests().Value() == 1);
         Check(frontend->ResourceState(admitted.Value().handle).Value() == RenderResourceState::Ready);
+        const RenderResourceUploadSnapshot drained = frontend->UploadSnapshot();
+        Check(drained.pendingPayloadBytes == 0);
+        Check(drained.pendingRequests == 0);
+        Check(drained.completedBatchCount == 3);
+        Check(drained.lastBatchPayloadBytes == oversizedForDrain.size());
+        Check(drained.lastBatchRequestCount == 1);
+        Check(drained.acceptingRequests);
+    }
+
+    TEST_CASE("Frontend Upload Arena Aligns Reclaims And Preserves Staged Bytes", "[unit][runtime][renderer][resource][upload]") {
+        lifecycleState = {};
+        RenderBackendRegistry registry;
+        Check(registry
+                  .Register(RenderBackendDescriptor{
+                      .id = RenderBackendId{"tracking"},
+                      .displayName = "Tracking",
+                      .provider = MakeTrackingBackendProvider(),
+                  })
+                  .HasValue());
+        Check(registry.Seal().HasValue());
+        auto created = RenderFrontend::Create(registry, RenderBackendId{"tracking"}, RenderBackendConfig{},
+                                              {.maximumPendingBytes = 16,
+                                               .maximumBytesPerDrain = 16,
+                                               .maximumRequestsPerDrain = 2,
+                                               .maximumPendingRequests = 2,
+                                               .stagingOffsetAlignment = 8});
+        REQUIRE(created.HasValue());
+        std::unique_ptr<RenderFrontend> frontend = std::move(created).Value();
+
+        const std::array firstBytes{std::byte{0x11}, std::byte{0x12}, std::byte{0x13}};
+        const std::array secondBytes{std::byte{0x21}, std::byte{0x22}, std::byte{0x23}};
+        auto first = frontend->CreateBuffer({.byteSize = firstBytes.size(),
+                                             .usage = RenderBufferUsage::Vertex,
+                                             .access = RenderBufferAccess::HostVisible},
+                                            firstBytes);
+        auto second = frontend->CreateBuffer({.byteSize = secondBytes.size(),
+                                              .usage = RenderBufferUsage::Vertex,
+                                              .access = RenderBufferAccess::HostVisible},
+                                             secondBytes);
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        const RenderResourceUploadSnapshot aligned = frontend->UploadSnapshot();
+        CHECK(aligned.pendingPayloadBytes == 6);
+        CHECK(aligned.occupiedStagingBytes == 11);
+        CHECK(aligned.pendingRequests == 2);
+
+        const auto requestFull =
+            frontend->CreateTexture({.extent = {1, 1}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled});
+        REQUIRE(requestFull.HasError());
+        CHECK(requestFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+
+        REQUIRE(frontend->ReleaseBuffer(first.Value().handle).HasValue());
+        const RenderResourceUploadSnapshot compacted = frontend->UploadSnapshot();
+        CHECK(compacted.pendingPayloadBytes == secondBytes.size());
+        CHECK(compacted.occupiedStagingBytes == secondBytes.size());
+        CHECK(compacted.pendingRequests == 1);
+        CHECK(compacted.cancelledRequestCount == 1);
+
+        const std::array<std::byte, 9> paddingOverflow{};
+        const auto alignmentFull = frontend->CreateBuffer({.byteSize = paddingOverflow.size(),
+                                                           .usage = RenderBufferUsage::Vertex,
+                                                           .access = RenderBufferAccess::HostVisible},
+                                                          paddingOverflow);
+        REQUIRE(alignmentFull.HasError());
+        CHECK(alignmentFull.ErrorValue().code.Value() == "render.frontend.resource.upload_capacity_exceeded");
+
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        CHECK(lifecycleState.lastBufferInitialData == std::vector<std::byte>(secondBytes.begin(), secondBytes.end()));
+        const RenderResourceUploadSnapshot completed = frontend->UploadSnapshot();
+        CHECK(completed.pendingPayloadBytes == 0);
+        CHECK(completed.occupiedStagingBytes == 0);
+        CHECK(completed.completedBatchCount == 1);
+        CHECK(completed.lastBatchPayloadBytes == secondBytes.size());
+        CHECK(completed.lastBatchRequestCount == 1);
     }
 
     TEST_CASE("Frontend Rejects Unsupported And In-Frame Resource Mutations", "[unit][runtime][renderer][resource]") {
