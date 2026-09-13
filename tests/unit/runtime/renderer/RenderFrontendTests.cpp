@@ -118,32 +118,12 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
                                            const RenderMemoryPlacement &) override {
             ++lifecycleState.createBufferCount;
             lifecycleState.lastBufferInitialData.assign(initialData.begin(), initialData.end());
-            if (lifecycleState.throwDuringResourceCreation) {
-                throw InjectedBackendException{"Injected resource creation exception."};
-            }
-            if (lifecycleState.failResourceCreation) {
-                return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
-                                                       ErrorDomainId{"render.test"},
-                                                       ErrorSeverity::Error,
-                                                       "Injected resource creation failure.",
-                                                       {}});
-            }
-            return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
+            return CompleteResourceCreation();
         }
 
         Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
             ++lifecycleState.createMeshCount;
-            if (lifecycleState.throwDuringResourceCreation) {
-                throw InjectedBackendException{"Injected resource creation exception."};
-            }
-            if (lifecycleState.failResourceCreation) {
-                return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
-                                                       ErrorDomainId{"render.test"},
-                                                       ErrorSeverity::Error,
-                                                       "Injected resource creation failure.",
-                                                       {}});
-            }
-            return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
+            return CompleteResourceCreation();
         }
 
         Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, const std::span<const std::byte> initialData,
@@ -277,6 +257,20 @@ namespace {  // NOSONAR(cpp:S1000) File-local test doubles and shared fixture st
         }
 
     private:
+        [[nodiscard]] Result<std::uint64_t> CompleteResourceCreation() {
+            if (lifecycleState.throwDuringResourceCreation) {
+                throw InjectedBackendException{"Injected resource creation exception."};
+            }
+            if (lifecycleState.failResourceCreation) {
+                return Result<std::uint64_t>::Failure({ErrorCode{"render.test.resource_failed"},
+                                                       ErrorDomainId{"render.test"},
+                                                       ErrorSeverity::Error,
+                                                       "Injected resource creation failure.",
+                                                       {}});
+            }
+            return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
+        }
+
         RenderBackendCapabilities capabilities_;
         bool initialized_{false};
     };
