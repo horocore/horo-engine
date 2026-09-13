@@ -23,15 +23,31 @@ namespace Horo::Render {
 
     /** @brief Finite frontend admission and per-drain limits for initial resource uploads. */
     struct RenderResourceUploadLimits {
-        std::size_t maximumPendingBytes{64U * 1024U * 1024U};
-        std::size_t maximumBytesPerDrain{16U * 1024U * 1024U};
-        std::uint32_t maximumRequestsPerDrain{64};
+        std::size_t maximumPendingBytes{64U * 1024U * 1024U};  /**< Arena capacity including requested alignment padding. */
+        std::size_t maximumBytesPerDrain{16U * 1024U * 1024U}; /**< Maximum payload processed after the progress-guaranteed first item. */
+        std::uint32_t maximumRequestsPerDrain{64};             /**< Maximum items in one frame-boundary batch. */
+        std::uint32_t maximumPendingRequests{1024};            /**< Maximum metadata records retained by the arena. */
+        std::size_t stagingOffsetAlignment{1};                 /**< Power-of-two alignment applied to every staged payload offset. */
 
         /** @brief Reports whether every upload bound is finite and non-zero. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return maximumPendingBytes > 0 && maximumBytesPerDrain > 0 && maximumBytesPerDrain <= maximumPendingBytes &&
-                   maximumRequestsPerDrain > 0;
+                   maximumPendingRequests > 0 && maximumRequestsPerDrain > 0 && maximumRequestsPerDrain <= maximumPendingRequests &&
+                   stagingOffsetAlignment > 0 && (stagingOffsetAlignment & (stagingOffsetAlignment - 1U)) == 0 &&
+                   stagingOffsetAlignment <= maximumPendingBytes;
         }
+    };
+
+    /** @brief Bounded owner-thread upload-arena state captured without exposing backend-native storage. */
+    struct RenderResourceUploadSnapshot {
+        std::size_t pendingPayloadBytes{0};     /**< Source bytes still waiting for realization. */
+        std::size_t occupiedStagingBytes{0};    /**< Arena bytes occupied including alignment padding. */
+        std::uint32_t pendingRequests{0};       /**< Metadata records awaiting an owner-thread boundary. */
+        std::uint64_t completedBatchCount{0};   /**< Non-empty bounded batches processed by this frontend. */
+        std::uint64_t cancelledRequestCount{0}; /**< Pending requests cancelled before native realization. */
+        std::size_t lastBatchPayloadBytes{0};   /**< Source payload consumed by the most recent non-empty batch. */
+        std::uint32_t lastBatchRequestCount{0}; /**< Requests completed by the most recent non-empty batch. */
+        bool acceptingRequests{false};          /**< False after teardown closes producer admission. */
     };
 
     /** @brief Host-composed renderer memory envelope, default scope, and bounded reclaim policy. */
@@ -248,6 +264,9 @@ namespace Horo::Render {
          * @return Number of completed requests, including typed backend failures.
          */
         [[nodiscard]] Result<std::size_t> ProcessResourceRequests();
+
+        /** @brief Returns bounded staging occupancy and completed-batch counters for this frontend. */
+        [[nodiscard]] RenderResourceUploadSnapshot UploadSnapshot() const noexcept;
 
         /** @brief Returns the current state of one buffer generation. */
         [[nodiscard]] Result<RenderResourceState> ResourceState(RenderBufferHandle buffer) const;
