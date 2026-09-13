@@ -741,6 +741,7 @@ namespace Horo::Render {
             return acknowledged;
         }
         static_cast<void>(frontend.resourceRegistry_->DrainRetirements());
+        static_cast<void>(frontend.memoryBudget_->ReclaimEmptyBlocks(frontend.memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
         return acknowledged;
     }
 }  // namespace Horo::Render

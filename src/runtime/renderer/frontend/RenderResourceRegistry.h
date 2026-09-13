@@ -64,7 +64,7 @@ namespace Horo::Render::Detail {
     /** @brief Frontend-private owner of resident identity, state, pins, and retirement. */
     class RenderResourceRegistry final {
     public:
-        RenderResourceRegistry(RenderResourceOwnerId owner, RenderResourceRegistryLimits limits,
+        RenderResourceRegistry(RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
                                BackendResourceRelease releaseBackendResource = {});
         ~RenderResourceRegistry() = default;
 

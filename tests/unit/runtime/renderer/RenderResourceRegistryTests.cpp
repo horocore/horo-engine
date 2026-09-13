@@ -22,6 +22,17 @@ namespace {
         std::size_t count{0};
     };
 
+    [[nodiscard]] RenderResourceRegistry MakeRegistry(const RenderResourceOwnerId owner, ReleasedBackendResources &released,
+                                                      const RenderResourceRegistryLimits &limits = {}) {
+        return RenderResourceRegistry{owner, limits,
+                                      [&released](const RenderResourceClass, const std::uint64_t backendInstance,
+                                                  const std::optional<RenderMemoryAllocationId>,
+                                                  const BackendResourceReleaseMode mode) noexcept {
+            released.instances[released.count] = backendInstance;
+            released.modes[released.count++] = mode;
+        }};
+    }
+
     TEST_CASE("Resource registry publishes a pending generation and records completion", "[unit][runtime][renderer][resource]") {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
@@ -272,14 +283,9 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         ReleasedBackendResources released;
-        RenderResourceRegistry
-            registry{owner.Value(),
-                     {.maximumSlots = 8, .maximumPendingRequests = 8, .retirementDrainBudget = 1, .maximumOperationResults = 8},
-                     [&released](const RenderResourceClass, const std::uint64_t backendInstance,
-                                 const std::optional<RenderMemoryAllocationId>, const BackendResourceReleaseMode mode) noexcept {
-            released.instances[released.count] = backendInstance;
-            released.modes[released.count++] = mode;
-        }};
+        RenderResourceRegistry registry =
+            MakeRegistry(owner.Value(), released,
+                         {.maximumSlots = 8, .maximumPendingRequests = 8, .retirementDrainBudget = 1, .maximumOperationResults = 8});
 
         auto buffer = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(buffer.HasValue());
@@ -307,20 +313,14 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         ReleasedBackendResources released;
-        RenderResourceRegistry registry{owner.Value(),
-                                        {.maximumSlots = 4,
-                                         .maximumPendingRequests = 4,
-                                         .retirementDrainBudget = 4,
-                                         .maximumOperationResults = 4,
-                                         .maximumSubmissionPins = 4,
-                                         .maximumTrackedQueues = 2,
-                                         .completionDrainBudget = 4},
-                                        [&released](const RenderResourceClass, const std::uint64_t backendInstance,
-                                                    const std::optional<RenderMemoryAllocationId>,
-                                                    const BackendResourceReleaseMode mode) noexcept {
-            released.instances[released.count] = backendInstance;
-            released.modes[released.count++] = mode;
-        }};
+        RenderResourceRegistry registry = MakeRegistry(owner.Value(), released,
+                                                       {.maximumSlots = 4,
+                                                        .maximumPendingRequests = 4,
+                                                        .retirementDrainBudget = 4,
+                                                        .maximumOperationResults = 4,
+                                                        .maximumSubmissionPins = 4,
+                                                        .maximumTrackedQueues = 2,
+                                                        .completionDrainBudget = 4});
 
         const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(buffer.HasValue());
@@ -399,14 +399,7 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         ReleasedBackendResources released;
-        RenderResourceRegistry registry{owner.Value(),
-                                        {},
-                                        [&released](const RenderResourceClass, const std::uint64_t backendInstance,
-                                                    const std::optional<RenderMemoryAllocationId>,
-                                                    const BackendResourceReleaseMode mode) noexcept {
-            released.instances[released.count] = backendInstance;
-            released.modes[released.count++] = mode;
-        }};
+        RenderResourceRegistry registry = MakeRegistry(owner.Value(), released);
         const auto buffer = registry.Reserve(RenderResourceClass::Buffer);
         REQUIRE(buffer.HasValue());
         REQUIRE(registry.Publish(RenderResourceClass::Buffer, Identity(buffer.Value()), 71).HasValue());
@@ -426,14 +419,7 @@ namespace {
         const auto owner = AcquireRenderResourceOwnerId();
         REQUIRE(owner.HasValue());
         ReleasedBackendResources released;
-        RenderResourceRegistry registry{owner.Value(),
-                                        {},
-                                        [&released](const RenderResourceClass, const std::uint64_t backendInstance,
-                                                    const std::optional<RenderMemoryAllocationId>,
-                                                    const BackendResourceReleaseMode mode) noexcept {
-            released.instances[released.count] = backendInstance;
-            released.modes[released.count++] = mode;
-        }};
+        RenderResourceRegistry registry = MakeRegistry(owner.Value(), released);
         const auto texture = registry.Reserve(RenderResourceClass::Texture);
         REQUIRE(texture.HasValue());
         REQUIRE(registry.Publish(RenderResourceClass::Texture, Identity(texture.Value()), 91).HasValue());

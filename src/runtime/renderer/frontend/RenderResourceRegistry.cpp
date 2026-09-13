@@ -28,7 +28,7 @@ namespace Horo::Render::Detail {
                maximumOperationResults >= maximumPendingRequests;
     }
 
-    RenderResourceRegistry::RenderResourceRegistry(const RenderResourceOwnerId owner, const RenderResourceRegistryLimits limits,
+    RenderResourceRegistry::RenderResourceRegistry(const RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
                                                    BackendResourceRelease releaseBackendResource)
         : owner_(owner), limits_(limits), retirementQueue_(limits.maximumSlots),
           releaseBackendResource_(std::move(releaseBackendResource)) {
@@ -327,7 +327,7 @@ namespace Horo::Render::Detail {
             queueProgress_.push_back(QueueProgress{.queue = completion.queue});
             queue = queueProgress_.end() - 1;
         }
-        queue->submitted = std::max(queue->submitted, completion.value);
+        queue->submitted = completion.value;
         submissionPins_.push_back(SubmissionPin{resourceClass, identity, completion});
         return Result<void>::Success();
     }
