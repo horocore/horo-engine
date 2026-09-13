@@ -54,9 +54,9 @@ namespace Horo::Render {
 
     /**
      * @brief Production shell-free adapter for DXC, SPIRV-Tools, SPIRV-Cross, and Apple Metal tools.
-     * @details The host owns the process runner, executable paths, and scratch root for the adapter lifetime.
-     * The adapter is safe for concurrent Compile calls; each call owns an isolated scratch directory which is
-     * removed before return. Tool identity and executable content are verified before any source is written.
+     * @details The adapter shares ownership of the process runner. The configured runner must support concurrent
+     * calls. Each Compile call owns an isolated scratch directory which is removed before return. Tool identity
+     * and executable content are verified when the adapter is created, before any source is written.
      */
     class ExternalShaderCompilerAdapter final : public IShaderCompilerAdapter {
     public:
@@ -72,11 +72,11 @@ namespace Horo::Render {
         /**
          * @brief Validates host configuration and creates a production adapter.
          * @param configuration Exact host platform, scratch root, tool paths, identities, and finite bounds.
-         * @param processes Host-owned shell-free process runner which must outlive the adapter.
+         * @param processes Shared shell-free process runner with concurrent-call support.
          * @return Move-only adapter, or a typed configuration/tool-lock failure.
          */
         [[nodiscard]] static Result<ExternalShaderCompilerAdapter> Create(ShaderCompilerToolchainConfiguration configuration,
-                                                                          IExternalProcessRunner &processes);
+                                                                          std::shared_ptr<IExternalProcessRunner> processes);
 
         /** @copydoc IShaderCompilerAdapter::Compile */
         [[nodiscard]] Result<ShaderCompilerAdapterOutput> Compile(const ShaderCompilerInvocation &invocation,

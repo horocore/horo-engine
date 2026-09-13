@@ -9,7 +9,6 @@
 #include <charconv>
 #include <fstream>
 #include <limits>
-#include <mutex>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -36,11 +35,11 @@ namespace Horo::Render {
                                        "sha256:55665c87824051ed4774ff3280a79ccbbb7d39243b9736ca5e98222134112d54",
                                        "sha256:b1bfa493d5c780b94c20b8b5f5aed50d1c4d03339cd55f496bd223eedeec1734", "NCSA-and-MIT"},
             ApprovedShaderCompilerTool{ShaderCompilerTool::SpirvTools, "linux-x86_64-ubuntu-26.04", "ubuntu-2026.1-1",
-                                       "http://archive.ubuntu.com/ubuntu/pool/universe/s/spirv-tools/spirv-tools_2026.1-1_amd64.deb",
+                                       "https://archive.ubuntu.com/ubuntu/pool/universe/s/spirv-tools/spirv-tools_2026.1-1_amd64.deb",
                                        "sha256:24e972ed4f2e92ada6f64b32ff40550fda02038385656736af871ca3dcb2b867",
                                        "sha256:85367fefdb7e93ae45654255ac2b7f8dc7056b6df78a6fdeb03ce395c7477239", "Apache-2.0"},
             ApprovedShaderCompilerTool{ShaderCompilerTool::SpirvCross, "linux-x86_64-ubuntu-26.04", "ubuntu-2021.01.15+1.4.335.0-1",
-                                       "http://archive.ubuntu.com/ubuntu/pool/universe/s/spirv-cross/"
+                                       "https://archive.ubuntu.com/ubuntu/pool/universe/s/spirv-cross/"
                                        "spirv-cross_2021.01.15+1.4.335.0-1_amd64.deb",
                                        "sha256:50d11b7efc263240d04b015fecfd419377a4a3e2a9cb59387f2229aae03e4e7f",
                                        "sha256:335caee5ce86daefc3dee5e13100c2118a1a1cccb183a8c6df817090e0cbb976", "Apache-2.0"},
@@ -255,13 +254,353 @@ namespace Horo::Render {
         private:
             std::filesystem::path path_;
         };
+
+        class CompilerRouteContext final {
+        public:
+            CompilerRouteContext(const ShaderCompilerToolchainConfiguration &configuration, IExternalProcessRunner &processes,
+                                 const ShaderCompilerInvocation &invocation, const CancellationToken &cancellation,
+                                 const ScratchDirectory &scratch, const std::filesystem::path &sourcePath)
+                : configuration_(configuration), processes_(processes), invocation_(invocation), cancellation_(cancellation),
+                  scratch_(scratch), sourcePath_(sourcePath) {}
+
+            [[nodiscard]] Result<ShaderCompilerAdapterOutput> Compile() {
+                if (invocation_.target.requirement.backend == ShaderTargetBackend::Null)
+                    return CompileNullRoute();
+
+                const ShaderCompilerToolInstallation *dxc = Lookup(ShaderCompilerTool::Dxc);
+                if (dxc == nullptr)
+                    return Failure(ShaderCompilerPipelineErrors::ToolMissing);
+
+                try {
+                    payloadStages_.reserve(invocation_.manifest.entryPoints.size());
+                    debugStages_.reserve(invocation_.manifest.entryPoints.size());
+                } catch (const std::bad_alloc &) {
+                    return Failure(ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                }
+
+                for (std::size_t index = 0; index < invocation_.manifest.entryPoints.size(); ++index) {
+                    const ShaderEntryPoint &entry = invocation_.manifest.entryPoints[index];
+                    Result<void> compiled = invocation_.target.requirement.backend == ShaderTargetBackend::D3D12
+                                                ? CompileD3D12Route(*dxc, entry, index)
+                                                : CompileSpirvRoute(*dxc, entry, index);
+                    if (compiled.HasError())
+                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(compiled).ErrorValue());
+                }
+                return PackageOutput();
+            }
+
+        private:
+            [[nodiscard]] Result<ShaderCompilerAdapterOutput> Failure(const ErrorCodeDescriptor &error) const {
+                return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(error));
+            }
+
+            [[nodiscard]] const ShaderCompilerToolInstallation *Lookup(const ShaderCompilerTool tool) const {
+                const auto expected = std::ranges::find_if(invocation_.target.tools, [tool](const ShaderCompilerToolIdentity &identity) {
+                    return identity.tool == tool;
+                });
+                if (expected == invocation_.target.tools.end())
+                    return nullptr;
+                const auto installed = std::ranges::find_if(configuration_.tools, [&](const ShaderCompilerToolInstallation &candidate) {
+                    return candidate.identity.tool == tool && candidate.identity.release == expected->release &&
+                           candidate.identity.buildDigest == expected->buildDigest;
+                });
+                return installed == configuration_.tools.end() ? nullptr : &*installed;
+            }
+
+            [[nodiscard]] Result<void> Run(const ShaderCompilerToolInstallation &tool, std::vector<std::string> arguments) {
+                if (cancellation_.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
+                ExternalProcessRequest request;
+                request.executable = tool.executable.string();
+                request.arguments = std::move(arguments);
+                request.workingDirectory = scratch_.Path();
+                request.environment.base = ProcessEnvironmentBase::Replace;
+                request.timeout = configuration_.processTimeout;
+                request.maximumLineBytes =
+                    std::min(invocation_.limits.maximumDiagnosticMessageBytes, configuration_.maximumProcessOutputBytes);
+                request.onOutput = [&](ProcessOutputLine line) {
+                    CaptureDiagnostic(std::move(line));
+                };
+                auto result = processes_.Run(request, cancellation_);
+                if (result.HasError())
+                    return Result<void>::Failure(
+                        WrapError(ShaderCompilerPipelineErrors::ToolProcessFailed, std::move(result).ErrorValue()));
+                if (result.Value().reason == ProcessTerminationReason::Cancelled || cancellation_.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
+                if (result.Value().reason == ProcessTerminationReason::Exited && result.Value().exitCode == 0)
+                    return Result<void>::Success();
+                return Result<void>::Failure(ProcessFailure());
+            }
+
+            void CaptureDiagnostic(ProcessOutputLine line) {
+                if (diagnostics_.size() >= invocation_.limits.maximumDiagnosticsPerTarget ||
+                    diagnosticBytes_ >= configuration_.maximumProcessOutputBytes)
+                    return;
+                line.text = SanitizeLine(std::move(line.text), scratch_.Path(), sourcePath_);
+                const std::size_t remaining = configuration_.maximumProcessOutputBytes - diagnosticBytes_;
+                if (line.text.size() > remaining) {
+                    line.text.resize(remaining);
+                    line.truncated = true;
+                }
+                diagnosticBytes_ += line.text.size();
+                if (!line.text.empty())
+                    diagnostics_.push_back(
+                        MakeToolDiagnostic(std::move(line.text), line.truncated, invocation_.manifest.sourceIdentity, line.stream));
+            }
+
+            [[nodiscard]] Error ProcessFailure() const {
+                Error failure = MakeError(ShaderCompilerPipelineErrors::ToolProcessFailed);
+                try {
+                    for (const ShaderCompilerDiagnostic &diagnostic : diagnostics_) {
+                        failure.diagnostics.push_back(
+                            {.code = DiagnosticCode{diagnostic.category == ShaderCompilerDiagnosticCategory::Source
+                                                        ? "render.shader_compiler.source"
+                                                        : "render.shader_compiler.toolchain"},
+                             .severity = diagnostic.severity == ShaderCompilerDiagnosticSeverity::Error     ? DiagnosticSeverity::Error
+                                         : diagnostic.severity == ShaderCompilerDiagnosticSeverity::Warning ? DiagnosticSeverity::Warning
+                                                                                                            : DiagnosticSeverity::Note,
+                             .message = diagnostic.message,
+                             .location = {diagnostic.sourceIdentity, diagnostic.line, diagnostic.column}});
+                    }
+                } catch (const std::bad_alloc &) {
+                    failure.diagnostics.clear();
+                }
+                return failure;
+            }
+
+            [[nodiscard]] std::vector<std::string> DxcArguments(const ShaderEntryPoint &entry, const bool spirv,
+                                                                const std::filesystem::path &output) const {
+                std::vector<std::string>
+                    arguments{"-nologo", "-HV", "2021", "-Ges", "-Zpc", "-T", std::string{StageProfile(entry.stage)}, "-E", entry.name};
+                arguments.push_back(invocation_.target.enableFastMath ? "-ffinite-math-only" : "-Gis");
+                arguments.push_back(invocation_.target.optimization == ShaderOptimizationLevel::Disabled ? "-Od"
+                                    : invocation_.target.optimization == ShaderOptimizationLevel::Size   ? "-O1"
+                                                                                                         : "-O3");
+                for (const ShaderCompilerDefine &define : invocation_.defines) {
+                    arguments.emplace_back("-D");
+                    arguments.push_back(define.name + "=" + define.value);
+                }
+                if (spirv)
+                    arguments.insert(arguments.end(), {"-spirv", "-fspv-target-env=vulkan1.3", "-fvk-use-gl-layout"});
+                arguments.insert(arguments.end(), {"-Fo", output.string(), sourcePath_.string()});
+                return arguments;
+            }
+
+            [[nodiscard]] Result<void> CompileSpirvRoute(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
+                                                         const std::size_t index) {
+                const std::string stem = "stage-" + std::to_string(index);
+                const std::filesystem::path spirvPath = scratch_.Path() / (stem + ".spv");
+                if (auto compiled = Run(dxc, DxcArguments(entry, true, spirvPath)); compiled.HasError())
+                    return compiled;
+                const ShaderCompilerToolInstallation *validator = Lookup(ShaderCompilerTool::SpirvTools);
+                if (validator == nullptr)
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+                if (auto validated = Run(*validator, {"--target-env", "vulkan1.3", spirvPath.string()}); validated.HasError())
+                    return validated;
+                auto spirv =
+                    ReadBoundedFile(spirvPath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (spirv.HasError())
+                    return Result<void>::Failure(std::move(spirv).ErrorValue());
+                if (!IsSpirV(spirv.Value()))
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+
+                const ShaderTargetBackend backend = invocation_.target.requirement.backend;
+                Result<void> routed = backend == ShaderTargetBackend::Vulkan   ? StoreVulkan(entry, std::move(spirv).Value())
+                                      : backend == ShaderTargetBackend::OpenGL ? CompileOpenGLRoute(entry, stem, spirvPath)
+                                                                               : CompileMetalRoute(entry, stem, spirvPath);
+                if (routed.HasError())
+                    return routed;
+                return CompileSpirvDebug(dxc, entry, stem);
+            }
+
+            [[nodiscard]] Result<void> StoreVulkan(const ShaderEntryPoint &entry, std::vector<std::uint8_t> spirv) {
+                payloadStages_.push_back({entry.stage, entry.name, std::move(spirv)});
+                return Result<void>::Success();
+            }
+
+            [[nodiscard]] Result<void> CompileOpenGLRoute(const ShaderEntryPoint &entry, const std::string &stem,
+                                                          const std::filesystem::path &spirvPath) {
+                const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
+                if (translator == nullptr)
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+                const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
+                if (auto translated =
+                        Run(*translator, {spirvPath.string(), "--output", nativePath.string(), "--entry", entry.name, "--stage",
+                                          std::string{StageName(entry.stage)}, "--version", "410", "--no-es", "--no-420pack-extension"});
+                    translated.HasError())
+                    return translated;
+                auto native =
+                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (native.HasError())
+                    return Result<void>::Failure(std::move(native).ErrorValue());
+                if (!IsGlsl410(native.Value()))
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+                payloadStages_.push_back({entry.stage, entry.name, std::move(native).Value()});
+                return Result<void>::Success();
+            }
+
+            [[nodiscard]] Result<void> CompileMetalRoute(const ShaderEntryPoint &entry, const std::string &stem,
+                                                         const std::filesystem::path &spirvPath) {
+                const ShaderCompilerToolInstallation *translator = Lookup(ShaderCompilerTool::SpirvCross);
+                const ShaderCompilerToolInstallation *metal = Lookup(ShaderCompilerTool::AppleMetal);
+                if (translator == nullptr || metal == nullptr)
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+                const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
+                if (auto translated = Run(*translator, {spirvPath.string(), "--output", nativePath.string(), "--entry", entry.name,
+                                                        "--stage", std::string{StageName(entry.stage)}, "--msl", "--msl-version", "20400"});
+                    translated.HasError())
+                    return translated;
+                auto native =
+                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (native.HasError())
+                    return Result<void>::Failure(std::move(native).ErrorValue());
+                const std::filesystem::path airPath = scratch_.Path() / (stem + ".air");
+                if (auto compiled = Run(*metal, {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0", "-c",
+                                                 nativePath.string(), "-o", airPath.string()});
+                    compiled.HasError())
+                    return compiled;
+                const std::filesystem::path libraryPath = scratch_.Path() / (stem + ".metallib");
+                if (auto linked = Run(*metal, {"-sdk", "macosx", "metallib", airPath.string(), "-o", libraryPath.string()});
+                    linked.HasError())
+                    return linked;
+                auto library =
+                    ReadBoundedFile(libraryPath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (library.HasError())
+                    return Result<void>::Failure(std::move(library).ErrorValue());
+                if (library.Value().size() < 4U || library.Value()[0] != 'M' || library.Value()[1] != 'T' || library.Value()[2] != 'L' ||
+                    library.Value()[3] != 'B')
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+                payloadStages_.push_back({entry.stage, entry.name, std::move(library).Value()});
+                return Result<void>::Success();
+            }
+
+            [[nodiscard]] Result<void> CompileSpirvDebug(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
+                                                         const std::string &stem) {
+                if (!invocation_.target.emitDebugInformation)
+                    return Result<void>::Success();
+                const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug");
+                std::vector<std::string> arguments = DxcArguments(entry, true, debugPath);
+                const auto optimization = std::ranges::find_if(arguments, [](const std::string &argument) {
+                    return argument == "-O1" || argument == "-O3";
+                });
+                if (optimization != arguments.end())
+                    *optimization = "-Od";
+                arguments.insert(arguments.end() - 3, {"-Zi", "-Qembed_debug"});
+                if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
+                    return compiled;
+                auto debug = ReadBoundedFile(debugPath, invocation_.limits.maximumDebugPayloadBytes,
+                                             ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (debug.HasError())
+                    return Result<void>::Failure(std::move(debug).ErrorValue());
+                if (!IsSpirV(debug.Value()))
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+                debugStages_.push_back({entry.stage, entry.name, std::move(debug).Value()});
+                return Result<void>::Success();
+            }
+
+            [[nodiscard]] Result<void> CompileD3D12Route(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
+                                                         const std::size_t index) {
+                const std::string stem = "stage-" + std::to_string(index);
+                const std::filesystem::path nativePath = scratch_.Path() / (stem + ".native");
+                if (auto compiled = Run(dxc, DxcArguments(entry, false, nativePath)); compiled.HasError())
+                    return compiled;
+                const ShaderCompilerToolInstallation *validator = Lookup(ShaderCompilerTool::DxilValidator);
+                if (validator == nullptr)
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
+                if (auto validated = Run(*validator, {nativePath.string()}); validated.HasError())
+                    return validated;
+                auto native =
+                    ReadBoundedFile(nativePath, invocation_.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (native.HasError())
+                    return Result<void>::Failure(std::move(native).ErrorValue());
+                if (!IsDxil(native.Value()))
+                    return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
+                payloadStages_.push_back({entry.stage, entry.name, std::move(native).Value()});
+                return CompileD3D12Debug(dxc, entry, stem);
+            }
+
+            [[nodiscard]] Result<void> CompileD3D12Debug(const ShaderCompilerToolInstallation &dxc, const ShaderEntryPoint &entry,
+                                                         const std::string &stem) {
+                if (!invocation_.target.emitDebugInformation)
+                    return Result<void>::Success();
+                const std::filesystem::path debugPath = scratch_.Path() / (stem + ".debug.dxil");
+                const std::filesystem::path pdbPath = scratch_.Path() / (stem + ".pdb");
+                std::vector<std::string> arguments = DxcArguments(entry, false, debugPath);
+                const auto optimization = std::ranges::find_if(arguments, [](const std::string &argument) {
+                    return argument == "-O1" || argument == "-O3";
+                });
+                if (optimization != arguments.end())
+                    *optimization = "-Od";
+                arguments.insert(arguments.end() - 3, {"-Zi", "-Fd", pdbPath.string()});
+                if (auto compiled = Run(dxc, std::move(arguments)); compiled.HasError())
+                    return compiled;
+                auto pdb =
+                    ReadBoundedFile(pdbPath, invocation_.limits.maximumDebugPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                if (pdb.HasError())
+                    return Result<void>::Failure(std::move(pdb).ErrorValue());
+                debugStages_.push_back({entry.stage, entry.name, std::move(pdb).Value()});
+                return Result<void>::Success();
+            }
+
+            [[nodiscard]] Result<ShaderCompilerAdapterOutput> CompileNullRoute() {
+                std::vector<ToolArtifactRecord> records;
+                try {
+                    records.reserve(invocation_.manifest.entryPoints.size());
+                    for (const ShaderEntryPoint &entry : invocation_.manifest.entryPoints) {
+                        std::vector<std::uint8_t> bytes;
+                        bytes.insert(bytes.end(), invocation_.artifactKey.bytes.begin(), invocation_.artifactKey.bytes.end());
+                        bytes.insert(bytes.end(), entry.name.begin(), entry.name.end());
+                        records.push_back({entry.stage, entry.name, std::move(bytes)});
+                    }
+                } catch (const std::bad_alloc &) {
+                    return Failure(ShaderCompilerPipelineErrors::ToolOutputInvalid);
+                }
+                auto payload = PackageStages(invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat, records,
+                                             invocation_.limits.maximumPayloadBytes);
+                if (payload.HasError())
+                    return Result<ShaderCompilerAdapterOutput>::Failure(std::move(payload).ErrorValue());
+                return Result<ShaderCompilerAdapterOutput>::Success({invocation_.target.requirement.backend,
+                                                                     invocation_.target.requirement.payloadFormat,
+                                                                     std::move(payload).Value(),
+                                                                     {},
+                                                                     std::move(diagnostics_)});
+            }
+
+            [[nodiscard]] Result<ShaderCompilerAdapterOutput> PackageOutput() {
+                auto payload = PackageStages(invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat,
+                                             payloadStages_, invocation_.limits.maximumPayloadBytes);
+                if (payload.HasError())
+                    return Result<ShaderCompilerAdapterOutput>::Failure(std::move(payload).ErrorValue());
+                std::vector<std::uint8_t> debugPayload;
+                if (!debugStages_.empty()) {
+                    auto packagedDebug = PackageStages(invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat,
+                                                       debugStages_, invocation_.limits.maximumDebugPayloadBytes);
+                    if (packagedDebug.HasError())
+                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(packagedDebug).ErrorValue());
+                    debugPayload = std::move(packagedDebug).Value();
+                }
+                return Result<ShaderCompilerAdapterOutput>::Success(
+                    {invocation_.target.requirement.backend, invocation_.target.requirement.payloadFormat, std::move(payload).Value(),
+                     std::move(debugPayload), std::move(diagnostics_)});
+            }
+
+            const ShaderCompilerToolchainConfiguration &configuration_;
+            IExternalProcessRunner &processes_;
+            const ShaderCompilerInvocation &invocation_;
+            const CancellationToken &cancellation_;
+            const ScratchDirectory &scratch_;
+            const std::filesystem::path &sourcePath_;
+            std::vector<ToolArtifactRecord> payloadStages_;
+            std::vector<ToolArtifactRecord> debugStages_;
+            std::vector<ShaderCompilerDiagnostic> diagnostics_;
+            std::size_t diagnosticBytes_{0};
+        };
     }  // namespace
 
     struct ExternalShaderCompilerAdapterState final {
         ShaderCompilerToolchainConfiguration configuration;
-        IExternalProcessRunner *processes{};
+        std::shared_ptr<IExternalProcessRunner> processes;
         std::atomic_uint64_t nextInvocation{1};
-        std::mutex processMutex;
     };
 
     /** @copydoc ApprovedShaderCompilerTools */
@@ -283,12 +622,12 @@ namespace Horo::Render {
 
     /** @copydoc ExternalShaderCompilerAdapter::Create */
     Result<ExternalShaderCompilerAdapter> ExternalShaderCompilerAdapter::Create(ShaderCompilerToolchainConfiguration configuration,
-                                                                                IExternalProcessRunner &processes) {
+                                                                                std::shared_ptr<IExternalProcessRunner> processes) {
         if (!IsSafeIdentity(configuration.hostPlatform) || !configuration.scratchRoot.is_absolute() ||
             configuration.processTimeout <= std::chrono::milliseconds::zero() || configuration.processTimeout > MaximumProcessTimeout ||
             configuration.maximumToolBinaryBytes == 0 || configuration.maximumToolBinaryBytes > HardMaximumToolBinaryBytes ||
             configuration.maximumProcessOutputBytes == 0 || configuration.maximumProcessOutputBytes > HardMaximumProcessOutputBytes ||
-            configuration.tools.size() > 5U)
+            configuration.tools.size() > 5U || processes == nullptr)
             return Result<ExternalShaderCompilerAdapter>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid));
 
         std::error_code error;
@@ -319,7 +658,7 @@ namespace Horo::Render {
         try {
             auto state = std::make_shared<ExternalShaderCompilerAdapterState>();
             state->configuration = std::move(configuration);
-            state->processes = &processes;
+            state->processes = std::move(processes);
             return Result<ExternalShaderCompilerAdapter>::Success(ExternalShaderCompilerAdapter(std::move(state)));
         } catch (const std::bad_alloc &) {
             return Result<ExternalShaderCompilerAdapter>::Failure(MakeError(ShaderCompilerPipelineErrors::AllocationFailed));
@@ -333,31 +672,6 @@ namespace Horo::Render {
             return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolchainConfigurationInvalid));
         if (cancellation.IsCancellationRequested())
             return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
-
-        const auto lookup = [&](const ShaderCompilerTool tool) -> const ShaderCompilerToolInstallation * {
-            const auto expected = std::ranges::find_if(invocation.target.tools, [tool](const ShaderCompilerToolIdentity &identity) {
-                return identity.tool == tool;
-            });
-            if (expected == invocation.target.tools.end())
-                return nullptr;
-            const auto installed = std::ranges::find_if(state_->configuration.tools, [&](const ShaderCompilerToolInstallation &candidate) {
-                return candidate.identity.tool == tool && candidate.identity.release == expected->release &&
-                       candidate.identity.buildDigest == expected->buildDigest;
-            });
-            return installed == state_->configuration.tools.end() ? nullptr : &*installed;
-        };
-
-        for (const ShaderCompilerToolIdentity &required : invocation.target.tools) {
-            const ShaderCompilerToolInstallation *installed = lookup(required.tool);
-            if (installed == nullptr)
-                return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-            auto executable = ReadBoundedFile(installed->executable, state_->configuration.maximumToolBinaryBytes,
-                                              ShaderCompilerPipelineErrors::ToolMissing);
-            if (executable.HasError())
-                return Result<ShaderCompilerAdapterOutput>::Failure(std::move(executable).ErrorValue());
-            if (ComputeSha256(std::as_bytes(std::span{executable.Value()})) != installed->executableDigest)
-                return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolDigestMismatch));
-        }
 
         const std::uint64_t sequence = state_->nextInvocation.fetch_add(1, std::memory_order_relaxed);
         if (sequence == 0)
@@ -379,281 +693,6 @@ namespace Horo::Render {
                 return Result<ShaderCompilerAdapterOutput>::Failure(std::move(written).ErrorValue());
         }
 
-        std::vector<ShaderCompilerDiagnostic> diagnostics;
-        std::size_t diagnosticBytes = 0;
-        const auto run = [&](const ShaderCompilerToolInstallation &tool, std::vector<std::string> arguments) -> Result<void> {
-            if (cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
-            ExternalProcessRequest request;
-            request.executable = tool.executable.string();
-            request.arguments = std::move(arguments);
-            request.workingDirectory = scratch.Path();
-            request.environment.base = ProcessEnvironmentBase::Replace;
-            request.timeout = state_->configuration.processTimeout;
-            request.maximumLineBytes =
-                std::min(invocation.limits.maximumDiagnosticMessageBytes, state_->configuration.maximumProcessOutputBytes);
-            request.onOutput = [&](ProcessOutputLine line) {
-                if (diagnostics.size() >= invocation.limits.maximumDiagnosticsPerTarget ||
-                    diagnosticBytes >= state_->configuration.maximumProcessOutputBytes)
-                    return;
-                line.text = SanitizeLine(std::move(line.text), scratch.Path(), sourcePath);
-                const std::size_t remaining = state_->configuration.maximumProcessOutputBytes - diagnosticBytes;
-                if (line.text.size() > remaining) {
-                    line.text.resize(remaining);
-                    line.truncated = true;
-                }
-                diagnosticBytes += line.text.size();
-                if (!line.text.empty())
-                    diagnostics.push_back(
-                        MakeToolDiagnostic(std::move(line.text), line.truncated, invocation.manifest.sourceIdentity, line.stream));
-            };
-            std::scoped_lock processLock(state_->processMutex);
-            auto result = state_->processes->Run(request, cancellation);
-            if (result.HasError())
-                return Result<void>::Failure(WrapError(ShaderCompilerPipelineErrors::ToolProcessFailed, std::move(result).ErrorValue()));
-            if (result.Value().reason == ProcessTerminationReason::Cancelled || cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(ShaderCompilerPipelineErrors::CancellationRequested));
-            if (result.Value().reason != ProcessTerminationReason::Exited || result.Value().exitCode != 0) {
-                Error failure = MakeError(ShaderCompilerPipelineErrors::ToolProcessFailed);
-                try {
-                    for (const ShaderCompilerDiagnostic &diagnostic : diagnostics) {
-                        failure.diagnostics.push_back(
-                            {.code = DiagnosticCode{diagnostic.category == ShaderCompilerDiagnosticCategory::Source
-                                                        ? "render.shader_compiler.source"
-                                                        : "render.shader_compiler.toolchain"},
-                             .severity = diagnostic.severity == ShaderCompilerDiagnosticSeverity::Error     ? DiagnosticSeverity::Error
-                                         : diagnostic.severity == ShaderCompilerDiagnosticSeverity::Warning ? DiagnosticSeverity::Warning
-                                                                                                            : DiagnosticSeverity::Note,
-                             .message = diagnostic.message,
-                             .location = {diagnostic.sourceIdentity, diagnostic.line, diagnostic.column}});
-                    }
-                } catch (const std::bad_alloc &) {
-                    failure.diagnostics.clear();
-                }
-                return Result<void>::Failure(std::move(failure));
-            }
-            return Result<void>::Success();
-        };
-
-        if (invocation.target.requirement.backend == ShaderTargetBackend::Null) {
-            std::vector<ToolArtifactRecord> records;
-            try {
-                records.reserve(invocation.manifest.entryPoints.size());
-                for (const ShaderEntryPoint &entry : invocation.manifest.entryPoints) {
-                    std::vector<std::uint8_t> bytes;
-                    bytes.insert(bytes.end(), invocation.artifactKey.bytes.begin(), invocation.artifactKey.bytes.end());
-                    bytes.insert(bytes.end(), entry.name.begin(), entry.name.end());
-                    records.push_back({entry.stage, entry.name, std::move(bytes)});
-                }
-            } catch (const std::bad_alloc &) {
-                return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-            }
-            auto payload = PackageStages(invocation.target.requirement.backend, invocation.target.requirement.payloadFormat, records,
-                                         invocation.limits.maximumPayloadBytes);
-            if (payload.HasError())
-                return Result<ShaderCompilerAdapterOutput>::Failure(std::move(payload).ErrorValue());
-            return Result<ShaderCompilerAdapterOutput>::Success({invocation.target.requirement.backend,
-                                                                 invocation.target.requirement.payloadFormat,
-                                                                 std::move(payload).Value(),
-                                                                 {},
-                                                                 std::move(diagnostics)});
-        }
-
-        const ShaderCompilerToolInstallation *dxc = lookup(ShaderCompilerTool::Dxc);
-        if (dxc == nullptr)
-            return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-
-        std::vector<ToolArtifactRecord> payloadStages;
-        std::vector<ToolArtifactRecord> debugStages;
-        try {
-            payloadStages.reserve(invocation.manifest.entryPoints.size());
-            debugStages.reserve(invocation.manifest.entryPoints.size());
-        } catch (const std::bad_alloc &) {
-            return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-        }
-
-        for (std::size_t index = 0; index < invocation.manifest.entryPoints.size(); ++index) {
-            const ShaderEntryPoint &entry = invocation.manifest.entryPoints[index];
-            const std::string stem = "stage-" + std::to_string(index);
-            const std::filesystem::path nativePath = scratch.Path() / (stem + ".native");
-            const std::filesystem::path spirvPath = scratch.Path() / (stem + ".spv");
-            const std::filesystem::path debugPath = scratch.Path() / (stem + ".debug");
-            std::vector<std::string>
-                dxcArguments{"-nologo", "-HV", "2021", "-Ges", "-Zpc", "-T", std::string{StageProfile(entry.stage)}, "-E", entry.name};
-            dxcArguments.push_back(invocation.target.enableFastMath ? "-ffinite-math-only" : "-Gis");
-            dxcArguments.push_back(invocation.target.optimization == ShaderOptimizationLevel::Disabled ? "-Od"
-                                   : invocation.target.optimization == ShaderOptimizationLevel::Size   ? "-O1"
-                                                                                                       : "-O3");
-            for (const ShaderCompilerDefine &define : invocation.defines) {
-                dxcArguments.emplace_back("-D");
-                dxcArguments.push_back(define.name + "=" + define.value);
-            }
-
-            const bool spirvRoute = invocation.target.requirement.backend != ShaderTargetBackend::D3D12;
-            if (spirvRoute) {
-                dxcArguments.insert(dxcArguments.end(), {"-spirv", "-fspv-target-env=vulkan1.3", "-fvk-use-gl-layout"});
-                dxcArguments.insert(dxcArguments.end(), {"-Fo", spirvPath.string(), sourcePath.string()});
-            } else {
-                dxcArguments.insert(dxcArguments.end(), {"-Fo", nativePath.string(), sourcePath.string()});
-            }
-            if (auto compiled = run(*dxc, std::move(dxcArguments)); compiled.HasError())
-                return Result<ShaderCompilerAdapterOutput>::Failure(std::move(compiled).ErrorValue());
-
-            if (spirvRoute) {
-                const ShaderCompilerToolInstallation *validator = lookup(ShaderCompilerTool::SpirvTools);
-                if (validator == nullptr)
-                    return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                if (auto validated = run(*validator, {"--target-env", "vulkan1.3", spirvPath.string()}); validated.HasError())
-                    return Result<ShaderCompilerAdapterOutput>::Failure(std::move(validated).ErrorValue());
-                auto spirv =
-                    ReadBoundedFile(spirvPath, invocation.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                if (spirv.HasError())
-                    return Result<ShaderCompilerAdapterOutput>::Failure(std::move(spirv).ErrorValue());
-                if (!IsSpirV(spirv.Value()))
-                    return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-
-                if (invocation.target.requirement.backend == ShaderTargetBackend::Vulkan) {
-                    payloadStages.push_back({entry.stage, entry.name, std::move(spirv).Value()});
-                } else {
-                    const ShaderCompilerToolInstallation *translator = lookup(ShaderCompilerTool::SpirvCross);
-                    if (translator == nullptr)
-                        return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                    std::vector<std::string> crossArguments{spirvPath.string(),
-                                                            "--output",
-                                                            nativePath.string(),
-                                                            "--entry",
-                                                            entry.name,
-                                                            "--stage",
-                                                            std::string{StageName(entry.stage)}};
-                    if (invocation.target.requirement.backend == ShaderTargetBackend::OpenGL)
-                        crossArguments.insert(crossArguments.end(), {"--version", "410", "--no-es", "--no-420pack-extension"});
-                    else
-                        crossArguments.insert(crossArguments.end(), {"--msl", "--msl-version", "20400"});
-                    if (auto translated = run(*translator, std::move(crossArguments)); translated.HasError())
-                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(translated).ErrorValue());
-                    auto native =
-                        ReadBoundedFile(nativePath, invocation.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                    if (native.HasError())
-                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(native).ErrorValue());
-                    if (invocation.target.requirement.backend == ShaderTargetBackend::OpenGL) {
-                        if (!IsGlsl410(native.Value()))
-                            return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                        payloadStages.push_back({entry.stage, entry.name, std::move(native).Value()});
-                    } else {
-                        const ShaderCompilerToolInstallation *metal = lookup(ShaderCompilerTool::AppleMetal);
-                        if (metal == nullptr)
-                            return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                        const std::filesystem::path airPath = scratch.Path() / (stem + ".air");
-                        if (auto metalCompile = run(*metal, {"-sdk", "macosx", "metal", "-std=macos-metal2.4", "-mmacosx-version-min=14.0",
-                                                             "-c", nativePath.string(), "-o", airPath.string()});
-                            metalCompile.HasError())
-                            return Result<ShaderCompilerAdapterOutput>::Failure(std::move(metalCompile).ErrorValue());
-                        const std::filesystem::path libraryPath = scratch.Path() / (stem + ".metallib");
-                        if (auto linked = run(*metal, {"-sdk", "macosx", "metallib", airPath.string(), "-o", libraryPath.string()});
-                            linked.HasError())
-                            return Result<ShaderCompilerAdapterOutput>::Failure(std::move(linked).ErrorValue());
-                        auto library = ReadBoundedFile(libraryPath, invocation.limits.maximumPayloadBytes,
-                                                       ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                        if (library.HasError())
-                            return Result<ShaderCompilerAdapterOutput>::Failure(std::move(library).ErrorValue());
-                        if (library.Value().size() < 4U || library.Value()[0] != 'M' || library.Value()[1] != 'T' ||
-                            library.Value()[2] != 'L' || library.Value()[3] != 'B')
-                            return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                        payloadStages.push_back({entry.stage, entry.name, std::move(library).Value()});
-                    }
-                }
-
-                if (invocation.target.emitDebugInformation) {
-                    std::vector<std::string> debugArguments{"-nologo",
-                                                            "-HV",
-                                                            "2021",
-                                                            "-Ges",
-                                                            "-Zpc",
-                                                            "-T",
-                                                            std::string{StageProfile(entry.stage)},
-                                                            "-E",
-                                                            entry.name,
-                                                            invocation.target.enableFastMath ? "-ffinite-math-only" : "-Gis",
-                                                            "-Od",
-                                                            "-Zi",
-                                                            "-Qembed_debug",
-                                                            "-spirv",
-                                                            "-fspv-target-env=vulkan1.3",
-                                                            "-fvk-use-gl-layout"};
-                    for (const ShaderCompilerDefine &define : invocation.defines) {
-                        debugArguments.emplace_back("-D");
-                        debugArguments.push_back(define.name + "=" + define.value);
-                    }
-                    debugArguments.insert(debugArguments.end(), {"-Fo", debugPath.string(), sourcePath.string()});
-                    if (auto debugCompiled = run(*dxc, std::move(debugArguments)); debugCompiled.HasError())
-                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(debugCompiled).ErrorValue());
-                    auto debug = ReadBoundedFile(debugPath, invocation.limits.maximumDebugPayloadBytes,
-                                                 ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                    if (debug.HasError())
-                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(debug).ErrorValue());
-                    if (!IsSpirV(debug.Value()))
-                        return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                    debugStages.push_back({entry.stage, entry.name, std::move(debug).Value()});
-                }
-            } else {
-                const ShaderCompilerToolInstallation *validator = lookup(ShaderCompilerTool::DxilValidator);
-                if (validator == nullptr)
-                    return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolMissing));
-                if (auto validated = run(*validator, {nativePath.string()}); validated.HasError())
-                    return Result<ShaderCompilerAdapterOutput>::Failure(std::move(validated).ErrorValue());
-                auto native =
-                    ReadBoundedFile(nativePath, invocation.limits.maximumPayloadBytes, ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                if (native.HasError())
-                    return Result<ShaderCompilerAdapterOutput>::Failure(std::move(native).ErrorValue());
-                if (!IsDxil(native.Value()))
-                    return Result<ShaderCompilerAdapterOutput>::Failure(MakeError(ShaderCompilerPipelineErrors::ToolOutputInvalid));
-                payloadStages.push_back({entry.stage, entry.name, std::move(native).Value()});
-                if (invocation.target.emitDebugInformation) {
-                    const std::filesystem::path debugDxilPath = scratch.Path() / (stem + ".debug.dxil");
-                    const std::filesystem::path pdbPath = scratch.Path() / (stem + ".pdb");
-                    std::vector<std::string> debugArguments{"-nologo",
-                                                            "-HV",
-                                                            "2021",
-                                                            "-Ges",
-                                                            "-Zpc",
-                                                            "-T",
-                                                            std::string{StageProfile(entry.stage)},
-                                                            "-E",
-                                                            entry.name,
-                                                            invocation.target.enableFastMath ? "-ffinite-math-only" : "-Gis",
-                                                            "-Od",
-                                                            "-Zi"};
-                    for (const ShaderCompilerDefine &define : invocation.defines) {
-                        debugArguments.emplace_back("-D");
-                        debugArguments.push_back(define.name + "=" + define.value);
-                    }
-                    debugArguments.insert(debugArguments.end(),
-                                          {"-Fd", pdbPath.string(), "-Fo", debugDxilPath.string(), sourcePath.string()});
-                    if (auto debugCompiled = run(*dxc, std::move(debugArguments)); debugCompiled.HasError())
-                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(debugCompiled).ErrorValue());
-                    auto pdb = ReadBoundedFile(pdbPath, invocation.limits.maximumDebugPayloadBytes,
-                                               ShaderCompilerPipelineErrors::ToolOutputInvalid);
-                    if (pdb.HasError())
-                        return Result<ShaderCompilerAdapterOutput>::Failure(std::move(pdb).ErrorValue());
-                    debugStages.push_back({entry.stage, entry.name, std::move(pdb).Value()});
-                }
-            }
-        }
-
-        auto payload = PackageStages(invocation.target.requirement.backend, invocation.target.requirement.payloadFormat, payloadStages,
-                                     invocation.limits.maximumPayloadBytes);
-        if (payload.HasError())
-            return Result<ShaderCompilerAdapterOutput>::Failure(std::move(payload).ErrorValue());
-        std::vector<std::uint8_t> debugPayload;
-        if (!debugStages.empty()) {
-            auto packagedDebug = PackageStages(invocation.target.requirement.backend, invocation.target.requirement.payloadFormat,
-                                               debugStages, invocation.limits.maximumDebugPayloadBytes);
-            if (packagedDebug.HasError())
-                return Result<ShaderCompilerAdapterOutput>::Failure(std::move(packagedDebug).ErrorValue());
-            debugPayload = std::move(packagedDebug).Value();
-        }
-        return Result<ShaderCompilerAdapterOutput>::Success({invocation.target.requirement.backend,
-                                                             invocation.target.requirement.payloadFormat, std::move(payload).Value(),
-                                                             std::move(debugPayload), std::move(diagnostics)});
+        return CompilerRouteContext{state_->configuration, *state_->processes, invocation, cancellation, scratch, sourcePath}.Compile();
     }
 }  // namespace Horo::Render
