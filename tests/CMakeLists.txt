@@ -1267,6 +1267,11 @@ add_executable(HoroShaderManifestTests
 )
 target_compile_features(HoroShaderManifestTests PRIVATE cxx_std_20)
 target_link_libraries(HoroShaderManifestTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroShaderPermutationTests
+        unit/runtime/renderer/ShaderPermutationTests.cpp
+)
+target_compile_features(HoroShaderPermutationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroShaderPermutationTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
@@ -1867,6 +1872,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroTemporalHistoryTests
         HoroRenderResourceDescriptorTests
         HoroShaderManifestTests
+        HoroShaderPermutationTests
         HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests
