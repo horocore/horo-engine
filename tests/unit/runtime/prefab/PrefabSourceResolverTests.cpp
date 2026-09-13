@@ -111,6 +111,39 @@ namespace Horo::Prefab {
             auto result = snapshot.Resolve(outer, PrefabInstanceId::Create(1).Value(), ResolverLimits(policy));
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == PrefabErrors::ObjectCountExceeded.code.Value());
+
+            policy.maximumObjectCount = 2;
+            policy.maximumNestedPrefabDepth = 1;
+            result = snapshot.Resolve(outer, PrefabInstanceId::Create(1).Value(), ResolverLimits(policy));
+            REQUIRE(result.HasError());
+            REQUIRE(result.ErrorValue().code.Value() == PrefabErrors::HierarchyDepthExceeded.code.Value());
+        }
+
+        TEST_CASE("Prefab source resolver inherits a variant parent hierarchy", "[unit][prefab][resolver][variant]") {
+            const auto base = ResolverAsset(1);
+            const auto variant = ResolverAsset(2);
+            const auto baseRevision = ResolverRevision(1);
+            Assets::AssetRegistry registry;
+            PublishResolverRegistry(registry, {ResolverRecord(base, "assets/prefabs/base.prefab"),
+                                               ResolverRecord(variant, "assets/prefabs/variant.prefab")});
+            PrefabComposition composition{
+                .variantParent = PrefabAssetReference::Create(base).Value(),
+                .variantAuthoredAgainst = baseRevision,
+            };
+            auto snapshot =
+                BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                  {{ResolverDocument(base, {ResolverObject(0), ResolverObject(4, LocalObjectId{0})}),
+                                                    baseRevision},
+                                                   {ResolverDocument(variant, {}, std::move(composition), {base}), ResolverRevision(2)}},
+                                                  ResolverLimits())
+                    .Value();
+
+            const auto candidate = snapshot.Resolve(variant, PrefabInstanceId::Create(3).Value(), ResolverLimits());
+            REQUIRE(candidate.HasValue());
+            CHECK(candidate.Value().RootAsset() == variant);
+            REQUIRE(candidate.Value().Objects().size() == 2);
+            CHECK(candidate.Value().Objects()[0].sourcePrefab == base);
+            CHECK(candidate.Value().Objects()[1].key.object.SourceObject() == LocalObjectId{4});
         }
 
         TEST_CASE("Prefab source resolver rejects malformed cyclic source graphs", "[unit][prefab][resolver][malformed]") {
