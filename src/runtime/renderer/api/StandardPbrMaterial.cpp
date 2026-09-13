@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <new>
 #include <ranges>
 #include <utility>
@@ -19,6 +20,8 @@ namespace Horo::Render {
             ShaderParameterId id;
             std::span<const float> values;
         };
+
+        constexpr std::byte FragmentStage{static_cast<std::uint8_t>(ShaderStageVisibility::Fragment)};
 
         [[nodiscard]] constexpr bool IsKnown(const MaterialAlphaMode mode) noexcept {
             return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(MaterialAlphaMode::Additive);
@@ -33,27 +36,29 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr StandardPbrFeature FeatureForRole(const StandardPbrTextureRole role) noexcept {
+            using enum StandardPbrTextureRole;
+            using enum StandardPbrFeature;
             switch (role) {
-                case StandardPbrTextureRole::Albedo:
-                    return StandardPbrFeature::AlbedoTexture;
-                case StandardPbrTextureRole::MetallicRoughness:
-                    return StandardPbrFeature::MetallicRoughnessTexture;
-                case StandardPbrTextureRole::Normal:
-                    return StandardPbrFeature::NormalTexture;
-                case StandardPbrTextureRole::Occlusion:
-                    return StandardPbrFeature::OcclusionTexture;
-                case StandardPbrTextureRole::Emissive:
-                    return StandardPbrFeature::EmissiveTexture;
-                case StandardPbrTextureRole::Opacity:
-                    return StandardPbrFeature::OpacityTexture;
+                case Albedo:
+                    return AlbedoTexture;
+                case MetallicRoughness:
+                    return MetallicRoughnessTexture;
+                case Normal:
+                    return NormalTexture;
+                case Occlusion:
+                    return OcclusionTexture;
+                case Emissive:
+                    return EmissiveTexture;
+                case Opacity:
+                    return OpacityTexture;
             }
-            return StandardPbrFeature::None;
+            return None;
         }
 
         [[nodiscard]] constexpr bool IsKnownFeatureMask(const StandardPbrFeature features) noexcept {
-            constexpr auto all = StandardPbrFeature::AlbedoTexture | StandardPbrFeature::MetallicRoughnessTexture |
-                                 StandardPbrFeature::NormalTexture | StandardPbrFeature::OcclusionTexture |
-                                 StandardPbrFeature::EmissiveTexture | StandardPbrFeature::OpacityTexture;
+            using enum StandardPbrFeature;
+            constexpr auto all =
+                AlbedoTexture | MetallicRoughnessTexture | NormalTexture | OcclusionTexture | EmissiveTexture | OpacityTexture;
             return (static_cast<std::uint32_t>(features) & ~static_cast<std::uint32_t>(all)) == 0;
         }
 
@@ -130,17 +135,16 @@ namespace Horo::Render {
         [[nodiscard]] const ShaderReflectedParameter *FindParameter(const NormalizedShaderReflection &reflection,
                                                                     const ShaderParameterId id) noexcept {
             const auto found = std::ranges::find(reflection.parameters, id, &ShaderReflectedParameter::id);
-            return found == reflection.parameters.end() ? nullptr : &*found;
+            return found == reflection.parameters.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] Result<std::size_t> ValidatePacking(const NormalizedShaderReflection &reflection,
                                                           const std::span<const ParameterValue> values,
                                                           const StandardPbrMaterialLimits &limits) {
             const auto buffer = std::ranges::find(reflection.bindings, StandardPbrParameterIds::Buffer, &ShaderReflectedBinding::id);
-            constexpr auto fragmentStage = static_cast<std::uint8_t>(ShaderStageVisibility::Fragment);
             if (reflection.interfaceSchemaVersion == 0 || buffer == reflection.bindings.end() || !buffer->active ||
                 buffer->kind != ShaderResourceKind::UniformBuffer || buffer->access != ShaderResourceAccess::ReadOnly ||
-                (static_cast<std::uint8_t>(buffer->stages) & fragmentStage) == 0)
+                (std::byte{static_cast<std::uint8_t>(buffer->stages)} & FragmentStage) == std::byte{0})
                 return Result<std::size_t>::Failure(MakeError(StandardPbrMaterialErrors::ReflectionMismatch));
 
             std::array<std::pair<std::size_t, std::size_t>, 8> occupied{};
