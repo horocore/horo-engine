@@ -13,6 +13,8 @@
 
 namespace Horo::Render {
     namespace {
+        using ShaderValidationDetail::FindSorted;
+        using ShaderValidationDetail::IsKnown;
         constexpr std::uint32_t SupportedManifestSchemaVersion = 1;
         constexpr std::size_t HardMaximumEntryPoints = 16;
         constexpr std::size_t HardMaximumBindings = 1'024;
@@ -61,10 +63,6 @@ namespace Horo::Render {
             return isAlphaOrUnderscore(static_cast<unsigned char>(value.front())) && std::ranges::all_of(value, [&](const char character) {
                 return isIdentifierCharacter(static_cast<unsigned char>(character));
             });
-        }
-
-        template <typename EnumT> [[nodiscard]] constexpr bool IsKnown(const EnumT value, const EnumT last) noexcept {
-            return static_cast<std::underlying_type_t<EnumT>>(value) <= static_cast<std::underlying_type_t<EnumT>>(last);
         }
 
         [[nodiscard]] constexpr ShaderStageVisibility VisibilityFor(const ShaderStage stage) noexcept {
@@ -131,8 +129,7 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] const ShaderResourceBinding *FindBinding(const ShaderManifest &manifest, const ShaderBindingId id) noexcept {
-            const auto found = std::ranges::lower_bound(manifest.bindings, id, {}, &ShaderResourceBinding::id);
-            return found != manifest.bindings.end() && found->id == id ? std::to_address(found) : nullptr;
+            return FindSorted(manifest.bindings, id, &ShaderResourceBinding::id);
         }
 
         [[nodiscard]] Result<void> ValidateParameters(const ShaderManifest &manifest, const ShaderManifestLimits &limits) {
