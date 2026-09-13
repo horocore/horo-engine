@@ -293,8 +293,8 @@ namespace Horo::Render {
                 return Result<void>::Failure(std::move(primaryCount).ErrorValue());
             if (primaryCount.Value() != candidate.bindings.size())
                 return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
-            for (std::size_t index = 0; index < candidate.targetBindings.size(); ++index) {
-                const ShaderTargetBindingMapEntry &mapping = candidate.targetBindings[index];
+            std::size_t index = 0;
+            for (const ShaderTargetBindingMapEntry &mapping : candidate.targetBindings) {
                 const ShaderReflectedBinding *reflection = FindReflectedBinding(candidate, mapping.id);
                 if (reflection == nullptr)
                     return Result<void>::Failure(MakeError(ShaderReflectionErrors::TargetMappingInvalid));
@@ -302,6 +302,7 @@ namespace Horo::Render {
                     return paired;
                 if (auto collision = ValidateNativeBindingCollision(target, candidate, index, *reflection); collision.HasError())
                     return collision;
+                ++index;
             }
             return Result<void>::Success();
         }
