@@ -105,13 +105,14 @@ namespace Horo::Prefab {
         [[nodiscard]] PrefabProviderStatus InspectBehavior(const Gameplay::BehaviorComponent &component,
                                                            const Gameplay::BehaviorDescriptor *descriptor,
                                                            std::span<const Gameplay::BehaviorComponent> siblings) noexcept {
+            using enum PrefabProviderStatus;
             if (descriptor == nullptr)
-                return PrefabProviderStatus::Missing;
+                return Missing;
             if (const std::size_t occurrenceCount = std::ranges::count(siblings, component.typeId, &Gameplay::BehaviorComponent::typeId);
                 component.schemaVersion != descriptor->schemaVersion || !BehaviorFieldsMatch(component, *descriptor) ||
                 (!descriptor->allowMultiple && occurrenceCount > 1))
-                return PrefabProviderStatus::IncompatibleSchema;
-            return PrefabProviderStatus::Current;
+                return IncompatibleSchema;
+            return Current;
         }
 
         [[nodiscard]] Result<void> InspectObjectProviders(const PrefabObjectNode &object, const Gameplay::ComponentRegistry &components,
