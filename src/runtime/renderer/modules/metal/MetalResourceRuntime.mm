@@ -7,7 +7,6 @@
 
 #import <Metal/Metal.h>
 #include <cstring>
-#include <functional>
 #include <limits>
 #include <new>
 #include <string>
@@ -121,10 +120,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool ValidBufferRequest(const bool deviceAvailable, const RenderBufferDescriptor &descriptor,
                                               const std::span<const std::byte> initialData, const RenderMemoryPlacement &placement,
                                               const Result<RenderMemoryCostPlan> &cost) {
-            if (!deviceAvailable || !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) ||
-                cost.HasError())
-                return false;
-            return ValidateMetalResourcePlacement(cost.Value(), placement).HasValue();
+            return deviceAvailable && descriptor.IsValid() && (initialData.empty() || initialData.size() == descriptor.byteSize) &&
+                   cost.HasValue() && ValidateMetalResourcePlacement(cost.Value(), placement).HasValue();
         }
 
         /** @brief Validates one Metal texture creation request against its queried plan. */
@@ -167,6 +164,7 @@ namespace Horo::Render::Detail {
 
         __strong id<MTLDevice> device{nil};
         __strong id<MTLCommandQueue> commandQueue{nil};
+        __strong id<MTLCommandBuffer> lastSubmittedUpload{nil}; /**< Final staging submission drained during teardown. */
         std::unordered_map<PoolKey, HeapRecord, PoolKeyHash> heaps;
         std::unordered_set<MetalBufferInstance *> buffers;
         std::unordered_set<MetalMeshInstance *> meshes;
@@ -236,13 +234,15 @@ namespace Horo::Render::Detail {
             return PlanMetalTextureUpload(descriptor, texelBytes.value_or(0));
         }
 
-        void CommitStagingBlit(const StagingBlit &transfer) const {
+        /** @pre All fallible upload setup has completed; callers return success after this terminal submission step. */
+        void CommitStagingBlit(const StagingBlit &transfer) {
             [transfer.blit endEncoding];
             [transfer.commands commit];
+            lastSubmittedUpload = transfer.commands;
         }
 
         [[nodiscard]] Result<void> UploadBuffer(id<MTLBuffer> buffer, const std::span<const std::byte> data,
-                                                const MetalResourceStorage storage) const {
+                                                const MetalResourceStorage storage) {
             if (data.empty())
                 return Result<void>::Success();
             if (storage == MetalResourceStorage::Shared) {
@@ -265,7 +265,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] Result<void> UploadTexture(id<MTLTexture> texture, const RenderTextureDescriptor &descriptor,
-                                                 const std::span<const std::byte> data) const {
+                                                 const std::span<const std::byte> data) {
             if (data.empty())
                 return Result<void>::Success();
             auto layout = PlanTextureUpload(descriptor);
@@ -297,26 +297,59 @@ namespace Horo::Render::Detail {
             return Result<void>::Success();
         }
 
-        template <typename Instance>
-        [[nodiscard]] Result<std::uint64_t> FinishResident(Result<void> uploaded, Instance *instance, HeapRecord &heap,
-                                                           const RenderMemoryPlacement &placement,
-                                                           std::unordered_set<Instance *> &instances, const char *identityError,
-                                                           const char *trackingError) {
-            if (uploaded.HasError()) {
-                delete instance;
-                DiscardEmptyHeap(placement);
-                return Result<std::uint64_t>::Failure(std::move(uploaded).ErrorValue());
-            }
-            if (instance == nullptr) {
-                DiscardEmptyHeap(placement);
-                return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, identityError));
+        /** @brief Removes a partially realized placed resource and restores its heap accounting. */
+        template <typename Instance, typename Resource>
+        void RollBackResident(Instance *instance, HeapRecord &heap, const RenderMemoryPlacement &placement,
+                              std::unordered_set<Instance *> &instances, Resource Instance::*resource, const bool retained) noexcept {
+            instances.erase(instance);
+            [(instance->*resource) makeAliasable];
+            delete instance;
+            if (retained)
+                static_cast<void>(ReleaseMetalHeapResource(heap.state));
+            DiscardEmptyHeap(placement);
+        }
+
+        /** @brief Publishes one placed resource only after tracking, accounting, and initial upload succeed. */
+        template <typename Instance, typename Resource, typename Upload>
+        [[nodiscard]] Result<std::uint64_t> FinishResident(Instance *instance, HeapRecord &heap, const RenderMemoryPlacement &placement,
+                                                           std::unordered_set<Instance *> &instances, Resource Instance::*resource,
+                                                           Upload &&upload, const char *trackingError) {
+            try {
+                instances.insert(instance);
+            } catch (...) {  // NOSONAR(cpp:S2738) Translate backend-private tracking allocation failures.
+                auto failure = Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
+                RollBackResident(instance, heap, placement, instances, resource, false);
+                return failure;
             }
             if (RetainMetalHeapResource(heap.state).HasError()) {
-                delete instance;
-                DiscardEmptyHeap(placement);
+                RollBackResident(instance, heap, placement, instances, resource, false);
                 return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
             }
-            instances.insert(instance);
+            try {
+                Result<void> uploaded = std::forward<Upload>(upload)();
+                if (uploaded.HasValue())
+                    return Result<std::uint64_t>::Success(Identity(instance));
+                RollBackResident(instance, heap, placement, instances, resource, true);
+                return Result<std::uint64_t>::Failure(std::move(uploaded).ErrorValue());
+            } catch (...) {
+                RollBackResident(instance, heap, placement, instances, resource, true);
+                return Result<std::uint64_t>::Failure(
+                    ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal initial resource upload threw an exception."));
+            }
+        }
+
+        /** @brief Publishes one non-placed native identity with typed allocation-failure translation. */
+        template <typename Instance>
+        [[nodiscard]] Result<std::uint64_t> TrackInstance(Instance *instance, std::unordered_set<Instance *> &instances,
+                                                          const char *trackingError) {
+            if (instance == nullptr)
+                return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
+            try {
+                instances.insert(instance);
+            } catch (...) {  // NOSONAR(cpp:S2738) Translate backend-private tracking allocation failures.
+                delete instance;
+                return Result<std::uint64_t>::Failure(ResourceError(MetalBackendErrors::ResourceCreationFailed, trackingError));
+            }
             return Result<std::uint64_t>::Success(Identity(instance));
         }
 
@@ -388,8 +421,15 @@ namespace Horo::Render::Detail {
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident buffer."));
         }
         auto *instance = new (std::nothrow) MetalBufferInstance{.buffer = buffer, .usage = descriptor.usage, .pool = placement.pool};
-        return impl_->FinishResident(impl_->UploadBuffer(buffer, initialData, storage), instance, *heap.Value(), placement, impl_->buffers,
-                                     "Metal buffer identity allocation failed.", "Metal buffer heap tracking capacity is exhausted.");
+        if (instance == nullptr) {
+            [buffer makeAliasable];
+            impl_->DiscardEmptyHeap(placement);
+            return Result<std::uint64_t>::Failure(
+                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal buffer identity allocation failed."));
+        }
+        return impl_->FinishResident(instance, *heap.Value(), placement, impl_->buffers, &MetalBufferInstance::buffer, [&] {
+            return impl_->UploadBuffer(buffer, initialData, storage);
+        }, "Metal buffer heap tracking capacity is exhausted.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
@@ -404,11 +444,7 @@ namespace Horo::Render::Detail {
         if (validBindings.HasError())
             return Result<std::uint64_t>::Failure(validBindings.ErrorValue());
         auto *instance = new (std::nothrow) MetalMeshInstance{.vertexBuffer = vertex->buffer, .indexBuffer = index->buffer};
-        if (instance == nullptr)
-            return Result<std::uint64_t>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal mesh identity allocation failed."));
-        impl_->meshes.insert(instance);
-        return Result<std::uint64_t>::Success(Identity(instance));
+        return impl_->TrackInstance(instance, impl_->meshes, "Metal mesh identity allocation failed.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateTexture(const RenderTextureDescriptor &descriptor,
@@ -429,9 +465,15 @@ namespace Horo::Render::Detail {
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal failed to allocate a resident texture."));
         }
         auto *instance = new (std::nothrow) MetalTextureInstance{.texture = texture, .descriptor = descriptor, .pool = placement.pool};
-        return impl_->FinishResident(impl_->UploadTexture(texture, descriptor, initialData), instance, *heap.Value(), placement,
-                                     impl_->textures, "Metal texture identity allocation failed.",
-                                     "Metal texture heap tracking capacity is exhausted.");
+        if (instance == nullptr) {
+            [texture makeAliasable];
+            impl_->DiscardEmptyHeap(placement);
+            return Result<std::uint64_t>::Failure(
+                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal texture identity allocation failed."));
+        }
+        return impl_->FinishResident(instance, *heap.Value(), placement, impl_->textures, &MetalTextureInstance::texture, [&] {
+            return impl_->UploadTexture(texture, descriptor, initialData);
+        }, "Metal texture heap tracking capacity is exhausted.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
@@ -459,11 +501,7 @@ namespace Horo::Render::Detail {
                                                                      .format = descriptor.format,
                                                                      .aspect = descriptor.aspect,
                                                                      .usage = source->descriptor.usage};
-        if (instance == nullptr)
-            return Result<std::uint64_t>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal texture-view identity allocation failed."));
-        impl_->textureViews.insert(instance);
-        return Result<std::uint64_t>::Success(Identity(instance));
+        return impl_->TrackInstance(instance, impl_->textureViews, "Metal texture-view identity allocation failed.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateRenderTarget(const RenderTargetDescriptor &descriptor,
@@ -485,11 +523,7 @@ namespace Horo::Render::Detail {
             .colorTexture = color.Value() == nullptr ? nil : color.Value()->texture,
             .depthTexture = depth.Value() == nullptr ? nil : depth.Value()->texture,
         };
-        if (instance == nullptr)
-            return Result<std::uint64_t>::Failure(
-                ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal render-target identity allocation failed."));
-        impl_->renderTargets.insert(instance);
-        return Result<std::uint64_t>::Success(Identity(instance));
+        return impl_->TrackInstance(instance, impl_->renderTargets, "Metal render-target identity allocation failed.");
     }
 
     void MetalResourceRuntime::DestroyBuffer(const std::uint64_t backendInstance) noexcept {
@@ -513,12 +547,15 @@ namespace Horo::Render::Detail {
     }
 
     void MetalResourceRuntime::Shutdown() noexcept {
+        if (impl_->lastSubmittedUpload != nil)
+            [impl_->lastSubmittedUpload waitUntilCompleted];
         DestroyAll(impl_->renderTargets);
         DestroyAll(impl_->textureViews);
         DestroyAll(impl_->meshes);
         DestroyAll(impl_->textures);
         DestroyAll(impl_->buffers);
         impl_->heaps.clear();
+        impl_->lastSubmittedUpload = nil;
         impl_->commandQueue = nil;
         impl_->device = nil;
     }
