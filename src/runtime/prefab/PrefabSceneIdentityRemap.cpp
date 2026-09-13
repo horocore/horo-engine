@@ -61,7 +61,7 @@ namespace Horo::Prefab {
         [[nodiscard]] const PrefabSceneIdentityMapping *FindMapping(const std::span<const PrefabSceneIdentityMapping> mappings,
                                                                     const ExpandedPrefabObjectKey &source) noexcept {
             const auto found = std::ranges::lower_bound(mappings, source, {}, &PrefabSceneIdentityMapping::source);
-            return found != mappings.end() && found->source == source ? std::addressof(*found) : nullptr;
+            return found != mappings.end() && found->source == source ? std::to_address(found) : nullptr;
         }
 
         /** @brief Validates one request's mutually exclusive typed target fields. */
@@ -70,14 +70,15 @@ namespace Horo::Prefab {
             const bool component = request.componentTarget.has_value();
             const bool behavior = request.behaviorTarget.has_value();
             const bool asset = request.assetTarget.has_value();
+            using enum PrefabReferenceKind;
             switch (request.kind) {
-                case PrefabReferenceKind::Entity:
+                case Entity:
                     return object && !component && !behavior && !asset;
-                case PrefabReferenceKind::Component:
+                case Component:
                     return object && component && request.componentTarget->IsValid() && !behavior && !asset;
-                case PrefabReferenceKind::Behavior:
+                case Behavior:
                     return object && !component && behavior && request.behaviorTarget->IsValid() && !asset;
-                case PrefabReferenceKind::Asset:
+                case Asset:
                     return !object && !component && !behavior && asset && request.assetTarget->IsValid();
             }
             return false;
@@ -102,8 +103,8 @@ namespace Horo::Prefab {
                         return Result<std::vector<RewrittenPrefabReference>>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
                     target = mappedTarget->second;
                 }
-                rewritten.push_back(
-                    {owner->second, request.kind, target, request.componentTarget, request.behaviorTarget, request.assetTarget});
+                rewritten.emplace_back(owner->second, request.kind, target, request.componentTarget, request.behaviorTarget,
+                                       request.assetTarget);
             }
             return Result<std::vector<RewrittenPrefabReference>>::Success(std::move(rewritten));
         }
@@ -158,9 +159,9 @@ namespace Horo::Prefab {
         lookup.reserve(candidate.Objects().size());
         for (const ResolvedPrefabObject &object : candidate.Objects()) {
             const PrefabSceneObjectId scene = HashIdentity(object.key);
-            if (!identities.insert(scene.value).second || !lookup.emplace(object.key, scene).second)
+            if (!identities.insert(scene.value).second || !lookup.try_emplace(object.key, scene).second)
                 return Result<PrefabSceneIdentityMap>::Failure(MakeError(PrefabErrors::IdentityCollision));
-            mappings.push_back({object.key, object.sourcePrefab, scene});
+            mappings.emplace_back(object.key, object.sourcePrefab, scene);
         }
         std::ranges::sort(mappings, {}, &PrefabSceneIdentityMapping::source);
 
