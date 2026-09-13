@@ -478,6 +478,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCapabilities.cpp
         physics/PhysicsCollisionSchema.cpp
         physics/PhysicsConstraintDescriptor.cpp
+        physics/PhysicsConvexHullCook.cpp
+        physics/PhysicsConvexHullArtifact.cpp
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
         physics/PhysicsDeterminismPolicy.cpp
