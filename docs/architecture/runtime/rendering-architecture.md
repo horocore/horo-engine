@@ -444,6 +444,18 @@ provider contract. Effect denoisers are the ADR-039/040 `DenoisingProvider`: the
 effect-specific signal/guide/history schemas and never become global
 reconstruction history.
 
+`Horo/Runtime/Render/MotionHistory.h` is the concrete backend-neutral extraction
+boundary for motion-vector inputs. Its owner-thread tracker canonically pairs
+stable render-object identities and unjittered camera transforms across
+successfully published real frames, while carrying current/previous normalized
+projection jitter separately. New objects and every reset use current-equals-
+previous effective transforms. Depth is positive linear view depth in meters;
+motion is normalized `previousUv - currentUv`; optional reactive/transparency
+masks remain typed generation-checked resources. Compatibility changes, camera
+cuts, missing predecessors, skipped work, suspension, invalid input, and
+explicit/provider requests produce named reset causes without backend fallback;
+cancelled attempts do not advance the last published state.
+
 Simulation, real rendering and presentation have distinct IDs.
 `ScenePresentationEpoch` groups all views of one scene frame;
 `RealRenderFrameId` is per `RenderViewId`. Frame generation

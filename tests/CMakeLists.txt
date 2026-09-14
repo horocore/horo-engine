@@ -1247,6 +1247,12 @@ add_executable(HoroTemporalHistoryTests
 )
 target_compile_features(HoroTemporalHistoryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTemporalHistoryTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroMotionHistoryTests
+        unit/runtime/renderer/MotionHistoryTests.cpp
+)
+target_compile_features(HoroMotionHistoryTests PRIVATE cxx_std_20)
+target_include_directories(HoroMotionHistoryTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroMotionHistoryTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroRenderSubmissionTests
         unit/runtime/renderer/RenderSubmissionTests.cpp
 )
@@ -2042,6 +2048,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRenderGraphTests
         HoroRenderGraphLifetimeTests
         HoroTemporalHistoryTests
+        HoroMotionHistoryTests
         HoroRenderResourceDescriptorTests
         HoroPipelineCacheTests
         HoroShaderManifestTests
