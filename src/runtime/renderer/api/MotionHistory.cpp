@@ -119,13 +119,14 @@ namespace Horo::Render {
     }  // namespace
 
     /** @copydoc RenderMotionHistoryTracker::RenderMotionHistoryTracker */
-    RenderMotionHistoryTracker::RenderMotionHistoryTracker(RenderMotionHistoryLimits limits, std::vector<PublishedObject> objects) noexcept
-        : m_limits(limits), m_ownerThread(std::this_thread::get_id()), m_objects(std::move(objects)) {}
+    RenderMotionHistoryTracker::RenderMotionHistoryTracker(RenderMotionHistoryLimits limits, std::vector<PublishedObject> objects,
+                                                           std::vector<RenderMotionObjectSample> scratch) noexcept
+        : m_limits(limits), m_ownerThread(std::this_thread::get_id()), m_objects(std::move(objects)), m_scratch(std::move(scratch)) {}
 
     /** @copydoc RenderMotionHistoryTracker::RenderMotionHistoryTracker */
     RenderMotionHistoryTracker::RenderMotionHistoryTracker(RenderMotionHistoryTracker &&other) noexcept
         : m_limits(other.m_limits), m_ownerThread(other.m_ownerThread), m_objects(std::move(other.m_objects)),
-          m_compatibility(std::move(other.m_compatibility)), m_camera(other.m_camera),
+          m_scratch(std::move(other.m_scratch)), m_compatibility(std::move(other.m_compatibility)), m_camera(other.m_camera),
           m_lastPublishedFrame(std::exchange(other.m_lastPublishedFrame, 0)), m_nextAttempt(std::exchange(other.m_nextAttempt, 1)),
           m_pending(std::move(other.m_pending)), m_stopped(std::exchange(other.m_stopped, true)) {}
 
@@ -137,6 +138,7 @@ namespace Horo::Render {
         m_limits = other.m_limits;
         m_ownerThread = other.m_ownerThread;
         m_objects = std::move(other.m_objects);
+        m_scratch = std::move(other.m_scratch);
         m_compatibility = std::move(other.m_compatibility);
         m_camera = other.m_camera;
         m_lastPublishedFrame = std::exchange(other.m_lastPublishedFrame, 0);
@@ -157,8 +159,10 @@ namespace Horo::Render {
             return Result<RenderMotionHistoryTracker>::Failure(MakeError(MotionHistoryErrors::InvalidLimits));
         try {
             std::vector<PublishedObject> objects;
+            std::vector<RenderMotionObjectSample> scratch;
             objects.reserve(limits.maxObjects);
-            return Result<RenderMotionHistoryTracker>::Success(RenderMotionHistoryTracker(limits, std::move(objects)));
+            scratch.reserve(limits.maxObjects);
+            return Result<RenderMotionHistoryTracker>::Success(RenderMotionHistoryTracker(limits, std::move(objects), std::move(scratch)));
         } catch (const std::bad_alloc &) {
             return Result<RenderMotionHistoryTracker>::Failure(MakeError(MotionHistoryErrors::AllocationFailed));
         }
@@ -192,8 +196,10 @@ namespace Horo::Render {
         frame.resetCause = reset;
         frame.objects.reserve(current.size());
 
+        auto previous = m_objects.begin();
         for (const RenderMotionObjectSample &sample : current) {
-            const auto previous = std::ranges::lower_bound(m_objects, sample.object, {}, &PublishedObject::object);
+            while (previous != m_objects.end() && previous->object < sample.object)
+                ++previous;
             const bool hasPrevious = historyValid && previous != m_objects.end() && previous->object == sample.object;
             frame.objects.push_back(
                 {sample.object, sample.localToWorld, hasPrevious ? previous->localToWorld : sample.localToWorld, hasPrevious});
@@ -211,12 +217,12 @@ namespace Horo::Render {
             return Result<RenderMotionFrame>::Failure(MakeError(MotionHistoryErrors::InvalidRequest));
 
         try {
-            std::vector<RenderMotionObjectSample> current(request.objects.begin(), request.objects.end());
-            std::ranges::sort(current, {}, &RenderMotionObjectSample::object);
-            if (std::ranges::adjacent_find(current, {}, &RenderMotionObjectSample::object) != current.end())
+            m_scratch.assign(request.objects.begin(), request.objects.end());
+            std::ranges::sort(m_scratch, {}, &RenderMotionObjectSample::object);
+            if (std::ranges::adjacent_find(m_scratch, {}, &RenderMotionObjectSample::object) != m_scratch.end())
                 return Result<RenderMotionFrame>::Failure(MakeError(MotionHistoryErrors::InvalidRequest));
 
-            RenderMotionFrame frame = BuildFrame(request, current, ResolveReset(m_compatibility, request, m_lastPublishedFrame));
+            RenderMotionFrame frame = BuildFrame(request, m_scratch, ResolveReset(m_compatibility, request, m_lastPublishedFrame));
             m_pending = PendingState{frame};
             return Result<RenderMotionFrame>::Success(std::move(frame));
         } catch (const std::bad_alloc &) {
@@ -232,11 +238,11 @@ namespace Horo::Render {
             return Result<void>::Failure(MakeError(MotionHistoryErrors::InvalidFrame));
         if (publish) {
             try {
-                std::vector<PublishedObject> replacement;
-                replacement.reserve(frame.objects.size());
+                if (m_objects.capacity() < frame.objects.size())
+                    m_objects.reserve(m_limits.maxObjects);
+                m_objects.clear();
                 for (const RenderMotionObjectPair &object : frame.objects)
-                    replacement.push_back({object.object, object.currentLocalToWorld});
-                m_objects = std::move(replacement);
+                    m_objects.push_back({object.object, object.currentLocalToWorld});
                 m_compatibility = frame.compatibility;
                 m_camera = {frame.camera.currentUnjitteredViewProjection, frame.camera.currentJitterUv};
                 m_lastPublishedFrame = frame.frameId;
@@ -272,6 +278,7 @@ namespace Horo::Render {
             return;
         m_pending.reset();
         m_objects.clear();
+        m_scratch.clear();
         m_compatibility.reset();
         m_lastPublishedFrame = 0;
         m_stopped = true;

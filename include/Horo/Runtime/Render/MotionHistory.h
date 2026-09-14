@@ -203,7 +203,8 @@ namespace Horo::Render {
             RenderMotionFrame frame;
         };
 
-        RenderMotionHistoryTracker(RenderMotionHistoryLimits limits, std::vector<PublishedObject> objects) noexcept;
+        RenderMotionHistoryTracker(RenderMotionHistoryLimits limits, std::vector<PublishedObject> objects,
+                                   std::vector<RenderMotionObjectSample> scratch) noexcept;
         [[nodiscard]] Result<void> ValidateThreadAndState() const;
         /** @brief Builds canonical effective motion pairs from already validated current samples. */
         [[nodiscard]] RenderMotionFrame BuildFrame(const RenderMotionFrameRequest &request,
@@ -215,6 +216,7 @@ namespace Horo::Render {
         RenderMotionHistoryLimits m_limits;
         std::thread::id m_ownerThread;
         std::vector<PublishedObject> m_objects;
+        std::vector<RenderMotionObjectSample> m_scratch;
         std::optional<TemporalHistoryCompatibility> m_compatibility;
         RenderMotionCameraSample m_camera;
         std::uint64_t m_lastPublishedFrame{0};

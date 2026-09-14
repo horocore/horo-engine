@@ -25,7 +25,7 @@ namespace Horo::Render::MotionHistoryErrors {
                                     "Provide a finite non-zero capacity within the documented maximum.");
     const ErrorCodeDescriptor InvalidRequest =
         Detail::MakeErrorDescriptor(Domain, "render.motion_history.request_invalid", ErrorSeverity::Error,
-                                    "The motion-history frame request is incomplete, unordered, duplicated, or over capacity.",
+                                    "The motion-history frame request is incomplete, duplicated, or over capacity.",
                                     "Provide complete compatibility and semantic inputs with canonical unique object identities.");
     const ErrorCodeDescriptor TrackerStopped =
         Detail::MakeErrorDescriptor(Domain, "render.motion_history.tracker_stopped", ErrorSeverity::Error,
