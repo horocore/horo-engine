@@ -163,6 +163,30 @@ Full registries distinguish temporarily occupied capacity from terminal generati
 exhaustion with stable typed diagnostics. Native solver IDs, pointers and leases
 remain values of the target-private mapping and never become public handle fields.
 
+Constraint requests use a generation-checked `ConstraintHandle` only after the
+owner-thread structural safe point publishes them. Their endpoints are explicit:
+the first is a live body-local frame and the second is either another distinct
+body-local frame or a world frame bound to the receiving world's current origin
+epoch. Anchor poses are relative to body poses, not native centers of mass, and no
+display name, traversal order, native ID or solver-owned pointer participates in
+identity. World anchors are transient runtime intent; origin rebasing must rebind
+or reject queued intent rather than treating numeric coordinates as durable identity.
+
+`PhysicsFixedConstraint` and `PhysicsDistanceConstraint` are the initial typed
+parameter vocabulary. Validation proves representation and owner consistency only;
+admission separately requires exact-revision `PhysicsCapability::Constraints`
+evidence before body resolution, lease retention or native creation. Unsupported,
+temporarily unavailable and stale evidence remain distinct typed failures. Hinge,
+slider, cone-twist, six-DOF, motor, break and spring behavior must gain typed policy
+and qualification rather than being approximated by fixed or distance constraints.
+
+Constraint solving inherits the immutable world's `PhysicsStepPolicy`. CanonicalV1
+uses the qualified 10 velocity and 2 position iterations for the complete world;
+individual constraints cannot override iteration counts. This keeps work budgets,
+deterministic fingerprints and cross-backend behavior explicit. A future per-body
+or per-constraint override requires a new typed capability/profile and qualification
+matrix; passing native iteration fields through the descriptor is unsupported.
+
 Portable rigid-body intent stores motion, mass policy and initial velocities but no
 runtime handle, world pose or native state. Scene conversion combines validated
 intent with an admitted shape and world-frame pose into a runtime creation

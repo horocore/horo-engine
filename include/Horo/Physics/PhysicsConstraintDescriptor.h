@@ -10,6 +10,8 @@
 #include <variant>
 
 namespace Horo::Physics {
+    struct PhysicsCapabilities;
+
     /** @brief Non-owning body endpoint and anchor frame relative to that body's pose, not its center of mass. */
     struct PhysicsBodyAnchor final {
         BodyHandle body;
@@ -64,4 +66,17 @@ namespace Horo::Physics {
      */
     [[nodiscard]] Result<void> ValidatePhysicsConstraintDescriptor(const PhysicsConstraintDescriptor &descriptor,
                                                                    PhysicsWorldId expectedWorld);
+
+    /**
+     * @brief Validates one structural request and requires explicit constraint capability evidence.
+     * @param descriptor Immutable backend-neutral constraint request.
+     * @param expectedWorld Published world generation receiving the request.
+     * @param capabilities Exact immutable capability snapshot retained for this admission attempt.
+     * @param expectedRevision Non-zero capability revision retained by the caller.
+     * @return Descriptor/identity failure first, otherwise stale, unsupported or unavailable capability evidence.
+     * @pre Control/owner-thread use; diagnostics may allocate.
+     * @post No handle is published, body lease retained, native constraint created or world state mutated.
+     */
+    [[nodiscard]] Result<void> AdmitPhysicsConstraintDescriptor(const PhysicsConstraintDescriptor &descriptor, PhysicsWorldId expectedWorld,
+                                                                const PhysicsCapabilities &capabilities, std::uint64_t expectedRevision);
 }  // namespace Horo::Physics

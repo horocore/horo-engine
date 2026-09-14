@@ -1,3 +1,4 @@
+#include "Horo/Physics/PhysicsCapabilities.h"
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
 
 #include <array>
@@ -12,6 +13,16 @@ namespace Horo::Physics {
             PhysicsConstraintDescriptor descriptor;
             descriptor.first.body = {PhysicsWorldId::Create(31).Value(), {0, 1}};
             return descriptor;
+        }
+
+        /** @brief Creates coherent available constraint capability evidence for admission tests. */
+        PhysicsCapabilities MakeCapabilities() {
+            PhysicsCapabilities capabilities;
+            capabilities.revision = 7;
+            capabilities.availability = PhysicsAvailability::Available;
+            capabilities.features.fill(PhysicsCapabilitySupport::Unsupported);
+            capabilities.features[static_cast<std::size_t>(PhysicsCapability::Constraints)] = PhysicsCapabilitySupport::Available;
+            return capabilities;
         }
 
         /** @brief Checks a structural rejection retains the expected stable error identity. */
@@ -95,6 +106,30 @@ namespace Horo::Physics {
                 REQUIRE(ValidatePhysicsConstraintDescriptor(descriptor, descriptor.first.body.world).HasValue());
                 REQUIRE(std::get<PhysicsDistanceConstraint>(descriptor.parameters).maximumMeters == distance);
             }
+        }
+
+        TEST_CASE("Constraint admission preserves validation precedence and explicit capability states",
+                  "[physics][constraint][capability]") {
+            auto descriptor = MakeConstraint();
+            const auto world = descriptor.first.body.world;
+            auto capabilities = MakeCapabilities();
+            REQUIRE(AdmitPhysicsConstraintDescriptor(descriptor, world, capabilities, capabilities.revision).HasValue());
+
+            descriptor.first = {};
+            RequireConstraintError(descriptor, world, PhysicsErrors::HandleMalformed);
+            REQUIRE(AdmitPhysicsConstraintDescriptor(descriptor, world, capabilities, capabilities.revision).ErrorValue().code.Value() ==
+                    PhysicsErrors::HandleMalformed.code.Value());
+
+            descriptor = MakeConstraint();
+            REQUIRE(
+                AdmitPhysicsConstraintDescriptor(descriptor, world, capabilities, capabilities.revision + 1).ErrorValue().code.Value() ==
+                PhysicsErrors::CapabilityStale.code.Value());
+            capabilities.features[static_cast<std::size_t>(PhysicsCapability::Constraints)] = PhysicsCapabilitySupport::Unsupported;
+            REQUIRE(AdmitPhysicsConstraintDescriptor(descriptor, world, capabilities, capabilities.revision).ErrorValue().code.Value() ==
+                    PhysicsErrors::OperationUnsupported.code.Value());
+            capabilities.features[static_cast<std::size_t>(PhysicsCapability::Constraints)] = PhysicsCapabilitySupport::Unavailable;
+            REQUIRE(AdmitPhysicsConstraintDescriptor(descriptor, world, capabilities, capabilities.revision).ErrorValue().code.Value() ==
+                    PhysicsErrors::CapabilityUnavailable.code.Value());
         }
     }  // namespace
 }  // namespace Horo::Physics

@@ -1,5 +1,7 @@
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
 
+#include "Horo/Physics/PhysicsCapabilities.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -47,5 +49,13 @@ namespace Horo::Physics {
         if (const auto *distance = std::get_if<PhysicsDistanceConstraint>(&descriptor.parameters))
             return ValidateDistance(*distance);
         return Result<void>::Success();
+    }
+
+    /** @copydoc AdmitPhysicsConstraintDescriptor */
+    Result<void> AdmitPhysicsConstraintDescriptor(const PhysicsConstraintDescriptor &descriptor, const PhysicsWorldId expectedWorld,
+                                                  const PhysicsCapabilities &capabilities, const std::uint64_t expectedRevision) {
+        if (const auto validation = ValidatePhysicsConstraintDescriptor(descriptor, expectedWorld); validation.HasError())
+            return validation;
+        return RequirePhysicsCapability(capabilities, PhysicsCapability::Constraints, expectedRevision);
     }
 }  // namespace Horo::Physics
