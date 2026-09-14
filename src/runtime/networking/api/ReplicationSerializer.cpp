@@ -50,17 +50,18 @@ namespace Horo::Network {
         }
 
         [[nodiscard]] ReplicationValueKind KindOf(const ReplicationRuntimeValue &value) noexcept {
+            using enum ReplicationValueKind;
             if (std::holds_alternative<bool>(value))
-                return ReplicationValueKind::Boolean;
+                return Boolean;
             if (std::holds_alternative<std::int64_t>(value))
-                return ReplicationValueKind::SignedInteger;
+                return SignedInteger;
             if (std::holds_alternative<std::uint64_t>(value))
-                return ReplicationValueKind::UnsignedInteger;
+                return UnsignedInteger;
             if (std::holds_alternative<double>(value))
-                return ReplicationValueKind::FloatingPoint;
+                return FloatingPoint;
             if (std::holds_alternative<std::string>(value))
-                return ReplicationValueKind::Utf8Text;
-            return ReplicationValueKind::ByteSequence;
+                return Utf8Text;
+            return ByteSequence;
         }
 
         [[nodiscard]] std::size_t ElementCount(const ReplicationRuntimeValue &value) noexcept {
@@ -119,8 +120,8 @@ namespace Horo::Network {
                 return Fail<std::int64_t>(NetworkErrors::ReplicationSerializerValueInvalid);
             const double scaled = value / step;
             constexpr double Minimum = -9223372036854775808.0;
-            constexpr double MaximumExclusive = 9223372036854775808.0;
-            if (!std::isfinite(scaled) || scaled < Minimum || scaled >= MaximumExclusive)
+            if (constexpr double MaximumExclusive = 9223372036854775808.0;
+                !std::isfinite(scaled) || scaled < Minimum || scaled >= MaximumExclusive)
                 return Fail<std::int64_t>(NetworkErrors::ReplicationSerializerCapacityExceeded);
             return Result<std::int64_t>::Success(static_cast<std::int64_t>(std::round(scaled)));
         }
@@ -142,27 +143,26 @@ namespace Horo::Network {
 
         [[nodiscard]] Result<std::vector<std::byte>> EncodeScalar(const ReplicationSerializerDescriptor &descriptor,
                                                                   const ReplicationRuntimeValue &value) {
+            using enum ReplicationValueKind;
             std::vector<std::byte> bytes;
             bytes.reserve(ScalarBytes);
             switch (descriptor.valueKind) {
-                case ReplicationValueKind::Boolean:
+                case Boolean:
                     bytes.push_back(std::get<bool>(value) ? std::byte{1} : std::byte{0});
                     break;
-                case ReplicationValueKind::SignedInteger:
+                case SignedInteger:
                     WriteU64(bytes, std::bit_cast<std::uint64_t>(std::get<std::int64_t>(value)));
                     break;
-                case ReplicationValueKind::UnsignedInteger:
+                case UnsignedInteger:
                     WriteU64(bytes, std::get<std::uint64_t>(value));
                     break;
-                case ReplicationValueKind::FloatingPoint: {
-                    const Result<void> encoded = EncodeFloating(bytes, descriptor, std::get<double>(value));
-                    if (encoded.HasError())
+                case FloatingPoint:
+                    if (const Result<void> encoded = EncodeFloating(bytes, descriptor, std::get<double>(value)); encoded.HasError())
                         return Result<std::vector<std::byte>>::Failure(encoded.ErrorValue());
                     break;
-                }
-                case ReplicationValueKind::Utf8Text:
-                case ReplicationValueKind::ByteSequence:
-                case ReplicationValueKind::Count:
+                case Utf8Text:
+                case ByteSequence:
+                case Count:
                     return Fail<std::vector<std::byte>>(NetworkErrors::ReplicationSerializerInvalid);
             }
             return Result<std::vector<std::byte>>::Success(std::move(bytes));
@@ -175,7 +175,7 @@ namespace Horo::Network {
                 return std::isfinite(value) ? Result<ReplicationRuntimeValue>::Success(value)
                                             : Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerValueInvalid);
             }
-            const double value = std::bit_cast<double>(bits);
+            const auto value = std::bit_cast<double>(bits);
             if (!std::isfinite(value) || (value == 0.0 && bits != 0))
                 return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerValueInvalid);
             return Result<ReplicationRuntimeValue>::Success(value);
@@ -183,21 +183,22 @@ namespace Horo::Network {
 
         [[nodiscard]] Result<ReplicationRuntimeValue> DecodeScalar(const ReplicationSerializerDescriptor &descriptor,
                                                                    const std::span<const std::byte> canonicalBytes) {
+            using enum ReplicationValueKind;
             const std::uint64_t bits = ReadU64(canonicalBytes);
             switch (descriptor.valueKind) {
-                case ReplicationValueKind::Boolean:
+                case Boolean:
                     if (bits > 1)
                         return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerValueInvalid);
                     return Result<ReplicationRuntimeValue>::Success(bits != 0);
-                case ReplicationValueKind::SignedInteger:
+                case SignedInteger:
                     return Result<ReplicationRuntimeValue>::Success(std::bit_cast<std::int64_t>(bits));
-                case ReplicationValueKind::UnsignedInteger:
+                case UnsignedInteger:
                     return Result<ReplicationRuntimeValue>::Success(bits);
-                case ReplicationValueKind::FloatingPoint:
+                case FloatingPoint:
                     return DecodeFloating(descriptor, bits);
-                case ReplicationValueKind::Utf8Text:
-                case ReplicationValueKind::ByteSequence:
-                case ReplicationValueKind::Count:
+                case Utf8Text:
+                case ByteSequence:
+                case Count:
                     return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerInvalid);
             }
             return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerInvalid);
@@ -224,8 +225,8 @@ namespace Horo::Network {
         if (decoded.HasError() || KindOf(decoded.Value()) != entry.descriptor.valueKind ||
             ElementCount(decoded.Value()) > field.limits.maximumElementCount)
             return Fail<void>(NetworkErrors::ReplicationSerializerValueInvalid);
-        Result<std::vector<std::byte>> encoded = entry.serializer->Encode(decoded.Value());
-        if (encoded.HasError() || encoded.Value() != bytes)
+        if (Result<std::vector<std::byte>> encoded = entry.serializer->Encode(decoded.Value());
+            encoded.HasError() || encoded.Value() != bytes)
             return Fail<void>(NetworkErrors::ReplicationSerializerValueInvalid);
         return Result<void>::Success();
     }
@@ -266,7 +267,7 @@ namespace Horo::Network {
             const ReplicationSerializerDescriptor descriptor = serializer->Descriptor();
             if (!ValidDescriptor(descriptor, limits))
                 return Fail<std::vector<Entry>>(NetworkErrors::ReplicationSerializerInvalid);
-            entries.push_back({descriptor, serializer});
+            entries.emplace_back(descriptor, serializer);
         }
         std::ranges::sort(entries, {}, [](const Entry &entry) {
             return EntryKey(entry.descriptor);
@@ -381,14 +382,16 @@ namespace Horo::Network {
     /** @copydoc CanonicalScalarReplicationSerializer::Create */
     Result<std::shared_ptr<const CanonicalScalarReplicationSerializer>> CanonicalScalarReplicationSerializer::Create(
         const ReplicationSerializerDescriptor &descriptor) {
-        const ReplicationSerializerRegistryLimits limits;
-        if (!ValidDescriptor(descriptor, limits) || descriptor.valueKind > ReplicationValueKind::FloatingPoint ||
+        if (const ReplicationSerializerRegistryLimits limits;
+            !ValidDescriptor(descriptor, limits) || descriptor.valueKind > ReplicationValueKind::FloatingPoint ||
             descriptor.maximumElementCount != 1 ||
             descriptor.maximumEncodedBytes < (descriptor.valueKind == ReplicationValueKind::Boolean ? 1U : ScalarBytes))
             return Fail<std::shared_ptr<const CanonicalScalarReplicationSerializer>>(NetworkErrors::ReplicationSerializerInvalid);
         try {
             return Result<std::shared_ptr<const CanonicalScalarReplicationSerializer>>::Success(
-                std::shared_ptr<const CanonicalScalarReplicationSerializer>{new CanonicalScalarReplicationSerializer(descriptor)});
+                // The private constructor keeps validation in Create; make_shared cannot access it.
+                std::shared_ptr<const CanonicalScalarReplicationSerializer>{
+                    new CanonicalScalarReplicationSerializer(descriptor)});  // NOSONAR
         } catch (const std::bad_alloc &) {
             return Fail<std::shared_ptr<const CanonicalScalarReplicationSerializer>>(NetworkErrors::ReplicationSerializerCapacityExceeded);
         }
@@ -416,8 +419,8 @@ namespace Horo::Network {
 
     /** @copydoc CanonicalScalarReplicationSerializer::Decode */
     Result<ReplicationRuntimeValue> CanonicalScalarReplicationSerializer::Decode(const std::span<const std::byte> canonicalBytes) const {
-        const std::size_t expected = descriptor_.valueKind == ReplicationValueKind::Boolean ? 1U : ScalarBytes;
-        if (canonicalBytes.size() != expected)
+        if (const std::size_t expected = descriptor_.valueKind == ReplicationValueKind::Boolean ? 1U : ScalarBytes;
+            canonicalBytes.size() != expected)
             return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerValueInvalid);
         return DecodeScalar(descriptor_, canonicalBytes);
     }
