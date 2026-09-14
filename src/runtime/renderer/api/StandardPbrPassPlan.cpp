@@ -65,7 +65,7 @@ namespace Horo::Render {
             using enum StandardPbrPassStage;
 
             const auto masked = std::ranges::find(plan.materials, Masked, &StandardPbrPassMaterial::alphaMode);
-            const std::size_t opaqueCount = static_cast<std::size_t>(masked - plan.materials.begin());
+            const auto opaqueCount = static_cast<std::size_t>(masked - plan.materials.begin());
             const std::size_t maskedCount = plan.materials.size() - opaqueCount;
             const auto depthOutputs = StandardPbrPassOutputs{.depth = true, .motionVectors = request.motionVectors};
             const auto colorOutputs = StandardPbrPassOutputs{.sceneColor = true,
