@@ -68,6 +68,13 @@ namespace {
         return nlohmann::json::parse(input);
     }
 
+    void WriteText(const std::filesystem::path &path, const std::string_view text) {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        REQUIRE((output.good()));
+        output << text;
+        REQUIRE((output.good()));
+    }
+
     struct BackendProjectOpen {
         BackendProjectOpen()
             : jobs({.workerCount = 3, .maxQueuedJobs = 32}), mutations(files), transactions(files, clock, mutations, jobs),
@@ -126,6 +133,17 @@ namespace {
         REQUIRE((std::ranges::none_of(records, [](const nlohmann::json &record) {
             return record.value("message", "").find("unknownNested") != std::string::npos;
         })));
+    }
+
+    void RequireProjectOpenFailureWithoutMutation(ProjectMigrationTestFixture &project) {
+        const std::string metadata = project.ReadProjectBytes();
+        BackendProjectOpen backend;
+        const auto opened = OpenProject(backend, project);
+        REQUIRE((opened.outcome == ProjectOpenOutcome::Failed));
+        REQUIRE((opened.diagnostic.has_value()));
+        REQUIRE((opened.diagnostic->code.Value() == "project.migration.stage_failed"));
+        REQUIRE((project.ReadProjectBytes() == metadata));
+        REQUIRE_FALSE((std::filesystem::exists(project.Root() / ".horo/migration_history.json")));
     }
 }  // namespace
 
@@ -210,4 +228,40 @@ TEST_CASE("Invalid legacy project fails without authoritative mutation", "[integ
         return record.value("level", "") == "error" &&
                record.value("message", "").find("project.migration.stage_failed") != std::string::npos;
     })));
+}
+
+TEST_CASE("Prefab migration rejects malformed and orphaned authored data transactionally", "[integration][project][migration][prefab]") {
+    ProjectMigrationTestFixture project;
+
+    SECTION("malformed stable identity") {
+        WriteText(project.Root() / "assets/prefabs/player.prefab.horo",
+                  R"({"schemaVersion":1,"assetId":"not-a-canonical-asset-id","assetType":"core.prefab"})");
+    }
+    SECTION("duplicate JSON key") {
+        WriteText(
+            project.Root() / "assets/prefabs/player.prefab",
+            R"({"projectVersion":"0.0.1","prefabId":"00112233-4455-6677-8899-aabbccddeeff","prefabId":"00112233-4455-6677-8899-aabbccddeeff"})");
+    }
+    SECTION("orphaned prefab source") {
+        std::error_code error;
+        REQUIRE((std::filesystem::remove(project.Root() / "assets/prefabs/player.prefab.horo", error)));
+        REQUIRE_FALSE((error));
+    }
+
+    RequireProjectOpenFailureWithoutMutation(project);
+}
+
+TEST_CASE("Prefab migration discovers portable uppercase authored extensions", "[integration][project][migration][prefab]") {
+    ProjectMigrationTestFixture project;
+    std::error_code error;
+    std::filesystem::rename(project.Root() / "assets/prefabs/player.prefab", project.Root() / "assets/prefabs/player.PREFAB", error);
+    REQUIRE_FALSE((error));
+    std::filesystem::rename(project.Root() / "assets/prefabs/player.prefab.horo", project.Root() / "assets/prefabs/player.PREFAB.HORO",
+                            error);
+    REQUIRE_FALSE((error));
+
+    BackendProjectOpen backend;
+    const auto opened = OpenProject(backend, project);
+    REQUIRE((opened.outcome == ProjectOpenOutcome::ReadyToActivate));
+    REQUIRE((ReadJson(project.Root() / "assets/prefabs/player.PREFAB").at("assetId") == "00112233-4455-6677-8899-aabbccddeeff"));
 }
