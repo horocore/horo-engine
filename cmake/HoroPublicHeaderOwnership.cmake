@@ -163,6 +163,8 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/ReplicationIdentity.h
     Horo/Network/ReplicationSerializer.h
     Horo/Network/ReplicationRoles.h
+    Horo/Network/RpcDescriptor.h
+    Horo/Network/RpcDescriptorRegistry.h
     Horo/Network/TransportCapabilities.h
     Horo/Network/TransportBudget.h
 )
