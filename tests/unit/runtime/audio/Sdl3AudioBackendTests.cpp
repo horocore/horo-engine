@@ -109,17 +109,29 @@ namespace Horo::Audio::Backend {
             return epoch;
         }
 
+        struct BackendFixture final {
+            std::unique_ptr<Sdl3AudioBackend> backend;
+            AudioDeviceEpoch epoch;
+        };
+
+        BackendFixture CreateOpenedBackend() {
+            auto created = CreateSdl3AudioBackend(Config());
+            REQUIRE(created.HasValue());
+            auto backend = std::move(created).Value();
+            REQUIRE(backend->Kind() == AudioBackendKind::SDL3Audio);
+            const auto epoch = OpenDefault(*backend);
+            return {std::move(backend), epoch};
+        }
+
         void StartRendering(Sdl3AudioBackend &backend, const AudioDeviceEpoch &epoch, Trace &trace) {
             REQUIRE(std::holds_alternative<Started>(Complete(backend, Start{epoch, {&trace, Render}}).outcome));
             REQUIRE(WaitForEvent(backend, ExpectedCallbackEvent::Ready));
         }
 
         TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {
-            auto created = CreateSdl3AudioBackend(Config());
-            REQUIRE(created.HasValue());
-            auto backend = std::move(created).Value();
-            REQUIRE(backend->Kind() == AudioBackendKind::SDL3Audio);
-            const auto epoch = OpenDefault(*backend);
+            auto fixture = CreateOpenedBackend();
+            auto &backend = fixture.backend;
+            const auto epoch = fixture.epoch;
             Trace trace;
             StartRendering(*backend, epoch, trace);
             REQUIRE(backend->CommitRendering(epoch).HasValue());
@@ -132,9 +144,13 @@ namespace Horo::Audio::Backend {
             REQUIRE(backend->AdvanceControl().HasValue());
             REQUIRE(WaitForEvent(*backend, ExpectedCallbackEvent::Quiesced));
             REQUIRE(backend->AdvanceControl().HasValue());
-            REQUIRE(std::holds_alternative<Quiesced>(backend->Poll(quiesce).Value()->outcome));
+            const auto quiesced = backend->Poll(quiesce);
+            REQUIRE(quiesced.HasValue());
+            REQUIRE(quiesced.Value());
+            REQUIRE(std::get_if<Quiesced>(&quiesced.Value()->outcome));
             REQUIRE(backend->AcknowledgeCompletion(quiesce).HasValue());
-            REQUIRE(std::holds_alternative<Stopped>(Complete(*backend, Stop{epoch}).outcome));
+            const auto stopped = Complete(*backend, Stop{epoch});
+            REQUIRE(std::get_if<Stopped>(&stopped.outcome));
             REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
         }
 
@@ -161,11 +177,10 @@ namespace Horo::Audio::Backend {
         }
 
         TEST_CASE("SDL3 audio destruction releases an active native stream", "[unit][audio][sdl3]") {
-            auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();
-            const auto epoch = OpenDefault(*backend);
+            auto fixture = CreateOpenedBackend();
             Trace trace;
-            StartRendering(*backend, epoch, trace);
-            backend.reset();
+            StartRendering(*fixture.backend, fixture.epoch, trace);
+            fixture.backend.reset();
 
             auto reopened = std::move(CreateSdl3AudioBackend(Config())).Value();
             REQUIRE(std::holds_alternative<AudioBackendProbe>(Complete(*reopened, Probe{}).outcome));
