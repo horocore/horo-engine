@@ -123,10 +123,10 @@ registry revision, or publication generation.
 Canonical serialization uses UTF-8 without a byte-order mark, rejects invalid
 Unicode, writes one trailing newline, emits no insignificant whitespace, emits
 object fields in contract order, and sorts semantically unordered collections by
-their stable typed identity. Numbers use the narrow integer or finite binary32
-domain already owned by the typed model. Time is signed nanosecond ticks and
-sample rate is a reduced positive integer fraction; seconds encoded as binary
-floating point are invalid.
+their stable typed identity. Integer widths follow the owning typed model and
+floating-point values use its finite binary32 domain. Time is always a signed
+64-bit nanosecond tick count; sample rate is a reduced positive integer fraction.
+Seconds encoded as binary floating point are invalid.
 
 Parsers reject duplicate keys, unknown major versions, non-canonical identity
 text, non-finite values, arithmetic overflow, invalid enum values, excessive
@@ -250,6 +250,16 @@ cooking must use the future AST dependency-aware key; it cannot pretend V1 cover
 dependency contents. Until that host capability exists, a contribution requiring
 non-empty dependency content must fail explicitly rather than publish an
 under-keyed artifact.
+
+This is an explicit delivery prerequisite, not an optional optimization. The
+owning policy and version transition are tracked in Asset Pipeline's
+[Incremental Cook And Cache Reuse](./asset-pipeline.md#incremental-cook-and-cache-reuse)
+contract. Before scheduling an implementation issue for clip or skeletal-mesh
+binding cooking, delivery planning must add a native `blocked by` relationship to
+the issue that implements that dependency-aware Assets extension. Until that
+issue exists and lands, only dependency-free skeleton cooking can advance past
+validation; clips and skeletal-mesh bindings remain deliberately unavailable
+instead of bypassing cache identity.
 
 The host owns output sinks, hashing, envelope encoding, cache verification,
 generation staging, manifest replacement, and rollback. The Animation cooker
