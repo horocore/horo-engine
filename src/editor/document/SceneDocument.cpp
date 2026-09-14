@@ -1,6 +1,7 @@
 #include "editor/document/SceneDocument.h"
 
 #include "Horo/Navigation/NavigationErrors.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "editor/project_model/EditorModelErrors.h"
 
@@ -284,7 +285,23 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> ValidatePhysicsAuthoringComponents(const SceneObjectComponentSet &components) {
+            if (components.rigidBody && Runtime::ValidateRigidBodyComponent(*components.rigidBody).HasError())
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
+            if (std::ranges::any_of(components.colliders, [](const Runtime::ColliderComponent &component) {
+                return Runtime::ValidateColliderComponent(component).HasError();
+            }))
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
+            if (std::ranges::any_of(components.physicsConstraints, [](const Runtime::PhysicsConstraintComponent &component) {
+                return Runtime::ValidatePhysicsConstraintComponent(component).HasError();
+            }))
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateComponents(const SceneObjectComponentSet &components) {
+            if (Result<void> physics = ValidatePhysicsAuthoringComponents(components); physics.HasError())
+                return physics;
             if (components.navigationSurface && Runtime::ValidateNavigationSurfaceComponent(*components.navigationSurface).HasError())
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
             if (components.navigationRegion && Runtime::ValidateNavigationRegionComponent(*components.navigationRegion).HasError())
@@ -445,7 +462,11 @@ namespace Horo::Editor {
             std::size_t bytes = sizeof(delta) + delta.objects.size() * sizeof(IndexedSceneObject);
             for (const IndexedSceneObject &object : delta.objects) {
                 bytes += object.object.name.size() + EstimateBehaviorMemoryBytes(object.object.components.behaviors) +
-                         EstimateNavigationComponentMemoryBytes(object.object.components);
+                         EstimateNavigationComponentMemoryBytes(object.object.components) +
+                         object.object.components.colliders.size() * sizeof(Runtime::ColliderComponent) +
+                         object.object.components.physicsConstraints.size() * sizeof(Runtime::PhysicsConstraintComponent);
+                for (const Runtime::ColliderComponent &collider : object.object.components.colliders)
+                    bytes += collider.materials.size() * sizeof(Runtime::PhysicsColliderMaterialBinding);
             }
             return bytes + delta.prefabInstances.size() * sizeof(IndexedPrefabInstance);
         }

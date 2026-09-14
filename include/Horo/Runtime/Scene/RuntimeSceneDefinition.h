@@ -10,8 +10,10 @@
 #include "Horo/Gameplay/BehaviorTypes.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
+#include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
 #include "Horo/Runtime/Scene/SceneComponents.h"
+#include "Horo/Runtime/Scene/SceneIdentity.h"
 
 #include <cstdint>
 #include <optional>
@@ -19,34 +21,6 @@
 #include <vector>
 
 namespace Horo::Runtime {
-    /** @brief Stable logical identity of one authored scene. */
-    struct SceneDefinitionId {
-        std::uint64_t value{};
-
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const SceneDefinitionId &) const noexcept = default;
-    };
-
-    /** @brief Monotonic authored content revision carried through runtime activation. */
-    struct SceneDefinitionRevision {
-        std::uint64_t value{};
-        [[nodiscard]] constexpr auto operator<=>(const SceneDefinitionRevision &) const noexcept = default;
-    };
-
-    /** @brief Stable authored object identity, independent from process-local entity handles. */
-    struct SceneObjectId {
-        std::uint64_t value{};
-
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const SceneObjectId &) const noexcept = default;
-    };
-
     /** @brief Typed core component payload owned by a definition or runtime scene. */
     struct RuntimeComponentSet {
         std::optional<CameraComponent> camera;
@@ -58,6 +32,9 @@ namespace Horo::Runtime {
         std::optional<NavigationRegionComponent> navigationRegion;
         std::optional<NavigationModifierComponent> navigationModifier;
         std::optional<NavigationLinkComponent> navigationLink;
+        std::optional<RigidBodyComponent> rigidBody;
+        std::vector<ColliderComponent> colliders;
+        std::vector<PhysicsConstraintComponent> physicsConstraints;
         std::vector<Gameplay::BehaviorComponent> behaviors;
         [[nodiscard]] bool operator==(const RuntimeComponentSet &) const noexcept = default;
     };

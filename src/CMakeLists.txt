@@ -416,6 +416,16 @@ target_link_libraries(HoroAssets
 )
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Assets)
 
+add_library(HoroPhysicsModel STATIC
+        physics/PhysicsErrors.cpp
+        physics/PhysicsFilterIdentity.cpp
+        runtime/scene/PhysicsSceneComponents.cpp
+)
+add_library(HoroEngine::PhysicsModel ALIAS HoroPhysicsModel)
+target_compile_features(HoroPhysicsModel PUBLIC cxx_std_20)
+target_link_libraries(HoroPhysicsModel PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Runtime)
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::PhysicsModel)
+
 add_library(HoroAudioApi STATIC
         audio/api/AudioAssetSchema.cpp
         audio/api/AudioBackendCapabilities.cpp
@@ -517,8 +527,6 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
         physics/PhysicsDeterminismPolicy.cpp
-        physics/PhysicsErrors.cpp
-        physics/PhysicsFilterIdentity.cpp
         physics/PhysicsHandleRegistry.h
         physics/PhysicsIdentity.cpp
         physics/PhysicsMetrics.cpp
@@ -533,7 +541,7 @@ add_library(HoroPhysics STATIC
 )
 add_library(HoroEngine::Physics ALIAS HoroPhysics)
 target_compile_features(HoroPhysics PUBLIC cxx_std_20)
-target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::PhysicsModel)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp

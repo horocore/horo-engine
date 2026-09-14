@@ -83,6 +83,23 @@ authority.
 
 ## Ownership
 
+The always-built `HoroEngine::PhysicsModel` target owns the portable authored Scene
+schema. A rigid body has one stable body slot and explicit motion/mass policy;
+colliders contribute stable slots, exact analytic or asset shape sources, local pose,
+scale, collision profile and material mappings to an explicit body reference;
+constraints name two exact body/world endpoints and a typed fixed or distance policy.
+Each payload carries schema version and generation, and scene persistence round-trips
+only Horo identities and canonical units. Runtime handles, native solver IDs, filter
+indices, leases and cooked payloads are deliberately unsupported in this durable
+surface.
+
+RuntimeScene validates aggregate producer identity and reference invariants before
+publishing an immutable definition: bodies never arise implicitly, every body has a
+bounded non-empty collider set, static planes bind only static bodies, and constraints
+cannot discover endpoints by hierarchy or name. This remains inert admission; native
+planning, resource resolution, activation, rollback and retirement stay with the
+solver-bearing Physics scene participant defined by ADR-087 and PHY-006.3.
+
 ```text
 SceneRuntime
   +-- PhysicsWorld

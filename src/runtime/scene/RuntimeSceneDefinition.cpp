@@ -99,6 +99,26 @@ namespace Horo::Runtime {
             }
             return ValidateNavigationSceneComponentViews(navigationComponents);
         }
+
+        /** @brief Validates Physics identities and explicit body references across the complete scene. */
+        [[nodiscard]] Result<void> ValidatePhysicsComponents(const std::span<const RuntimeEntityDefinition> entities) {
+            std::vector<PhysicsSceneComponentView> physicsComponents;
+            physicsComponents.reserve(entities.size());
+            for (const RuntimeEntityDefinition &entity : entities) {
+                physicsComponents.push_back({.owner = entity.object,
+                                             .rigidBody = entity.components.rigidBody ? &*entity.components.rigidBody : nullptr,
+                                             .colliders = entity.components.colliders,
+                                             .constraints = entity.components.physicsConstraints});
+            }
+            return ValidatePhysicsSceneComponentViews(physicsComponents);
+        }
+
+        /** @brief Validates all authored subsystem projections before publishing a definition. */
+        [[nodiscard]] Result<void> ValidateAuthoredComponents(const std::span<const RuntimeEntityDefinition> entities) {
+            if (Result<void> navigation = ValidateNavigationComponents(entities); navigation.HasError())
+                return navigation;
+            return ValidatePhysicsComponents(entities);
+        }
     }  // namespace
 
     /** @copydoc RuntimeSceneDefinition::RuntimeSceneDefinition */
@@ -220,8 +240,8 @@ namespace Horo::Runtime {
         std::ranges::sort(assetDependencies_, {}, [](const SceneAssetDependency &dependency) {
             return dependency.id;
         });
-        if (Result<void> navigation = ValidateNavigationComponents(entities_); navigation.HasError())
-            return Result<RuntimeSceneDefinition>::Failure(navigation.ErrorValue());
+        if (Result<void> components = ValidateAuthoredComponents(entities_); components.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(components.ErrorValue());
 
         return Result<RuntimeSceneDefinition>::Success(
             RuntimeSceneDefinition{id_, revision_, std::move(entities_), std::move(assetDependencies_)});
