@@ -680,7 +680,9 @@ The networking subsystem requires targeted automated verification:
      parity, exactly-once terminal publication, cancel/shutdown ordering, stale
      completion rejection and non-wrapping generation replacement.
    - `SendPayloadLifetimeTests`: caller buffer may be overwritten after `Send()` returns.
-   - `ReplicationManagerTests`: ADR-175 safe-point capture and immutable publication; lost/duplicate dirty hints, stale identity, cancellation, shutdown, delta compression and interest queries.
+- `ReplicationManagerTests`: ADR-175 safe-point capture and immutable publication; lost/duplicate dirty hints, stale identity, cancellation, shutdown, delta compression and interest queries.
+   - `ReplicationSerializerTests`: complete owner/type/codec binding, immutable adapter lifetime pins, canonical scalar encoding,
+     explicit quantization equivalence, field bounds, incompatible tags and malformed payload rejection.
 2. **Deterministic Transport Tests (`NetworkTransportNullTests`)**:
    - No `Platform` link; no OS sockets; no I/O thread.
    - Simulated latency, jitter, packet loss, duplicate packets, and out-of-order delivery.

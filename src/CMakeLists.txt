@@ -235,6 +235,8 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/ProtocolIdentityRegistry.cpp
         runtime/networking/api/ReplicationDescriptor.cpp
         runtime/networking/api/ReplicationDescriptorRegistry.cpp
+        runtime/networking/api/ReplicationSerializer.cpp
+        runtime/networking/api/ReplicationSerializerErrors.cpp
         runtime/networking/api/ReplicationRoles.cpp
         runtime/networking/api/TransportCapabilities.cpp
         runtime/networking/api/TransportBudget.cpp

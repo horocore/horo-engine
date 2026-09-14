@@ -144,6 +144,22 @@ requiredness, write policy and limits. Editor/display names, `PropertyPath`, C++
 member names, component order, reflection indices, pointer values and byte offsets
 never enter the wire contract.
 
+`ReplicationSerializerRegistry` binds each field's exact owner, semantic value
+type and codec identity to one pinned typed adapter during host composition. The
+registry copies adapter metadata, pins adapter and schema lifetimes, rejects
+missing/duplicate/foreign bindings, and enforces both adapter and field bounds
+around every call. Runtime values cross this boundary only through the closed
+`ReplicationRuntimeValue` representation; serializers never receive an ECS
+address, member offset, object span or native-layout byte view.
+
+Quantization is explicit codec metadata. The Horo scalar codec supports exact
+boolean/integer/floating representations and deterministic nearest-step floating
+quantization. Canonical comparison encodes both typed source values and compares
+the resulting type-tagged codec bytes, so values in the same quantization bucket
+do not produce spurious deltas. Quantized values remain network representations:
+they never replace Gameplay's authored/runtime value or become save/hash
+authority. A quantization change allocates a new codec identity.
+
 Replication conditions are descriptor policy, not authority:
 
 - `Always`: considered for every eligible snapshot;
