@@ -134,15 +134,15 @@ namespace Horo::Runtime {
             if (const auto *analytic = std::get_if<PhysicsAnalyticCollider>(&component.source)) {
                 if (!IsValidAnalytic(*analytic))
                     return Failure("Physics collider analytic geometry is invalid.");
-                const bool uniform =
-                    Math::NearlyEqual(component.scale.x, component.scale.y) && Math::NearlyEqual(component.scale.y, component.scale.z);
-                if (!uniform &&
+                if (const bool uniform =
+                        Math::NearlyEqual(component.scale.x, component.scale.y) && Math::NearlyEqual(component.scale.y, component.scale.z);
+                    !uniform &&
                     (std::holds_alternative<PhysicsSphereCollider>(*analytic) || std::holds_alternative<PhysicsCapsuleCollider>(*analytic)))
                     return Failure("Sphere and capsule colliders require uniform authored scale.");
                 return Result<void>::Success();
             }
-            const auto &asset = std::get<PhysicsShapeAssetReference>(component.source);
-            if (!asset.asset.IsValid() || !asset.subresource.IsValid())
+            if (const auto &asset = std::get<PhysicsShapeAssetReference>(component.source);
+                !asset.asset.IsValid() || !asset.subresource.IsValid())
                 return Failure("Physics collider shape assets require stable asset and subresource identities.");
             return Result<void>::Success();
         }
@@ -158,8 +158,8 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateConstraintParameters(const PhysicsConstraintComponent &component) {
-            const auto *distance = std::get_if<PhysicsDistanceConstraint>(&component.parameters);
-            if (distance != nullptr && (!std::isfinite(distance->minimumMeters) || !std::isfinite(distance->maximumMeters) ||
+            if (const auto *distance = std::get_if<PhysicsDistanceConstraint>(&component.parameters);
+                distance != nullptr && (!std::isfinite(distance->minimumMeters) || !std::isfinite(distance->maximumMeters) ||
                                         distance->minimumMeters < 0.0F || distance->maximumMeters < distance->minimumMeters))
                 return Failure("Physics distance constraints require a finite non-negative ordered interval.");
             return Result<void>::Success();
@@ -197,7 +197,7 @@ namespace Horo::Runtime {
                     return valid;
                 if (Result<void> unique = AddComponentIdentity(view.owner, view.rigidBody->id, componentIds); unique.HasError())
                     return unique;
-                if (!bodies.emplace(Key(view.owner, view.rigidBody->body.value), view.rigidBody).second)
+                if (!bodies.try_emplace(Key(view.owner, view.rigidBody->body.value), view.rigidBody).second)
                     return Failure("Authored Physics body slots must be unique within one Scene object.");
             }
             return Result<void>::Success();

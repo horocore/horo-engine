@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <variant>
 
 namespace Horo::Editor {
@@ -519,6 +520,32 @@ namespace Horo::Editor {
             return {{"object", reference.object.value}, {"body", reference.body.value}};
         }
 
+        [[nodiscard]] const char *PhysicsMotionName(const Runtime::AuthoredPhysicsMotionType motion) noexcept {
+            using enum Runtime::AuthoredPhysicsMotionType;
+            switch (motion) {
+                case Static:
+                    return "static";
+                case Kinematic:
+                    return "kinematic";
+                case Dynamic:
+                    return "dynamic";
+                case Count:
+                    break;
+            }
+            return "dynamic";
+        }
+
+        [[nodiscard]] Json PhysicsMassJson(const Runtime::AuthoredPhysicsMassPolicy &policy) {
+            return std::visit([]<typename Mass>(const Mass &mass) -> Json {
+                if constexpr (std::is_same_v<Mass, Runtime::AuthoredPhysicsNoMass>)
+                    return {{"kind", "none"}};
+                else if constexpr (std::is_same_v<Mass, Runtime::AuthoredPhysicsMass>)
+                    return {{"kind", "mass"}, {"kilograms", mass.kilograms}};
+                else
+                    return {{"kind", "density"}, {"kilogramsPerCubicMeter", mass.kilogramsPerCubicMeter}};
+            }, policy);
+        }
+
         [[nodiscard]] Json PhysicsColliderSourceJson(const Runtime::PhysicsColliderSource &source) {
             if (const auto *asset = std::get_if<Runtime::PhysicsShapeAssetReference>(&source))
                 return {{"kind", "asset"}, {"asset", asset->asset.ToString()}, {"subresource", asset->subresource.value}};
@@ -536,20 +563,12 @@ namespace Horo::Editor {
         }
 
         void AppendRigidBody(Json &value, const Runtime::RigidBodyComponent &body) {
-            const char *motion = body.motion == Runtime::AuthoredPhysicsMotionType::Static      ? "static"
-                                 : body.motion == Runtime::AuthoredPhysicsMotionType::Kinematic ? "kinematic"
-                                                                                                : "dynamic";
-            Json mass = {{"kind", "none"}};
-            if (const auto *explicitMass = std::get_if<Runtime::AuthoredPhysicsMass>(&body.mass))
-                mass = {{"kind", "mass"}, {"kilograms", explicitMass->kilograms}};
-            else if (const auto *density = std::get_if<Runtime::AuthoredPhysicsDensity>(&body.mass))
-                mass = {{"kind", "density"}, {"kilogramsPerCubicMeter", density->kilogramsPerCubicMeter}};
             value["rigidBody"] = {{"id", body.id.value},
                                   {"body", body.body.value},
                                   {"schemaVersion", body.schemaVersion},
                                   {"generation", body.generation},
-                                  {"motion", motion},
-                                  {"mass", std::move(mass)},
+                                  {"motion", PhysicsMotionName(body.motion)},
+                                  {"mass", PhysicsMassJson(body.mass)},
                                   {"initialLinearVelocity", Vec3Json(body.initialLinearVelocity)},
                                   {"initialAngularVelocity", Vec3Json(body.initialAngularVelocity)},
                                   {"linearDampingPerSecond", body.linearDampingPerSecond},
@@ -1067,12 +1086,13 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] Result<Runtime::AuthoredPhysicsMotionType> ParsePhysicsMotion(const std::string_view name) {
+            using enum Runtime::AuthoredPhysicsMotionType;
             if (name == "static")
-                return Result<Runtime::AuthoredPhysicsMotionType>::Success(Runtime::AuthoredPhysicsMotionType::Static);
+                return Result<Runtime::AuthoredPhysicsMotionType>::Success(Static);
             if (name == "kinematic")
-                return Result<Runtime::AuthoredPhysicsMotionType>::Success(Runtime::AuthoredPhysicsMotionType::Kinematic);
+                return Result<Runtime::AuthoredPhysicsMotionType>::Success(Kinematic);
             if (name == "dynamic")
-                return Result<Runtime::AuthoredPhysicsMotionType>::Success(Runtime::AuthoredPhysicsMotionType::Dynamic);
+                return Result<Runtime::AuthoredPhysicsMotionType>::Success(Dynamic);
             return Result<Runtime::AuthoredPhysicsMotionType>::Failure(PersistenceError(SceneInvalid, "Rigid body motion is invalid."));
         }
 
@@ -1187,7 +1207,7 @@ namespace Horo::Editor {
                 if (material.HasError())
                     return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Failure(
                         PersistenceError(SceneInvalid, "Collider material is invalid."));
-                materials.push_back({Physics::PhysicsMaterialSlotId::FromValue(entry["slot"].get<std::uint64_t>()), material.Value()});
+                materials.emplace_back(Physics::PhysicsMaterialSlotId::FromValue(entry["slot"].get<std::uint64_t>()), material.Value());
             }
             return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Success(std::move(materials));
         }
