@@ -108,9 +108,9 @@ namespace Horo::Character {
             lastTick_ = simulationTick;
             emissionsThisTick_ = 0;
         }
-        const bool intervalClosed = lastEmissionTick_ != 0 && simulationTick != lastEmissionTick_ &&
-                                    simulationTick - lastEmissionTick_ < policy_.minimumTickInterval;
-        if (intervalClosed || emissionsThisTick_ == policy_.maximumEmissionsPerTick) {
+        if (const bool intervalClosed = lastEmissionTick_ != 0 && simulationTick != lastEmissionTick_ &&
+                                        simulationTick - lastEmissionTick_ < policy_.minimumTickInterval;
+            intervalClosed || emissionsThisTick_ == policy_.maximumEmissionsPerTick) {
             SaturatingIncrement(statistics_.suppressed);
             return CharacterDiagnosticAdmission::SuppressedRate;
         }
