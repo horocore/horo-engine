@@ -24,7 +24,7 @@ namespace Horo::Render {
                          const std::size_t firstMaterial, const std::size_t materialCount, const StandardPbrPassOutputs outputs) {
             if (materialCount == 0)
                 return;
-            batches.push_back({stage, alphaMode, firstMaterial, materialCount, outputs});
+            batches.emplace_back(stage, alphaMode, firstMaterial, materialCount, outputs);
         }
 
         /** @brief Validates frontend policy before any owned plan storage is allocated. */
@@ -48,7 +48,7 @@ namespace Horo::Render {
                         MakeError(StandardPbrPassPlanErrors::UnsupportedMaterialClass));
                 if (!material.id.IsValid() || material.sourceRevision == 0 || material.generation == 0 || !material.pipeline.IsValid())
                     return Result<std::vector<StandardPbrPassMaterial>>::Failure(MakeError(StandardPbrPassPlanErrors::InvalidMaterial));
-                canonical.push_back({material.id, material.sourceRevision, material.generation, material.pipeline, material.alphaMode});
+                canonical.emplace_back(material.id, material.sourceRevision, material.generation, material.pipeline, material.alphaMode);
             }
             std::ranges::sort(canonical, {}, &StandardPbrPassMaterial::id);
             if (std::ranges::adjacent_find(canonical, {}, &StandardPbrPassMaterial::id) != canonical.end())
@@ -61,30 +61,31 @@ namespace Horo::Render {
 
         /** @brief Emits ordered logical batches over two contiguous alpha-class ranges. */
         void BuildBatches(StandardPbrPassPlan &plan, const StandardPbrPassPlanRequest &request) {
-            const auto masked = std::ranges::find(plan.materials, MaterialAlphaMode::Masked, &StandardPbrPassMaterial::alphaMode);
+            using enum MaterialAlphaMode;
+            using enum StandardPbrPassStage;
+
+            const auto masked = std::ranges::find(plan.materials, Masked, &StandardPbrPassMaterial::alphaMode);
             const std::size_t opaqueCount = static_cast<std::size_t>(masked - plan.materials.begin());
             const std::size_t maskedCount = plan.materials.size() - opaqueCount;
-            const StandardPbrPassOutputs depthOutputs{.depth = true, .motionVectors = request.motionVectors};
-            const StandardPbrPassOutputs colorOutputs{.sceneColor = true,
-                                                      .depth = !request.depthPrepass,
-                                                      .motionVectors = request.motionVectors && !request.depthPrepass};
+            const auto depthOutputs = StandardPbrPassOutputs{.depth = true, .motionVectors = request.motionVectors};
+            const auto colorOutputs = StandardPbrPassOutputs{.sceneColor = true,
+                                                             .depth = !request.depthPrepass,
+                                                             .motionVectors = request.motionVectors && !request.depthPrepass};
             plan.batches.reserve(request.family == StandardPbrRasterFamily::Deferred ? 5U : 4U);
             if (request.depthPrepass) {
-                AppendBatch(plan.batches, StandardPbrPassStage::Depth, MaterialAlphaMode::Opaque, 0, opaqueCount, depthOutputs);
-                AppendBatch(plan.batches, StandardPbrPassStage::Depth, MaterialAlphaMode::Masked, opaqueCount, maskedCount, depthOutputs);
+                AppendBatch(plan.batches, Depth, Opaque, 0, opaqueCount, depthOutputs);
+                AppendBatch(plan.batches, Depth, Masked, opaqueCount, maskedCount, depthOutputs);
             }
             if (request.family == StandardPbrRasterFamily::Deferred) {
-                const StandardPbrPassOutputs gbufferOutputs{.depth = !request.depthPrepass,
-                                                            .motionVectors = request.motionVectors && !request.depthPrepass};
-                AppendBatch(plan.batches, StandardPbrPassStage::DeferredGBuffer, MaterialAlphaMode::Opaque, 0, opaqueCount, gbufferOutputs);
-                AppendBatch(plan.batches, StandardPbrPassStage::DeferredGBuffer, MaterialAlphaMode::Masked, opaqueCount, maskedCount,
-                            gbufferOutputs);
-                plan.batches.push_back({StandardPbrPassStage::DeferredLighting, MaterialAlphaMode::Opaque, 0, 0, {.sceneColor = true}});
+                const auto gbufferOutputs =
+                    StandardPbrPassOutputs{.depth = !request.depthPrepass, .motionVectors = request.motionVectors && !request.depthPrepass};
+                AppendBatch(plan.batches, DeferredGBuffer, Opaque, 0, opaqueCount, gbufferOutputs);
+                AppendBatch(plan.batches, DeferredGBuffer, Masked, opaqueCount, maskedCount, gbufferOutputs);
+                plan.batches.emplace_back(DeferredLighting, Opaque, 0, 0, StandardPbrPassOutputs{.sceneColor = true});
                 return;
             }
-            AppendBatch(plan.batches, StandardPbrPassStage::ForwardColor, MaterialAlphaMode::Opaque, 0, opaqueCount, colorOutputs);
-            AppendBatch(plan.batches, StandardPbrPassStage::ForwardColor, MaterialAlphaMode::Masked, opaqueCount, maskedCount,
-                        colorOutputs);
+            AppendBatch(plan.batches, ForwardColor, Opaque, 0, opaqueCount, colorOutputs);
+            AppendBatch(plan.batches, ForwardColor, Masked, opaqueCount, maskedCount, colorOutputs);
         }
     }  // namespace
 
