@@ -1,6 +1,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/Runtime/Scene/SavedSceneBootstrap.h"
+#include "SceneTestIdentity.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -11,11 +12,7 @@
 
 namespace Horo::Runtime {
     namespace {
-        template <typename Identity> Identity Id(const std::uint8_t marker) {
-            std::array<std::uint8_t, 16> bytes{};
-            bytes.back() = marker;
-            return Identity::FromBytes(bytes).Value();
-        }
+        using SceneTest::Id;
 
         Assets::AssetTypeId SceneAssetType(const std::string_view value = "core.scene") {
             return Assets::AssetTypeId::Parse(value).Value();

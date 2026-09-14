@@ -28,4 +28,12 @@ namespace Horo::Runtime::SceneErrors {
     extern const ErrorCodeDescriptor SaveBootstrapAssetUnavailable;
     extern const ErrorCodeDescriptor SaveBootstrapIncompatible;
     extern const ErrorCodeDescriptor SaveBootstrapSpawnMissing;
+    extern const ErrorCodeDescriptor PersistentIdentityInvalid;
+    extern const ErrorCodeDescriptor PersistentIdentityDuplicate;
+    extern const ErrorCodeDescriptor PersistentIdentityBindingInvalid;
+    extern const ErrorCodeDescriptor PersistentIdentityBindingMissing;
+    extern const ErrorCodeDescriptor PersistentIdentityUnknown;
+    extern const ErrorCodeDescriptor PersistentIdentityStale;
+    extern const ErrorCodeDescriptor PersistentIdentityTombstoned;
+    extern const ErrorCodeDescriptor PersistentIdentityAllocationFailed;
 }  // namespace Horo::Runtime::SceneErrors

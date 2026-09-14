@@ -75,4 +75,31 @@ namespace Horo::Runtime::SceneErrors {
     const ErrorCodeDescriptor SaveBootstrapSpawnMissing{kDomain, ErrorCode{"scene.save_bootstrap.spawn_missing"}, kError,
                                                         "The saved spawn anchor is absent from the compatible scene baseline.",
                                                         "Restore the authored anchor or migrate the saved spawn location."};
+    const ErrorCodeDescriptor PersistentIdentityInvalid{kDomain, ErrorCode{"scene.persistence.identity_invalid"}, kError,
+                                                        "Persistent entity identity input is invalid.",
+                                                        "Use bounded, non-zero durable identities, generations, and provenance."};
+    const ErrorCodeDescriptor PersistentIdentityDuplicate{kDomain, ErrorCode{"scene.persistence.identity_duplicate"}, kError,
+                                                          "Persistent entity identity or mapping ownership is duplicated.",
+                                                          "Assign each durable and runtime identity exactly once."};
+    const ErrorCodeDescriptor PersistentIdentityBindingInvalid{kDomain, ErrorCode{"scene.persistence.binding_invalid"}, kError,
+                                                               "A persistent entity runtime binding is invalid.",
+                                                               "Bind a live durable record to an entity in the exact target Scene."};
+    const ErrorCodeDescriptor PersistentIdentityBindingMissing{kDomain, ErrorCode{"scene.persistence.binding_missing"}, kError,
+                                                               "A live persistent entity has no runtime binding.",
+                                                               "Materialize every live record before publishing the Scene candidate."};
+    const ErrorCodeDescriptor PersistentIdentityUnknown{kDomain, ErrorCode{"scene.persistence.identity_unknown"}, kError,
+                                                        "A persistent entity identity is not present in the candidate.",
+                                                        "Resolve only identities declared by the loaded canonical Scene state."};
+    const ErrorCodeDescriptor PersistentIdentityStale{kDomain, ErrorCode{"scene.persistence.identity_stale"}, kError,
+                                                      "A persistent entity generation is stale.",
+                                                      "Use the exact generation stored by the current durable record."};
+    const ErrorCodeDescriptor PersistentIdentityTombstoned{kDomain, ErrorCode{"scene.persistence.identity_tombstoned"}, kError,
+                                                           "A persistent entity is explicitly tombstoned.",
+                                                           "Preserve the deletion and do not materialize or bind the entity."};
+    const ErrorCodeDescriptor PersistentIdentityAllocationFailed{kDomain,
+                                                                 ErrorCode{"scene.persistence.allocation_failed"},
+                                                                 kError,
+                                                                 "Persistent entity identity storage could not be allocated.",
+                                                                 "Release candidate memory and retry within the explicit bound.",
+                                                                 true};
 }  // namespace Horo::Runtime::SceneErrors
