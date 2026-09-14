@@ -72,6 +72,22 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor OriginShiftPolicyUnauthorized;
     /** @brief Origin-shift evaluation is closed by cancellation or shutdown. */
     extern const ErrorCodeDescriptor OriginShiftPolicyLifecycleUnavailable;
+    /** @brief An origin-rebase transaction, decision, participant set or receipt is malformed. */
+    extern const ErrorCodeDescriptor OriginRebaseInvalid;
+    /** @brief An origin-rebase lifecycle, commit point or transaction value is unsupported. */
+    extern const ErrorCodeDescriptor OriginRebaseUnsupported;
+    /** @brief An origin-rebase decision, participant revision, receipt or active-frame fence is stale. */
+    extern const ErrorCodeDescriptor OriginRebaseStale;
+    /** @brief The complete required origin-rebase participant set was not supplied. */
+    extern const ErrorCodeDescriptor OriginRebaseIncomplete;
+    /** @brief The required origin-rebase participant set exceeds its mandatory ceiling. */
+    extern const ErrorCodeDescriptor OriginRebaseCapacityExceeded;
+    /** @brief Origin-rebase preparation or publication is closed by cancellation, shutdown or terminal ownership. */
+    extern const ErrorCodeDescriptor OriginRebaseLifecycleUnavailable;
+    /** @brief Origin-rebase publication was requested outside the post-simulation host safe point. */
+    extern const ErrorCodeDescriptor OriginRebaseSafePointUnavailable;
+    /** @brief Storage required to gather a complete prepared origin-rebase transaction is unavailable. */
+    extern const ErrorCodeDescriptor OriginRebaseStorageUnavailable;
     /** @brief A World Streaming diagnostic snapshot, decision row or aggregate queue fact is malformed. */
     extern const ErrorCodeDescriptor DiagnosticProjectionInvalid;
     /** @brief A diagnostic row names a foreign owner, partition epoch, operation or revision. */

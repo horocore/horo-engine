@@ -708,6 +708,8 @@ endif()
 add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/NetworkStreamingAuthority.cpp
         runtime/world_streaming/OriginFrame.cpp
+        runtime/world_streaming/OriginRebaseTransaction.cpp
+        runtime/world_streaming/OriginRebaseTransactionErrors.cpp
         runtime/world_streaming/OriginShiftPolicy.cpp
         runtime/world_streaming/OriginShiftPolicyErrors.cpp
         runtime/world_streaming/RuntimeEntityCellExitOperation.cpp

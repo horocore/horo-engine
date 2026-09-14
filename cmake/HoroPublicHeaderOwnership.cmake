@@ -396,6 +396,7 @@ horo_configure_target_header_boundary(HoroNavigationRecastDetour PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/NetworkStreamingAuthority.h
     Horo/WorldStreaming/OriginFrame.h
+    Horo/WorldStreaming/OriginRebaseTransaction.h
     Horo/WorldStreaming/OriginShiftPolicy.h
     Horo/WorldStreaming/RuntimeEntityCellExitOperation.h
     Horo/WorldStreaming/CookedWorldIndexManifest.h
