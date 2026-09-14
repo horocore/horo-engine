@@ -113,7 +113,7 @@ namespace Horo::WorldStreaming {
         double maximumLatencySeconds{};           /**< Maximum total or stage latency in one sample. */
         std::uint64_t maximumBytesPerSample{};    /**< Maximum bytes for each closed flow category. */
         std::uint64_t maximumQueueDepth{};        /**< Maximum depth for each closed queue category. */
-        std::uint64_t maximumResidentCells{};     /**< Maximum cells in each aggregate residency category. */
+        std::uint64_t maximumResidentCells{};     /**< Maximum total cells across all aggregate residency categories. */
         std::uint64_t maximumDropsPerSample{};    /**< Maximum drops for each closed reason. */
         std::uint64_t maximumFailuresPerSample{}; /**< Maximum failures for each closed reason. */
     };
