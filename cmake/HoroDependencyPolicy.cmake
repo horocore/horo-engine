@@ -103,6 +103,8 @@ horo_allow_target_dependencies(TARGET HoroHostModuleComposition DEPENDENCIES Hor
 horo_allow_target_dependencies(TARGET horo-engine DEPENDENCIES HoroApplication HoroHostModuleComposition)
 horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkValidatorStage DEPENDENCIES horo-extension-validate)
+horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES HoroExtensions)
+horo_allow_target_dependencies(TARGET HoroExtensionSdkConformanceStage DEPENDENCIES horo-extension-conformance)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
         HoroGui
