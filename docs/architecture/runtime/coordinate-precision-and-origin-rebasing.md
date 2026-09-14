@@ -196,8 +196,41 @@ only the unpublished candidate. Replacement and shutdown expire outstanding fram
 leases; neither operation mutates any stable global coordinate.
 
 This contract does not choose a trigger, safe point, participant set, or subsystem
-adapter. Those responsibilities remain with the later `OriginRebaseCoordinator`
-and integration work described below.
+adapter. Trigger authority is the separate `OriginShiftPolicy` contract below;
+safe-point transactions, participant sets and subsystem adapters remain with the
+later `OriginRebaseCoordinator` and integration work described below.
+
+### Origin Shift Trigger and Authority Policy
+
+`HoroWorldStreaming` owns the immutable backend-neutral `OriginShiftPolicy`.
+Every publication has a stable `OriginShiftPolicyId`, exact
+`OriginShiftPolicyRevision` and stable `OriginFrameId`. Evaluation accepts only
+canonical `WorldCoordinate64` focal positions and an exact active-frame binding;
+it neither mutates the frame nor invokes a rebase participant.
+
+Each requester has an independent positive millimeter threshold bounded by the
+origin frame's 8192 m local half-extent. Distance is radial from the captured
+canonical active origin. Equality remains inside the threshold; only a strictly
+greater distance produces `RequestShift`. The resulting decision retains the
+request identity, active-frame fence, applied threshold and canonical target for
+the later safe-point transaction.
+
+Authority is determined entirely by host composition:
+
+| Runtime mode | Gameplay | Editor | Network authority |
+|---|---:|---:|---:|
+| Standalone gameplay | allowed | rejected | rejected |
+| Editor preview | allowed | allowed | rejected |
+| Authoritative server | allowed | rejected | rejected |
+| Network client | rejected | rejected | allowed |
+
+Thus editor preview can evaluate editor and gameplay focal points without making
+editor code a runtime dependency, while a multiplayer client cannot use local
+gameplay or editor input to override its server-issued origin authority. Unknown
+versions and enum values, stale policy/frame fences, unauthorized requesters and
+cancelling/closed lifecycle states return distinct typed errors. Policy
+replacement is explicit through revision fencing; cancellation and shutdown close
+evaluation without publishing partial state.
 
 ### 1. Origin Rebase Coordinator
 

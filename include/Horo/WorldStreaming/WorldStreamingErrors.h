@@ -62,6 +62,16 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor OriginFrameLifecycleUnavailable;
     /** @brief Storage required for an origin-frame owner or replacement lease could not be allocated. */
     extern const ErrorCodeDescriptor OriginFrameStorageUnavailable;
+    /** @brief An origin-shift policy, context or request is malformed. */
+    extern const ErrorCodeDescriptor OriginShiftPolicyInvalid;
+    /** @brief An origin-shift policy version, mode, requester or lifecycle value is unsupported. */
+    extern const ErrorCodeDescriptor OriginShiftPolicyUnsupported;
+    /** @brief An origin-shift evaluation names a foreign or superseded policy or origin frame. */
+    extern const ErrorCodeDescriptor OriginShiftPolicyStale;
+    /** @brief The requester is not permitted to initiate shifts in the configured host mode. */
+    extern const ErrorCodeDescriptor OriginShiftPolicyUnauthorized;
+    /** @brief Origin-shift evaluation is closed by cancellation or shutdown. */
+    extern const ErrorCodeDescriptor OriginShiftPolicyLifecycleUnavailable;
     /** @brief A World Streaming diagnostic snapshot, decision row or aggregate queue fact is malformed. */
     extern const ErrorCodeDescriptor DiagnosticProjectionInvalid;
     /** @brief A diagnostic row names a foreign owner, partition epoch, operation or revision. */
