@@ -765,6 +765,7 @@ target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
 
 add_library(HoroPrefabAuthoring STATIC
+        runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabDocument.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
