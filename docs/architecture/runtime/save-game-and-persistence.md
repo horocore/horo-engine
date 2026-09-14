@@ -129,6 +129,17 @@ component fields. It does not walk arbitrary component memory or own gameplay,
 Physics, Character, AI or dormant world state. Each such subsystem owns its canonical
 participant; duplicate field/semantic ownership rejects composition.
 
+`PersistentEntityIdentityMap` is the Scene-owned detached identity candidate for that
+boundary. Its persisted records contain only `PersistentEntityId`, a non-zero durable
+incarnation, explicit authored or spawn-definition provenance, and live/tombstone state;
+`EntityRef` appears only in the separate restore-time binding input. Construction sorts by
+persistent identity, rejects duplicate IDs and authored origins, requires exactly one
+same-Scene binding for every live record, and rejects every binding for a tombstone. This
+makes decoder/ECS iteration order irrelevant, prevents stale generations from resolving,
+and preserves destroyed authored entities as deletions rather than allowing defaults to
+silently recreate them. Prefab-backed spawns carry the existing path-free save asset and
+prefab-instance identities instead of a prefab object pointer or runtime occurrence handle.
+
 Always excluded unless a semantic owner defines a different canonical value are
 pointers/native objects, runtime handles/indices, container capacity, jobs/futures/
 cancellation/callbacks, pending queues/events, GPU/render extraction/fences, Audio
