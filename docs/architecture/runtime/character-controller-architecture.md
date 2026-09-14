@@ -101,9 +101,9 @@ succeeds, one no-fail aggregate ownership switch publishes it; failure retires o
 the candidate and leaves the old aggregate visible. `Shutdown` is idempotent, drains
 every owned controller record, and runs before the paired Physics world is retired.
 Slot reuse advances a non-wrapping generation; exhausted slots are retired instead
-of allowing an older handle to alias a replacement. Until CHR-001.4 supplies
-fixed-tick safe-point commands, active controller creation and destruction are
-rejected.
+of allowing an older handle to alias a replacement. Active controller creation and
+destruction remain rejected until their structural safe-point command payloads are
+defined; CHR-001.4 supplies the separate bounded movement-command pipeline.
 
 The Horo algorithm performs bounded overlap recovery, support classification,
 platform carry, capsule sweep/slide, guarded step-up/forward/down, vertical motion,
@@ -253,6 +253,18 @@ capsule, accumulate root motion or become a resume-time catch-up displacement.
 `Horo::Character::CharacterMovementRequest` owns an exact tick and producer
 sequence, generation-checked controller identity, explicit optional desired velocity
 and heading, jump intent and typed stance intent. It contains no caller delta time.
+
+`CharacterWorld::QueueMovementCommand` copies requests into storage reserved by the
+immutable world settings. Producers use non-blocking admission: contention returns
+`RejectedBusy`, exhaustion returns `RejectedFull`, and neither path mutates controller
+state. Exact duplicate controller/tick/sequence positions and commands for a closed
+tick fail with `character.command.order_invalid`. Before movement, the owner thread
+freezes the eligible frame and orders it by tick, stable controller handle and
+sequence. A greater sequence for the same controller and tick replaces the earlier
+intent; only the final replacement executes. A controller with no command performs
+no movement for that tick, and an earlier intent is never replayed. The world itself
+must advance through consecutive ticks, so a skipped attempted tick is an explicit
+order error rather than an inferred catch-up policy.
 
 The controller consumes `FixedStepContext::fixedDelta`; callers cannot provide a
 different delta. Desired translation/facing use explicit presence and root-motion

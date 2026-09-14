@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Physics/CharacterCommandPipeline.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
 
@@ -96,6 +97,29 @@ namespace Horo::Character {
          * @return Owned descriptor copy, or a typed malformed/foreign/stale/lifecycle error.
          */
         [[nodiscard]] Result<CharacterControllerDescriptor> ControllerDescriptor(const CharacterControllerHandle &handle) const;
+
+        /**
+         * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.
+         * @param request Immutable owned request; no live producer state is retained.
+         * @return Deferred, full or busy admission, or a typed malformed/late/lifecycle error.
+         * @post Concurrent admission never mutates a controller. Exact duplicates are rejected; a greater
+         * sequence for the same controller/tick replaces the earlier intent when that tick is consumed.
+         */
+        [[nodiscard]] Result<CharacterCommandAdmission> QueueMovementCommand(const CharacterMovementRequest &request);
+
+        /**
+         * @brief Freezes and schedules one exact next Character fixed tick on the owner thread.
+         * @param input One-based next tick, exact scene generation and positive host fixed quantum.
+         * @return Success or a typed affinity/lifecycle/order/request error without partial publication.
+         * @post Commands are ordered by stable controller identity. A controller with no command performs no
+         * movement for the tick; prior intent is never replayed. The queue closes before callbacks execute.
+         */
+        [[nodiscard]] Result<void> AdvanceFixedTick(const CharacterFixedTickInput &input);
+
+        /** @brief Returns one coherent copy of the last published tick from any thread. */
+        [[nodiscard]] CharacterPublishedTick PublishedTick() const noexcept;
+        /** @brief Returns allocation-free cumulative command-pipeline counters. */
+        [[nodiscard]] CharacterTickStatistics TickStatistics() const noexcept;
 
         /** @brief Closes admission and drains every controller record; safe repeatedly. */
         void Shutdown() noexcept;

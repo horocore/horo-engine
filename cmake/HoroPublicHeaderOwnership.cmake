@@ -262,6 +262,7 @@ horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
 )
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
+    Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterErrors.h
     Horo/Physics/CharacterWorld.h

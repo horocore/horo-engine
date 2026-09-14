@@ -19,6 +19,8 @@ namespace Horo::Character::CharacterErrors {
     extern const ErrorCodeDescriptor DescriptorInvalid;
     /** @brief A fixed-tick movement request is malformed or internally inconsistent. */
     extern const ErrorCodeDescriptor RequestInvalid;
+    /** @brief A movement command is late, duplicated or targets a non-successor tick. */
+    extern const ErrorCodeDescriptor CommandOrderInvalid;
     /** @brief Controller, contact or result storage exhausted its admitted bound. */
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief Every controller slot retired at the non-wrapping generation ceiling. */

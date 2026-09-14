@@ -4,18 +4,69 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <functional>
 #include <limits>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Horo::Character {
     namespace {
+        /** @brief Validates immutable request evidence before attempting queue ownership. */
+        [[nodiscard]] Result<void> ValidateAdmissionRequest(const auto &impl, const CharacterMovementRequest &request) {
+            if (!impl.acceptingCommands.load(std::memory_order_acquire))
+                return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+            if (const auto valid = ValidateCharacterMovementRequest(request, impl.descriptor.sceneGeneration, impl.descriptor.identity);
+                valid.HasError())
+                return valid;
+            if (request.tick <= impl.closedTick.load(std::memory_order_acquire))
+                return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Revalidates lifecycle/order and exact duplication while queue ownership is held. */
+        [[nodiscard]] Result<void> ValidateLockedAdmission(const auto &impl, const CharacterMovementRequest &request) {
+            if (!impl.acceptingCommands.load(std::memory_order_relaxed))
+                return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+            if (request.tick <= impl.closedTick.load(std::memory_order_relaxed) ||
+                std::ranges::any_of(impl.commands, [&request](const CharacterMovementRequest &queued) {
+                return queued.tick == request.tick && queued.controller == request.controller && queued.sequence == request.sequence;
+            }))
+                return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+            return Result<void>::Success();
+        }
+
         /** @brief Target-private owned controller state prepared for later fixed-tick behavior. */
         struct CharacterControllerRecord final {
             CharacterControllerDescriptor descriptor;
+            std::optional<CharacterMovementRequest> lastMovement;
+            std::uint64_t lastSequence{};
+        };
+
+        /** @brief Orders owned commands independently of producer arrival timing. */
+        [[nodiscard]] bool CommandLess(const CharacterMovementRequest &left, const CharacterMovementRequest &right) noexcept {
+            if (left.tick != right.tick)
+                return left.tick < right.tick;
+            if (left.controller != right.controller)
+                return left.controller < right.controller;
+            return left.sequence < right.sequence;
+        }
+
+        /** @brief Restores the non-reentrant tick guard on every return path. */
+        struct TickGuard final {
+            explicit TickGuard(bool &value) noexcept : value_(value) {
+                value_ = true;
+            }
+
+            ~TickGuard() noexcept {
+                value_ = false;
+            }
+
+            bool &value_;
         };
 
         /** @brief Process-owned synchronization and non-wrapping Character world identity source. */
@@ -64,14 +115,112 @@ namespace Horo::Character {
     struct CharacterWorld::Impl final {
         Impl(const CharacterWorldDescriptor &owner, const CharacterWorldSettings &worldSettings,
              Detail::CharacterControllerRegistry<CharacterControllerRecord> &&controllerRegistry)
-            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)) {}
+            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)) {
+            commands.reserve(settings.Values().capacities.maximumQueuedCommands);
+            scratch.reserve(settings.Values().work.maximumCommandsPerTick);
+        }
 
         CharacterWorldDescriptor descriptor;
         CharacterWorldSettings settings;
         Detail::CharacterControllerRegistry<CharacterControllerRecord> controllers;
+        std::vector<CharacterMovementRequest> commands;
+        std::vector<CharacterMovementRequest> scratch;
+        mutable std::mutex commandMutex;
+        mutable std::mutex publicationMutex;
+        CharacterPublishedTick published;
+        std::atomic<std::uint64_t> closedTick{};
+        std::atomic<bool> acceptingCommands{};
+        std::atomic<std::uint64_t> admittedCommands{};
+        std::atomic<std::uint64_t> rejectedCommands{};
+        std::atomic<std::uint64_t> completedTicks{};
+        std::atomic<std::uint32_t> pendingCommands{};
+        std::atomic<std::uint32_t> maximumCommandDepth{};
         std::thread::id ownerThread{std::this_thread::get_id()};
         CharacterWorldState state{CharacterWorldState::Prepared};
+        bool ticking{};
     };
+
+    namespace {
+        /** @brief Validates a frozen frame completely before queue or controller publication changes. */
+        [[nodiscard]] Result<void> ValidateFrozenCommands(auto &impl) {
+            for (std::size_t index = 0; index < impl.scratch.size(); ++index) {
+                const CharacterMovementRequest &command = impl.scratch[index];
+                if (const auto valid = ValidateCharacterMovementRequest(command, impl.descriptor.sceneGeneration, impl.descriptor.identity);
+                    valid.HasError())
+                    return valid;
+                const auto record = impl.controllers.ResolveMutable(command.controller);
+                if (record.HasError())
+                    return Result<void>::Failure(record.ErrorValue());
+                if (command.sequence <= record.Value()->lastSequence)
+                    return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+                if (index != 0 && impl.scratch[index - 1].controller == command.controller &&
+                    impl.scratch[index - 1].sequence == command.sequence)
+                    return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Canonicalizes and removes one validated eligible frame while holding queue ownership. */
+        [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
+            const std::lock_guard queueLock{impl.commandMutex};
+            if (std::ranges::any_of(impl.commands, [&input](const CharacterMovementRequest &command) {
+                return command.tick < input.tick;
+            }))
+                return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+            const auto eligible =
+                static_cast<std::size_t>(std::ranges::count_if(impl.commands, [&input](const CharacterMovementRequest &command) {
+                return command.tick == input.tick;
+            }));
+            if (eligible > impl.settings.Values().work.maximumCommandsPerTick)
+                return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
+
+            impl.scratch.clear();
+            for (const CharacterMovementRequest &command : impl.commands) {
+                if (command.tick == input.tick)
+                    impl.scratch.push_back(command);
+            }
+            std::ranges::sort(impl.scratch, CommandLess);
+            if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
+                return valid;
+            std::erase_if(impl.commands, [&input](const CharacterMovementRequest &command) {
+                return command.tick == input.tick;
+            });
+            impl.pendingCommands.store(static_cast<std::uint32_t>(impl.commands.size()), std::memory_order_relaxed);
+            impl.closedTick.store(input.tick, std::memory_order_release);
+            return Result<void>::Success();
+        }
+
+        /** @brief Applies only the final replacement for each controller from one frozen canonical frame. */
+        [[nodiscard]] std::uint32_t ApplyCommandFrame(auto &impl, const CharacterFixedTickInput &input) noexcept {
+            std::uint32_t applied{};
+            for (std::size_t index = 0; index < impl.scratch.size(); ++index) {
+                const CharacterMovementRequest &command = impl.scratch[index];
+                if (index + 1 != impl.scratch.size() && impl.scratch[index + 1].controller == command.controller)
+                    continue;
+                auto record = impl.controllers.ResolveMutable(command.controller);
+                record.Value()->lastMovement = command;
+                record.Value()->lastSequence = command.sequence;
+                if (input.observer.movement)
+                    input.observer.movement(input.observer.context, command);
+                ++applied;
+            }
+            return applied;
+        }
+
+        /** @brief Atomically replaces the coherent Character publication marker. */
+        void PublishTick(auto &impl, const CharacterFixedTickInput &input, const std::uint32_t applied) noexcept {
+            const std::lock_guard publicationLock{impl.publicationMutex};
+            impl.published.completedTick = input.tick;
+            ++impl.published.publicationRevision;
+            impl.published.appliedCommands = applied;
+        }
+
+        /** @brief Emits one optional phase observation without exposing pipeline storage. */
+        void ObservePhase(const CharacterFixedTickInput &input, const CharacterTickPhase phase) noexcept {
+            if (input.observer.phase)
+                input.observer.phase(input.observer.context, phase, input.tick);
+        }
+    }  // namespace
 
     /** @copydoc CharacterWorld::Prepare */
     Result<std::unique_ptr<CharacterWorld>> CharacterWorld::Prepare(const CharacterWorldPreparationDescriptor &descriptor,
@@ -108,6 +257,7 @@ namespace Horo::Character {
         if (const auto ready = RequirePreparedMutation(impl_->state, impl_->ownerThread); ready.HasError())
             return ready;
         impl_->state = CharacterWorldState::Active;
+        impl_->acceptingCommands.store(true, std::memory_order_release);
         return Result<void>::Success();
     }
 
@@ -148,10 +298,84 @@ namespace Horo::Character {
         return Result<CharacterControllerDescriptor>::Success(record.Value()->descriptor);
     }
 
+    /** @copydoc CharacterWorld::QueueMovementCommand */
+    Result<CharacterCommandAdmission> CharacterWorld::QueueMovementCommand(const CharacterMovementRequest &request) {
+        const auto rejected = [this](const CharacterCommandAdmissionStatus status) {
+            impl_->rejectedCommands.fetch_add(1, std::memory_order_relaxed);
+            return Result<CharacterCommandAdmission>::Success({status, impl_->pendingCommands.load(std::memory_order_relaxed)});
+        };
+        if (const auto valid = ValidateAdmissionRequest(*impl_, request); valid.HasError()) {
+            impl_->rejectedCommands.fetch_add(1, std::memory_order_relaxed);
+            return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
+        }
+
+        const std::unique_lock queueLock{impl_->commandMutex, std::try_to_lock};
+        if (!queueLock.owns_lock())
+            return rejected(CharacterCommandAdmissionStatus::RejectedBusy);
+        if (const auto valid = ValidateLockedAdmission(*impl_, request); valid.HasError()) {
+            impl_->rejectedCommands.fetch_add(1, std::memory_order_relaxed);
+            return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
+        }
+        if (impl_->commands.size() == impl_->settings.Values().capacities.maximumQueuedCommands)
+            return rejected(CharacterCommandAdmissionStatus::RejectedFull);
+
+        impl_->commands.push_back(request);
+        const auto depth = static_cast<std::uint32_t>(impl_->commands.size());
+        impl_->pendingCommands.store(depth, std::memory_order_relaxed);
+        impl_->maximumCommandDepth.store(std::max(depth, impl_->maximumCommandDepth.load(std::memory_order_relaxed)),
+                                         std::memory_order_relaxed);
+        impl_->admittedCommands.fetch_add(1, std::memory_order_relaxed);
+        return Result<CharacterCommandAdmission>::Success({CharacterCommandAdmissionStatus::Deferred, depth});
+    }
+
+    /** @copydoc CharacterWorld::AdvanceFixedTick */
+    Result<void> CharacterWorld::AdvanceFixedTick(const CharacterFixedTickInput &input) {
+        if (impl_->ownerThread != std::this_thread::get_id() || impl_->state != CharacterWorldState::Active || impl_->ticking)
+            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+        if (input.tick == 0 || input.sceneGeneration != impl_->descriptor.sceneGeneration || input.fixedDelta <= Duration{} ||
+            input.tick != impl_->closedTick.load(std::memory_order_acquire) + 1)
+            return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+
+        const TickGuard ticking{impl_->ticking};
+        if (const auto frozen = FreezeCommandFrame(*impl_, input); frozen.HasError())
+            return frozen;
+
+        ObservePhase(input, CharacterTickPhase::FreezeCommands);
+        const std::uint32_t applied = ApplyCommandFrame(*impl_, input);
+        ObservePhase(input, CharacterTickPhase::ResolveMovement);
+
+        PublishTick(*impl_, input, applied);
+        impl_->completedTicks.fetch_add(1, std::memory_order_relaxed);
+        ObservePhase(input, CharacterTickPhase::PublishCompletedTick);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc CharacterWorld::PublishedTick */
+    CharacterPublishedTick CharacterWorld::PublishedTick() const noexcept {
+        const std::lock_guard publicationLock{impl_->publicationMutex};
+        return impl_->published;
+    }
+
+    /** @copydoc CharacterWorld::TickStatistics */
+    CharacterTickStatistics CharacterWorld::TickStatistics() const noexcept {
+        return {
+            impl_->completedTicks.load(std::memory_order_relaxed),      impl_->admittedCommands.load(std::memory_order_relaxed),
+            impl_->rejectedCommands.load(std::memory_order_relaxed),    impl_->pendingCommands.load(std::memory_order_relaxed),
+            impl_->maximumCommandDepth.load(std::memory_order_relaxed),
+        };
+    }
+
     /** @copydoc CharacterWorld::Shutdown */
     void CharacterWorld::Shutdown() noexcept {
         if (impl_->state == CharacterWorldState::Destroyed)
             return;
+        impl_->acceptingCommands.store(false, std::memory_order_release);
+        {
+            const std::lock_guard queueLock{impl_->commandMutex};
+            impl_->commands.clear();
+            impl_->scratch.clear();
+            impl_->pendingCommands.store(0, std::memory_order_relaxed);
+        }
         impl_->controllers.Drain();
         impl_->state = CharacterWorldState::Destroyed;
     }

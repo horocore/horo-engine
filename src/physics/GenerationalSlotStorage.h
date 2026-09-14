@@ -93,6 +93,14 @@ namespace Horo::Physics::Detail {
             return entry.value.has_value() && entry.generation == generation ? &*entry.value : nullptr;
         }
 
+        /** @brief Resolves an exact occupied generation for owner-thread mutation. @return Borrow or null when stale. */
+        [[nodiscard]] Value *Resolve(const std::uint32_t index, const std::uint32_t generation) noexcept {
+            if (index >= entries_.size())
+                return nullptr;
+            Entry &entry = entries_[index];
+            return entry.value.has_value() && entry.generation == generation ? &*entry.value : nullptr;
+        }
+
         /** @brief Removes an exact live generation. @return False without mutation when absent or stale. */
         [[nodiscard]] bool Remove(const std::uint32_t index, const std::uint32_t generation) noexcept {
             if (Resolve(index, generation) == nullptr)
