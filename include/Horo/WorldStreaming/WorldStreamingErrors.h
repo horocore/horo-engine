@@ -8,6 +8,20 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief A streaming metric binding, policy, handle set or sample is malformed. */
+    extern const ErrorCodeDescriptor MetricInvalid;
+    /** @brief A streaming metric availability, requirement, collection level or lifecycle value is unsupported. */
+    extern const ErrorCodeDescriptor MetricUnsupported;
+    /** @brief A metric sample or replacement no longer matches the active owner or revisions. */
+    extern const ErrorCodeDescriptor MetricStale;
+    /** @brief A complete metric sample exceeds one of its admitted measurement maxima. */
+    extern const ErrorCodeDescriptor MetricCapacityExceeded;
+    /** @brief Required metric collection is unavailable from host composition. */
+    extern const ErrorCodeDescriptor MetricCapabilityUnavailable;
+    /** @brief Metric publication or replacement is closed by cancellation or shutdown. */
+    extern const ErrorCodeDescriptor MetricLifecycleUnavailable;
+    /** @brief A metric-binding operation ran outside its declaring authority owner thread. */
+    extern const ErrorCodeDescriptor MetricThreadAffinityViolation;
     /** @brief A network-streaming authority config, command, report, or proof is malformed. */
     extern const ErrorCodeDescriptor NetworkStreamingAuthorityInvalid;
     /** @brief A network-streaming intent, readiness value, or state proof is unsupported. */
