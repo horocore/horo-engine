@@ -138,7 +138,7 @@ namespace Horo::Runtime {
          * @return Success, or the first registry lifecycle failure; repeated calls succeed.
          * @post Previously issued registry snapshots continue to pin their exact adapter leases.
          */
-        [[nodiscard]] Result<void> Close() noexcept;
+        [[nodiscard]] Result<void> Close() const noexcept;
         /** @brief Reports whether this generation still admits participation. @return Current state. */
         [[nodiscard]] bool IsOpen() const noexcept;
 

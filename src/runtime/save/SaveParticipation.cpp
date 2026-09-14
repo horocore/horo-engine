@@ -2,9 +2,9 @@
 
 #include "Horo/Runtime/Save/SaveErrors.h"
 
-#include <exception>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -40,11 +40,11 @@ namespace Horo::Runtime {
                    (!HasSaveParticipantRole(roles, SaveParticipantRole::Restore) || capabilities.restoreParticipants);
         }
 
-        template <typename Request>
-        [[nodiscard]] Result<SaveOperationHandle> SubmitRequest(
-            const std::shared_ptr<SaveParticipationDetail::State> &state, const std::uint64_t generation,
-            const bool SaveParticipationCapabilities::*capability, const Request &request,
-            Result<SaveOperationHandle> (ISaveParticipationOperationHost::*submit)(const Request &)) {
+        template <typename Request, typename Submit>
+        [[nodiscard]] Result<SaveOperationHandle> SubmitRequest(const std::shared_ptr<SaveParticipationDetail::State> &state,
+                                                                const std::uint64_t generation,
+                                                                const bool SaveParticipationCapabilities::*capability,
+                                                                const Request &request, const Submit &submit) {
             if (state == nullptr || !state->open || state->generation != generation)
                 return LifecycleFailure<SaveOperationHandle>();
             if (!(state->capabilities.*capability))
@@ -52,12 +52,12 @@ namespace Horo::Runtime {
             if (!IsValidRequest(request))
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::OperationInvalid));
             try {
-                return (state->operations->*submit)(request);
+                return submit(*state->operations, request);
             } catch (const std::bad_alloc &) {
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
-            } catch (const std::exception &) {
+            } catch (const std::runtime_error &) {
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
-            } catch (...) {
+            } catch (const std::logic_error &) {
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
             }
         }
@@ -89,13 +89,17 @@ namespace Horo::Runtime {
     /** @copydoc SaveParticipationClient::RequestSave */
     Result<SaveOperationHandle> SaveParticipationClient::RequestSave(const SaveParticipationSaveRequest &request) const {
         return SubmitRequest(state_.lock(), generation_, &SaveParticipationCapabilities::saveRequests, request,
-                             &ISaveParticipationOperationHost::RequestSave);
+                             [](ISaveParticipationOperationHost &host, const SaveParticipationSaveRequest &validated) {
+            return host.RequestSave(validated);
+        });
     }
 
     /** @copydoc SaveParticipationClient::RequestLoad */
     Result<SaveOperationHandle> SaveParticipationClient::RequestLoad(const SaveParticipationLoadRequest &request) const {
         return SubmitRequest(state_.lock(), generation_, &SaveParticipationCapabilities::loadRequests, request,
-                             &ISaveParticipationOperationHost::RequestLoad);
+                             [](ISaveParticipationOperationHost &host, const SaveParticipationLoadRequest &validated) {
+            return host.RequestLoad(validated);
+        });
     }
 
     /** @copydoc SaveParticipationClient::IsOpen */
@@ -152,7 +156,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveParticipationHost::Close */
-    Result<void> SaveParticipationHost::Close() noexcept {
+    Result<void> SaveParticipationHost::Close() const noexcept {
         if (state_ == nullptr || (!state_->open && state_->registeredParticipants.empty()))
             return Result<void>::Success();
         state_->open = false;
