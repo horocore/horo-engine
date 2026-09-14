@@ -1737,6 +1737,7 @@ set_tests_properties(HoroExtensionManifestValidatorRejectsUnknownSchema PROPERTI
 add_test(NAME HoroExtensionManifestValidatorIsPackaged
     COMMAND "${CMAKE_COMMAND}"
         "-DVALIDATOR=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-extension-validate${CMAKE_EXECUTABLE_SUFFIX}"
+        "-DCONFORMANCE=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-extension-conformance${CMAKE_EXECUTABLE_SUFFIX}"
         "-DSCHEMA=${HORO_EXTENSION_SDK_PACKAGE_DIR}/share/horo/extension-sdk/extension-manifest-v1.schema.json"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/VerifyExtensionValidatorPackage.cmake")
 set_tests_properties(HoroExtensionManifestValidatorIsPackaged PROPERTIES
@@ -1751,10 +1752,11 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ExtensionModuleResolutionTests.cpp
         unit/extensions/ExtensionAbiValidationTests.cpp
+        unit/extensions/ExtensionAbiConformanceTests.cpp
         unit/extensions/ExtensionAbiIntegrationTests.cpp
         unit/extensions/ExternalImporterRegistrationTests.cpp
 )
-foreach(abi_fixture_mode RANGE 0 3)
+foreach(abi_fixture_mode RANGE 0 4)
     set(abi_fixture_target HoroExtensionAbiFixture${abi_fixture_mode})
     add_library(${abi_fixture_target} MODULE fixtures/extensions/AbiModule.c)
     target_compile_features(${abi_fixture_target} PRIVATE c_std_11)
@@ -1765,6 +1767,20 @@ foreach(abi_fixture_mode RANGE 0 3)
     target_compile_definitions(HoroExtensionManagerTests PRIVATE
             HORO_ABI_FIXTURE_${abi_fixture_mode}="$<TARGET_FILE:${abi_fixture_target}>")
 endforeach()
+add_dependencies(HoroExtensionManagerTests horo-extension-conformance)
+add_test(NAME HoroExtensionAbiConformanceCliSupported
+    COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")
+set_tests_properties(HoroExtensionAbiConformanceCliSupported PROPERTIES
+    LABELS "extensions;sdk;cli"
+    PASS_REGULAR_EXPRESSION
+        "\"passed\":true,\"code\":\"extension.abi.conformance.passed\"")
+add_test(NAME HoroExtensionAbiConformanceCliIncompatible
+    COMMAND "${CMAKE_COMMAND}"
+        "-DCONFORMANCE=$<TARGET_FILE:horo-extension-conformance>"
+        "-DMODULE=$<TARGET_FILE:HoroExtensionAbiFixture2>"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/VerifyExtensionAbiConformanceFailure.cmake")
+set_tests_properties(HoroExtensionAbiConformanceCliIncompatible PROPERTIES
+    LABELS "extensions;sdk;cli")
 target_include_directories(HoroExtensionManagerTests PRIVATE ${PROJECT_SOURCE_DIR}/src/extensions/host)
 target_include_directories(HoroExtensionManagerTests PRIVATE ${PROJECT_SOURCE_DIR}/src/extensions/capabilities/asset_pipeline_points)
 target_include_directories(HoroExtensionManagerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
