@@ -4,6 +4,7 @@
 
 #include <exception>
 #include <new>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -159,13 +160,17 @@ namespace Horo::Runtime {
             state_->registeredParticipants.clear();
             return Result<void>::Success();
         }
+        std::optional<Error> firstError;
         for (std::size_t remaining = state_->registeredParticipants.size(); remaining > 0; --remaining) {
             auto removed = state_->registry->Unregister(state_->registeredParticipants[remaining - 1]);
-            if (removed.HasError())
-                return Result<void>::Failure(removed.ErrorValue());
-            state_->registeredParticipants.erase(state_->registeredParticipants.begin() + static_cast<std::ptrdiff_t>(remaining - 1));
+            if (removed.HasError()) {
+                if (!firstError.has_value())
+                    firstError.emplace(std::move(removed).ErrorValue());
+            } else {
+                state_->registeredParticipants.erase(state_->registeredParticipants.begin() + static_cast<std::ptrdiff_t>(remaining - 1));
+            }
         }
-        return Result<void>::Success();
+        return firstError.has_value() ? Result<void>::Failure(std::move(*firstError)) : Result<void>::Success();
     }
 
     /** @copydoc SaveParticipationHost::IsOpen */
