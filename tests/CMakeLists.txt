@@ -503,6 +503,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/WorldStreamingRuntimeCompositionTests.cpp
         unit/runtime/world_streaming/WorldStreamingDiagnosticSnapshotTests.cpp
         unit/runtime/world_streaming/WorldStreamingMetricsTests.cpp
+        unit/runtime/world_streaming/WorldStreamingTraceTests.cpp
 )
 target_compile_features(HoroWorldStreamingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming)

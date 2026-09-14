@@ -1,0 +1,334 @@
+#include "Horo/WorldStreaming/WorldStreamingTrace.h"
+
+#include "WorldStreamingInternal.h"
+
+#include <algorithm>
+#include <new>
+#include <string>
+#include <utility>
+
+namespace Horo::WorldStreaming {
+    namespace {
+        [[nodiscard]] bool KnownStage(const StreamingTraceStage stage) noexcept {
+            return stage >= StreamingTraceStage::SourceEvaluation && stage < StreamingTraceStage::Count;
+        }
+
+        [[nodiscard]] bool TerminalStatus(const Telemetry::SpanStatus status) noexcept {
+            return status >= Telemetry::SpanStatus::Succeeded && status <= Telemetry::SpanStatus::TimedOut;
+        }
+
+        [[nodiscard]] bool ConfigurationValid(const StreamingTraceConfiguration &configuration) noexcept {
+            return configuration.owner.IsValid() && configuration.ownerRevision.IsValid() && configuration.bindingRevision.IsValid() &&
+                   configuration.operation.IsValid() && configuration.maximumSpans != 0;
+        }
+
+        [[nodiscard]] unsigned int SubjectMask(const StreamingTraceSubject &subject) noexcept {
+            return static_cast<unsigned int>(subject.source.IsValid()) | static_cast<unsigned int>(subject.cellOperation.IsValid()) << 1U |
+                   static_cast<unsigned int>(subject.assetRequest.IsValid()) << 2U |
+                   static_cast<unsigned int>(subject.activation.IsValid()) << 3U |
+                   static_cast<unsigned int>(subject.provider.IsValid()) << 4U;
+        }
+
+        [[nodiscard]] bool SubjectValid(const StreamingTraceStageBegin &begin) noexcept {
+            using enum StreamingTraceStage;
+            const auto mask = SubjectMask(begin.subject);
+            switch (begin.stage) {
+                case SourceEvaluation:
+                    return mask == 1U;
+                case AssetRequest:
+                    return mask == 6U;
+                case Activation:
+                    return mask == 10U;
+                case ProviderWork:
+                    return mask == 18U;
+                case Count:
+                    return false;
+            }
+            return false;
+        }
+
+        [[nodiscard]] Result<void> ValidateStageBegin(const StreamingTraceStageBegin &begin, const StreamingTraceOperationId operation) {
+            if (!begin.span.IsValid() || !begin.parentRoot.IsValid() || begin.parentRoot != operation)
+                return Internal::Failure<void>(WorldStreamingErrors::TraceInvalid);
+            if (!KnownStage(begin.stage))
+                return Internal::Failure<void>(WorldStreamingErrors::TraceUnsupported);
+            if (!SubjectValid(begin))
+                return Internal::Failure<void>(WorldStreamingErrors::TraceInvalid);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateStageAdmission(const std::unordered_map<std::uint64_t, std::size_t> &spanIndices,
+                                                          const std::size_t spanCount, const StreamingTraceStageBegin &begin,
+                                                          const std::size_t maximumSpans) {
+            if (spanIndices.contains(begin.span.Value()))
+                return Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
+            if (spanCount == maximumSpans)
+                return Internal::Failure<void>(WorldStreamingErrors::TraceCapacityExceeded);
+            if (!begin.parentSpan.IsValid())
+                return Result<void>::Success();
+            return spanIndices.contains(begin.parentSpan.Value()) ? Result<void>::Success()
+                                                                  : Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
+        }
+
+        [[nodiscard]] bool HasActiveStage(std::span<const StreamingTraceStageSnapshot> snapshots) noexcept {
+            return std::ranges::any_of(snapshots, [](const StreamingTraceStageSnapshot &snapshot) {
+                return snapshot.status == Telemetry::SpanStatus::Unset;
+            });
+        }
+
+        [[nodiscard]] Result<void> ValidateSuccessor(const StreamingTraceConfiguration &current,
+                                                     const StreamingTraceConfiguration &successor,
+                                                     const StreamingTraceBindingRevision expectedRevision) {
+            if (!ConfigurationValid(successor))
+                return Internal::Failure<void>(WorldStreamingErrors::TraceInvalid);
+            if (successor.maximumSpans > StreamingTraceConfiguration::MaximumSpanCapacity)
+                return Internal::Failure<void>(WorldStreamingErrors::TraceCapacityExceeded);
+            if (expectedRevision != current.bindingRevision || successor.owner != current.owner)
+                return Internal::Failure<void>(WorldStreamingErrors::TraceStale);
+            if (successor.bindingRevision.Value() <= current.bindingRevision.Value() ||
+                successor.ownerRevision.Value() < current.ownerRevision.Value())
+                return Internal::Failure<void>(WorldStreamingErrors::TraceStale);
+            if (successor.operation == current.operation)
+                return Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] const char *StageName(const StreamingTraceStage stage) noexcept {
+            using enum StreamingTraceStage;
+            switch (stage) {
+                case SourceEvaluation:
+                    return "world_streaming.source_evaluation";
+                case AssetRequest:
+                    return "world_streaming.asset_request";
+                case Activation:
+                    return "world_streaming.activation";
+                case ProviderWork:
+                    return "world_streaming.provider_work";
+                case Count:
+                    return "world_streaming.invalid";
+            }
+            return "world_streaming.invalid";
+        }
+
+        void AddSubjectFields(std::vector<Telemetry::Field> &fields, const StreamingTraceSubject &subject) {
+            if (subject.source.IsValid())
+                fields.emplace_back("source.id", subject.source.Value());
+            if (subject.cellOperation.IsValid()) {
+                fields.emplace_back("cell.operation.id", subject.cellOperation.operation.Value());
+                fields.emplace_back("cell.generation", subject.cellOperation.fence.generation.Value());
+            }
+            if (subject.assetRequest.IsValid())
+                fields.emplace_back("asset_request.id", subject.assetRequest.Value());
+            if (subject.activation.IsValid())
+                fields.emplace_back("activation.id", subject.activation.Value());
+            if (subject.provider.IsValid())
+                fields.emplace_back("provider.id", subject.provider.Value());
+        }
+
+        [[nodiscard]] Telemetry::Record PrepareRecord(const StreamingTraceConfiguration &configuration,
+                                                      const StreamingTraceStageBegin &begin) {
+            std::vector<Telemetry::Field> fields;
+            fields.reserve(10);
+            fields.emplace_back("trace.root.id", configuration.operation.Value());
+            fields.emplace_back("trace.binding.revision", configuration.bindingRevision.Value());
+            fields.emplace_back("owner.id", configuration.owner.owner.Value());
+            fields.emplace_back("owner.revision", configuration.ownerRevision.Value());
+            AddSubjectFields(fields, begin.subject);
+            Telemetry::SpanRecord span{.operationId = begin.span.Value(),
+                                       .parentOperationId =
+                                           begin.parentSpan.IsValid() ? begin.parentSpan.Value() : begin.parentRoot.Value(),
+                                       .name = StageName(begin.stage),
+                                       .fields = std::move(fields)};
+            return {.subsystem = "world_streaming", .payload = std::move(span)};
+        }
+    }  // namespace
+
+    /** @copydoc WorldStreamingTrace::WorldStreamingTrace */
+    WorldStreamingTrace::WorldStreamingTrace(const StreamingTraceConfiguration &configuration)
+        : configuration_(configuration), ownerThread_(std::this_thread::get_id()), lifecycle_(StreamingTraceLifecycle::Active) {
+        snapshots_.reserve(configuration.maximumSpans);
+        startedAt_.reserve(configuration.maximumSpans);
+        preparedRecords_.reserve(configuration.maximumSpans);
+        spanIndices_.reserve(configuration.maximumSpans);
+    }
+
+    /** @copydoc WorldStreamingTrace::WorldStreamingTrace */
+    WorldStreamingTrace::WorldStreamingTrace(WorldStreamingTrace &&other) noexcept
+        : configuration_(other.configuration_), snapshots_(std::move(other.snapshots_)), startedAt_(std::move(other.startedAt_)),
+          preparedRecords_(std::move(other.preparedRecords_)), spanIndices_(std::move(other.spanIndices_)),
+          ownerThread_(other.ownerThread_), lifecycle_(other.lifecycle_) {
+        other.lifecycle_ = StreamingTraceLifecycle::Closed;
+    }
+
+    /** @copydoc WorldStreamingTrace::Create */
+    Result<WorldStreamingTrace> WorldStreamingTrace::Create(const StreamingTraceConfiguration &configuration) {
+        if (!ConfigurationValid(configuration))
+            return Internal::Failure<WorldStreamingTrace>(WorldStreamingErrors::TraceInvalid);
+        if (configuration.maximumSpans > StreamingTraceConfiguration::MaximumSpanCapacity)
+            return Internal::Failure<WorldStreamingTrace>(WorldStreamingErrors::TraceCapacityExceeded);
+        try {
+            return Result<WorldStreamingTrace>::Success(WorldStreamingTrace{configuration});
+        } catch (const std::bad_alloc &) {
+            return Internal::Failure<WorldStreamingTrace>(WorldStreamingErrors::TraceStorageUnavailable);
+        }
+    }
+
+    /** @copydoc WorldStreamingTrace::Begin */
+    Result<void> WorldStreamingTrace::Begin(const StreamingTraceStageBegin &begin, const StreamingTraceBindingRevision expectedRevision) {
+        if (auto mutation = ValidateActiveMutation(); mutation.HasError())
+            return mutation;
+        if (expectedRevision != configuration_.bindingRevision)
+            return Internal::Failure<void>(WorldStreamingErrors::TraceStale);
+        if (auto validation = ValidateStageBegin(begin, configuration_.operation); validation.HasError())
+            return validation;
+        if (auto admission = ValidateStageAdmission(spanIndices_, snapshots_.size(), begin, configuration_.maximumSpans);
+            admission.HasError())
+            return admission;
+        try {
+            auto record = PrepareRecord(configuration_, begin);
+            spanIndices_.emplace(begin.span.Value(), snapshots_.size());
+            preparedRecords_.push_back(std::move(record));
+        } catch (const std::bad_alloc &) {
+            return Internal::Failure<void>(WorldStreamingErrors::TraceStorageUnavailable);
+        }
+        snapshots_.push_back({.begin = begin});
+        startedAt_.push_back(std::chrono::steady_clock::now());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorldStreamingTrace::Complete */
+    Result<StreamingTracePublishDisposition> WorldStreamingTrace::Complete(const StreamingTraceSpanId span,
+                                                                           const Telemetry::SpanStatus status,
+                                                                           const StreamingTraceBindingRevision expectedRevision) {
+        if (std::this_thread::get_id() != ownerThread_)
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceThreadAffinityViolation);
+        if (lifecycle_ == StreamingTraceLifecycle::Closed)
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceLifecycleUnavailable);
+        if (expectedRevision != configuration_.bindingRevision)
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceStale);
+        if (!span.IsValid())
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceInvalid);
+        if (!TerminalStatus(status))
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceUnsupported);
+        const auto found = spanIndices_.find(span.Value());
+        if (found == spanIndices_.end())
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceIdentityConflict);
+        const auto index = found->second;
+        if (snapshots_[index].status != Telemetry::SpanStatus::Unset)
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceLifecycleUnavailable);
+        return Result<StreamingTracePublishDisposition>::Success(Emit(index, status));
+    }
+
+    /** @copydoc WorldStreamingTrace::Replace */
+    Result<void> WorldStreamingTrace::Replace(const StreamingTraceBindingRevision expectedRevision,
+                                              const StreamingTraceConfiguration &successor) {
+        if (auto mutation = ValidateActiveMutation(); mutation.HasError())
+            return mutation;
+        if (auto validation = ValidateSuccessor(configuration_, successor, expectedRevision); validation.HasError())
+            return validation;
+        if (HasActiveStage(snapshots_))
+            return Internal::Failure<void>(WorldStreamingErrors::TraceLifecycleUnavailable);
+        try {
+            std::vector<StreamingTraceStageSnapshot> successorSnapshots;
+            std::vector<std::chrono::steady_clock::time_point> successorStarts;
+            std::vector<Telemetry::Record> successorRecords;
+            std::unordered_map<std::uint64_t, std::size_t> successorIndices;
+            successorSnapshots.reserve(successor.maximumSpans);
+            successorStarts.reserve(successor.maximumSpans);
+            successorRecords.reserve(successor.maximumSpans);
+            successorIndices.reserve(successor.maximumSpans);
+            configuration_ = successor;
+            snapshots_.swap(successorSnapshots);
+            startedAt_.swap(successorStarts);
+            preparedRecords_.swap(successorRecords);
+            spanIndices_.swap(successorIndices);
+        } catch (const std::bad_alloc &) {
+            return Internal::Failure<void>(WorldStreamingErrors::TraceStorageUnavailable);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorldStreamingTrace::Cancel */
+    Result<StreamingTraceEmissionSummary> WorldStreamingTrace::Cancel() {
+        using enum StreamingTraceLifecycle;
+        if (std::this_thread::get_id() != ownerThread_)
+            return Internal::Failure<StreamingTraceEmissionSummary>(WorldStreamingErrors::TraceThreadAffinityViolation);
+        if (lifecycle_ == Closed)
+            return Internal::Failure<StreamingTraceEmissionSummary>(WorldStreamingErrors::TraceLifecycleUnavailable);
+        lifecycle_ = Cancelling;
+        return Result<StreamingTraceEmissionSummary>::Success(CancelActive());
+    }
+
+    /** @copydoc WorldStreamingTrace::Close */
+    Result<StreamingTraceEmissionSummary> WorldStreamingTrace::Close() {
+        using enum StreamingTraceLifecycle;
+        if (std::this_thread::get_id() != ownerThread_)
+            return Internal::Failure<StreamingTraceEmissionSummary>(WorldStreamingErrors::TraceThreadAffinityViolation);
+        if (lifecycle_ == Closed)
+            return Result<StreamingTraceEmissionSummary>::Success({});
+        lifecycle_ = Cancelling;
+        auto summary = CancelActive();
+        lifecycle_ = Closed;
+        return Result<StreamingTraceEmissionSummary>::Success(summary);
+    }
+
+    /** @copydoc WorldStreamingTrace::Owner */
+    const StreamingRuntimeOwnerToken &WorldStreamingTrace::Owner() const noexcept {
+        return configuration_.owner;
+    }
+
+    /** @copydoc WorldStreamingTrace::Revision */
+    StreamingTraceBindingRevision WorldStreamingTrace::Revision() const noexcept {
+        return configuration_.bindingRevision;
+    }
+
+    /** @copydoc WorldStreamingTrace::Operation */
+    StreamingTraceOperationId WorldStreamingTrace::Operation() const noexcept {
+        return configuration_.operation;
+    }
+
+    /** @copydoc WorldStreamingTrace::Lifecycle */
+    StreamingTraceLifecycle WorldStreamingTrace::Lifecycle() const noexcept {
+        return lifecycle_;
+    }
+
+    /** @copydoc WorldStreamingTrace::Stages */
+    std::span<const StreamingTraceStageSnapshot> WorldStreamingTrace::Stages() const noexcept {
+        return snapshots_;
+    }
+
+    /** @copydoc WorldStreamingTrace::ValidateActiveMutation */
+    Result<void> WorldStreamingTrace::ValidateActiveMutation() const {
+        if (std::this_thread::get_id() != ownerThread_)
+            return Internal::Failure<void>(WorldStreamingErrors::TraceThreadAffinityViolation);
+        if (lifecycle_ != StreamingTraceLifecycle::Active)
+            return Internal::Failure<void>(WorldStreamingErrors::TraceLifecycleUnavailable);
+        return Result<void>::Success();
+    }
+
+    StreamingTracePublishDisposition WorldStreamingTrace::Emit(const std::size_t index, const Telemetry::SpanStatus status) noexcept {
+        auto &snapshot = snapshots_[index];
+        snapshot.status = status;
+        snapshot.duration = std::chrono::steady_clock::now() - startedAt_[index];
+        auto record = std::move(preparedRecords_[index]);
+        auto &span = std::get<Telemetry::SpanRecord>(record.payload);
+        span.status = status;
+        span.duration = snapshot.duration;
+        snapshot.publication = Telemetry::Runtime::EmitRecord(std::move(record)) ? StreamingTracePublishDisposition::Submitted
+                                                                                 : StreamingTracePublishDisposition::Dropped;
+        return snapshot.publication;
+    }
+
+    StreamingTraceEmissionSummary WorldStreamingTrace::CancelActive() noexcept {
+        StreamingTraceEmissionSummary summary;
+        for (std::size_t index = 0; index < snapshots_.size(); ++index) {
+            if (snapshots_[index].status != Telemetry::SpanStatus::Unset)
+                continue;
+            if (Emit(index, Telemetry::SpanStatus::Cancelled) == StreamingTracePublishDisposition::Submitted)
+                ++summary.submitted;
+            else
+                ++summary.dropped;
+        }
+        return summary;
+    }
+}  // namespace Horo::WorldStreaming

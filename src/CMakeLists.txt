@@ -740,6 +740,8 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/WorldStreamingDiagnosticSnapshot.cpp
         runtime/world_streaming/WorldStreamingMetricErrors.cpp
         runtime/world_streaming/WorldStreamingMetrics.cpp
+        runtime/world_streaming/WorldStreamingTraceErrors.cpp
+        runtime/world_streaming/WorldStreamingTrace.cpp
         runtime/world_streaming/WorldStreamingErrors.cpp
         runtime/world_streaming/WorldStreamingIdentity.cpp
 )
