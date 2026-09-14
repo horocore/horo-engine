@@ -2,6 +2,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <string_view>
 
 namespace Horo::Extensions {
     TEST_CASE("ABI conformance accepts legacy and current compatible fixtures", "[Extensions][ABI][SDK]") {
@@ -38,6 +39,18 @@ namespace Horo::Extensions {
         CHECK(report.unloadInvoked);
     }
 
+    TEST_CASE("ABI conformance identifies callback load and identity failures", "[Extensions][ABI][SDK]") {
+        CHECK(RunExtensionAbiConformance(HORO_ABI_FIXTURE_5).code == ExtensionAbiConformanceCode::RegistrationRejected);
+        CHECK(RunExtensionAbiConformance(HORO_ABI_FIXTURE_6).code == ExtensionAbiConformanceCode::LoadRejected);
+        CHECK(RunExtensionAbiConformance(HORO_ABI_FIXTURE_7).code == ExtensionAbiConformanceCode::ModuleIdentityRejected);
+    }
+
+    TEST_CASE("ABI conformance identifies a missing module load entry point", "[Extensions][ABI][SDK]") {
+        const auto report = RunExtensionAbiConformance(HORO_ABI_MISSING_LOAD_FIXTURE);
+        CHECK(report.code == ExtensionAbiConformanceCode::MissingLoadEntryPoint);
+        CHECK_FALSE(report.unloadInvoked);
+    }
+
     TEST_CASE("ABI conformance reports missing libraries without invoking module lifecycle", "[Extensions][ABI][SDK]") {
         const auto report = RunExtensionAbiConformance("does-not-exist-horo-extension-module");
         CHECK_FALSE(report.Passed());
@@ -45,5 +58,14 @@ namespace Horo::Extensions {
         CHECK_FALSE(report.queryPresent);
         CHECK_FALSE(report.unloadPresent);
         CHECK_FALSE(report.unloadInvoked);
+    }
+
+    TEST_CASE("ABI conformance exposes stable names for every terminal outcome", "[Extensions][ABI][SDK]") {
+        using enum ExtensionAbiConformanceCode;
+        constexpr std::array codes{Passed,       LibraryLoadFailed,   MissingLoadEntryPoint,  NegotiationRejected, RegistrationRejected,
+                                   LoadRejected, ModuleTableRejected, ModuleIdentityRejected, CleanupRejected};
+        for (const auto code : codes)
+            CHECK(ExtensionAbiConformanceCodeName(code).starts_with("extension.abi."));
+        CHECK(ExtensionAbiConformanceCodeName(static_cast<ExtensionAbiConformanceCode>(255)) == "extension.abi.conformance.unknown");
     }
 }  // namespace Horo::Extensions

@@ -4,7 +4,7 @@
 
 static uint32_t loadCount;
 
-#if HORO_ABI_FIXTURE_MODE == 4
+#if HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5
 static HoroExtensionStatus ImportAsset(void *context, const HoroAssetImportRequest *request, HoroAssetImportResponse *response) {
     (void)context;
     (void)request;
@@ -26,12 +26,13 @@ HORO_EXTENSION_EXPORT uint32_t horo_test_load_count(void) {
 #if HORO_ABI_FIXTURE_MODE != 0
 /** @brief Return a valid or deliberately incompatible inert requirements table. */
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequirements *requirements) {
-    *requirements =
-        (HoroExtensionRequirements){.structSize = sizeof(HoroExtensionRequirements),
-                                    .abiMajorVersion = HORO_EXTENSION_ABI_VERSION,
-                                    .minimumHostMinor = HORO_ABI_FIXTURE_MODE == 2 ? 99 : 0,
-                                    .requiredHostApiSize = offsetof(HoroExtensionHostApi, abiMinorVersion),
-                                    .requiredFunctions = HORO_ABI_FIXTURE_MODE == 4 ? HORO_EXTENSION_REQUIRES_ASSET_IMPORTER : 0};
+    *requirements = (HoroExtensionRequirements){.structSize = sizeof(HoroExtensionRequirements),
+                                                .abiMajorVersion = HORO_EXTENSION_ABI_VERSION,
+                                                .minimumHostMinor = HORO_ABI_FIXTURE_MODE == 2 ? 99 : 0,
+                                                .requiredHostApiSize = offsetof(HoroExtensionHostApi, abiMinorVersion),
+                                                .requiredFunctions = HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5
+                                                                         ? HORO_EXTENSION_REQUIRES_ASSET_IMPORTER
+                                                                         : 0};
     return HORO_EXTENSION_SUCCESS;
 }
 #endif
@@ -39,7 +40,7 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequ
 /** @brief Return a legacy module prefix or a deliberately truncated result. */
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensionHostApi *host, HoroExtensionModuleApi *outModule) {
     ++loadCount;
-#if HORO_ABI_FIXTURE_MODE == 4
+#if HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5
     static const char contributionId[] = "fixture.importer";
     static const char contributionVersion[] = "1.0.0";
     static uint32_t destroyCount;
@@ -49,7 +50,7 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
         .contributionId = {contributionId, sizeof(contributionId) - 1},
         .contributionVersion = {contributionVersion, sizeof(contributionVersion) - 1},
         .importerContext = &destroyCount,
-        .importAsset = ImportAsset,
+        .importAsset = HORO_ABI_FIXTURE_MODE == 5 ? NULL : ImportAsset,
         .destroyImporter = DestroyImporter,
     };
     const HoroExtensionStatus registrationStatus = host->registerAssetImporter(host->hostContext, &importer);
@@ -58,6 +59,15 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
 #else
     (void)host;
 #endif
+    if (HORO_ABI_FIXTURE_MODE == 6)
+        return HORO_EXTENSION_ERROR_INIT_FAILED;
+    if (HORO_ABI_FIXTURE_MODE == 7) {
+        static const char invalidIdentity[] = "invalid";
+        *outModule = (HoroExtensionModuleApi){.structSize = sizeof(HoroExtensionModuleApi),
+                                              .moduleId = {invalidIdentity, 257},
+                                              .moduleVersion = {invalidIdentity, sizeof(invalidIdentity) - 1}};
+        return HORO_EXTENSION_SUCCESS;
+    }
     outModule->structSize = HORO_ABI_FIXTURE_MODE == 3 ? 1 : offsetof(HoroExtensionModuleApi, moduleId);
     return HORO_EXTENSION_SUCCESS;
 }
