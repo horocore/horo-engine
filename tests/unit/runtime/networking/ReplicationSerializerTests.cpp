@@ -59,6 +59,10 @@ namespace Horo::Network {
                 return Result<ReplicationRuntimeValue>::Success(0.0);
             }
 
+            Result<bool> CanonicallyEqual(const ReplicationRuntimeValue &left, const ReplicationRuntimeValue &right) const override {
+                return Result<bool>::Success(left == right);
+            }
+
         private:
             ReplicationSerializerDescriptor descriptor_;
         };
@@ -220,6 +224,15 @@ namespace Horo::Network {
         const auto oversized = std::make_shared<OversizedSerializer>(insufficient);
         const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> contributions{oversized};
         RequireError(ReplicationSerializerRegistry::Create(Schemas(), contributions), NetworkErrors::ReplicationSerializerCapacityExceeded);
+    }
+
+    TEST_CASE("Canonical comparison delegates without materializing encoded buffers", "[unit][network][replication][serializer]") {
+        const auto serializer = std::make_shared<OversizedSerializer>(SerializerDescriptor());
+        const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> serializers{serializer};
+        const auto registry = ReplicationSerializerRegistry::Create(Schemas(), serializers).Value();
+
+        REQUIRE(registry.CanonicallyEqual(SchemaId(10), FieldIdValue(1), 3.0, 3.0).Value());
+        REQUIRE_FALSE(registry.CanonicallyEqual(SchemaId(10), FieldIdValue(1), 3.0, 4.0).Value());
     }
 
     TEST_CASE("Immutable serializer registry pins schema and adapter lifetimes", "[unit][network][replication][serializer]") {

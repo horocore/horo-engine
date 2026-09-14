@@ -83,6 +83,15 @@ namespace Horo::Network {
          * @return Owned runtime value or a typed malformed/capacity error.
          */
         [[nodiscard]] virtual Result<ReplicationRuntimeValue> Decode(std::span<const std::byte> canonicalBytes) const = 0;
+
+        /**
+         * @brief Compares typed values by canonical wire semantics without materializing encoded buffers.
+         * @param left First Horo-owned runtime value.
+         * @param right Second Horo-owned runtime value.
+         * @return Whether both values have identical canonical encodings, or a typed validation error.
+         */
+        [[nodiscard]] virtual Result<bool> CanonicallyEqual(const ReplicationRuntimeValue &left,
+                                                            const ReplicationRuntimeValue &right) const = 0;
     };
 
     /** @brief Finite host limits for one immutable serializer registry generation. */
@@ -196,6 +205,9 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::vector<std::byte>> Encode(const ReplicationRuntimeValue &value) const override;
         /** @copydoc IReplicationFieldSerializer::Decode */
         [[nodiscard]] Result<ReplicationRuntimeValue> Decode(std::span<const std::byte> canonicalBytes) const override;
+        /** @copydoc IReplicationFieldSerializer::CanonicallyEqual */
+        [[nodiscard]] Result<bool> CanonicallyEqual(const ReplicationRuntimeValue &left,
+                                                    const ReplicationRuntimeValue &right) const override;
 
     private:
         /** @brief Stores already validated inert metadata for one scalar adapter. */

@@ -203,6 +203,39 @@ namespace Horo::Network {
             }
             return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerInvalid);
         }
+
+        [[nodiscard]] Result<bool> CompareScalars(const ReplicationSerializerDescriptor &descriptor, const ReplicationRuntimeValue &left,
+                                                  const ReplicationRuntimeValue &right) {
+            using enum ReplicationValueKind;
+            switch (descriptor.valueKind) {
+                case Boolean:
+                    return Result<bool>::Success(std::get<bool>(left) == std::get<bool>(right));
+                case SignedInteger:
+                    return Result<bool>::Success(std::get<std::int64_t>(left) == std::get<std::int64_t>(right));
+                case UnsignedInteger:
+                    return Result<bool>::Success(std::get<std::uint64_t>(left) == std::get<std::uint64_t>(right));
+                case FloatingPoint: {
+                    const double leftValue = std::get<double>(left);
+                    const double rightValue = std::get<double>(right);
+                    if (!std::isfinite(leftValue) || !std::isfinite(rightValue))
+                        return Fail<bool>(NetworkErrors::ReplicationSerializerValueInvalid);
+                    if (descriptor.quantization.mode == ReplicationQuantizationMode::Exact)
+                        return Result<bool>::Success(leftValue == rightValue);
+                    const Result<std::int64_t> leftStep = Quantize(leftValue, descriptor.quantization.step);
+                    if (leftStep.HasError())
+                        return Result<bool>::Failure(leftStep.ErrorValue());
+                    const Result<std::int64_t> rightStep = Quantize(rightValue, descriptor.quantization.step);
+                    if (rightStep.HasError())
+                        return Result<bool>::Failure(rightStep.ErrorValue());
+                    return Result<bool>::Success(leftStep.Value() == rightStep.Value());
+                }
+                case Utf8Text:
+                case ByteSequence:
+                case Count:
+                    return Fail<bool>(NetworkErrors::ReplicationSerializerInvalid);
+            }
+            return Fail<bool>(NetworkErrors::ReplicationSerializerInvalid);
+        }
     }  // namespace
 
     /** @brief Resolves one serializer by exact owner, semantic type, and codec identity. */
@@ -365,13 +398,19 @@ namespace Horo::Network {
     Result<bool> ReplicationSerializerRegistry::CanonicallyEqual(const ReplicationSchemaId schema, const FieldId field,
                                                                  const ReplicationRuntimeValue &left,
                                                                  const ReplicationRuntimeValue &right) const {
-        const Result<ReplicationEncodedValue> encodedLeft = Encode(schema, field, left);
-        if (encodedLeft.HasError())
-            return Result<bool>::Failure(encodedLeft.ErrorValue());
-        const Result<ReplicationEncodedValue> encodedRight = Encode(schema, field, right);
-        if (encodedRight.HasError())
-            return Result<bool>::Failure(encodedRight.ErrorValue());
-        return Result<bool>::Success(encodedLeft.Value() == encodedRight.Value());
+        try {
+            const Result<Binding> binding = Resolve(schema, field);
+            if (binding.HasError())
+                return Result<bool>::Failure(binding.ErrorValue());
+            if (KindOf(left) != binding.Value().entry->descriptor.valueKind ||
+                KindOf(right) != binding.Value().entry->descriptor.valueKind ||
+                ElementCount(left) > binding.Value().field->limits.maximumElementCount ||
+                ElementCount(right) > binding.Value().field->limits.maximumElementCount)
+                return Fail<bool>(NetworkErrors::ReplicationSerializerValueInvalid);
+            return binding.Value().entry->serializer->CanonicallyEqual(left, right);
+        } catch (const std::bad_alloc &) {
+            return Fail<bool>(NetworkErrors::ReplicationSerializerCapacityExceeded);
+        }
     }
 
     /** @copydoc ReplicationSerializerRegistry::Schemas */
@@ -423,5 +462,13 @@ namespace Horo::Network {
             canonicalBytes.size() != expected)
             return Fail<ReplicationRuntimeValue>(NetworkErrors::ReplicationSerializerValueInvalid);
         return DecodeScalar(descriptor_, canonicalBytes);
+    }
+
+    /** @copydoc CanonicalScalarReplicationSerializer::CanonicallyEqual */
+    Result<bool> CanonicalScalarReplicationSerializer::CanonicallyEqual(const ReplicationRuntimeValue &left,
+                                                                        const ReplicationRuntimeValue &right) const {
+        if (KindOf(left) != descriptor_.valueKind || KindOf(right) != descriptor_.valueKind)
+            return Fail<bool>(NetworkErrors::ReplicationSerializerValueInvalid);
+        return CompareScalars(descriptor_, left, right);
     }
 }  // namespace Horo::Network
