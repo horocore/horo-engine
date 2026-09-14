@@ -251,6 +251,16 @@ add_executable(HoroAudioNullTests
 target_compile_features(HoroAudioNullTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioNullTests PRIVATE HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioNullTests LABELS "unit;audio;headless")
+if(HORO_BUILD_AUDIO_SDL3)
+    add_executable(HoroAudioSdl3Tests
+            unit/runtime/audio/Sdl3AudioBackendTests.cpp
+    )
+    target_compile_features(HoroAudioSdl3Tests PRIVATE cxx_std_20)
+    target_link_libraries(HoroAudioSdl3Tests PRIVATE HoroEngine::AudioSdl3)
+    horo_register_catch_test(HoroAudioSdl3Tests
+            LABELS "unit;audio;backend"
+            PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
+endif()
 add_executable(HoroAudioDspTests
     unit/runtime/audio/ResamplerKernelTests.cpp
     unit/runtime/audio/AudioResamplerTests.cpp

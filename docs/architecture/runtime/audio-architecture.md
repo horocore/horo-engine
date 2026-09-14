@@ -1363,6 +1363,14 @@ backends. SDL3Audio is an explicit portability/reference peer and NullAudio is t
 headless/test peer. SDL3Audio is not the base or silent fallback for a native
 backend merely because the host also uses SDL3 for windowing.
 
+The implemented SDL3 reference adapter is a separate optional `HoroAudioSdl3`
+target. SDL headers and linkage remain private. Construction is inert; explicit
+control operations initialize/probe SDL, publish an owned catalog with a stable
+default-role identity, open one logical device, and install preallocated
+planar-to-interleaved conversion only during `Start`. The SDL audio thread invokes
+the retained Horo render port and publishes bounded callback facts. Quiescence and
+stream destruction prove callback detachment before `Close`.
+
 The application composition root links and registers only admitted backend
 targets, then resolves one stable backend ID before device construction. Backend
 identity remains fixed for the AudioRuntime lifetime; selecting another peer
