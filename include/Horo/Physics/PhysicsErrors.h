@@ -6,6 +6,8 @@
 
 #include "Horo/Foundation/ErrorCode.h"
 
+#include <span>
+
 namespace Horo::Physics::PhysicsErrors {
     /** @brief Missing or invalid published-world identity. */
     extern const ErrorCodeDescriptor WorldInvalid;
@@ -59,4 +61,7 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor ShapeMotionUnsupported;
     /** @brief A cooked Physics shape artifact is malformed or fails integrity validation. */
     extern const ErrorCodeDescriptor ShapeArtifactInvalid;
+
+    /** @brief Returns the complete canonical Physics error descriptor set. @return Stable process-lifetime descriptor view. */
+    [[nodiscard]] std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept;
 }  // namespace Horo::Physics::PhysicsErrors

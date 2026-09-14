@@ -1,5 +1,7 @@
 #include "Horo/Physics/PhysicsErrors.h"
 
+#include <array>
+
 namespace Horo::Physics::PhysicsErrors {
     namespace {
         const ErrorDomainId PhysicsDomain{"horo.physics"};
@@ -241,4 +243,37 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = true,
     };
+
+    /** @copydoc Descriptors */
+    std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
+        static const std::array descriptors{
+            &WorldInvalid,
+            &HandleMalformed,
+            &HandleWorldMismatch,
+            &HandleStale,
+            &GenerationExhausted,
+            &CapabilityUnavailable,
+            &OperationUnsupported,
+            &InvalidState,
+            &ThreadAffinityViolation,
+            &SolverDeadlineExceeded,
+            &SolverValidationMessage,
+            &SolverAssertionFailed,
+            &SolverFatalCondition,
+            &DescriptorInvalid,
+            &CommandOrderInvalid,
+            &SeedPolicyInvalid,
+            &ProfileUnsupported,
+            &CapacityExceeded,
+            &CapabilityStale,
+            &QuerySnapshotStale,
+            &InitializationFailed,
+            &ShapeCookSourceInvalid,
+            &ShapeCookLimitExceeded,
+            &ShapeCookCancelled,
+            &ShapeMotionUnsupported,
+            &ShapeArtifactInvalid,
+        };
+        return descriptors;
+    }
 }  // namespace Horo::Physics::PhysicsErrors

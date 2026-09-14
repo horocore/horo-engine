@@ -2,7 +2,6 @@
 
 #include "Horo/Physics/PhysicsErrors.h"
 
-#include <array>
 #include <optional>
 #include <utility>
 
@@ -13,32 +12,7 @@ namespace Horo::Physics {
             if (error.domain.Value() != "horo.physics")
                 return std::nullopt;
 
-            static const std::array descriptors{
-                &PhysicsErrors::WorldInvalid,
-                &PhysicsErrors::HandleMalformed,
-                &PhysicsErrors::HandleWorldMismatch,
-                &PhysicsErrors::HandleStale,
-                &PhysicsErrors::GenerationExhausted,
-                &PhysicsErrors::CapabilityUnavailable,
-                &PhysicsErrors::OperationUnsupported,
-                &PhysicsErrors::InvalidState,
-                &PhysicsErrors::ThreadAffinityViolation,
-                &PhysicsErrors::SolverDeadlineExceeded,
-                &PhysicsErrors::SolverValidationMessage,
-                &PhysicsErrors::SolverAssertionFailed,
-                &PhysicsErrors::SolverFatalCondition,
-                &PhysicsErrors::DescriptorInvalid,
-                &PhysicsErrors::ProfileUnsupported,
-                &PhysicsErrors::CapacityExceeded,
-                &PhysicsErrors::CapabilityStale,
-                &PhysicsErrors::QuerySnapshotStale,
-                &PhysicsErrors::InitializationFailed,
-            };
-            for (const ErrorCodeDescriptor *descriptor : descriptors) {
-                if (error.code.Value() == descriptor->code.Value())
-                    return DiagnosticCode{std::string{descriptor->code.Value()}};
-            }
-            return std::nullopt;
+            return DiagnosticCodeForDeclaredError(error, "horo.physics", PhysicsErrors::Descriptors());
         }
 
         /** @brief Converts the complete Foundation severity vocabulary without fallback. */
@@ -62,48 +36,94 @@ namespace Horo::Physics {
             return key == SceneGeneration || key == SimulationTick || key == QuerySnapshotGeneration || key == OperationSequence;
         }
 
+        /** @brief Captures one valid world while preserving a single-world context invariant. */
+        bool AcceptWorld(const PhysicsWorldId world, std::optional<PhysicsWorldId> &contextWorld) noexcept {
+            if (!world.IsValid() || (contextWorld.has_value() && *contextWorld != world))
+                return false;
+            contextWorld = world;
+            return true;
+        }
+
+        /** @brief Validates a typed handle and captures its valid owning world. */
+        template <typename Handle>
+        bool AcceptHandle(const PhysicsDiagnosticContextValue &value, std::optional<PhysicsWorldId> &contextWorld) noexcept {
+            if (const auto *handle = std::get_if<Handle>(&value))
+                return handle->IsValid() && AcceptWorld(handle->world, contextWorld);
+            return false;
+        }
+
+        /** @brief Validates the world-valued context entry. */
+        bool ValidateWorldEntry(const PhysicsDiagnosticContextValue &value, std::optional<PhysicsWorldId> &contextWorld) noexcept {
+            if (const auto *world = std::get_if<PhysicsWorldId>(&value))
+                return AcceptWorld(*world, contextWorld);
+            return false;
+        }
+
+        /** @brief Validates the asset-valued context entry. */
+        bool ValidateAssetEntry(const PhysicsDiagnosticContextValue &value) noexcept {
+            if (const auto *asset = std::get_if<Assets::AssetId>(&value))
+                return asset->IsValid();
+            return false;
+        }
+
+        /** @brief Dispatches the closed handle-valued context keys. */
+        bool ValidateHandleEntry(const PhysicsDiagnosticContextEntry &entry, std::optional<PhysicsWorldId> &contextWorld) noexcept {
+            using enum PhysicsDiagnosticContextKey;
+            if (entry.key == Body)
+                return AcceptHandle<BodyHandle>(entry.value, contextWorld);
+            if (entry.key == Shape)
+                return AcceptHandle<ShapeHandle>(entry.value, contextWorld);
+            if (entry.key == Constraint)
+                return AcceptHandle<ConstraintHandle>(entry.value, contextWorld);
+            return false;
+        }
+
+        /** @brief Validates one identity-valued context entry. */
+        bool ValidateIdentityEntry(const PhysicsDiagnosticContextEntry &entry, std::optional<PhysicsWorldId> &contextWorld) noexcept {
+            using enum PhysicsDiagnosticContextKey;
+            if (entry.key == World)
+                return ValidateWorldEntry(entry.value, contextWorld);
+            if (entry.key == Asset)
+                return ValidateAssetEntry(entry.value);
+            return ValidateHandleEntry(entry, contextWorld);
+        }
+
+        /** @brief Validates one scalar-valued context entry. */
+        bool ValidateScalarEntry(const PhysicsDiagnosticContextEntry &entry) noexcept {
+            if (const auto *value = std::get_if<std::uint64_t>(&entry.value))
+                return !RequiresNonZeroScalar(entry.key) || *value != 0;
+            return false;
+        }
+
         /** @brief Validates one key/value pair and captures its world identity when applicable. */
         bool ValidateContextEntry(const PhysicsDiagnosticContextEntry &entry, std::optional<PhysicsWorldId> &contextWorld) noexcept {
-            const auto acceptWorld = [&contextWorld](const PhysicsWorldId world) {
-                if (!world.IsValid() || (contextWorld.has_value() && *contextWorld != world))
-                    return false;
-                contextWorld = world;
-                return true;
-            };
-
-            switch (entry.key) {
-                using enum PhysicsDiagnosticContextKey;
-                case World:
-                    if (const auto *world = std::get_if<PhysicsWorldId>(&entry.value))
-                        return acceptWorld(*world);
-                    return false;
-                case Body:
-                    if (const auto *handle = std::get_if<BodyHandle>(&entry.value))
-                        return handle->IsValid() && acceptWorld(handle->world);
-                    return false;
-                case Shape:
-                    if (const auto *handle = std::get_if<ShapeHandle>(&entry.value))
-                        return handle->IsValid() && acceptWorld(handle->world);
-                    return false;
-                case Constraint:
-                    if (const auto *handle = std::get_if<ConstraintHandle>(&entry.value))
-                        return handle->IsValid() && acceptWorld(handle->world);
-                    return false;
-                case Asset:
-                    if (const auto *asset = std::get_if<Assets::AssetId>(&entry.value))
-                        return asset->IsValid();
-                    return false;
-                case SceneGeneration:
-                case SimulationTick:
-                case QuerySnapshotGeneration:
-                case OperationSequence:
-                case RequestedCount:
-                case Capacity:
-                    if (const auto *value = std::get_if<std::uint64_t>(&entry.value))
-                        return !RequiresNonZeroScalar(entry.key) || *value != 0;
-                    return false;
-            }
+            using enum PhysicsDiagnosticContextKey;
+            if (entry.key <= Asset)
+                return ValidateIdentityEntry(entry, contextWorld);
+            if (entry.key <= Capacity)
+                return ValidateScalarEntry(entry);
             return false;
+        }
+
+        /** @brief Validates bounded record-wide inputs before copying evidence. */
+        bool ValidateRecordInput(const Error &error, const std::span<const PhysicsDiagnosticContextEntry> context,
+                                 const std::optional<DiagnosticCode> &code, const std::optional<DiagnosticSeverity> &severity) noexcept {
+            if (!code.has_value() || !severity.has_value())
+                return false;
+            return !error.message.empty() && error.message.size() <= MaximumPhysicsDiagnosticMessageBytes &&
+                   context.size() <= MaximumPhysicsDiagnosticContextEntries;
+        }
+
+        /** @brief Validates ordered typed context while preserving a single-world invariant. */
+        bool ValidateContext(const std::span<const PhysicsDiagnosticContextEntry> context) noexcept {
+            std::optional<PhysicsDiagnosticContextKey> previousKey;
+            std::optional<PhysicsWorldId> contextWorld;
+            for (const PhysicsDiagnosticContextEntry &entry : context) {
+                if ((previousKey.has_value() && entry.key <= *previousKey) || !ValidateContextEntry(entry, contextWorld))
+                    return false;
+                previousKey = entry.key;
+            }
+            return true;
         }
     }  // namespace
 
@@ -135,19 +155,13 @@ namespace Horo::Physics {
                 MakeError(PhysicsErrors::OperationUnsupported, "Unknown Physics diagnostic category."));
         const auto code = CanonicalDiagnosticCode(error);
         const auto severity = DiagnosticSeverityFor(error.severity);
-        if (!code.has_value() || !severity.has_value() || error.message.empty() ||
-            error.message.size() > MaximumPhysicsDiagnosticMessageBytes || context.size() > MaximumPhysicsDiagnosticContextEntries)
+        if (!ValidateRecordInput(error, context, code, severity))
             return Result<PhysicsDiagnosticRecord>::Failure(
                 MakeError(PhysicsErrors::DescriptorInvalid, "Physics diagnostic evidence is malformed or exceeds its bounded record."));
 
-        std::optional<PhysicsDiagnosticContextKey> previousKey;
-        std::optional<PhysicsWorldId> contextWorld;
-        for (const PhysicsDiagnosticContextEntry &entry : context) {
-            if ((previousKey.has_value() && entry.key <= *previousKey) || !ValidateContextEntry(entry, contextWorld))
-                return Result<PhysicsDiagnosticRecord>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Physics diagnostic context is unordered, duplicate or malformed."));
-            previousKey = entry.key;
-        }
+        if (!ValidateContext(context))
+            return Result<PhysicsDiagnosticRecord>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Physics diagnostic context is unordered, duplicate or malformed."));
 
         PhysicsDiagnosticRecord record;
         record.category = category;
