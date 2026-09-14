@@ -240,6 +240,13 @@ target_include_directories(HoroAudioApiTests PRIVATE ${PROJECT_SOURCE_DIR}/src/a
 target_compile_features(HoroAudioApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioApiTests PRIVATE HoroEngine::AudioApi)
 horo_register_catch_test(HoroAudioApiTests LABELS "unit;audio;headless")
+
+add_executable(HoroAudioImportTests
+        unit/runtime/audio/AudioSourceImporterTests.cpp
+)
+target_compile_features(HoroAudioImportTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioImportTests PRIVATE HoroEngine::AudioImport)
+horo_register_catch_test(HoroAudioImportTests LABELS "unit;audio;headless")
 add_executable(HoroAudioBackendContractTests
         unit/runtime/audio/AudioBackendContractTests.cpp
 )

@@ -434,6 +434,17 @@ add_library(HoroEngine::AudioApi ALIAS HoroAudioApi)
 target_compile_features(HoroAudioApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
+add_library(HoroAudioImport STATIC
+        audio/import/AudioSourceImporter.cpp
+        audio/import/AudioSourceProbeDetail.inl
+)
+add_library(HoroEngine::AudioImport ALIAS HoroAudioImport)
+target_compile_features(HoroAudioImport PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioImport
+        PUBLIC HoroEngine::AudioApi
+        PRIVATE HoroThirdParty::Miniaudio
+)
+
 # Build-tree-only contract shared privately by Audio control and concrete backend adapters.
 add_library(HoroAudioBackendContract INTERFACE)
 target_compile_features(HoroAudioBackendContract INTERFACE cxx_std_20)
