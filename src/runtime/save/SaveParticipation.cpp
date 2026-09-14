@@ -2,9 +2,9 @@
 
 #include "Horo/Runtime/Save/SaveErrors.h"
 
+#include <exception>
 #include <new>
 #include <optional>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -55,9 +55,9 @@ namespace Horo::Runtime {
                 return submit(*state->operations, request);
             } catch (const std::bad_alloc &) {
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
-            } catch (const std::runtime_error &) {
+            } catch (const std::exception &) {  // NOSONAR -- module callbacks are an ABI boundary; no exception may escape it.
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
-            } catch (const std::logic_error &) {
+            } catch (...) {  // NOSONAR -- third-party modules may throw non-standard exceptions across this boundary.
                 return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
             }
         }
