@@ -143,6 +143,9 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Animation Architecture](./runtime/animation-architecture.md): skeletal
   animation, clips, animation graphs, blend trees, IK, root motion, retargeting,
   and animation events.
+- [Animation Asset Pipeline Contract](./runtime/animation-asset-pipeline-contract.md):
+  animation authoring schemas, import settings, dependencies, cooked payloads,
+  diagnostics, migration, and the Animation/Asset Pipeline ownership boundary.
 - [Animation Ownership, Update Order and Clock](../adr/061-animation-ownership-update-order-and-clock.md):
   pose ownership, fixed-tick advancement, pause/step/rate semantics, root-motion
   timing, and physics/render handoff.

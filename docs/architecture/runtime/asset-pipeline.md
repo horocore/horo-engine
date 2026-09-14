@@ -9,6 +9,12 @@ release.
 The pipeline is host-agnostic. The same importers, cookers, and packagers are
 used by the GUI, CLI, and MCP.
 
+Animation assets follow the generic identity, orchestration, cache, publication,
+and byte-provider authority here. Animation-specific source selection, schemas,
+dependencies, compression, cooked payloads, and diagnostics are owned by the
+[Animation Asset Pipeline Contract](./animation-asset-pipeline-contract.md).
+Assets must not interpret joints, tracks, root motion, or compression profiles.
+
 Virtual-texture sources follow this same authority under
 [ADR-164](../../adr/164-virtual-texturing-ownership-product-scope-and-capability-tier.md):
 the pipeline publishes immutable target/capability-keyed artifacts and bounded byte

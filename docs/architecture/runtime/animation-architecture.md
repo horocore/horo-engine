@@ -16,6 +16,12 @@ single normative owner of pose ownership, animation clock domains, fixed-tick
 order, root-motion timing, and physics/render handoff. This document owns the
 broader animation subsystem model and summarizes that decision.
 
+[Animation Asset Pipeline Contract](./animation-asset-pipeline-contract.md) is
+the normative ANI-001.8 owner of animation authoring payloads, import settings,
+typed dependencies, cooked representations, diagnostics, and the Animation/AST
+boundary. The examples in this document describe semantic values only and are
+not an alternate serialized format.
+
 ## Scope
 
 Covered:
@@ -685,6 +691,11 @@ committed pose. Animation-to-physics handoff is explicit and generation-checked.
 
 ## Asset Formats
 
+The following JSON fragments are illustrative projections of typed Animation
+values. They are not canonical files, do not assign persistent identity, and do
+not define import or cooked bytes. ANI-001.8 owns those contracts in
+[Animation Asset Pipeline Contract](./animation-asset-pipeline-contract.md).
+
 ### Skeleton Asset
 
 ```json
@@ -788,5 +799,8 @@ through binary floating point.
 - [Physics Architecture](./physics-architecture.md): ragdoll, hit detection, and
   animation/physics handoff.
 - [Asset Pipeline](./asset-pipeline.md): clip import, compression, and cook.
+- [Animation Asset Pipeline Contract](./animation-asset-pipeline-contract.md):
+  canonical authoring payload, import settings, dependency, cook, diagnostic,
+  and migration ownership.
 - [Advanced Rendering Architecture](./advanced-rendering-architecture.md):
   meshlets, GPU-driven rendering, and virtual geometry boundaries.
