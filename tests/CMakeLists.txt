@@ -776,6 +776,7 @@ target_compile_features(HoroReleaseProfileTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseProfileTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
+        unit/application/ProjectMigrationCatalogTests.cpp
 )
 target_compile_features(HoroProjectMigrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigrations)

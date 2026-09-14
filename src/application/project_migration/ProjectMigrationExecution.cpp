@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <system_error>
 #include <unordered_set>
@@ -87,23 +88,37 @@ namespace Horo::Application {
             });
         }
 
+        [[nodiscard]] bool HasSuffix(const std::string_view path, const std::initializer_list<std::string_view> suffixes) {
+            return std::ranges::any_of(suffixes, [path](const std::string_view suffix) {
+                return path.ends_with(suffix);
+            });
+        }
+
+        [[nodiscard]] bool IsSceneDocument(const std::string_view path) {
+            return HasSuffix(path, {".scene.horo", ".hscene"}) || (path.starts_with("assets/scenes/") && path.ends_with(".horo"));
+        }
+
         [[nodiscard]] MigrationDocumentKind ClassifyDocument(const std::string_view path) {
             using enum MigrationDocumentKind;
+            std::string folded{path};
+            std::ranges::transform(folded, folded.begin(), [](const unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
             if (path == ".horo/project.json")
                 return ProjectMetadata;
-            if (path.ends_with(".scene.horo") || path.ends_with(".hscene"))
-                return Scene;
-            if (path.ends_with(".prefab.horo") || path.ends_with(".hprefab"))
-                return Prefab;
-            if (path.ends_with(".horo.meta"))
+            if (HasSuffix(folded, {".prefab.horo", ".horo.meta"}))
                 return AssetSidecar;
-            if (path.find("/input") != std::string_view::npos)
+            if (IsSceneDocument(folded))
+                return Scene;
+            if (HasSuffix(folded, {".prefab", ".hprefab"}))
+                return Prefab;
+            if (folded.find("/input") != std::string_view::npos)
                 return Input;
-            if (path.ends_with(".material.horo"))
+            if (folded.ends_with(".material.horo"))
                 return Material;
-            if (path.ends_with(".graph.horo"))
+            if (folded.ends_with(".graph.horo"))
                 return Graph;
-            if (path.starts_with(".horo/"))
+            if (folded.starts_with(".horo/"))
                 return ProjectSettings;
             return Other;
         }

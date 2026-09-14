@@ -1,4 +1,5 @@
 #include "Horo/Application/ProjectMigrationCatalog.h"
+#include "ProjectMigrationProductionTestSupport.h"
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 namespace project_migration_tests {
@@ -153,16 +155,6 @@ namespace project_migration_tests {
                 .sourceContract = Contract(sourceContract),
                 .targetContract = Contract(targetContract),
                 .pipeline = std::move(pipeline)};
-    }
-
-    [[nodiscard]] Horo::Application::ProjectMigrationDefinition ProductionCompressionDefinition() {
-        const auto catalog = Horo::Application::BuildBuiltInProjectMigrationCatalog();
-        REQUIRE((catalog.HasValue()));
-        const auto definition = std::ranges::find_if(catalog.Value(), [](const auto &entry) {
-            return entry.id.value == "core.project_settings.compression_defaults";
-        });
-        REQUIRE((definition != catalog.Value().end()));
-        return *definition;
     }
 
     [[nodiscard]] Horo::Application::ProjectMigrationPlan ProductionCompressionPlan() {
@@ -361,19 +353,6 @@ namespace project_migration_tests {
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 
-    TEST_CASE("Built In Catalog Contains Compression Defaults Migration", "[unit][application]") {
-        const auto definition = ProductionCompressionDefinition();
-        REQUIRE((definition.id.value == "core.project_settings.compression_defaults"));
-        REQUIRE((Horo::Application::FormatHoroVersion(definition.from.value) == "0.0.1"));
-        REQUIRE((Horo::Application::FormatHoroVersion(definition.to.value) == "0.1.0"));
-
-        const auto support = Horo::Application::BuildBuiltInProjectMigrationSupportDescriptor();
-        REQUIRE((support.HasValue()));
-        REQUIRE((Horo::Application::FormatHoroVersion(support.Value().target.value) == "0.1.0"));
-        REQUIRE((Horo::Application::FormatHoroVersion(support.Value().minimumMigratable.value) == "0.0.1"));
-        REQUIRE((support.Value().targetValidator != nullptr));
-    }
-
     TEST_CASE("Production Compression Migration Preserves Unknown Json Semantics", "[unit][application]") {
         ProductionMigrationFixture fixture;
         TemporaryProject project;
@@ -464,5 +443,105 @@ namespace project_migration_tests {
         REQUIRE((dryRun.HasValue()));
         REQUIRE((dryRun.Value().changedFiles == std::vector<std::string>{".horo/project.json"}));
         REQUIRE((project.Read(".horo/project.json") == before));
+    }
+
+    TEST_CASE("Production Migration Adopts Prefab Identity Before Scene References", "[unit][application][prefab]") {
+        constexpr std::string_view PrefabId = "00112233-4455-6677-8899-aabbccddeeff";
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"prefab-adoption","settings":{}})");
+        project.Write("assets/prefabs/player.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        project.Write(
+            "assets/prefabs/player.prefab",
+            R"({"projectVersion":"0.0.1","prefabId":"00112233-4455-6677-8899-aabbccddeeff","objects":[{"components":[{"type":"game.unknown","payload":{"bytes":[0,127,255]}}]}],"unknown":{"kept":true}})");
+        project.Write(
+            "assets/scenes/main.horo",
+            R"({"schemaVersion":1,"objects":[],"prefabInstances":[{"instanceId":7,"sourcePath":"assets/prefabs/player.prefab","unknown":"kept"}]})");
+        const std::string sourcePrefab = project.Read("assets/prefabs/player.prefab");
+        const std::string sourceScene = project.Read("assets/scenes/main.horo");
+
+        auto prepared = fixture.Prepare(project);
+        REQUIRE((prepared.HasValue()));
+        std::vector<std::string> changedPaths;
+        std::ranges::transform(prepared.Value().Changes(), std::back_inserter(changedPaths), [](const auto &change) {
+            return change.path;
+        });
+        REQUIRE(
+            (changedPaths == std::vector<std::string>{".horo/project.json", "assets/prefabs/player.prefab", "assets/scenes/main.horo"}));
+        const auto prefabBytes = prepared.Value().ReadCandidateDocument("assets/prefabs/player.prefab");
+        const auto sceneBytes = prepared.Value().ReadCandidateDocument("assets/scenes/main.horo");
+        REQUIRE((prefabBytes.HasValue()));
+        REQUIRE((sceneBytes.HasValue()));
+        const std::string prefab = Text(prefabBytes.Value());
+        const std::string scene = Text(sceneBytes.Value());
+        REQUIRE((prefab.find("\"projectVersion\": \"0.1.0\"") != std::string::npos));
+        REQUIRE((prefab.find(std::string{"\"assetId\": \""} + std::string{PrefabId} + "\"") != std::string::npos));
+        REQUIRE((prefab.find("\"prefabId\"") == std::string::npos));
+        REQUIRE((prefab.find("\"bytes\"") != std::string::npos));
+        REQUIRE((prefab.find("127") != std::string::npos));
+        REQUIRE((prefab.find("255") != std::string::npos));
+        REQUIRE((prefab.find("\"kept\": true") != std::string::npos));
+        REQUIRE((scene.find(std::string{"\"sourceAsset\": \""} + std::string{PrefabId} + "\"") != std::string::npos));
+        REQUIRE((scene.find("\"sourcePath\"") == std::string::npos));
+        REQUIRE((scene.find("\"unknown\": \"kept\"") != std::string::npos));
+        REQUIRE((project.Read("assets/prefabs/player.prefab") == sourcePrefab));
+        REQUIRE((project.Read("assets/scenes/main.horo") == sourceScene));
+    }
+
+    TEST_CASE("Production Prefab Migration Enforces Source Payload Boundary", "[unit][application][prefab]") {
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"prefab-boundary","settings":{}})");
+        project.Write("assets/prefabs/boundary.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"10112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        constexpr std::string_view Prefix = R"({"projectVersion":"0.0.1","padding":")";
+        constexpr std::string_view Suffix = R"("})";
+        constexpr std::size_t MaximumPrefabBytes = 4U * 1024U * 1024U;
+        std::string bounded{Prefix};
+        bounded.append(MaximumPrefabBytes - Prefix.size() - Suffix.size(), 'x');
+        bounded.append(Suffix);
+        REQUIRE((bounded.size() == MaximumPrefabBytes));
+        project.Write("assets/prefabs/boundary.prefab", bounded);
+        REQUIRE((fixture.Prepare(project).HasValue()));
+
+        bounded.push_back(' ');
+        project.Write("assets/prefabs/boundary.prefab", bounded);
+        const std::string authoritative = project.Read("assets/prefabs/boundary.prefab");
+        auto rejected = fixture.Prepare(project);
+        REQUIRE((rejected.HasError()));
+        REQUIRE((rejected.ErrorValue().message.find("payload bound") != std::string::npos));
+        REQUIRE((project.Read("assets/prefabs/boundary.prefab") == authoritative));
+    }
+
+    TEST_CASE("Production Prefab Migration Rejects Future And Conflicting References Transactionally", "[unit][application][prefab]") {
+        constexpr std::string_view Sidecar =
+            R"({"schemaVersion":1,"assetId":"20112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+        ProductionMigrationFixture fixture;
+
+        TemporaryProject future;
+        future.Write(".horo/project.json", R"({"projectId":"prefab-future","settings":{}})");
+        future.Write("assets/prefabs/future.prefab.horo", std::string{Sidecar});
+        future.Write("assets/prefabs/future.prefab", R"({"projectVersion":"0.2.0","unknown":{"kept":true}})");
+        const std::string futureSource = future.Read("assets/prefabs/future.prefab");
+        auto futureResult = fixture.Prepare(future);
+        REQUIRE((futureResult.HasError()));
+        REQUIRE((futureResult.ErrorValue().message.find("newer than the migration target") != std::string::npos));
+        REQUIRE((future.Read("assets/prefabs/future.prefab") == futureSource));
+
+        TemporaryProject conflicting;
+        conflicting.Write(".horo/project.json", R"({"projectId":"prefab-conflict","settings":{}})");
+        conflicting.Write("assets/prefabs/player.prefab.horo", std::string{Sidecar});
+        conflicting.Write("assets/prefabs/player.prefab", R"({"projectVersion":"0.0.1"})");
+        conflicting.Write(
+            "assets/scenes/main.scene.horo",
+            R"({"schemaVersion":1,"objects":[],"prefabInstances":[{"instanceId":1,"sourcePath":"assets/prefabs/player.prefab","sourceAsset":"30112233-4455-6677-8899-aabbccddeeff"}]})");
+        const std::string conflictingPrefab = conflicting.Read("assets/prefabs/player.prefab");
+        const std::string conflictingScene = conflicting.Read("assets/scenes/main.scene.horo");
+        auto conflictResult = fixture.Prepare(conflicting);
+        REQUIRE((conflictResult.HasError()));
+        REQUIRE((conflictResult.ErrorValue().message.find("conflicts with the typed prefab sidecar registry") != std::string::npos));
+        REQUIRE((conflicting.Read("assets/prefabs/player.prefab") == conflictingPrefab));
+        REQUIRE((conflicting.Read("assets/scenes/main.scene.horo") == conflictingScene));
     }
 }  // namespace project_migration_tests

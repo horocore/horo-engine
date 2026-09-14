@@ -17,6 +17,7 @@ namespace Horo::ProjectMigrations::R0_1_0 {
         auto builder = ProjectMigrationPipelineBuilder::Begin({"core.project_settings.compression_defaults"});
         static_cast<void>(
             builder.AddForEach(MigrationDocumentQuery::Kind(MigrationDocumentKind::ProjectMetadata), BuildCompressionDefaultsStage()));
+        static_cast<void>(builder.AddThen(BuildPrefabMigrationAdoptionStage()));
         static_cast<void>(builder.AddValidator(BuildCompressionPostconditionValidator()));
         auto pipeline = std::move(builder).Build();
         if (pipeline.HasError())
