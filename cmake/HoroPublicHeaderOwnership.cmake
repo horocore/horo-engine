@@ -192,6 +192,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/NavigationSceneComponents.h
     Horo/Runtime/Scene/PersistentEntityIdentity.h
+    Horo/Runtime/Scene/SaveableComponentState.h
     Horo/Runtime/Scene/RuntimeScene.h
     Horo/Runtime/Scene/RuntimeSceneDefinition.h
     Horo/Runtime/Scene/SavedSceneBootstrap.h

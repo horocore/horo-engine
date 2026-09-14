@@ -36,4 +36,11 @@ namespace Horo::Runtime::SceneErrors {
     extern const ErrorCodeDescriptor PersistentIdentityStale;
     extern const ErrorCodeDescriptor PersistentIdentityTombstoned;
     extern const ErrorCodeDescriptor PersistentIdentityAllocationFailed;
+    extern const ErrorCodeDescriptor SaveableComponentInvalid;
+    extern const ErrorCodeDescriptor SaveableComponentDuplicate;
+    extern const ErrorCodeDescriptor SaveableComponentMissingAdapter;
+    extern const ErrorCodeDescriptor SaveableComponentIdentityMismatch;
+    extern const ErrorCodeDescriptor SaveableComponentSchemaUnsupported;
+    extern const ErrorCodeDescriptor SaveableComponentPayloadInvalid;
+    extern const ErrorCodeDescriptor SaveableComponentAllocationFailed;
 }  // namespace Horo::Runtime::SceneErrors
