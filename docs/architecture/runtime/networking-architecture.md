@@ -76,6 +76,11 @@ The network subsystem is organized into four distinct CMake targets with strict 
   - Message abstractions: `MessageView`, `ConstMessageSpan`, `IMessageSerializer`.
   - Transport interface and events: `INetworkTransport`, `ITransportEventConsumer`, `TransportEvent`, `TransportConnectionState`, `TransportCapabilities`.
   - Replication schema contracts: `ReplicationSchemaId`, stable `FieldId`, `ReplicationSchemaVersion`, field descriptors, canonical codec bindings and `ReplicationCondition`.
+  - RPC declaration contracts: stable `RpcId`/`RpcParameterId`, typed parameter
+    codec bindings, immutable descriptor generations, direction, delivery,
+    recipient, caller-permission, rate and payload bounds. Executable handlers
+    remain outside descriptor construction and later require exact accepted-ID
+    binding by NetworkRuntime and the gameplay owner.
 - **Not Public**: `ITransportConnection`, `ITransportListener`, native peers, OS sockets, and backend queue types.
 
 ### 2. `HoroEngine::NetworkRuntime`
@@ -680,7 +685,7 @@ The networking subsystem requires targeted automated verification:
      parity, exactly-once terminal publication, cancel/shutdown ordering, stale
      completion rejection and non-wrapping generation replacement.
    - `SendPayloadLifetimeTests`: caller buffer may be overwritten after `Send()` returns.
-- `ReplicationManagerTests`: ADR-175 safe-point capture and immutable publication; lost/duplicate dirty hints, stale identity, cancellation, shutdown, delta compression and interest queries.
+   - `ReplicationManagerTests`: ADR-175 safe-point capture and immutable publication; lost/duplicate dirty hints, stale identity, cancellation, shutdown, delta compression and interest queries.
    - `ReplicationSerializerTests`: complete owner/type/codec binding, immutable adapter lifetime pins, canonical scalar encoding,
      explicit quantization equivalence, field bounds, incompatible tags and malformed payload rejection.
 2. **Deterministic Transport Tests (`NetworkTransportNullTests`)**:

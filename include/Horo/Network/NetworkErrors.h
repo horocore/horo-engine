@@ -56,6 +56,18 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor ReplicationSchemaUnknown;
     /** @brief Descriptor snapshot construction exceeded its explicit finite capacity. */
     extern const ErrorCodeDescriptor ReplicationCapacityExceeded;
+    /** @brief RPC declaration metadata, routing, permissions, or bounds are malformed. */
+    extern const ErrorCodeDescriptor RpcDescriptorInvalid;
+    /** @brief RPC or parameter stable identities conflict within one generation. */
+    extern const ErrorCodeDescriptor RpcDescriptorConflict;
+    /** @brief RPC declaration evolution is not explicitly compatible. */
+    extern const ErrorCodeDescriptor RpcDescriptorIncompatible;
+    /** @brief No exact accepted RPC declaration exists for the requested identity. */
+    extern const ErrorCodeDescriptor RpcUnknown;
+    /** @brief RPC declaration construction exceeded an explicit finite bound. */
+    extern const ErrorCodeDescriptor RpcCapacityExceeded;
+    /** @brief An RPC parameter has no exact accepted typed codec metadata. */
+    extern const ErrorCodeDescriptor RpcParameterUnsupported;
     /** @brief Serializer metadata, quantization policy, or typed value representation is malformed. */
     extern const ErrorCodeDescriptor ReplicationSerializerInvalid;
     /** @brief Multiple serializers claim the same owner, semantic type, and codec identity. */

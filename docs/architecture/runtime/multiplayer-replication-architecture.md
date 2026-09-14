@@ -309,6 +309,19 @@ registered stable command/RPC schemas with direction, reliability, rate, permiss
 parameter and payload limits. The server validates the active principal and object
 grant, then gameplay decides whether canonical state changes.
 
+`RpcDescriptor` is the inert Network-owned declaration surface. Each declaration
+uses a stable `RpcId`, schema version and module owner plus a closed direction,
+delivery, target and caller-permission policy. Parameters use stable
+`RpcParameterId` values and exact value-type/codec metadata already admitted by
+the typed replication serializer contract. `BuildRpcDescriptorSnapshot` copies,
+canonicalizes and fingerprints the complete set before activation; duplicate
+identities, unsupported codecs, unsafe routing/permission combinations and
+unbounded rates or payloads fail transactionally. The snapshot intentionally
+contains no function pointer, callback or dispatch hook. NetworkRuntime and the
+gameplay owner must separately bind an accepted identity during later dispatch,
+so an arbitrary C++ method can never become remotely callable by declaration
+side effect.
+
 Gameplay may publish local events that cause owned state mutation or mark declared
 fields dirty. NetworkRuntime does not subscribe to the generic event bus and mirror
 arbitrary event payloads. A network event/RPC requires its own typed schema; local
