@@ -208,6 +208,31 @@ namespace {
                                     .profiles = {Navigation::NavigationAgentProfileId::Create(6).Value()},
                                     .traversalCost = 2.0F,
                                 },
+                            .rigidBody = Runtime::RigidBodyComponent{.id = {41}, .body = {42}},
+                            .colliders = {Runtime::
+                                              ColliderComponent{
+                                                  .id = {43},
+                                                  .collider = {44},
+                                                  .body = {.object = {1}, .body = {42}},
+                                                  .source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{.radiusMeters =
+                                                                                                                                1.25F}},
+                                                  .localPose = {.translation = {0.0F, 0.5F, 0.0F}},
+                                                  .collisionProfile =
+                                                      Physics::CollisionProfileId::Parse("11111111-2222-4333-8444-555555555555").Value(),
+                                                  .materials = {{.slot = Physics::PhysicsMaterialSlotId::FromValue(1),
+                                                                 .material = Assets::AssetId::Parse("99999999-aaaa-4bbb-8ccc-dddddddddddd")
+                                                                                 .Value()}},
+                                              }},
+                            .physicsConstraints =
+                                {
+                                    Runtime::PhysicsConstraintComponent{
+                                        .id = {45},
+                                        .constraint = {46},
+                                        .first = {.body = {.object = {1}, .body = {42}}},
+                                        .second =
+                                            Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 4.0F, 0.0F}}},
+                                        .parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.5F, .maximumMeters = 4.0F},
+                                    }},
                             .behaviors =
                                 {
                                     Gameplay::BehaviorComponent{
@@ -227,6 +252,96 @@ namespace {
                         },
                 });
         REQUIRE((created.HasValue()));
+        const auto profile = Physics::CollisionProfileId::Parse("11111111-2222-4333-8444-555555555555").Value();
+        const auto material = Assets::AssetId::Parse("99999999-aaaa-4bbb-8ccc-dddddddddddd").Value();
+        const auto materialBinding =
+            Runtime::PhysicsColliderMaterialBinding{.slot = Physics::PhysicsMaterialSlotId::FromValue(1), .material = material};
+        REQUIRE(
+            commands
+                .Execute(CreateSceneObjectCommand{
+                    .name = "Dynamic Physics Variants",
+                    .components =
+                        SceneObjectComponentSet{.rigidBody =
+                                                    Runtime::RigidBodyComponent{.id = {51},
+                                                                                .body = {52},
+                                                                                .motion = Runtime::AuthoredPhysicsMotionType::Dynamic,
+                                                                                .mass = Runtime::AuthoredPhysicsMass{.kilograms = 12.0F}},
+                                                .colliders =
+                                                    {Runtime::ColliderComponent{.id = {53},
+                                                                                .collider = {54},
+                                                                                .body = {.object = {2}, .body = {52}},
+                                                                                .source =
+                                                                                    Runtime::PhysicsAnalyticCollider{
+                                                                                        Runtime::PhysicsBoxCollider{}},
+                                                                                .collisionProfile = profile,
+                                                                                .materials = {materialBinding}},
+                                                     Runtime::ColliderComponent{.id = {55},
+                                                                                .collider = {56},
+                                                                                .body = {.object = {2}, .body = {52}},
+                                                                                .source =
+                                                                                    Runtime::PhysicsAnalyticCollider{
+                                                                                        Runtime::PhysicsCapsuleCollider{}},
+                                                                                .collisionProfile = profile,
+                                                                                .materials = {materialBinding}},
+                                                     Runtime::ColliderComponent{.id = {57},
+                                                                                .collider = {58},
+                                                                                .body = {.object = {2}, .body = {52}},
+                                                                                .source = Runtime::
+                                                                                    PhysicsShapeAssetReference{.asset =
+                                                                                                                   Assets::AssetId::Parse(
+                                                                                                                       "aaaaaaaa-1111-4222-"
+                                                                                                                       "8333-bbbbbbbbbbbb")
+                                                                                                                       .Value(),
+                                                                                                               .subresource = {3}},
+                                                                                .collisionProfile = profile,
+                                                                                .materials = {materialBinding}}},
+                                                .physicsConstraints =
+                                                    {Runtime::PhysicsConstraintComponent{.id = {59},
+                                                                                         .constraint = {60},
+                                                                                         .first = {.body = {.object = {2}, .body = {52}}},
+                                                                                         .second =
+                                                                                             Runtime::PhysicsConstraintBodyEndpoint{
+                                                                                                 .body = {.object = {1}, .body = {42}}},
+                                                                                         .parameters =
+                                                                                             Runtime::PhysicsFixedConstraint{}}}}})
+                .HasValue());
+        REQUIRE(
+            commands
+                .Execute(
+                    CreateSceneObjectCommand{.name = "Density Physics Variant",
+                                             .components =
+                                                 SceneObjectComponentSet{.rigidBody = Runtime::
+                                                                             RigidBodyComponent{.id = {61},
+                                                                                                .body = {62},
+                                                                                                .motion = Runtime::
+                                                                                                    AuthoredPhysicsMotionType::Dynamic,
+                                                                                                .mass = Runtime::AuthoredPhysicsDensity{}},
+                                                                         .colliders =
+                                                                             {Runtime::ColliderComponent{.id = {63},
+                                                                                                         .collider = {64},
+                                                                                                         .body = {.object = {3},
+                                                                                                                  .body = {62}},
+                                                                                                         .collisionProfile = profile,
+                                                                                                         .materials = {materialBinding}}}}})
+                .HasValue());
+        REQUIRE(
+            commands
+                .Execute(CreateSceneObjectCommand{
+                    .name = "Static Plane Physics Variant",
+                    .components =
+                        SceneObjectComponentSet{.rigidBody =
+                                                    Runtime::RigidBodyComponent{.id = {71},
+                                                                                .body = {72},
+                                                                                .motion = Runtime::AuthoredPhysicsMotionType::Kinematic},
+                                                .colliders = {Runtime::ColliderComponent{.id = {73},
+                                                                                         .collider = {74},
+                                                                                         .body = {.object = {4}, .body = {72}},
+                                                                                         .source =
+                                                                                             Runtime::PhysicsAnalyticCollider{
+                                                                                                 Runtime::PhysicsStaticPlaneCollider{}},
+                                                                                         .collisionProfile = profile,
+                                                                                         .materials = {materialBinding}}}}})
+                .HasValue());
         const auto prefabAsset = Assets::AssetId::Parse("11112222-3333-4444-8888-9999aaaabbbb");
         REQUIRE(prefabAsset.HasValue());
         const auto sourcePrefab = Prefab::PrefabAssetReference::Create(prefabAsset.Value());
@@ -271,17 +386,15 @@ TEST_CASE("Project Scene Save Reopens The Same Authored State", "[unit][editor][
     REQUIRE((loaded.HasValue()));
     REQUIRE((loaded.Value().has_value()));
     REQUIRE((loaded.Value()->absolutePath.is_absolute()));
-    REQUIRE((loaded.Value()->objects.size() == 1));
+    REQUIRE((loaded.Value()->objects.size() == authored.objects.size()));
     REQUIRE((loaded.Value()->prefabInstances.size() == 1));
 
     SceneDocument reopened;
     REQUIRE((reopened.LoadSaved(std::move(loaded.Value()->objects), std::move(loaded.Value()->prefabInstances)).HasValue()));
     REQUIRE((!reopened.IsDirty()));
-    REQUIRE((reopened.Objects().size() == 1));
-    REQUIRE((reopened.Objects().front().name == authored.objects.front().name));
-    REQUIRE((reopened.Objects().front().localTransform == authored.objects.front().localTransform));
-    REQUIRE((reopened.Objects().front().primitiveMesh == authored.objects.front().primitiveMesh));
-    REQUIRE((reopened.Objects().front().components == authored.objects.front().components));
+    REQUIRE((reopened.Objects().size() == authored.objects.size()));
+    for (std::size_t index = 0; index < authored.objects.size(); ++index)
+        RequireSameSceneObject(reopened.Objects()[index], authored.objects[index]);
     REQUIRE((reopened.PrefabInstances().size() == 1));
     REQUIRE((reopened.PrefabInstances().front() == authored.prefabInstances.front()));
 }

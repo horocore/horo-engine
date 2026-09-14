@@ -708,6 +708,24 @@ after the gate. Handles retain shared state across user callbacks, and producer
 replacement detaches prior state before abandonment dispatch so reentrant release or
 move assignment cannot invalidate callback evidence or orphan the installed operation.
 
+## Physics Authored Scene Model Boundary
+
+`[PHY-006.2]` introduces `HoroEngine::PhysicsModel` as the owner of the inert,
+backend-neutral `PhysicsErrors.h`, `PhysicsFilterIdentity.h`, and
+`PhysicsSceneComponents.h` public contracts. `HoroEngine::RuntimeScene` may carry
+these authored values and the editor-neutral scene persistence service may round-trip
+them, but neither layer links the solver-bearing `HoroEngine::Physics` target or
+performs activation. Existing Physics consumers continue to receive the identities
+through `HoroEngine::Physics`; direct consumers of authoring-only values should
+migrate to `HoroEngine::PhysicsModel`. Generated standalone public-header consumers
+cover the new owner as well as the unchanged RuntimeScene and Physics boundaries.
+
+`SceneIdentity.h` moves the scene, revision, and object identities into the base
+`HoroEngine::Runtime` owner so PhysicsModel can name explicit authored body endpoints
+without introducing a RuntimeScene-to-Physics dependency cycle. The types and their
+representation are unchanged; existing RuntimeScene callers require no source
+migration.
+
 ## Runtime Save Participant Ordering Boundary
 
 `[SAV-001.8]` extends the existing `SaveParticipantRegistry.h` contract without

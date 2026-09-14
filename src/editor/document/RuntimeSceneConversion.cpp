@@ -1,5 +1,8 @@
 #include "editor/document/RuntimeSceneConversion.h"
 
+#include <algorithm>
+#include <iterator>
+
 namespace Horo::Editor {
     namespace {
         const ErrorDomainId SceneConversionDomain{"horo.editor.scene_conversion"};
@@ -15,6 +18,13 @@ namespace Horo::Editor {
 
         template <typename Component> [[nodiscard]] std::optional<Component> ActiveComponent(const std::optional<Component> &component) {
             return component.has_value() && component->enabled ? component : std::nullopt;
+        }
+
+        template <typename Component> [[nodiscard]] std::vector<Component> ActiveComponents(const std::vector<Component> &components) {
+            std::vector<Component> active;
+            active.reserve(components.size());
+            std::ranges::copy_if(components, std::back_inserter(active), &Component::enabled);
+            return active;
         }
     }  // namespace
 
@@ -34,6 +44,9 @@ namespace Horo::Editor {
                 .navigationRegion = ActiveComponent(object.components.navigationRegion),
                 .navigationModifier = ActiveComponent(object.components.navigationModifier),
                 .navigationLink = ActiveComponent(object.components.navigationLink),
+                .rigidBody = ActiveComponent(object.components.rigidBody),
+                .colliders = ActiveComponents(object.components.colliders),
+                .physicsConstraints = ActiveComponents(object.components.physicsConstraints),
                 .behaviors = object.components.behaviors,
             };
             builder.Add(Runtime::RuntimeEntityDefinition{

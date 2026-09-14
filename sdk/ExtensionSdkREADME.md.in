@@ -40,4 +40,15 @@ bin/horo-extension-validate --json --schema-version 1 extension.json
 The matching authoring schema is
 `share/horo/extension-sdk/extension-manifest-v1.schema.json`. The validator is
 the behavioral authority and reports stable codes plus exact JSON field paths.
-Project scaffolding and distribution tools are separate SDK deliverables.
+
+Exercise a trusted native module's ABI negotiation, host callback ownership,
+result-table shape, and unload path with:
+
+```text
+bin/horo-extension-conformance --json path/to/native-module
+```
+
+The harness reports stable stage-specific codes and exits nonzero for an
+incompatible module. It loads native code in the harness process, so run it only
+against trusted build output. Project scaffolding and distribution tools are
+separate SDK deliverables.

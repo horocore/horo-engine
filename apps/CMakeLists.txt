@@ -37,6 +37,24 @@ add_custom_command(
 add_custom_target(HoroExtensionSdkValidatorStage ALL
     DEPENDS "${HORO_EXTENSION_VALIDATOR_SDK_PATH}")
 
+add_executable(horo-extension-conformance
+    horo-extension-conformance/main.cpp
+)
+target_compile_features(horo-extension-conformance PRIVATE cxx_std_20)
+target_link_libraries(horo-extension-conformance PRIVATE HoroEngine::Extensions)
+set(HORO_EXTENSION_CONFORMANCE_SDK_PATH
+    "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-extension-conformance${CMAKE_EXECUTABLE_SUFFIX}")
+add_custom_command(
+    OUTPUT "${HORO_EXTENSION_CONFORMANCE_SDK_PATH}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:horo-extension-conformance>"
+        "${HORO_EXTENSION_CONFORMANCE_SDK_PATH}"
+    DEPENDS horo-extension-conformance
+    COMMENT "Staging the extension ABI conformance harness in the SDK"
+    VERBATIM)
+add_custom_target(HoroExtensionSdkConformanceStage ALL
+    DEPENDS "${HORO_EXTENSION_CONFORMANCE_SDK_PATH}")
+
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.
 if(HORO_BUILD_EDITOR_GUI)

@@ -693,6 +693,15 @@ exact field paths, rejects unsupported requested schema versions, and never
 loads module code. The schema supports editor completion; the executable remains
 the behavioral authority for cross-field and identity-reference rules.
 
+The SDK additionally stages `horo-extension-conformance` for trusted native
+author builds. It exercises the production ABI negotiation and module-table
+normalization rules, supplies bounded host callback ownership, destroys every
+accepted callback-owned contribution before module unload, and reports stable
+stage-specific human or JSON outcomes. Compatible legacy/current fixtures and
+intentionally incompatible version/table fixtures protect the harness contract.
+Because this command executes native module code in its own process, it is a
+developer conformance tool rather than a trust or sandbox boundary.
+
 Project gameplay modules may use the SDK-generation C++ boundary documented in
 [Gameplay Module Boundary](./gameplay-module-boundary.md). That boundary is
 rebuilt with the project and SDK generation; it is not the same compatibility
