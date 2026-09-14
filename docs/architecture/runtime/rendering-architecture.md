@@ -281,6 +281,17 @@ ordered back-to-front with stable instance-identity ties; additive work uses its
 own commutative pass. Order-independent transparency and refraction are separate
 optional recipes with declared capability, memory and fallback contracts.
 
+The concrete Standard PBR opaque/depth preparation boundary is
+`Horo/Runtime/Render/StandardPbrPassPlan.h`. It consumes an already selected
+raster family and exact resident material generations; it does not select a
+recipe or inspect backend capabilities. Preparation is bounded, synchronous and
+transactional, and publishes one owned canonical material table plus ordered
+batches. Opaque and masked ranges are stable by `MaterialRuntimeId`; masked depth
+and color/GBuffer batches reference the same range so coverage membership cannot
+drift. Every plan declares scene color and depth products, plus motion vectors
+when requested. Native backends realize those logical batches without changing
+material classification, pass order or output policy.
+
 [ADR-011](../../adr/011-vfx-effect-ownership-simulation-domain-and-renderer-boundary.md)
 VFX batches keep their own pass kinds (`VfxParticlePass`, deferred/forward
 `DecalRenderBatch`, `VolumetricVfxBatch`). The frontend maps those kinds onto the
