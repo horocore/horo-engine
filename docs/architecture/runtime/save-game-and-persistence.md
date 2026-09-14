@@ -170,7 +170,25 @@ completes before generation publication so membership and generation remain atom
 The identity-sorted binding view remains the canonical manifest/query
 projection and is not used as an execution plan.
 
-Schematic interface shapes (not new installed headers):
+`Horo/Runtime/Save/SaveParticipation.h` is the installed gameplay/module-facing
+contract. A host-owned `SaveParticipationHost` issues weak clients for one exact
+non-zero module generation, advertises the exact API version and capture, restore,
+save-request and load-request capabilities, and binds accepted participant adapters
+into the application-owned canonical registry. Closing or replacing the host first
+revokes client admission and unregisters that generation's live bindings; immutable
+registry snapshots continue to pin their exact adapter leases until detached work
+retires. Retaining a client across reload therefore grants neither stale callbacks
+nor registry authority.
+
+Gameplay save/load requests contain only an opaque `SaveGameSlotId` and typed policy
+mode. The injected application operation host resolves the active namespace, project
+policy, operation identity, safe point and storage adapter. The public request cannot
+name a path, namespace, storage provider or native handle. Native C++ participants and
+planned scripting adapters map to the same inert descriptor, bounded capture sink,
+staged restore and path-free request semantics rather than parallel persistence models.
+
+The complete application service shape below remains schematic; it is not an
+installed `RuntimeSaveService` header:
 
 ```cpp
 struct ProductStorageId { Uuid value; };
