@@ -15,35 +15,36 @@
 #include <vector>
 
 namespace Horo::Audio::Backend {
-    namespace {
+    namespace Sdl3Detail {
         constexpr std::size_t EventCapacity = 64;
 
-        Result<void> Failure(const ErrorCodeDescriptor &descriptor) {
+        inline Result<void> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<void>::Failure(MakeError(descriptor));
         }
 
-        AudioDurationObservation UnknownDuration() noexcept {
+        inline AudioDurationObservation UnknownDuration() noexcept {
             return {};
         }
 
-        AudioChannelLayout LayoutForChannels(const int channels) {
+        inline AudioChannelLayout LayoutForChannels(const int channels) {
+            using enum AudioSpeakerPreset;
             switch (channels) {
                 case 1:
-                    return MakeAudioSpeakerLayout(AudioSpeakerPreset::Mono);
+                    return MakeAudioSpeakerLayout(Mono);
                 case 2:
-                    return MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo);
+                    return MakeAudioSpeakerLayout(Stereo);
                 case 4:
-                    return MakeAudioSpeakerLayout(AudioSpeakerPreset::Quad);
+                    return MakeAudioSpeakerLayout(Quad);
                 case 6:
-                    return MakeAudioSpeakerLayout(AudioSpeakerPreset::FivePointOne);
+                    return MakeAudioSpeakerLayout(FivePointOne);
                 case 8:
-                    return MakeAudioSpeakerLayout(AudioSpeakerPreset::SevenPointOne);
+                    return MakeAudioSpeakerLayout(SevenPointOne);
                 default:
                     return {};
             }
         }
 
-        AudioBackendProbe AvailableProbe() {
+        inline AudioBackendProbe AvailableProbe() {
             AudioBackendProbe probe{.backend = AudioBackendKind::SDL3Audio,
                                     .compiled = true,
                                     .hostSupported = true,
@@ -55,7 +56,25 @@ namespace Horo::Audio::Backend {
             probe.features[static_cast<std::size_t>(AudioBackendCapability::NativeDiagnostics)] = AudioCapabilitySupport::Available;
             return probe;
         }
-    }  // namespace
+
+        inline bool IsExpectedResult(const RenderPhase phase, const RenderResult &result) noexcept {
+            using enum RenderDisposition;
+            if (result.fault != AudioCallbackFaultCode::None)
+                return false;
+            if (phase == RenderPhase::Priming)
+                return result.disposition == Ready;
+            if (phase == RenderPhase::Quiescing)
+                return result.disposition == Quiesced;
+            return result.disposition == Rendered;
+        }
+
+        inline AudioCallbackFaultCode FaultCode(const bool outputIsFinite, const AudioCallbackFaultCode reported) noexcept {
+            using enum AudioCallbackFaultCode;
+            if (!outputIsFinite)
+                return NonFiniteOutput;
+            return reported != None ? reported : BackendFailure;
+        }
+    }  // namespace Sdl3Detail
 
     struct Sdl3AudioBackend::Impl final {
         struct DeviceBinding final {
@@ -67,6 +86,60 @@ namespace Horo::Audio::Backend {
         struct NativeOpenFacts final {
             SDL_AudioSpec actual{};
             int periodFrames{};
+        };
+
+        struct OperationState final {
+            std::optional<OperationId> pendingOperation;
+            std::optional<Request> pendingRequest;
+            std::optional<Completion> completion;
+            std::uint64_t nextSequence{1};
+        };
+
+        struct CallbackState final {
+            std::atomic<Sdl3AudioBackendState> lifecycle{Sdl3AudioBackendState::Closed};
+            std::atomic<bool> ready{};
+            std::atomic<bool> quiesced{};
+            std::atomic<bool> faultLatched{};
+            std::atomic<std::uint64_t> sampleFrame{};
+            std::array<Event, Sdl3Detail::EventCapacity> events{};
+            std::atomic<std::size_t> write{};
+            std::atomic<std::size_t> read{};
+        };
+
+        struct RequestValidation final {
+            const Impl &backend;
+
+            bool operator()(const Probe &) const noexcept {
+                return true;
+            }
+
+            bool operator()(const Horo::Audio::Backend::Enumerate &) const noexcept {
+                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Closed;
+            }
+
+            bool operator()(const Open &request) const noexcept {
+                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Closed && request.access == AccessMode::Shared &&
+                       MatchesAudioDeviceEpoch(request.plannedEpoch, request.plannedEpoch) &&
+                       ValidateAudioDeviceFormatRequest(request.format);
+            }
+
+            bool operator()(const Start &request) const noexcept {
+                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Opened && request.epoch == backend.epoch &&
+                       request.render.process;
+            }
+
+            bool operator()(const Quiesce &request) const noexcept {
+                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Rendering && request.epoch == backend.epoch;
+            }
+
+            bool operator()(const Stop &request) const noexcept {
+                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Quiesced && request.epoch == backend.epoch;
+            }
+
+            bool operator()(const Close &) const noexcept {
+                const auto current = backend.callback.lifecycle.load();
+                return current == Sdl3AudioBackendState::Opened || current == Sdl3AudioBackendState::Stopped;
+            }
         };
 
         explicit Impl(const Sdl3AudioBackendConfig &value) noexcept : config(value), defaultDevice{value.owner, 1, 1} {}
@@ -88,10 +161,7 @@ namespace Horo::Audio::Backend {
         AudioDeviceId defaultDevice;
         std::vector<DeviceBinding> devices;
         AudioDeviceSnapshot snapshot;
-        std::optional<OperationId> pendingOperation;
-        std::optional<Request> pendingRequest;
-        std::optional<Completion> completion;
-        std::uint64_t nextOperationSequence{1};
+        OperationState operations;
         std::uint64_t discoveryRevision{1};
         std::uint32_t nextDeviceSlot{2};
         bool initialized{};
@@ -105,14 +175,7 @@ namespace Horo::Audio::Backend {
         std::vector<AudioSample *> planes;
         std::vector<AudioSample> interleaved;
         RenderPort render;
-        std::atomic<Sdl3AudioBackendState> state{Sdl3AudioBackendState::Closed};
-        std::atomic<bool> ready{};
-        std::atomic<bool> quiesced{};
-        std::atomic<bool> faultLatched{};
-        std::atomic<std::uint64_t> sampleFrame{};
-        std::array<Event, EventCapacity> callbackEvents{};
-        std::atomic<std::size_t> callbackWrite{};
-        std::atomic<std::size_t> callbackRead{};
+        CallbackState callback;
 
         bool Initialize() noexcept {
             if (initialized)
@@ -122,16 +185,16 @@ namespace Horo::Audio::Backend {
         }
 
         void PushCallbackEvent(const Event &event) noexcept {
-            const auto write = callbackWrite.load(std::memory_order_relaxed);
-            const auto next = (write + 1) % EventCapacity;
-            if (next == callbackRead.load(std::memory_order_acquire))
+            const auto write = callback.write.load();
+            const auto next = (write + 1) % Sdl3Detail::EventCapacity;
+            if (next == callback.read.load())
                 return;
-            callbackEvents[write] = event;
-            callbackWrite.store(next, std::memory_order_release);
+            callback.events[write] = event;
+            callback.write.store(next);
         }
 
         RenderPhase Phase() const noexcept {
-            const auto current = state.load(std::memory_order_acquire);
+            const auto current = callback.lifecycle.load();
             if (current == Sdl3AudioBackendState::Priming)
                 return RenderPhase::Priming;
             if (current == Sdl3AudioBackendState::Quiescing)
@@ -147,18 +210,8 @@ namespace Horo::Audio::Backend {
             });
         }
 
-        static bool IsExpectedResult(const RenderPhase phase, const RenderResult &result) noexcept {
-            if (result.fault != AudioCallbackFaultCode::None)
-                return false;
-            if (phase == RenderPhase::Priming)
-                return result.disposition == RenderDisposition::Ready;
-            if (phase == RenderPhase::Quiescing)
-                return result.disposition == RenderDisposition::Quiesced;
-            return result.disposition == RenderDisposition::Rendered;
-        }
-
         void PublishFault(const std::uint64_t frame, const AudioCallbackFaultCode code) noexcept {
-            if (faultLatched.exchange(true, std::memory_order_acq_rel))
+            if (callback.faultLatched.exchange(true))
                 return;
             PushCallbackEvent(
                 {config.owner, AudioCallbackEvent{epoch, frame, {config.clockDomain, SDL_GetTicksNS()}, AudioCallbackFault{code}}});
@@ -171,10 +224,10 @@ namespace Horo::Audio::Backend {
         }
 
         void PublishTransition(const RenderPhase phase, const std::uint64_t nextFrame) noexcept {
-            if (phase == RenderPhase::Priming && !ready.exchange(true, std::memory_order_acq_rel))
+            if (phase == RenderPhase::Priming && !callback.ready.exchange(true))
                 PushCallbackEvent(
                     {config.owner, AudioCallbackEvent{epoch, nextFrame, {config.clockDomain, SDL_GetTicksNS()}, AudioCallbackReady{}}});
-            if (phase == RenderPhase::Quiescing && !quiesced.exchange(true, std::memory_order_acq_rel))
+            if (phase == RenderPhase::Quiescing && !callback.quiesced.exchange(true))
                 PushCallbackEvent(
                     {config.owner, AudioCallbackEvent{epoch, nextFrame, {config.clockDomain, SDL_GetTicksNS()}, AudioCallbackQuiesced{}}});
         }
@@ -182,7 +235,7 @@ namespace Horo::Audio::Backend {
         bool FeedBlock(SDL_AudioStream *nativeStream, const int bytesPerBlock) noexcept {
             for (auto *plane : planes)
                 std::fill_n(plane, callbackFrames, 0.0F);
-            const auto frame = sampleFrame.load(std::memory_order_relaxed);
+            const auto frame = callback.sampleFrame.load();
             const auto phase = Phase();
             const RenderInvocation invocation{.epoch = epoch,
                                               .phase = phase,
@@ -194,20 +247,16 @@ namespace Horo::Audio::Backend {
                                                          .validFrames = callbackFrames,
                                                          .capacityFrames = callbackFrames}};
             const auto result = render.process(render.context, invocation);
-            const bool finite = OutputIsFinite();
-            if (!finite || !IsExpectedResult(phase, result)) {
+            if (const bool finite = OutputIsFinite(); !finite || !Sdl3Detail::IsExpectedResult(phase, result)) {
                 std::ranges::fill(interleaved, 0.0F);
-                const auto fault = !finite                                        ? AudioCallbackFaultCode::NonFiniteOutput
-                                   : result.fault != AudioCallbackFaultCode::None ? result.fault
-                                                                                  : AudioCallbackFaultCode::BackendFailure;
-                PublishFault(frame, fault);
+                PublishFault(frame, Sdl3Detail::FaultCode(finite, result.fault));
             } else {
                 Interleave();
             }
             if (!SDL_PutAudioStreamData(nativeStream, interleaved.data(), bytesPerBlock))
                 return false;
             const auto nextFrame = frame + callbackFrames;
-            sampleFrame.store(nextFrame, std::memory_order_release);
+            callback.sampleFrame.store(nextFrame);
             PublishTransition(phase, nextFrame);
             return true;
         }
@@ -226,17 +275,17 @@ namespace Horo::Audio::Backend {
                                             std::vector<AudioDiscoveredDevice> &discovered) {
             const auto existing = std::ranges::find(devices, native, &DeviceBinding::native);
             if (existing == devices.end() && nextDeviceSlot == 0)
-                return Failure(AudioErrors::HandleGenerationExhausted);
+                return Sdl3Detail::Failure(AudioErrors::HandleGenerationExhausted);
             const AudioDeviceId identity = existing != devices.end() ? existing->horo : AudioDeviceId{config.owner, nextDeviceSlot++, 1};
             const char *name = SDL_GetAudioDeviceName(native);
-            discovered.push_back({identity, name ? std::string{name}.substr(0, 256) : "SDL3 playback device", AudioDeviceClass::Physical});
-            next.push_back({identity, native});
+            discovered.emplace_back(identity, name ? std::string{name}.substr(0, 256) : "SDL3 playback device", AudioDeviceClass::Physical);
+            next.emplace_back(identity, native);
             return Result<void>::Success();
         }
 
         Result<void> CommitDiscovery(std::vector<DeviceBinding> next, std::vector<AudioDiscoveredDevice> discovered) {
             if (next != devices && discoveryRevision == std::numeric_limits<std::uint64_t>::max())
-                return Failure(AudioErrors::HandleGenerationExhausted);
+                return Sdl3Detail::Failure(AudioErrors::HandleGenerationExhausted);
             if (next != devices)
                 ++discoveryRevision;
             devices = std::move(next);
@@ -253,7 +302,7 @@ namespace Horo::Audio::Backend {
                 return Result<AudioDeviceSnapshot>::Failure(MakeError(AudioErrors::CapabilityUnavailable));
             int count{};
             SDL_AudioDeviceID *nativeDevices = SDL_GetAudioPlaybackDevices(&count);
-            if (!nativeDevices && count == 0)
+            if (!nativeDevices)
                 return Result<AudioDeviceSnapshot>::Failure(MakeError(AudioErrors::BackendFailed));
             if (count < 0 || count >= static_cast<int>(MaximumAudioDiscoveredDevices)) {
                 SDL_free(nativeDevices);
@@ -263,7 +312,7 @@ namespace Horo::Audio::Backend {
             std::vector<AudioDiscoveredDevice> discovered;
             next.reserve(static_cast<std::size_t>(count));
             discovered.reserve(static_cast<std::size_t>(count) + 1);
-            discovered.push_back({defaultDevice, "System default audio device", AudioDeviceClass::Virtual});
+            discovered.emplace_back(defaultDevice, "System default audio device", AudioDeviceClass::Virtual);
             for (int index = 0; index < count; ++index) {
                 if (const auto appended = AppendDiscoveredDevice(nativeDevices[index], next, discovered); appended.HasError()) {
                     SDL_free(nativeDevices);
@@ -283,74 +332,40 @@ namespace Horo::Audio::Backend {
             return found == devices.end() ? 0 : found->native;
         }
 
-        bool Valid(const Probe &) const noexcept {
-            return true;
-        }
-
-        bool Valid(const Horo::Audio::Backend::Enumerate &) const noexcept {
-            return state.load(std::memory_order_acquire) == Sdl3AudioBackendState::Closed;
-        }
-
-        bool Valid(const Open &request) const noexcept {
-            return state.load(std::memory_order_acquire) == Sdl3AudioBackendState::Closed && request.access == AccessMode::Shared &&
-                   MatchesAudioDeviceEpoch(request.plannedEpoch, request.plannedEpoch) && ValidateAudioDeviceFormatRequest(request.format);
-        }
-
-        bool Valid(const Start &request) const noexcept {
-            return state.load(std::memory_order_acquire) == Sdl3AudioBackendState::Opened && request.epoch == epoch &&
-                   request.render.process;
-        }
-
-        bool Valid(const Quiesce &request) const noexcept {
-            return state.load(std::memory_order_acquire) == Sdl3AudioBackendState::Rendering && request.epoch == epoch;
-        }
-
-        bool Valid(const Stop &request) const noexcept {
-            return state.load(std::memory_order_acquire) == Sdl3AudioBackendState::Quiesced && request.epoch == epoch;
-        }
-
-        bool Valid(const Close &) const noexcept {
-            const auto current = state.load(std::memory_order_acquire);
-            return current == Sdl3AudioBackendState::Opened || current == Sdl3AudioBackendState::Stopped;
-        }
-
         bool Valid(const Request &request) const noexcept {
-            return std::visit([this](const auto &value) {
-                return Valid(value);
-            }, request);
+            return std::visit(RequestValidation{*this}, request);
         }
 
         template <typename Outcome> void Finish(const OperationId &operation, Outcome outcome) {
-            completion = Completion{operation, std::move(outcome)};
-            pendingOperation.reset();
-            pendingRequest.reset();
+            operations.completion = Completion{operation, std::move(outcome)};
+            operations.pendingOperation.reset();
+            operations.pendingRequest.reset();
         }
 
         Result<void> Apply(const Probe &, const OperationId &operation) {
             if (!Initialize())
                 Finish(operation, Failed{MakeError(AudioErrors::CapabilityUnavailable), ResourceDisposition::Unchanged});
             else
-                Finish(operation, AvailableProbe());
+                Finish(operation, Sdl3Detail::AvailableProbe());
             return Result<void>::Success();
         }
 
         Result<void> Apply(const Horo::Audio::Backend::Enumerate &, const OperationId &operation) {
-            auto result = Enumerate();
-            if (result.HasError())
+            if (auto result = Enumerate(); result.HasError())
                 Finish(operation, Failed{result.ErrorValue(), ResourceDisposition::Unchanged});
             else
                 Finish(operation, std::move(result).Value());
             return Result<void>::Success();
         }
 
-        Result<AudioProcessingFormat> ResolveEffectiveFormat(const Open &request, const SDL_AudioSpec &actual) {
-            const auto actualLayout = LayoutForChannels(actual.channels);
+        Result<AudioProcessingFormat> ResolveEffectiveFormat(const Open &request, const SDL_AudioSpec &actual) const {
+            const auto actualLayout = Sdl3Detail::LayoutForChannels(actual.channels);
             if (!ValidateAudioChannelLayout(ViewAudioChannelLayout(actualLayout)))
                 return Result<AudioProcessingFormat>::Failure(MakeError(AudioErrors::OperationUnsupported));
             const AudioProcessingFormat nativeSignal{static_cast<std::uint32_t>(actual.freq), actualLayout};
             const bool sameLayout = actualLayout == request.format.preferred.layout;
-            const bool sameRate = actual.freq == static_cast<int>(request.format.preferred.sampleRate);
-            if (sameLayout && (sameRate || request.format.nativeRatePolicy != AudioDeviceRatePolicy::Exact))
+            if (const bool sameRate = actual.freq == static_cast<int>(request.format.preferred.sampleRate);
+                sameLayout && (sameRate || request.format.nativeRatePolicy != AudioDeviceRatePolicy::Exact))
                 return Result<AudioProcessingFormat>::Success(request.format.preferred);
             const auto alternative = std::ranges::find(request.format.allowedAlternatives, nativeSignal);
             return alternative == request.format.allowedAlternatives.end()
@@ -375,7 +390,8 @@ namespace Horo::Audio::Backend {
 
         AudioNegotiatedDeviceFormat NegotiatedFormat(const Open &request, const AudioDeviceResolution &resolved,
                                                      const SDL_AudioSpec &actual, const int nativeFrames) const {
-            const AudioProcessingFormat nativeSignal{static_cast<std::uint32_t>(actual.freq), LayoutForChannels(actual.channels)};
+            const AudioProcessingFormat nativeSignal{static_cast<std::uint32_t>(actual.freq),
+                                                     Sdl3Detail::LayoutForChannels(actual.channels)};
             AudioNegotiatedDeviceFormat negotiated{.device = resolved.device,
                                                    .discoveryRevision = resolved.revision,
                                                    .formatRevision = epoch.formatRevision,
@@ -404,8 +420,7 @@ namespace Horo::Audio::Backend {
             const SDL_AudioSpec requested{SDL_AUDIO_F32, static_cast<int>(request.format.preferred.layout.orderedChannels.size()),
                                           static_cast<int>(request.format.preferred.sampleRate)};
             logicalDevice = native ? SDL_OpenAudioDevice(native, &requested) : 0;
-            NativeOpenFacts facts;
-            if (logicalDevice && SDL_GetAudioDeviceFormat(logicalDevice, &facts.actual, &facts.periodFrames))
+            if (NativeOpenFacts facts; logicalDevice && SDL_GetAudioDeviceFormat(logicalDevice, &facts.actual, &facts.periodFrames))
                 return Result<NativeOpenFacts>::Success(facts);
             if (logicalDevice)
                 SDL_CloseAudioDevice(logicalDevice);
@@ -441,11 +456,11 @@ namespace Horo::Audio::Backend {
             auto negotiated = NegotiatedFormat(request, resolved, facts.actual, facts.periodFrames);
             const AudioDeviceTimingReport timing{.epoch = epoch,
                                                  .capturedAt = {config.clockDomain, SDL_GetTicksNS()},
-                                                 .hardwareLatency = UnknownDuration(),
-                                                 .adapterLatency = UnknownDuration(),
-                                                 .queuedLatency = UnknownDuration(),
-                                                 .endToEndLatency = UnknownDuration()};
-            state.store(Sdl3AudioBackendState::Opened, std::memory_order_release);
+                                                 .hardwareLatency = Sdl3Detail::UnknownDuration(),
+                                                 .adapterLatency = Sdl3Detail::UnknownDuration(),
+                                                 .queuedLatency = Sdl3Detail::UnknownDuration(),
+                                                 .endToEndLatency = Sdl3Detail::UnknownDuration()};
+            callback.lifecycle.store(Sdl3AudioBackendState::Opened);
             Finish(operation, Opened{std::move(negotiated), timing, AccessMode::Shared});
             return Result<void>::Success();
         }
@@ -454,19 +469,19 @@ namespace Horo::Audio::Backend {
             SDL_AudioSpec source{SDL_AUDIO_F32, static_cast<int>(planes.size()), static_cast<int>(format.sampleRate)};
             stream = SDL_CreateAudioStream(&source, nullptr);
             render = request.render;
-            ready.store(false, std::memory_order_release);
-            quiesced.store(false, std::memory_order_release);
-            faultLatched.store(false, std::memory_order_release);
-            sampleFrame.store(0, std::memory_order_release);
-            state.store(Sdl3AudioBackendState::Priming, std::memory_order_release);
-            const bool started = stream && SDL_SetAudioStreamGetCallback(stream, &Impl::Feed, this) &&
-                                 SDL_BindAudioStream(logicalDevice, stream) && SDL_ResumeAudioDevice(logicalDevice);
-            if (!started) {
+            callback.ready.store(false);
+            callback.quiesced.store(false);
+            callback.faultLatched.store(false);
+            callback.sampleFrame.store(0);
+            callback.lifecycle.store(Sdl3AudioBackendState::Priming);
+            if (const bool started = stream && SDL_SetAudioStreamGetCallback(stream, &Impl::Feed, this) &&
+                                     SDL_BindAudioStream(logicalDevice, stream) && SDL_ResumeAudioDevice(logicalDevice);
+                !started) {
                 if (stream)
                     SDL_DestroyAudioStream(stream);
                 stream = nullptr;
                 render = {};
-                state.store(Sdl3AudioBackendState::Opened, std::memory_order_release);
+                callback.lifecycle.store(Sdl3AudioBackendState::Opened);
                 Finish(operation, Failed{MakeError(AudioErrors::BackendFailed), ResourceDisposition::CallbackDetached});
             } else {
                 Finish(operation, Started{epoch});
@@ -475,11 +490,11 @@ namespace Horo::Audio::Backend {
         }
 
         Result<void> Apply(const Quiesce &, const OperationId &operation) {
-            if (!quiesced.load(std::memory_order_acquire)) {
-                state.store(Sdl3AudioBackendState::Quiescing, std::memory_order_release);
+            if (!callback.quiesced.load()) {
+                callback.lifecycle.store(Sdl3AudioBackendState::Quiescing);
                 return Result<void>::Success();
             }
-            state.store(Sdl3AudioBackendState::Quiesced, std::memory_order_release);
+            callback.lifecycle.store(Sdl3AudioBackendState::Quiesced);
             Finish(operation, Quiesced{epoch});
             return Result<void>::Success();
         }
@@ -490,7 +505,7 @@ namespace Horo::Audio::Backend {
             SDL_DestroyAudioStream(stream);
             stream = nullptr;
             render = {};
-            state.store(Sdl3AudioBackendState::Stopped, std::memory_order_release);
+            callback.lifecycle.store(Sdl3AudioBackendState::Stopped);
             Finish(operation, Stopped{epoch});
             return Result<void>::Success();
         }
@@ -508,7 +523,7 @@ namespace Horo::Audio::Backend {
                 SDL_QuitSubSystem(SDL_INIT_AUDIO);
                 initialized = false;
             }
-            state.store(Sdl3AudioBackendState::Closed, std::memory_order_release);
+            callback.lifecycle.store(Sdl3AudioBackendState::Closed);
             Finish(operation, Closed{});
             return Result<void>::Success();
         }
