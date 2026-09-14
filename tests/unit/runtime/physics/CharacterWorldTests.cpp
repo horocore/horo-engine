@@ -275,6 +275,7 @@ namespace Horo::Character {
             REQUIRE(trace.movements[1].sequence == 5);
             REQUIRE((world->PublishedTick() == CharacterPublishedTick{1, 1, 2}));
 
+            RequireError(world->QueueMovementCommand(Movement(first, 2, 2)), CharacterErrors::CommandOrderInvalid);
             trace = {};
             REQUIRE(world->AdvanceFixedTick(FixedTick(2, trace.Observer())).HasValue());
             REQUIRE(trace.movementCount == 0);
@@ -284,7 +285,7 @@ namespace Horo::Character {
             const auto statistics = world->TickStatistics();
             REQUIRE(statistics.completedTicks == 2);
             REQUIRE(statistics.admittedCommands == 3);
-            REQUIRE(statistics.rejectedCommands == 1);
+            REQUIRE(statistics.rejectedCommands == 2);
             REQUIRE(statistics.pendingCommands == 0);
             REQUIRE(statistics.maximumCommandDepth == 3);
         }

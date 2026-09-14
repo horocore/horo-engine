@@ -101,7 +101,7 @@ namespace Horo::Character {
         /**
          * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.
          * @param request Immutable owned request; no live producer state is retained.
-         * @return Deferred, full or busy admission, or a typed malformed/late/lifecycle error.
+         * @return Deferred, full or busy admission, or a typed malformed/late/stale/lifecycle error.
          * @post Concurrent admission never mutates a controller. Exact duplicates are rejected; a greater
          * sequence for the same controller/tick replaces the earlier intent when that tick is consumed.
          */

@@ -28,13 +28,27 @@ namespace Horo::Character {
             return Result<void>::Success();
         }
 
+        /** @brief Tests whether one queued sequence makes a new request duplicate or globally stale. */
+        [[nodiscard]] bool ConflictsWithQueuedCommand(const CharacterMovementRequest &queued,
+                                                      const CharacterMovementRequest &request) noexcept {
+            if (queued.controller != request.controller)
+                return false;
+            return (queued.tick == request.tick && queued.sequence == request.sequence) ||
+                   (queued.tick < request.tick && queued.sequence >= request.sequence) ||
+                   (queued.tick > request.tick && queued.sequence <= request.sequence);
+        }
+
         /** @brief Revalidates lifecycle/order and exact duplication while queue ownership is held. */
         [[nodiscard]] Result<void> ValidateLockedAdmission(const auto &impl, const CharacterMovementRequest &request) {
             if (!impl.acceptingCommands.load())
                 return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
-            if (request.tick <= impl.closedTick.load() ||
-                std::ranges::any_of(impl.commands, [&request](const CharacterMovementRequest &queued) {
-                return queued.tick == request.tick && queued.controller == request.controller && queued.sequence == request.sequence;
+            const std::uint32_t slot = request.controller.slot.index;
+            if (slot >= impl.controllerGenerations.size() || impl.controllerGenerations[slot] != request.controller.slot.generation)
+                return Result<void>::Failure(MakeError(CharacterErrors::HandleStale));
+            if (request.tick <= impl.closedTick.load() || request.sequence <= impl.closedSequences[slot])
+                return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+            if (std::ranges::any_of(impl.commands, [&request](const CharacterMovementRequest &queued) {
+                return ConflictsWithQueuedCommand(queued, request);
             }))
                 return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
             return Result<void>::Success();
@@ -117,7 +131,9 @@ namespace Horo::Character {
     struct CharacterWorld::Impl final {
         Impl(const CharacterWorldDescriptor &owner, const CharacterWorldSettings &worldSettings,
              Detail::CharacterControllerRegistry<CharacterControllerRecord> &&controllerRegistry)
-            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)) {
+            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)),
+              controllerGenerations(settings.Values().capacities.maximumControllers),
+              closedSequences(settings.Values().capacities.maximumControllers) {
             commands.reserve(settings.Values().capacities.maximumQueuedCommands);
             scratch.reserve(settings.Values().work.maximumCommandsPerTick);
         }
@@ -139,6 +155,8 @@ namespace Horo::Character {
         Detail::CharacterControllerRegistry<CharacterControllerRecord> controllers;
         std::vector<CharacterMovementRequest> commands;
         std::vector<CharacterMovementRequest> scratch;
+        std::vector<std::uint32_t> controllerGenerations;
+        std::vector<std::uint64_t> closedSequences;
         CharacterPublishedTick published;
         std::atomic<std::uint64_t> closedTick{};
         std::atomic<bool> acceptingCommands{};
@@ -198,6 +216,8 @@ namespace Horo::Character {
             std::ranges::sort(impl.scratch, CommandLess);
             if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
                 return valid;
+            for (const CharacterMovementRequest &command : impl.scratch)
+                impl.closedSequences[command.controller.slot.index] = command.sequence;
             std::erase_if(impl.commands, [&input](const CharacterMovementRequest &command) {
                 return command.tick == input.tick;
             });
@@ -293,7 +313,13 @@ namespace Horo::Character {
         if (descriptor.maximumContacts > impl_->settings.Values().work.maximumContactsPerMovement)
             return Result<CharacterControllerHandle>::Failure(
                 MakeError(CharacterErrors::CapacityExceeded, "Controller contact capacity exceeds the Character world work budget."));
-        return impl_->controllers.Acquire(CharacterControllerRecord{descriptor});
+        auto acquired = impl_->controllers.Acquire(CharacterControllerRecord{descriptor});
+        if (acquired.HasValue()) {
+            const CharacterControllerHandle handle = acquired.Value();
+            impl_->controllerGenerations[handle.slot.index] = handle.slot.generation;
+            impl_->closedSequences[handle.slot.index] = 0;
+        }
+        return acquired;
     }
 
     /** @copydoc CharacterWorld::DestroyController */

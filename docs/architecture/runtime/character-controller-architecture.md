@@ -257,9 +257,11 @@ and heading, jump intent and typed stance intent. It contains no caller delta ti
 `CharacterWorld::QueueMovementCommand` copies requests into storage reserved by the
 immutable world settings. Producers use non-blocking admission: contention returns
 `RejectedBusy`, exhaustion returns `RejectedFull`, and neither path mutates controller
-state. Exact duplicate controller/tick/sequence positions and commands for a closed
-tick fail with `character.command.order_invalid`. Before movement, the owner thread
-freezes the eligible frame and orders it by tick, stable controller handle and
+state. Exact duplicate controller/tick/sequence positions, stale producer sequences,
+and commands for a closed tick fail during admission with
+`character.command.order_invalid`. Queued sequences for one controller must increase
+across future ticks, independent of producer arrival order. Before movement, the owner
+thread freezes the eligible frame and orders it by tick, stable controller handle and
 sequence. A greater sequence for the same controller and tick replaces the earlier
 intent; only the final replacement executes. A controller with no command performs
 no movement for that tick, and an earlier intent is never replayed. The world itself
