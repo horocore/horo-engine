@@ -100,10 +100,11 @@ namespace Horo::Physics {
         }
 
         void RecordDiagnostic(const Error &error, const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
+            using enum PhysicsDiagnosticContextKey;
             const std::array context{
-                PhysicsDiagnosticContextEntry{.key = PhysicsDiagnosticContextKey::World, .value = identity},
-                PhysicsDiagnosticContextEntry{.key = PhysicsDiagnosticContextKey::SceneGeneration, .value = sceneGeneration},
-                PhysicsDiagnosticContextEntry{.key = PhysicsDiagnosticContextKey::SimulationTick, .value = simulationTick},
+                PhysicsDiagnosticContextEntry{.key = World, .value = identity},
+                PhysicsDiagnosticContextEntry{.key = SceneGeneration, .value = sceneGeneration},
+                PhysicsDiagnosticContextEntry{.key = SimulationTick, .value = simulationTick},
             };
             const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error, context);
             if (record.HasValue())

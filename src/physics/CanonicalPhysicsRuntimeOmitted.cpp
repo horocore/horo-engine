@@ -30,6 +30,9 @@ namespace Horo::Physics::Detail {
     /** @copydoc SubmitCanonicalDiagnosticForTesting */
     void SubmitCanonicalDiagnosticForTesting(const CanonicalWorldHandle, const CanonicalDiagnosticKind, const std::string_view) noexcept {}
 
+    /** @copydoc InvokeCanonicalDiagnosticCallbackForTesting */
+    void InvokeCanonicalDiagnosticCallbackForTesting(const CanonicalWorldHandle, const CanonicalDiagnosticKind, const std::string_view) {}
+
     /** @copydoc InspectCanonicalResources */
     CanonicalResourceCounts InspectCanonicalResources(const CanonicalRuntimeHandle) noexcept {
         return {};

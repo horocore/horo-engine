@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -45,40 +46,43 @@ namespace Horo::Physics::Detail {
             static void AppendDroppedSummary(std::string &message, const std::uint32_t droppedCount) {
                 if (droppedCount == 0)
                     return;
-                std::array<char, 48> suffix{};
-                const int suffixSize = std::snprintf(suffix.data(), suffix.size(), " [%u additional messages dropped]", droppedCount);
-                if (suffixSize <= 0)
+                std::array<char, 16> countText{};
+                const auto [countEnd, error] = std::to_chars(countText.data(), countText.data() + countText.size(), droppedCount);
+                if (error != std::errc{})
                     return;
-                const auto admittedSuffixSize = std::min(static_cast<std::size_t>(suffixSize), suffix.size() - 1);
-                if (message.size() + admittedSuffixSize > MaximumPhysicsDiagnosticMessageBytes)
-                    message.resize(MaximumPhysicsDiagnosticMessageBytes - admittedSuffixSize);
-                message.append(suffix.data(), admittedSuffixSize);
+                std::string suffix{" ["};
+                suffix.append(countText.data(), static_cast<std::size_t>(countEnd - countText.data()));
+                suffix.append(" additional messages dropped]");
+                if (message.size() + suffix.size() > MaximumPhysicsDiagnosticMessageBytes)
+                    message.resize(MaximumPhysicsDiagnosticMessageBytes - suffix.size());
+                message.append(suffix);
             }
 
             /** @brief Maps one private normalized classification to a stable Horo error. */
             static Error MakeDiagnosticError(const CanonicalDiagnosticKind kind, std::string message) {
+                using enum CanonicalDiagnosticKind;
                 switch (kind) {
-                    case CanonicalDiagnosticKind::Validation:
+                    case Validation:
                         return MakeError(PhysicsErrors::SolverValidationMessage, std::move(message));
-                    case CanonicalDiagnosticKind::Assertion:
+                    case Assertion:
                         return MakeError(PhysicsErrors::SolverAssertionFailed, std::move(message));
-                    case CanonicalDiagnosticKind::Fatal:
+                    case Fatal:
                         return MakeError(PhysicsErrors::SolverFatalCondition, std::move(message));
                 }
                 return MakeError(PhysicsErrors::SolverFatalCondition, "Unknown canonical solver diagnostic classification.");
             }
 
             void RetainEmergency(const CanonicalDiagnosticKind kind) noexcept {
-                auto desired = static_cast<std::uint8_t>(kind) + 1;
-                std::uint8_t current = emergencyKind.load(std::memory_order_relaxed);
-                while (current < desired &&
-                       !emergencyKind.compare_exchange_weak(current, desired, std::memory_order_release, std::memory_order_relaxed)) {
+                const auto desired = static_cast<std::uint8_t>(static_cast<std::uint8_t>(kind) + std::uint8_t{1});
+                std::uint8_t current = emergencyKind.load();
+                while (current < desired && !emergencyKind.compare_exchange_weak(current, desired)) {
+                    // A producer changed the priority; retry only while this condition is more severe.
                 }
             }
 
             void Submit(const CanonicalDiagnosticKind kind, const std::string_view message) noexcept {
-                if (lock.test_and_set(std::memory_order_acquire)) {
-                    dropped.fetch_add(1, std::memory_order_relaxed);
+                if (lock.test_and_set()) {
+                    dropped.fetch_add(1);
                     if (kind != CanonicalDiagnosticKind::Validation)
                         RetainEmergency(kind);
                     return;
@@ -93,16 +97,16 @@ namespace Horo::Physics::Detail {
                     size = count;
                     occupied = true;
                 }
-                lock.clear(std::memory_order_release);
+                lock.clear();
             }
 
             [[nodiscard]] std::optional<Error> Drain() {
-                if (lock.test_and_set(std::memory_order_acquire))
+                if (lock.test_and_set())
                     return MakeError(PhysicsErrors::SolverFatalCondition,
                                      "A native solver callback did not quiesce before the owner-thread drain boundary.");
-                const std::uint8_t emergency = emergencyKind.exchange(0, std::memory_order_acquire);
+                const std::uint8_t emergency = emergencyKind.exchange(0);
                 if (!occupied && emergency == 0) {
-                    lock.clear(std::memory_order_release);
+                    lock.clear();
                     return std::nullopt;
                 }
                 CanonicalDiagnosticKind kind = occupied ? retainedKind : static_cast<CanonicalDiagnosticKind>(emergency - 1);
@@ -112,10 +116,10 @@ namespace Horo::Physics::Detail {
                     kind = static_cast<CanonicalDiagnosticKind>(emergency - 1);
                     message = "Native solver fatal evidence was bounded by callback contention.";
                 }
-                AppendDroppedSummary(message, dropped.exchange(0, std::memory_order_relaxed));
+                AppendDroppedSummary(message, dropped.exchange(0));
                 occupied = false;
                 size = 0;
-                lock.clear(std::memory_order_release);
+                lock.clear();
                 return MakeDiagnosticError(kind, std::move(message));
             }
 
@@ -128,19 +132,22 @@ namespace Horo::Physics::Detail {
             bool occupied{};
         };
 
-        /** @brief The only inbox eligible to receive process-global Jolt callbacks during a bounded native call. */
-        std::atomic<DiagnosticInbox *> activeDiagnosticInbox{};
+        /** @brief Returns process callback routing state owned by the one admitted canonical runtime. */
+        std::atomic<DiagnosticInbox *> &ActiveDiagnosticInbox() noexcept {
+            static std::atomic<DiagnosticInbox *> inbox;
+            return inbox;
+        }
 
         /** @brief Normalizes one Jolt trace call into a bounded validation record without retaining native memory. */
-        void CaptureNativeTrace(const char *format, ...) noexcept {
-            DiagnosticInbox *inbox = activeDiagnosticInbox.load(std::memory_order_acquire);
+        void CaptureNativeTrace(const char *format, ...) noexcept {  // NOSONAR -- JPH::TraceFunction requires this C varargs ABI.
+            DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
             if (inbox == nullptr || format == nullptr)
                 return;
             thread_local std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> message{};
             message.fill('\0');
             std::va_list arguments;
             va_start(arguments, format);
-            const int formatted = std::vsnprintf(message.data(), message.size(), format, arguments);
+            const int formatted = std::vsnprintf(message.data(), message.size(), format, arguments);  // NOSONAR -- native format ABI.
             va_end(arguments);
             if (formatted < 0)
                 inbox->Submit(CanonicalDiagnosticKind::Validation, "Native solver validation message could not be formatted.");
@@ -151,14 +158,13 @@ namespace Horo::Physics::Detail {
 #ifdef JPH_ENABLE_ASSERTS
         /** @brief Converts a Jolt assertion into fatal bounded evidence; owner lifecycle performs the transition. */
         bool CaptureNativeAssertion(const char *expression, const char *message, const char *, const JPH::uint) noexcept {
-            DiagnosticInbox *inbox = activeDiagnosticInbox.load(std::memory_order_acquire);
+            DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
             if (inbox == nullptr)
                 return false;
-            thread_local std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> evidence{};
-            evidence.fill('\0');
-            std::snprintf(evidence.data(), evidence.size(), "%s%s%s", expression == nullptr ? "Native solver assertion" : expression,
-                          message == nullptr ? "" : ": ", message == nullptr ? "" : message);
-            inbox->Submit(CanonicalDiagnosticKind::Assertion, evidence.data());
+            const std::string_view evidence = message != nullptr && message[0] != '\0' ? std::string_view{message}
+                                              : expression == nullptr                  ? std::string_view{"Native solver assertion"}
+                                                                                       : std::string_view{expression};
+            inbox->Submit(CanonicalDiagnosticKind::Assertion, evidence);
             return false;
         }
 #endif
@@ -201,7 +207,7 @@ namespace Horo::Physics::Detail {
             CanonicalRuntime &operator=(const CanonicalRuntime &) = delete;
 
             ~CanonicalRuntime() {
-                activeDiagnosticInbox.store(nullptr, std::memory_order_release);
+                ActiveDiagnosticInbox().store(nullptr);
                 if (typesRegistered)
                     JPH::UnregisterTypes();
                 JPH::Factory::sInstance = nullptr;
@@ -292,12 +298,17 @@ namespace Horo::Physics::Detail {
         public:
             explicit DiagnosticRoute(DiagnosticInbox &inbox) noexcept : inbox_(&inbox) {
                 DiagnosticInbox *expected = nullptr;
-                admitted_ = activeDiagnosticInbox.compare_exchange_strong(expected, inbox_, std::memory_order_acq_rel);
+                admitted_ = ActiveDiagnosticInbox().compare_exchange_strong(expected, inbox_);
             }
+
+            DiagnosticRoute(const DiagnosticRoute &) = delete;
+            DiagnosticRoute &operator=(const DiagnosticRoute &) = delete;
+            DiagnosticRoute(DiagnosticRoute &&) = delete;
+            DiagnosticRoute &operator=(DiagnosticRoute &&) = delete;
 
             ~DiagnosticRoute() {
                 if (admitted_)
-                    activeDiagnosticInbox.store(nullptr, std::memory_order_release);
+                    ActiveDiagnosticInbox().store(nullptr);
             }
 
             [[nodiscard]] bool Admitted() const noexcept {
@@ -402,19 +413,20 @@ namespace Horo::Physics::Detail {
         if (world.value == nullptr)
             return Result<CanonicalStepOutcome>::Failure(MakeError(PhysicsErrors::InvalidState));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        const DiagnosticRoute route{canonical.diagnostics};
-        if (!route.Admitted())
+        if (const DiagnosticRoute route{canonical.diagnostics}; !route.Admitted()) {
             return Result<CanonicalStepOutcome>::Failure(
                 MakeError(PhysicsErrors::InvalidState, "Another canonical solver callback generation is still active."));
-        const auto updateError = canonical.system->Update(fixedDeltaSeconds, 1, canonical.scratch.get(), canonical.jobs.get());
-        std::optional<Error> diagnostic = canonical.diagnostics.Drain();
-        if (diagnostic.has_value() && (diagnostic->code.Value() == PhysicsErrors::SolverAssertionFailed.code.Value() ||
-                                       diagnostic->code.Value() == PhysicsErrors::SolverFatalCondition.code.Value()))
-            return Result<CanonicalStepOutcome>::Failure(std::move(*diagnostic));
-        if (updateError != JPH::EPhysicsUpdateError::None)
-            return Result<CanonicalStepOutcome>::Failure(
-                MakeError(PhysicsErrors::CapacityExceeded, "Canonical fixed tick exhausted required contact or pair storage."));
-        return Result<CanonicalStepOutcome>::Success({.diagnostic = std::move(diagnostic)});
+        } else {
+            const auto updateError = canonical.system->Update(fixedDeltaSeconds, 1, canonical.scratch.get(), canonical.jobs.get());
+            std::optional<Error> diagnostic = canonical.diagnostics.Drain();
+            if (diagnostic.has_value() && (diagnostic->code.Value() == PhysicsErrors::SolverAssertionFailed.code.Value() ||
+                                           diagnostic->code.Value() == PhysicsErrors::SolverFatalCondition.code.Value()))
+                return Result<CanonicalStepOutcome>::Failure(std::move(*diagnostic));
+            if (updateError != JPH::EPhysicsUpdateError::None)
+                return Result<CanonicalStepOutcome>::Failure(
+                    MakeError(PhysicsErrors::CapacityExceeded, "Canonical fixed tick exhausted required contact or pair storage."));
+            return Result<CanonicalStepOutcome>::Success({.diagnostic = std::move(diagnostic)});
+        }
     }
 
     /** @copydoc SubmitCanonicalDiagnosticForTesting */
@@ -422,6 +434,31 @@ namespace Horo::Physics::Detail {
                                              const std::string_view message) noexcept {
         if (world.value != nullptr)
             static_cast<CanonicalWorld *>(world.value)->diagnostics.Submit(kind, message);
+    }
+
+    /** @copydoc InvokeCanonicalDiagnosticCallbackForTesting */
+    void InvokeCanonicalDiagnosticCallbackForTesting(const CanonicalWorldHandle world, const CanonicalDiagnosticKind kind,
+                                                     const std::string_view message) {
+        using enum CanonicalDiagnosticKind;
+        if (world.value == nullptr)
+            return;
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        if (const DiagnosticRoute route{canonical.diagnostics}; !route.Admitted()) {
+            return;
+        } else {
+            const std::string ownedMessage{message};
+            if (kind == Validation) {
+                JPH::Trace("%s", ownedMessage.c_str());
+                return;
+            }
+#ifdef JPH_ENABLE_ASSERTS
+            if (kind == Assertion) {
+                JPH::AssertFailed("injected_solver_assertion", ownedMessage.c_str(), "", 0);
+                return;
+            }
+#endif
+            canonical.diagnostics.Submit(kind, message);
+        }
     }
 
     /** @copydoc InspectCanonicalResources */

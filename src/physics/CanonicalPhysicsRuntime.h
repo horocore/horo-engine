@@ -63,6 +63,8 @@ namespace Horo::Physics::Detail {
     [[nodiscard]] Result<CanonicalStepOutcome> StepCanonicalWorld(CanonicalWorldHandle world, float fixedDeltaSeconds);
     /** @brief Exercises the same bounded callback inbox from native-boundary tests. */
     void SubmitCanonicalDiagnosticForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message) noexcept;
+    /** @brief Invokes the installed native callback hook under a bounded test route. */
+    void InvokeCanonicalDiagnosticCallbackForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message);
     /** @brief Copies current native resource ownership counts without traversing solver data. */
     [[nodiscard]] CanonicalResourceCounts InspectCanonicalResources(CanonicalRuntimeHandle runtime) noexcept;
 }  // namespace Horo::Physics::Detail

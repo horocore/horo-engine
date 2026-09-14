@@ -157,7 +157,7 @@ namespace Horo::Physics::Detail {
         const WorldOwner world{prepared.Value()};
 
         const std::string oversized(MaximumPhysicsDiagnosticMessageBytes + 128, 'v');
-        SubmitCanonicalDiagnosticForTesting(world.handle, CanonicalDiagnosticKind::Validation, oversized);
+        InvokeCanonicalDiagnosticCallbackForTesting(world.handle, CanonicalDiagnosticKind::Validation, oversized);
         const auto validated = StepCanonicalWorld(world.handle, 1.0F / 60.0F);
         REQUIRE(validated.HasValue());
         REQUIRE(validated.Value().diagnostic.has_value());
@@ -166,7 +166,7 @@ namespace Horo::Physics::Detail {
         REQUIRE(validated.Value().diagnostic->message.size() == MaximumPhysicsDiagnosticMessageBytes);
 
         SubmitCanonicalDiagnosticForTesting(world.handle, CanonicalDiagnosticKind::Validation, "lower-priority validation");
-        SubmitCanonicalDiagnosticForTesting(world.handle, CanonicalDiagnosticKind::Assertion, "bounded solver assertion");
+        InvokeCanonicalDiagnosticCallbackForTesting(world.handle, CanonicalDiagnosticKind::Assertion, "bounded solver assertion");
         const auto asserted = StepCanonicalWorld(world.handle, 1.0F / 60.0F);
         REQUIRE(asserted.HasError());
         REQUIRE(asserted.ErrorValue().code.Value() == PhysicsErrors::SolverAssertionFailed.code.Value());
@@ -186,8 +186,20 @@ namespace Horo::Physics::Detail {
         REQUIRE(fatal.HasError());
         REQUIRE(fatal.ErrorValue().code.Value() == PhysicsErrors::SolverFatalCondition.code.Value());
 
+        SubmitCanonicalDiagnosticForTesting(world.handle, CanonicalDiagnosticKind::Validation, {});
+        const auto empty = StepCanonicalWorld(world.handle, 1.0F / 60.0F);
+        REQUIRE(empty.HasValue());
+        REQUIRE(empty.Value().diagnostic.has_value());
+        REQUIRE_FALSE(empty.Value().diagnostic->message.empty());
+
+        SubmitCanonicalDiagnosticForTesting(world.handle, static_cast<CanonicalDiagnosticKind>(255), "unknown classification");
+        const auto unknown = StepCanonicalWorld(world.handle, 1.0F / 60.0F);
+        REQUIRE(unknown.HasError());
+        REQUIRE(unknown.ErrorValue().code.Value() == PhysicsErrors::SolverFatalCondition.code.Value());
+
         REQUIRE(StepCanonicalWorld({}, 1.0F / 60.0F).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
         SubmitCanonicalDiagnosticForTesting({}, CanonicalDiagnosticKind::Fatal, "ignored after retirement");
+        InvokeCanonicalDiagnosticCallbackForTesting({}, CanonicalDiagnosticKind::Validation, "ignored after retirement");
     }
 
     TEST_CASE("Canonical diagnostic callbacks are restored after runtime shutdown", "[physics][native][diagnostics][shutdown]") {
@@ -200,8 +212,10 @@ namespace Horo::Physics::Detail {
             REQUIRE(created.HasValue());
             const RuntimeOwner runtime{created.Value()};
             REQUIRE(JPH::Trace != priorTrace);
+            JPH::Trace(nullptr);
 #ifdef JPH_ENABLE_ASSERTS
             REQUIRE(JPH::AssertFailed != priorAssert);
+            REQUIRE_FALSE(JPH::AssertFailed(nullptr, nullptr, nullptr, 0));
 #endif
         }
         REQUIRE(JPH::Trace == priorTrace);
