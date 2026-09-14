@@ -178,6 +178,7 @@ namespace Horo::WorldStreaming {
         StreamingTraceConfiguration configuration_{};
         std::vector<StreamingTraceStageSnapshot> snapshots_;
         std::vector<std::chrono::steady_clock::time_point> startedAt_;
+        std::vector<Telemetry::Record> preparedRecords_;
         std::unordered_map<std::uint64_t, std::size_t> spanIndices_;
         std::thread::id ownerThread_;
         StreamingTraceLifecycle lifecycle_{StreamingTraceLifecycle::Closed};

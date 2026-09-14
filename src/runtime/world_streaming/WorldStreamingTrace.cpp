@@ -124,6 +124,23 @@ namespace Horo::WorldStreaming {
             if (subject.provider.IsValid())
                 fields.emplace_back("provider.id", subject.provider.Value());
         }
+
+        [[nodiscard]] Telemetry::Record PrepareRecord(const StreamingTraceConfiguration &configuration,
+                                                      const StreamingTraceStageBegin &begin) {
+            std::vector<Telemetry::Field> fields;
+            fields.reserve(10);
+            fields.emplace_back("trace.root.id", configuration.operation.Value());
+            fields.emplace_back("trace.binding.revision", configuration.bindingRevision.Value());
+            fields.emplace_back("owner.id", configuration.owner.owner.Value());
+            fields.emplace_back("owner.revision", configuration.ownerRevision.Value());
+            AddSubjectFields(fields, begin.subject);
+            Telemetry::SpanRecord span{.operationId = begin.span.Value(),
+                                       .parentOperationId =
+                                           begin.parentSpan.IsValid() ? begin.parentSpan.Value() : begin.parentRoot.Value(),
+                                       .name = StageName(begin.stage),
+                                       .fields = std::move(fields)};
+            return {.subsystem = "world_streaming", .payload = std::move(span)};
+        }
     }  // namespace
 
     /** @copydoc WorldStreamingTrace::WorldStreamingTrace */
@@ -131,13 +148,15 @@ namespace Horo::WorldStreaming {
         : configuration_(configuration), ownerThread_(std::this_thread::get_id()), lifecycle_(StreamingTraceLifecycle::Active) {
         snapshots_.reserve(configuration.maximumSpans);
         startedAt_.reserve(configuration.maximumSpans);
+        preparedRecords_.reserve(configuration.maximumSpans);
         spanIndices_.reserve(configuration.maximumSpans);
     }
 
     /** @copydoc WorldStreamingTrace::WorldStreamingTrace */
     WorldStreamingTrace::WorldStreamingTrace(WorldStreamingTrace &&other) noexcept
         : configuration_(other.configuration_), snapshots_(std::move(other.snapshots_)), startedAt_(std::move(other.startedAt_)),
-          spanIndices_(std::move(other.spanIndices_)), ownerThread_(other.ownerThread_), lifecycle_(other.lifecycle_) {
+          preparedRecords_(std::move(other.preparedRecords_)), spanIndices_(std::move(other.spanIndices_)),
+          ownerThread_(other.ownerThread_), lifecycle_(other.lifecycle_) {
         other.lifecycle_ = StreamingTraceLifecycle::Closed;
     }
 
@@ -166,7 +185,9 @@ namespace Horo::WorldStreaming {
             admission.HasError())
             return admission;
         try {
+            auto record = PrepareRecord(configuration_, begin);
             spanIndices_.emplace(begin.span.Value(), snapshots_.size());
+            preparedRecords_.push_back(std::move(record));
         } catch (const std::bad_alloc &) {
             return Internal::Failure<void>(WorldStreamingErrors::TraceStorageUnavailable);
         }
@@ -210,13 +231,16 @@ namespace Horo::WorldStreaming {
         try {
             std::vector<StreamingTraceStageSnapshot> successorSnapshots;
             std::vector<std::chrono::steady_clock::time_point> successorStarts;
+            std::vector<Telemetry::Record> successorRecords;
             std::unordered_map<std::uint64_t, std::size_t> successorIndices;
             successorSnapshots.reserve(successor.maximumSpans);
             successorStarts.reserve(successor.maximumSpans);
+            successorRecords.reserve(successor.maximumSpans);
             successorIndices.reserve(successor.maximumSpans);
             configuration_ = successor;
             snapshots_.swap(successorSnapshots);
             startedAt_.swap(successorStarts);
+            preparedRecords_.swap(successorRecords);
             spanIndices_.swap(successorIndices);
         } catch (const std::bad_alloc &) {
             return Internal::Failure<void>(WorldStreamingErrors::TraceStorageUnavailable);
@@ -286,28 +310,12 @@ namespace Horo::WorldStreaming {
         auto &snapshot = snapshots_[index];
         snapshot.status = status;
         snapshot.duration = std::chrono::steady_clock::now() - startedAt_[index];
-        try {
-            std::vector<Telemetry::Field> fields;
-            fields.reserve(10);
-            fields.emplace_back("trace.root.id", configuration_.operation.Value());
-            fields.emplace_back("trace.binding.revision", configuration_.bindingRevision.Value());
-            fields.emplace_back("owner.id", configuration_.owner.owner.Value());
-            fields.emplace_back("owner.revision", configuration_.ownerRevision.Value());
-            AddSubjectFields(fields, snapshot.begin.subject);
-            Telemetry::SpanRecord span{.operationId = snapshot.begin.span.Value(),
-                                       .parentOperationId = snapshot.begin.parentSpan.IsValid() ? snapshot.begin.parentSpan.Value()
-                                                                                                : snapshot.begin.parentRoot.Value(),
-                                       .name = StageName(snapshot.begin.stage),
-                                       .status = status,
-                                       .duration = snapshot.duration,
-                                       .fields = std::move(fields)};
-            Telemetry::Record record{.subsystem = "world_streaming", .context = Log::CaptureLogContext(), .payload = std::move(span)};
-            snapshot.publication = Telemetry::Runtime::EmitRecord(std::move(record)) ? StreamingTracePublishDisposition::Submitted
-                                                                                     : StreamingTracePublishDisposition::Dropped;
-        } catch (...) {
-            // Observability must never alter or escape terminal streaming control flow.
-            snapshot.publication = StreamingTracePublishDisposition::Dropped;
-        }
+        auto record = std::move(preparedRecords_[index]);
+        auto &span = std::get<Telemetry::SpanRecord>(record.payload);
+        span.status = status;
+        span.duration = snapshot.duration;
+        snapshot.publication = Telemetry::Runtime::EmitRecord(std::move(record)) ? StreamingTracePublishDisposition::Submitted
+                                                                                 : StreamingTracePublishDisposition::Dropped;
         return snapshot.publication;
     }
 
