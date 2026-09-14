@@ -47,8 +47,8 @@ namespace {
     }
 
     template <typename T> void RequireGameplayError(const Result<T> &result, const ErrorCodeDescriptor &expected) {
-        REQUIRE(result.HasError());
-        CHECK(result.ErrorValue().code.Value() == expected.code.Value());
+        REQUIRE_FALSE(result.HasValue());
+        REQUIRE(result.ErrorValue().code.Value() == expected.code.Value());
     }
 }  // namespace
 
