@@ -85,6 +85,28 @@ limits through structured counters and diagnostics. Per-controller capsule,
 locomotion, slope, step and gravity policy remains in
 `CharacterControllerDescriptor`.
 
+`CharacterDiagnosticRecord` is the CHR-007.1 backend-neutral projection for
+rejected commands, degraded lifecycle, query/solver failures, and exhausted
+Character-owned limits. Every record owns a valid controller handle, matching
+scene generation, non-zero simulation tick, stable category/code/severity, and a
+bounded message. Optional metadata is a closed, ordered, fixed-capacity vocabulary
+for the paired Physics world, operation sequence, requested count, and capacity.
+Unknown codes, malformed identity/tick evidence, unordered metadata, and oversized
+messages fail before publication. When Character wraps a declared Physics error,
+the record retains that exact typed Physics code separately; consumers never parse
+messages or flatten cause chains to recover the source failure.
+
+Owners maintain one `CharacterDiagnosticRateLimiter` per
+controller/category/code stream. The limiter is allocation-free and owner-thread
+only, admits a finite number of records per tick, enforces a minimum tick interval,
+counts suppressed and out-of-order attempts with saturating counters, and performs
+no logging or callback execution. Observability, editor, and debug consumers read
+immutable retained records after Character publication; they do not own rate policy
+or simulation mutation. `maximumDiagnosticRecords` remains the scene-wide retained
+record bound; a retaining layer that reaches it must preserve Character state and
+report aggregate drop telemetry rather than allocating or evicting
+nondeterministically.
+
 The public lifecycle surfaces are `Horo/Physics/CharacterWorld.h` and the
 `HoroPhysicsSceneIntegration` adapter owning the
 `Horo/Physics/PhysicsSceneActivation.h` participant. The adapter is the explicit
