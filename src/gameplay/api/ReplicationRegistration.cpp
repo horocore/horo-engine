@@ -31,10 +31,9 @@ namespace Horo::Gameplay {
         }
 
         [[nodiscard]] bool ValidPhaseSchedule(const GameplayReplicationSchedule &schedule) noexcept {
-            const bool validCapture =
-                schedule.capturePhase == GameplaySystemPhase::PostPhysics || schedule.capturePhase == GameplaySystemPhase::Gameplay;
-            const bool validApply =
-                schedule.applyPhase == GameplaySystemPhase::PrePhysics || schedule.applyPhase == GameplaySystemPhase::Gameplay;
+            using enum GameplaySystemPhase;
+            const bool validCapture = schedule.capturePhase == PostPhysics || schedule.capturePhase == Gameplay;
+            const bool validApply = schedule.applyPhase == PrePhysics || schedule.applyPhase == Gameplay;
             return validCapture && validApply && schedule.affinity == GameplayThreadAffinity::RuntimeOwner &&
                    schedule.captureAccess.writes.empty();
         }
@@ -62,10 +61,9 @@ namespace Horo::Gameplay {
             if (access.reads.size() > MaximumGameplayComponentAccesses || access.writes.size() > MaximumGameplayComponentAccesses ||
                 access.reads.size() + access.writes.size() > MaximumGameplayComponentAccesses)
                 return false;
-            const auto valid = [components](const ComponentTypeId &id) {
+            if (const auto valid = [components](const ComponentTypeId &id) {
                 return id.IsValid() && FindComponent(components, id) != nullptr;
-            };
-            if (!std::ranges::all_of(access.reads, valid) || !std::ranges::all_of(access.writes, valid))
+            }; !std::ranges::all_of(access.reads, valid) || !std::ranges::all_of(access.writes, valid))
                 return false;
             const auto hasDuplicates = [](const std::vector<ComponentTypeId> &ids) {
                 for (std::size_t index = 0; index < ids.size(); ++index) {
@@ -81,8 +79,7 @@ namespace Horo::Gameplay {
                                       const std::span<const ComponentDescriptor> components,
                                       const std::span<const BehaviorRegistration> behaviors,
                                       const std::span<const GameplayServiceRegistration> services) noexcept {
-            return std::visit([&](const auto &owner) {
-                using Owner = std::decay_t<decltype(owner)>;
+            return std::visit([&]<typename Owner>(const Owner &owner) {
                 if constexpr (std::is_same_v<Owner, ComponentTypeId>) {
                     return owner.IsValid() && FindComponent(components, owner) != nullptr &&
                            std::ranges::find(registration.schedule.captureAccess.reads, owner) !=
@@ -171,7 +168,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc ReplicationRegistrationRegistry::ReplicationRegistrationRegistry */
-    ReplicationRegistrationRegistry::ReplicationRegistrationRegistry(std::string moduleId, GameplayReplicationRegistryLimits limits)
+    ReplicationRegistrationRegistry::ReplicationRegistrationRegistry(std::string moduleId, const GameplayReplicationRegistryLimits &limits)
         : moduleId_(std::move(moduleId)), limits_(limits) {}
 
     /** @copydoc ReplicationRegistrationRegistry::Register */
@@ -230,7 +227,7 @@ namespace Horo::Gameplay {
             std::vector<GameplayReplicationBinding> bindings;
             bindings.reserve(registrations_.size());
             for (const GameplayReplicationRegistration &registration : registrations_)
-                bindings.push_back({registration.owner, registration.schema.id, registration.schedule});
+                bindings.emplace_back(registration.owner, registration.schema.id, registration.schedule);
             state_ = std::make_shared<GameplayReplicationLease::State>(std::move(descriptors).Value(),
                                                                        std::move(serializerRegistry).Value(), std::move(bindings));
             frozen_ = true;

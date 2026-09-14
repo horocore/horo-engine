@@ -99,7 +99,7 @@ namespace Horo::Gameplay {
          * @param moduleId Canonical project module identity owning all declarations.
          * @param limits Finite host construction envelope.
          */
-        explicit ReplicationRegistrationRegistry(std::string moduleId, GameplayReplicationRegistryLimits limits = {});
+        explicit ReplicationRegistrationRegistry(std::string moduleId, const GameplayReplicationRegistryLimits &limits = {});
 
         /**
          * @brief Copies one inert owner/schema/serializer contribution into the open transaction.
