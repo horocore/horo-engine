@@ -22,25 +22,26 @@ namespace Horo::WorldStreaming {
                    configuration.operation.IsValid() && configuration.maximumSpans != 0;
         }
 
-        [[nodiscard]] std::uint8_t SubjectMask(const StreamingTraceSubject &subject) noexcept {
-            return static_cast<std::uint8_t>(subject.source.IsValid()) | static_cast<std::uint8_t>(subject.cellOperation.IsValid()) << 1U |
-                   static_cast<std::uint8_t>(subject.assetRequest.IsValid()) << 2U |
-                   static_cast<std::uint8_t>(subject.activation.IsValid()) << 3U |
-                   static_cast<std::uint8_t>(subject.provider.IsValid()) << 4U;
+        [[nodiscard]] unsigned int SubjectMask(const StreamingTraceSubject &subject) noexcept {
+            return static_cast<unsigned int>(subject.source.IsValid()) | static_cast<unsigned int>(subject.cellOperation.IsValid()) << 1U |
+                   static_cast<unsigned int>(subject.assetRequest.IsValid()) << 2U |
+                   static_cast<unsigned int>(subject.activation.IsValid()) << 3U |
+                   static_cast<unsigned int>(subject.provider.IsValid()) << 4U;
         }
 
         [[nodiscard]] bool SubjectValid(const StreamingTraceStageBegin &begin) noexcept {
+            using enum StreamingTraceStage;
             const auto mask = SubjectMask(begin.subject);
             switch (begin.stage) {
-                case StreamingTraceStage::SourceEvaluation:
+                case SourceEvaluation:
                     return mask == 1U;
-                case StreamingTraceStage::AssetRequest:
+                case AssetRequest:
                     return mask == 6U;
-                case StreamingTraceStage::Activation:
+                case Activation:
                     return mask == 10U;
-                case StreamingTraceStage::ProviderWork:
+                case ProviderWork:
                     return mask == 18U;
-                case StreamingTraceStage::Count:
+                case Count:
                     return false;
             }
             return false;
@@ -58,10 +59,9 @@ namespace Horo::WorldStreaming {
 
         [[nodiscard]] Result<void> ValidateStageAdmission(std::span<const StreamingTraceStageSnapshot> snapshots,
                                                           const StreamingTraceStageBegin &begin, const std::size_t maximumSpans) {
-            const auto spanMatch = [&begin](const StreamingTraceStageSnapshot &snapshot) {
+            if (std::ranges::any_of(snapshots, [&begin](const StreamingTraceStageSnapshot &snapshot) {
                 return snapshot.begin.span == begin.span;
-            };
-            if (std::ranges::any_of(snapshots, spanMatch))
+            }))
                 return Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
             if (snapshots.size() == maximumSpans)
                 return Internal::Failure<void>(WorldStreamingErrors::TraceCapacityExceeded);
@@ -98,16 +98,17 @@ namespace Horo::WorldStreaming {
         }
 
         [[nodiscard]] const char *StageName(const StreamingTraceStage stage) noexcept {
+            using enum StreamingTraceStage;
             switch (stage) {
-                case StreamingTraceStage::SourceEvaluation:
+                case SourceEvaluation:
                     return "world_streaming.source_evaluation";
-                case StreamingTraceStage::AssetRequest:
+                case AssetRequest:
                     return "world_streaming.asset_request";
-                case StreamingTraceStage::Activation:
+                case Activation:
                     return "world_streaming.activation";
-                case StreamingTraceStage::ProviderWork:
+                case ProviderWork:
                     return "world_streaming.provider_work";
-                case StreamingTraceStage::Count:
+                case Count:
                     return "world_streaming.invalid";
             }
             return "world_streaming.invalid";
@@ -115,17 +116,17 @@ namespace Horo::WorldStreaming {
 
         void AddSubjectFields(std::vector<Telemetry::Field> &fields, const StreamingTraceSubject &subject) {
             if (subject.source.IsValid())
-                fields.push_back({"source.id", subject.source.Value()});
+                fields.emplace_back("source.id", subject.source.Value());
             if (subject.cellOperation.IsValid()) {
-                fields.push_back({"cell.operation.id", subject.cellOperation.operation.Value()});
-                fields.push_back({"cell.generation", subject.cellOperation.fence.generation.Value()});
+                fields.emplace_back("cell.operation.id", subject.cellOperation.operation.Value());
+                fields.emplace_back("cell.generation", subject.cellOperation.fence.generation.Value());
             }
             if (subject.assetRequest.IsValid())
-                fields.push_back({"asset_request.id", subject.assetRequest.Value()});
+                fields.emplace_back("asset_request.id", subject.assetRequest.Value());
             if (subject.activation.IsValid())
-                fields.push_back({"activation.id", subject.activation.Value()});
+                fields.emplace_back("activation.id", subject.activation.Value());
             if (subject.provider.IsValid())
-                fields.push_back({"provider.id", subject.provider.Value()});
+                fields.emplace_back("provider.id", subject.provider.Value());
         }
     }  // namespace
 
@@ -221,23 +222,25 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc WorldStreamingTrace::Cancel */
     Result<StreamingTraceEmissionSummary> WorldStreamingTrace::Cancel() {
+        using enum StreamingTraceLifecycle;
         if (std::this_thread::get_id() != ownerThread_)
             return Internal::Failure<StreamingTraceEmissionSummary>(WorldStreamingErrors::TraceThreadAffinityViolation);
-        if (lifecycle_ == StreamingTraceLifecycle::Closed)
+        if (lifecycle_ == Closed)
             return Internal::Failure<StreamingTraceEmissionSummary>(WorldStreamingErrors::TraceLifecycleUnavailable);
-        lifecycle_ = StreamingTraceLifecycle::Cancelling;
+        lifecycle_ = Cancelling;
         return Result<StreamingTraceEmissionSummary>::Success(CancelActive());
     }
 
     /** @copydoc WorldStreamingTrace::Close */
     Result<StreamingTraceEmissionSummary> WorldStreamingTrace::Close() {
+        using enum StreamingTraceLifecycle;
         if (std::this_thread::get_id() != ownerThread_)
             return Internal::Failure<StreamingTraceEmissionSummary>(WorldStreamingErrors::TraceThreadAffinityViolation);
-        if (lifecycle_ == StreamingTraceLifecycle::Closed)
+        if (lifecycle_ == Closed)
             return Result<StreamingTraceEmissionSummary>::Success({});
-        lifecycle_ = StreamingTraceLifecycle::Cancelling;
+        lifecycle_ = Cancelling;
         auto summary = CancelActive();
-        lifecycle_ = StreamingTraceLifecycle::Closed;
+        lifecycle_ = Closed;
         return Result<StreamingTraceEmissionSummary>::Success(summary);
     }
 
@@ -282,10 +285,10 @@ namespace Horo::WorldStreaming {
         try {
             std::vector<Telemetry::Field> fields;
             fields.reserve(10);
-            fields.push_back({"trace.root.id", configuration_.operation.Value()});
-            fields.push_back({"trace.binding.revision", configuration_.bindingRevision.Value()});
-            fields.push_back({"owner.id", configuration_.owner.owner.Value()});
-            fields.push_back({"owner.revision", configuration_.ownerRevision.Value()});
+            fields.emplace_back("trace.root.id", configuration_.operation.Value());
+            fields.emplace_back("trace.binding.revision", configuration_.bindingRevision.Value());
+            fields.emplace_back("owner.id", configuration_.owner.owner.Value());
+            fields.emplace_back("owner.revision", configuration_.ownerRevision.Value());
             AddSubjectFields(fields, snapshot.begin.subject);
             Telemetry::SpanRecord span{.operationId = snapshot.begin.span.Value(),
                                        .parentOperationId = snapshot.begin.parentSpan.IsValid() ? snapshot.begin.parentSpan.Value()
