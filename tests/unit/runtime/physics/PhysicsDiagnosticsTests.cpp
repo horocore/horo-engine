@@ -48,9 +48,9 @@ namespace Horo::Physics {
             REQUIRE(first.HasValue());
             REQUIRE(first.Value().code.Value() == PhysicsErrors::WorldInvalid.code.Value());
             const auto last =
-                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Lifecycle, MakeError(PhysicsErrors::InitializationFailed));
+                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Lifecycle, MakeError(PhysicsErrors::SolverFatalCondition));
             REQUIRE(last.HasValue());
-            REQUIRE(last.Value().code.Value() == PhysicsErrors::InitializationFailed.code.Value());
+            REQUIRE(last.Value().code.Value() == PhysicsErrors::SolverFatalCondition.code.Value());
 
             auto invented = MakeError(PhysicsErrors::DescriptorInvalid);
             invented.code = ErrorCode{"physics.future.invented"};

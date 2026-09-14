@@ -96,6 +96,34 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor SolverValidationMessage{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.solver.validation"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The native physics solver reported a validation message.",
+        .remediationHint = "Inspect the bounded solver evidence and correct the originating Physics configuration or content.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SolverAssertionFailed{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.solver.assertion_failed"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "A native physics solver invariant failed.",
+        .remediationHint = "Retain the prior coherent publication, reset the world only after inspecting the bounded assertion evidence.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor SolverFatalCondition{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.solver.fatal_condition"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "The native physics solver reported a fatal condition.",
+        .remediationHint =
+            "Retain the prior coherent publication and rebuild the world only after resolving the reported solver condition.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor DescriptorInvalid{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.descriptor.invalid"},

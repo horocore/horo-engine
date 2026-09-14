@@ -27,6 +27,12 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor ThreadAffinityViolation;
     /** @brief Solver child work exceeded its fixed-tick deadline and was cooperatively cancelled. */
     extern const ErrorCodeDescriptor SolverDeadlineExceeded;
+    /** @brief The native solver emitted a bounded non-terminal validation message. */
+    extern const ErrorCodeDescriptor SolverValidationMessage;
+    /** @brief A native solver invariant assertion failed and the active world cannot continue safely. */
+    extern const ErrorCodeDescriptor SolverAssertionFailed;
+    /** @brief The native solver reported a fatal condition outside a recoverable operation result. */
+    extern const ErrorCodeDescriptor SolverFatalCondition;
     /** @brief Malformed or unsupported-version descriptor metadata. */
     extern const ErrorCodeDescriptor DescriptorInvalid;
     /** @brief A command lacks complete canonical identity/order evidence or duplicates an admitted key. */

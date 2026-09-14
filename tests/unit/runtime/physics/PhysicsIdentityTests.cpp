@@ -104,7 +104,7 @@ namespace Horo::Physics {
         }
 
         TEST_CASE("Physics errors have unique definitive identities and actionable diagnostics", "[physics][errors]") {
-            const std::array<std::pair<const ErrorCodeDescriptor *, std::string_view>, 13> cases{{
+            const std::array<std::pair<const ErrorCodeDescriptor *, std::string_view>, 16> cases{{
                 {&PhysicsErrors::WorldInvalid, "physics.world.invalid"},
                 {&PhysicsErrors::HandleMalformed, "physics.handle.malformed"},
                 {&PhysicsErrors::HandleWorldMismatch, "physics.handle.world_mismatch"},
@@ -113,6 +113,9 @@ namespace Horo::Physics {
                 {&PhysicsErrors::CapabilityUnavailable, "physics.capability.unavailable"},
                 {&PhysicsErrors::OperationUnsupported, "physics.operation.unsupported"},
                 {&PhysicsErrors::InvalidState, "physics.state.invalid"},
+                {&PhysicsErrors::SolverValidationMessage, "physics.solver.validation"},
+                {&PhysicsErrors::SolverAssertionFailed, "physics.solver.assertion_failed"},
+                {&PhysicsErrors::SolverFatalCondition, "physics.solver.fatal_condition"},
                 {&PhysicsErrors::DescriptorInvalid, "physics.descriptor.invalid"},
                 {&PhysicsErrors::ProfileUnsupported, "physics.profile.unsupported"},
                 {&PhysicsErrors::CapacityExceeded, "physics.capacity.exceeded"},
@@ -133,6 +136,8 @@ namespace Horo::Physics {
                 REQUIRE(error.message == descriptor->summary);
             }
             REQUIRE(PhysicsErrors::GenerationExhausted.defaultSeverity == ErrorSeverity::Critical);
+            REQUIRE(PhysicsErrors::SolverAssertionFailed.defaultSeverity == ErrorSeverity::Critical);
+            REQUIRE(PhysicsErrors::SolverFatalCondition.defaultSeverity == ErrorSeverity::Critical);
             REQUIRE(PhysicsErrors::CapabilityUnavailable.userActionable);
             REQUIRE(PhysicsErrors::OperationUnsupported.userActionable);
         }

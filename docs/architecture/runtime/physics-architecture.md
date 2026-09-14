@@ -638,6 +638,16 @@ owned evidence with no logging, storage, event, lifetime or mutation authority.
 Metrics/profiler ingestion and native solver callback translation remain separate
 owning contracts.
 
+The canonical solver adapter installs process-owned native trace/assertion callbacks
+only for the admitted runtime lifetime and restores the prior hooks on retirement.
+Callbacks may only attempt a non-blocking copy into one fixed per-world inbox while a
+joined native step is active. The owner thread drains that inbox after the step,
+normalizes validation, assertion and fatal conditions to stable `horo.physics` codes,
+and retains one owned `PhysicsDiagnosticRecord`. Validation evidence is inert;
+assertion and fatal evidence fail the world exactly once while preserving the prior
+coherent publication. Reset, scene unload and shutdown clear the retained evidence,
+and no callback may log, allocate, mutate gameplay state or retain native text.
+
 `PhysicsMetricSnapshot` is the immutable bounded handoff for one committed tick.
 Physics validates its exact world and publication revisions, finite host/adapter-
 supplied durations, coherent counts and admitted world limits before invoking any
