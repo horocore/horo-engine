@@ -1305,6 +1305,12 @@ add_executable(HoroStandardPbrMaterialTests
 target_compile_features(HoroStandardPbrMaterialTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrMaterialTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrMaterialTests PRIVATE HoroEngine::RenderApi)
+add_executable(HoroStandardPbrPassPlanTests
+        unit/runtime/renderer/StandardPbrPassPlanTests.cpp
+)
+target_compile_features(HoroStandardPbrPassPlanTests PRIVATE cxx_std_20)
+target_include_directories(HoroStandardPbrPassPlanTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(HoroStandardPbrPassPlanTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroShaderCompilerPipelineTests
         unit/runtime/renderer/ShaderCompilerPipelineTests.cpp
         unit/runtime/renderer/ShaderCompilerToolchainTests.cpp
@@ -2030,6 +2036,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroShaderPermutationTests
         HoroShaderReflectionTests
         HoroStandardPbrMaterialTests
+        HoroStandardPbrPassPlanTests
         HoroShaderCompilerPipelineTests
         HoroRenderSubmissionTests
         HoroRenderFrontendTests
