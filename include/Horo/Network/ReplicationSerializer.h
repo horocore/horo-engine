@@ -190,6 +190,10 @@ namespace Horo::Network {
 
     /** @brief Horo-owned deterministic scalar codec supporting exact and stepped floating-point fields. */
     class CanonicalScalarReplicationSerializer final : public IReplicationFieldSerializer {
+    private:
+        /** @brief Unforgeable token keeping construction behind validated Create calls. */
+        struct ValidatedConstruction final {};
+
     public:
         /**
          * @brief Creates a validated scalar serializer.
@@ -209,10 +213,10 @@ namespace Horo::Network {
         [[nodiscard]] Result<bool> CanonicallyEqual(const ReplicationRuntimeValue &left,
                                                     const ReplicationRuntimeValue &right) const override;
 
-    private:
-        /** @brief Stores already validated inert metadata for one scalar adapter. */
-        explicit CanonicalScalarReplicationSerializer(ReplicationSerializerDescriptor descriptor);
+        /** @brief Stores metadata already validated by Create; the private token prevents direct caller construction. */
+        CanonicalScalarReplicationSerializer(ValidatedConstruction, ReplicationSerializerDescriptor descriptor);
 
+    private:
         ReplicationSerializerDescriptor descriptor_;
     };
 }  // namespace Horo::Network

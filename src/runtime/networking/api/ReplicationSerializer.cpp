@@ -428,16 +428,15 @@ namespace Horo::Network {
             return Fail<std::shared_ptr<const CanonicalScalarReplicationSerializer>>(NetworkErrors::ReplicationSerializerInvalid);
         try {
             return Result<std::shared_ptr<const CanonicalScalarReplicationSerializer>>::Success(
-                // The private constructor keeps validation in Create; make_shared cannot access it.
-                std::shared_ptr<const CanonicalScalarReplicationSerializer>{
-                    new CanonicalScalarReplicationSerializer(descriptor)});  // NOSONAR
+                std::make_shared<CanonicalScalarReplicationSerializer>(ValidatedConstruction{}, descriptor));
         } catch (const std::bad_alloc &) {
             return Fail<std::shared_ptr<const CanonicalScalarReplicationSerializer>>(NetworkErrors::ReplicationSerializerCapacityExceeded);
         }
     }
 
     /** @copydoc CanonicalScalarReplicationSerializer::CanonicalScalarReplicationSerializer */
-    CanonicalScalarReplicationSerializer::CanonicalScalarReplicationSerializer(ReplicationSerializerDescriptor descriptor)
+    CanonicalScalarReplicationSerializer::CanonicalScalarReplicationSerializer(ValidatedConstruction,
+                                                                               ReplicationSerializerDescriptor descriptor)
         : descriptor_(std::move(descriptor)) {}
 
     /** @copydoc CanonicalScalarReplicationSerializer::Descriptor */
