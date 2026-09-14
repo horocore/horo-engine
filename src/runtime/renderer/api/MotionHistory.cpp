@@ -205,8 +205,11 @@ namespace Horo::Render {
             while (previous != m_objects.end() && previous->object < sample.object)
                 ++previous;
             const bool hasPrevious = historyValid && previous != m_objects.end() && previous->object == sample.object;
-            frame.objects.emplace_back(RenderMotionObjectPair{sample.object, sample.localToWorld,
-                                                              hasPrevious ? previous->localToWorld : sample.localToWorld, hasPrevious});
+            RenderMotionObjectPair &pair = frame.objects.emplace_back();
+            pair.object = sample.object;
+            pair.currentLocalToWorld = sample.localToWorld;
+            pair.previousLocalToWorld = hasPrevious ? previous->localToWorld : sample.localToWorld;
+            pair.hasPrevious = hasPrevious;
         }
         return frame;
     }
@@ -245,8 +248,11 @@ namespace Horo::Render {
                 if (m_objects.capacity() < frame.objects.size())
                     m_objects.reserve(m_limits.maxObjects);
                 m_objects.clear();
-                for (const RenderMotionObjectPair &object : frame.objects)
-                    m_objects.emplace_back(PublishedObject{object.object, object.currentLocalToWorld});
+                for (const RenderMotionObjectPair &object : frame.objects) {
+                    PublishedObject &published = m_objects.emplace_back();
+                    published.object = object.object;
+                    published.localToWorld = object.currentLocalToWorld;
+                }
                 m_compatibility = frame.compatibility;
                 m_camera = {frame.camera.currentUnjitteredViewProjection, frame.camera.currentJitterUv};
                 m_lastPublishedFrame = frame.frameId;
