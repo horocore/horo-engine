@@ -20,13 +20,13 @@ namespace Horo::Audio::Backend {
 
     /** @brief Backend-local facts; parent AudioRuntime state remains control-owned. */
     enum class Sdl3AudioBackendState : std::uint8_t {
-        Closed,
-        Opened,
-        Priming,
-        Rendering,
-        Quiescing,
-        Quiesced,
-        Stopped
+        Closed = 0,
+        Opened = 1,
+        Priming = 2,
+        Rendering = 3,
+        Quiescing = 4,
+        Quiesced = 5,
+        Stopped = 6
     };
 
     /**
