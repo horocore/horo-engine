@@ -91,6 +91,26 @@ namespace Horo::Character {
             std::uint64_t next{1};
         };
 
+        /** @brief Encapsulates command and publication mutex ownership for one Character world. */
+        class CharacterWorldSynchronization final {
+        public:
+            [[nodiscard]] std::unique_lock<std::mutex> TryLockCommands() {
+                return std::unique_lock{commandMutex_, std::try_to_lock};
+            }
+
+            [[nodiscard]] std::scoped_lock<std::mutex> LockCommands() const {
+                return std::scoped_lock{commandMutex_};
+            }
+
+            [[nodiscard]] std::scoped_lock<std::mutex> LockPublication() const {
+                return std::scoped_lock{publicationMutex_};
+            }
+
+        private:
+            mutable std::mutex commandMutex_;
+            mutable std::mutex publicationMutex_;
+        };
+
         [[nodiscard]] CharacterWorldIdentityAuthority &WorldIdentityAuthority() {
             static CharacterWorldIdentityAuthority authority;
             return authority;
@@ -138,18 +158,6 @@ namespace Horo::Character {
             scratch.reserve(settings.Values().work.maximumCommandsPerTick);
         }
 
-        [[nodiscard]] std::unique_lock<std::mutex> TryLockCommands() {
-            return std::unique_lock{commandMutex_, std::try_to_lock};
-        }
-
-        [[nodiscard]] std::lock_guard<std::mutex> LockCommands() const {
-            return std::lock_guard{commandMutex_};
-        }
-
-        [[nodiscard]] std::lock_guard<std::mutex> LockPublication() const {
-            return std::lock_guard{publicationMutex_};
-        }
-
         CharacterWorldDescriptor descriptor;
         CharacterWorldSettings settings;
         Detail::CharacterControllerRegistry<CharacterControllerRecord> controllers;
@@ -157,6 +165,7 @@ namespace Horo::Character {
         std::vector<CharacterMovementRequest> scratch;
         std::vector<std::uint32_t> controllerGenerations;
         std::vector<std::uint64_t> closedSequences;
+        CharacterWorldSynchronization synchronization;
         CharacterPublishedTick published;
         std::atomic<std::uint64_t> closedTick{};
         std::atomic<bool> acceptingCommands{};
@@ -168,10 +177,6 @@ namespace Horo::Character {
         std::thread::id ownerThread{std::this_thread::get_id()};
         CharacterWorldState state{CharacterWorldState::Prepared};
         bool ticking{};
-
-    private:
-        mutable std::mutex commandMutex_;
-        mutable std::mutex publicationMutex_;
     };
 
     namespace {
@@ -196,7 +201,7 @@ namespace Horo::Character {
 
         /** @brief Canonicalizes and removes one validated eligible frame while holding queue ownership. */
         [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
-            const auto queueLock = impl.LockCommands();
+            const auto queueLock = impl.synchronization.LockCommands();
             if (std::ranges::any_of(impl.commands, [&input](const CharacterMovementRequest &command) {
                 return command.tick < input.tick;
             }))
@@ -245,7 +250,7 @@ namespace Horo::Character {
 
         /** @brief Atomically replaces the coherent Character publication marker. */
         void PublishTick(auto &impl, const CharacterFixedTickInput &input, const std::uint32_t applied) noexcept {
-            const auto publicationLock = impl.LockPublication();
+            const auto publicationLock = impl.synchronization.LockPublication();
             impl.published.completedTick = input.tick;
             ++impl.published.publicationRevision;
             impl.published.appliedCommands = applied;
@@ -351,7 +356,7 @@ namespace Horo::Character {
             return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
         }
 
-        if (auto queueLock = impl_->TryLockCommands(); queueLock.owns_lock()) {
+        if (auto queueLock = impl_->synchronization.TryLockCommands(); queueLock.owns_lock()) {
             if (const auto valid = ValidateLockedAdmission(*impl_, request); valid.HasError()) {
                 impl_->rejectedCommands.fetch_add(1);
                 return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
@@ -393,7 +398,7 @@ namespace Horo::Character {
 
     /** @copydoc CharacterWorld::PublishedTick */
     CharacterPublishedTick CharacterWorld::PublishedTick() const noexcept {
-        const auto publicationLock = impl_->LockPublication();
+        const auto publicationLock = impl_->synchronization.LockPublication();
         return impl_->published;
     }
 
@@ -411,7 +416,7 @@ namespace Horo::Character {
             return;
         impl_->acceptingCommands.store(false);
         {
-            const auto queueLock = impl_->LockCommands();
+            const auto queueLock = impl_->synchronization.LockCommands();
             impl_->commands.clear();
             impl_->scratch.clear();
             impl_->pendingCommands.store(0);
