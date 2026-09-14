@@ -16,10 +16,10 @@ namespace Horo::Character {
         constexpr std::uint64_t MaximumMinimumTickInterval = 1'000'000;
 
         const std::array CharacterDescriptors{
-            &CharacterErrors::WorldInvalid,        &CharacterErrors::HandleMalformed,      &CharacterErrors::HandleWorldMismatch,
-            &CharacterErrors::HandleStale,         &CharacterErrors::DescriptorInvalid,    &CharacterErrors::RequestInvalid,
-            &CharacterErrors::CommandOrderInvalid, &CharacterErrors::CapacityExceeded,     &CharacterErrors::GenerationExhausted,
-            &CharacterErrors::InvalidState,        &CharacterErrors::OperationUnsupported,
+            &CharacterErrors::DescriptorInvalid,    &CharacterErrors::RequestInvalid, &CharacterErrors::CommandOrderInvalid,
+            &CharacterErrors::OperationUnsupported, &CharacterErrors::WorldInvalid,   &CharacterErrors::HandleMalformed,
+            &CharacterErrors::HandleWorldMismatch,  &CharacterErrors::HandleStale,    &CharacterErrors::GenerationExhausted,
+            &CharacterErrors::CapacityExceeded,     &CharacterErrors::InvalidState,
         };
 
         const std::array PhysicsDescriptors{
