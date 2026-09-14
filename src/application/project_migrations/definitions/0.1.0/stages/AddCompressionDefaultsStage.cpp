@@ -12,11 +12,6 @@ namespace Horo::ProjectMigrations::R0_1_0 {
             return MakeError(Application::ProjectErrors::MigrationStageFailed, std::move(message));
         }
 
-        [[nodiscard]] std::vector<std::byte> Bytes(const std::string &text) {
-            const auto *first = reinterpret_cast<const std::byte *>(text.data());
-            return {first, first + text.size()};
-        }
-
         class CompressionDefaultsStage final : public Application::IProjectMigrationDocumentStage {
         public:
             [[nodiscard]] Application::MigrationStageDescriptor Describe() const override {
@@ -49,7 +44,7 @@ namespace Horo::ProjectMigrations::R0_1_0 {
                 const std::string serialized = root.dump(2) + "\n";
                 return Result<Application::MigrationDocumentChange>::Success({
                     .document = source.handle,
-                    .replacement = Bytes(serialized),
+                    .replacement = SerializeDocumentBytes(serialized),
                     .changed = serialized.size() != source.bytes.size() ||
                                !std::equal(serialized.begin(), serialized.end(), reinterpret_cast<const char *>(source.bytes.data())),
                 });

@@ -1,6 +1,12 @@
 #include "ProjectMigration.h"
 
 namespace Horo::ProjectMigrations::R0_1_0 {
+    /** @copydoc SerializeDocumentBytes */
+    std::vector<std::byte> SerializeDocumentBytes(const std::string_view text) {
+        const auto *first = reinterpret_cast<const std::byte *>(text.data());
+        return {first, first + text.size()};
+    }
+
     /** @copydoc BuildProjectMigration */
     Result<Application::ProjectMigrationDefinition> BuildProjectMigration() {
         using namespace Application;

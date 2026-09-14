@@ -103,11 +103,6 @@ namespace Horo::ProjectMigrations::R0_1_0 {
             return value;
         }
 
-        [[nodiscard]] std::vector<std::byte> Bytes(const std::string &text) {
-            const auto *first = reinterpret_cast<const std::byte *>(text.data());
-            return {first, first + text.size()};
-        }
-
         [[nodiscard]] Result<Json> ParseDocument(const Application::ProjectDocumentView &document, const std::string_view family) {
             try {
                 JsonShapeValidator shape;
@@ -239,7 +234,7 @@ namespace Horo::ProjectMigrations::R0_1_0 {
                 if (auto migrated = MigratePrefabDocument(prefab, identity->second); migrated.HasError())
                     return migrated;
                 const std::string serialized = prefab.dump(2) + "\n";
-                if (auto replaced = context.ReplaceDocument(entry.handle, Bytes(serialized)); replaced.HasError())
+                if (auto replaced = context.ReplaceDocument(entry.handle, SerializeDocumentBytes(serialized)); replaced.HasError())
                     return replaced;
             }
             return Result<void>::Success();
@@ -301,7 +296,7 @@ namespace Horo::ProjectMigrations::R0_1_0 {
                     return Result<void>::Failure(migrated.ErrorValue());
             }
             const std::string serialized = scene.dump(2) + "\n";
-            return context.ReplaceDocument(entry.handle, Bytes(serialized));
+            return context.ReplaceDocument(entry.handle, SerializeDocumentBytes(serialized));
         }
 
         [[nodiscard]] Result<void> MigrateSceneDocuments(ProjectMigrationContext &context, const PrefabIdentityIndex &index,
