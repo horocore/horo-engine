@@ -448,6 +448,8 @@ horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/MotionHistory.h
+    Horo/Runtime/Render/MotionHistoryErrors.h
     Horo/Runtime/Render/PipelineCache.h
     Horo/Runtime/Render/PipelineCacheErrors.h
     Horo/Runtime/Render/Mesh.h
