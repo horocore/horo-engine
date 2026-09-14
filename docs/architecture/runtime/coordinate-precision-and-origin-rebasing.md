@@ -234,80 +234,42 @@ evaluation without publishing partial state.
 
 ### 1. Origin Rebase Coordinator
 
-The `OriginRebaseCoordinator` is owned by `SceneRuntime` and updated during the pre-render frame phase on the host thread that ticks `SceneRuntime` (editor, game, and dedicated-server hosts). It is a runtime type and must not depend on editor types.
+`HoroWorldStreaming` owns the backend-neutral `OriginRebaseTransaction`. The game,
+editor-preview and dedicated-server composition roots provide the complete required
+participant set and call commit during their post-simulation safe point. The
+transaction does not discover services, register callbacks in ambient state or
+depend on editor/backend types.
 
-```cpp
-namespace Horo::Runtime::Precision {
+Every participant has a stable `OriginRebaseParticipantId` and exact
+`OriginRebaseParticipantRevision`. Preparation receives one immutable
+`OriginRebaseEvent` containing the authorized request plus exact previous and
+successor `OriginFrame` publications. It returns a uniquely owned prepared receipt.
+The receipt is the only state retained by the transaction; participant objects
+remain caller-owned. Required and supplied participants are sorted by stable ID,
+must map one-to-one, and are bounded by the host-authored maximum.
 
-struct OriginRebaseConfig {
-    float rebasingThresholdMeters{1000.0F}; // Distance from origin before triggering shift
-    float gridCellSizeMeters{1024.0F};      // Spatial partition grid cell size
-    bool  snapToGridCells{true};            // If true, origin shifts by discrete cell increments
-};
+Preparation is the only fallible participant phase. Each prepared receipt binds the
+transaction, participant revision and both frame generations. A missing, duplicate,
+foreign or stale receipt rejects the complete transaction. If any participant
+fails, already acquired receipts roll back in reverse canonical order. No active
+frame or participant live state changes during preparation.
 
-struct OriginRebaseEvent {
-    Math::WorldCoordinate64 oldOrigin;
-    Math::WorldCoordinate64 newOrigin;
-    Math::Vec3              shiftDelta;      // fp32 local-frame view of (newOrigin - oldOrigin); exact mm via old/new Origin
-    uint64_t                originGeneration; // Monotonically increasing origin revision
-};
+Commit accepts only `OriginRebaseCommitPoint::PostSimulation`. It first verifies
+that `OriginFrameOwner` still publishes the exact frame captured by the policy
+decision, stages and atomically publishes the exact revision/generation successor,
+then calls every receipt's no-fail `ApplyPrepared` once in canonical participant
+order. All allocation, readiness checks and native synchronization must therefore
+finish during preparation. The safe-point owner does not expose intermediate state
+to simulation, extraction or backend threads. Old leases expire at publication;
+stable canonical `WorldCoordinate64` values never change.
 
-enum class RebasePhase : uint8_t {
-    Idle,
-    Preparing,
-    Committing,
-    RollingBack
-};
-
-class IOriginRebaseParticipant {
-public:
-    virtual ~IOriginRebaseParticipant() = default;
-
-    [[nodiscard]] virtual std::string_view GetParticipantName() const noexcept = 0;
-
-    /**
-     * @brief Phase 1: Validate readiness and pre-allocate migration memory.
-     * Must return Error if the subsystem cannot safely shift at this time.
-     */
-    [[nodiscard]] virtual Result<void> PrepareRebase(const OriginRebaseEvent &event) noexcept = 0;
-
-    /**
-     * @brief Phase 2: Apply position translation atomically without velocity alteration.
-     */
-    virtual void CommitRebase(const OriginRebaseEvent &event) noexcept = 0;
-
-    /**
-     * @brief Rollback: Executed if any participant failed during PrepareRebase.
-     */
-    virtual void RollbackRebase(const OriginRebaseEvent &event) noexcept = 0;
-};
-
-class OriginRebaseCoordinator {
-public:
-    explicit OriginRebaseCoordinator(OriginRebaseConfig config = {}) noexcept;
-    ~OriginRebaseCoordinator() noexcept;
-
-    [[nodiscard]] const Math::WorldCoordinate64 &GetActiveOrigin() const noexcept;
-    [[nodiscard]] uint64_t GetOriginGeneration() const noexcept;
-    [[nodiscard]] bool IsRebasing() const noexcept;
-
-    Result<void> RegisterParticipant(IOriginRebaseParticipant *participant) noexcept;
-    Result<void> UnregisterParticipant(IOriginRebaseParticipant *participant) noexcept;
-
-    /**
-     * @brief Evaluates camera position and executes atomic two-phase rebase if threshold is breached.
-     * Must be called at the declared post-simulation / pre-render synchronization point.
-     */
-    Result<bool> EvaluateAndRebase(const Math::WorldCoordinate64 &focalWorldPos) noexcept;
-
-    /**
-     * @brief Forces an explicit origin shift to a target world coordinate.
-     */
-    Result<void> ForceRebase(const Math::WorldCoordinate64 &targetOrigin) noexcept;
-};
-
-} // namespace Horo::Runtime::Precision
-```
+Cancellation or shutdown before publication rolls back the complete prepared set
+and leaves the active frame unchanged. A wrong safe point is retryable and retains
+prepared ownership. A stale owner, cancelling/closed lifecycle, invalid set or
+publication failure makes the transaction terminal and rolls back every receipt.
+Subsystem-specific transformation and backend adapters remain separate follow-up
+contracts; this transaction defines only gathering, fencing, atomic application and
+generation publication.
 
 ### 2. Two-Phase Rebasing Execution Flow
 
