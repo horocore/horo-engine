@@ -2,11 +2,14 @@
 #include "Horo/Physics/CharacterWorld.h"
 #include "PhysicsTestUtils.h"
 
+#include <array>
+#include <barrier>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <limits>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Horo::Character {
     namespace {
@@ -61,6 +64,54 @@ namespace Horo::Character {
             REQUIRE(prepared.HasValue());
             return std::move(prepared).Value();
         }
+
+        struct ActiveWorld final {
+            std::unique_ptr<CharacterWorld> world;
+            std::array<CharacterControllerHandle, 2> controllers{};
+        };
+
+        [[nodiscard]] ActiveWorld ActiveWorldWithControllers(const std::uint32_t controllerCount = 1) {
+            REQUIRE(controllerCount <= 2);
+            ActiveWorld result{PreparedWorld(controllerCount)};
+            const auto descriptor = ControllerDescriptor(result.world->Descriptor());
+            for (std::uint32_t index = 0; index < controllerCount; ++index)
+                result.controllers[index] = result.world->CreateController(descriptor).Value();
+            REQUIRE(result.world->Activate().HasValue());
+            return result;
+        }
+
+        [[nodiscard]] CharacterMovementRequest Movement(const CharacterControllerHandle controller, const std::uint64_t tick,
+                                                        const std::uint64_t sequence) {
+            return {.controller = controller, .tick = tick, .sequence = sequence};
+        }
+
+        [[nodiscard]] CharacterFixedTickInput FixedTick(const std::uint64_t tick, const CharacterTickObserver observer = {}) {
+            return {.tick = tick,
+                    .sceneGeneration = WorldDescriptor().sceneGeneration,
+                    .fixedDelta = Duration::FromNanoseconds(16'666'667),
+                    .observer = observer};
+        }
+
+        struct CommandTrace final {
+            std::array<CharacterTickPhase, 3> phases{};
+            std::array<CharacterMovementRequest, 2> movements{};
+            std::size_t phaseCount{};
+            std::size_t movementCount{};
+
+            static void Phase(void *context, const CharacterTickPhase phase, const std::uint64_t) noexcept {
+                auto &trace = *static_cast<CommandTrace *>(context);
+                trace.phases[trace.phaseCount++] = phase;
+            }
+
+            static void Movement(void *context, const CharacterMovementRequest &request) noexcept {
+                auto &trace = *static_cast<CommandTrace *>(context);
+                trace.movements[trace.movementCount++] = request;
+            }
+
+            [[nodiscard]] CharacterTickObserver Observer() noexcept {
+                return {.context = this, .phase = Phase, .movement = Movement};
+            }
+        };
 
         TEST_CASE("Character world preparation captures exact ownership and capacity", "[physics][character][world]") {
             const auto settings = Settings(2);
@@ -201,6 +252,157 @@ namespace Horo::Character {
             REQUIRE(creationResult.has_value());
             RequireError(*creationResult, CharacterErrors::InvalidState);
             REQUIRE(world->ActiveControllerCount() == 0);
+        }
+
+        TEST_CASE("Character fixed ticks canonically order commands and select the final replacement",
+                  "[physics][character][world][command]") {
+            auto [world, controllers] = ActiveWorldWithControllers(2);
+            const auto [first, second] = controllers;
+
+            REQUIRE(world->QueueMovementCommand(Movement(second, 1, 5)).Value().status == CharacterCommandAdmissionStatus::Deferred);
+            REQUIRE(world->QueueMovementCommand(Movement(first, 1, 2)).Value().status == CharacterCommandAdmissionStatus::Deferred);
+            REQUIRE(world->QueueMovementCommand(Movement(first, 1, 3)).Value().status == CharacterCommandAdmissionStatus::Deferred);
+
+            CommandTrace trace;
+            REQUIRE(world->AdvanceFixedTick(FixedTick(1, trace.Observer())).HasValue());
+            REQUIRE(trace.phaseCount == 3);
+            REQUIRE(trace.phases == std::array{CharacterTickPhase::FreezeCommands, CharacterTickPhase::ResolveMovement,
+                                               CharacterTickPhase::PublishCompletedTick});
+            REQUIRE(trace.movementCount == 2);
+            REQUIRE(trace.movements[0].controller == first);
+            REQUIRE(trace.movements[0].sequence == 3);
+            REQUIRE(trace.movements[1].controller == second);
+            REQUIRE(trace.movements[1].sequence == 5);
+            REQUIRE((world->PublishedTick() == CharacterPublishedTick{1, 1, 2}));
+
+            RequireError(world->QueueMovementCommand(Movement(first, 2, 2)), CharacterErrors::CommandOrderInvalid);
+            trace = {};
+            REQUIRE(world->AdvanceFixedTick(FixedTick(2, trace.Observer())).HasValue());
+            REQUIRE(trace.movementCount == 0);
+            REQUIRE((world->PublishedTick() == CharacterPublishedTick{2, 2, 0}));
+            RequireError(world->QueueMovementCommand(Movement(first, 2, 6)), CharacterErrors::CommandOrderInvalid);
+
+            const auto statistics = world->TickStatistics();
+            REQUIRE(statistics.completedTicks == 2);
+            REQUIRE(statistics.admittedCommands == 3);
+            REQUIRE(statistics.rejectedCommands == 2);
+            REQUIRE(statistics.pendingCommands == 0);
+            REQUIRE(statistics.maximumCommandDepth == 3);
+        }
+
+        TEST_CASE("Character fixed ticks reject foreign owner threads without closing the command frame",
+                  "[physics][character][world][command][thread]") {
+            auto [world, controllers] = ActiveWorldWithControllers();
+            const auto handle = controllers.front();
+            REQUIRE(world->QueueMovementCommand(Movement(handle, 1, 1)).HasValue());
+
+            std::optional<Result<void>> tickResult;
+            std::thread foreign([&] {
+                tickResult = world->AdvanceFixedTick(FixedTick(1));
+            });
+            foreign.join();
+            REQUIRE(tickResult.has_value());
+            RequireError(*tickResult, CharacterErrors::InvalidState);
+            REQUIRE((world->PublishedTick() == CharacterPublishedTick{}));
+            REQUIRE(world->TickStatistics().pendingCommands == 1);
+            REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
+            REQUIRE((world->PublishedTick() == CharacterPublishedTick{1, 1, 1}));
+        }
+
+        TEST_CASE("Character command admission rejects duplicates and preserves an over-budget tick",
+                  "[physics][character][world][command][capacity]") {
+            CharacterWorldSettingsDescriptor values;
+            values.capacities.maximumControllers = 2;
+            values.capacities.maximumQueuedCommands = 2;
+            values.work.maximumCommandsPerTick = 1;
+            const auto settings = CharacterWorldSettings::Capture(values);
+            REQUIRE(settings.HasValue());
+            auto prepared = CharacterWorld::Prepare(WorldDescriptor(), settings.Value());
+            REQUIRE(prepared.HasValue());
+            auto world = std::move(prepared).Value();
+            const auto first = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+            const auto second = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+            REQUIRE(world->Activate().HasValue());
+
+            REQUIRE(world->QueueMovementCommand(Movement(first, 1, 1)).HasValue());
+            RequireError(world->QueueMovementCommand(Movement(first, 1, 1)), CharacterErrors::CommandOrderInvalid);
+            REQUIRE(world->QueueMovementCommand(Movement(second, 1, 1)).HasValue());
+            REQUIRE(world->QueueMovementCommand(Movement(first, 2, 2)).Value().status == CharacterCommandAdmissionStatus::RejectedFull);
+            RequireError(world->AdvanceFixedTick(FixedTick(1)), CharacterErrors::CapacityExceeded);
+            REQUIRE((world->PublishedTick() == CharacterPublishedTick{}));
+            REQUIRE(world->TickStatistics().pendingCommands == 2);
+
+            RequireError(world->AdvanceFixedTick(FixedTick(2)), CharacterErrors::CommandOrderInvalid);
+            auto invalid = FixedTick(1);
+            invalid.fixedDelta = {};
+            RequireError(world->AdvanceFixedTick(invalid), CharacterErrors::CommandOrderInvalid);
+        }
+
+        struct ReentrantProducer final {
+            CharacterWorld *world{};
+            CharacterMovementRequest closed;
+            CharacterMovementRequest future;
+            std::optional<Result<CharacterCommandAdmission>> closedResult;
+            std::optional<Result<CharacterCommandAdmission>> futureResult;
+
+            static void Movement(void *context, const CharacterMovementRequest &) noexcept {
+                auto &producer = *static_cast<ReentrantProducer *>(context);
+                producer.closedResult = producer.world->QueueMovementCommand(producer.closed);
+                producer.futureResult = producer.world->QueueMovementCommand(producer.future);
+            }
+        };
+
+        TEST_CASE("Character closes the current command frame before producer callbacks execute",
+                  "[physics][character][world][command][thread]") {
+            auto [world, controllers] = ActiveWorldWithControllers();
+            const auto handle = controllers.front();
+            REQUIRE(world->QueueMovementCommand(Movement(handle, 1, 1)).HasValue());
+
+            ReentrantProducer producer{world.get(), Movement(handle, 1, 2), Movement(handle, 2, 2)};
+            const CharacterTickObserver observer{.context = &producer, .movement = ReentrantProducer::Movement};
+            REQUIRE(world->AdvanceFixedTick(FixedTick(1, observer)).HasValue());
+            REQUIRE(producer.closedResult.has_value());
+            RequireError(*producer.closedResult, CharacterErrors::CommandOrderInvalid);
+            REQUIRE(producer.futureResult.has_value());
+            REQUIRE(producer.futureResult->Value().status == CharacterCommandAdmissionStatus::Deferred);
+            REQUIRE(world->TickStatistics().pendingCommands == 1);
+            REQUIRE(world->AdvanceFixedTick(FixedTick(2)).HasValue());
+            REQUIRE((world->PublishedTick() == CharacterPublishedTick{2, 2, 1}));
+        }
+
+        TEST_CASE("Concurrent Character producers receive bounded non-blocking admission outcomes",
+                  "[physics][character][world][command][thread]") {
+            constexpr std::size_t ProducerCount = 16;
+            auto world = PreparedWorld(1);
+            const auto handle = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+            REQUIRE(world->Activate().HasValue());
+
+            std::barrier start{static_cast<std::ptrdiff_t>(ProducerCount + 1)};
+            std::array<std::optional<Result<CharacterCommandAdmission>>, ProducerCount> results;
+            std::vector<std::thread> producers;
+            producers.reserve(ProducerCount);
+            for (std::size_t index = 0; index < ProducerCount; ++index) {
+                producers.emplace_back([&, index] {
+                    start.arrive_and_wait();
+                    results[index] = world->QueueMovementCommand(Movement(handle, 1, index + 1));
+                });
+            }
+            start.arrive_and_wait();
+            for (std::thread &producer : producers)
+                producer.join();
+
+            std::uint32_t deferred{};
+            for (const auto &result : results) {
+                REQUIRE(result.has_value());
+                REQUIRE(result->HasValue());
+                const auto status = result->Value().status;
+                REQUIRE((status == CharacterCommandAdmissionStatus::Deferred || status == CharacterCommandAdmissionStatus::RejectedBusy));
+                deferred += static_cast<std::uint32_t>(status == CharacterCommandAdmissionStatus::Deferred);
+            }
+            REQUIRE(deferred != 0);
+            REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
+            REQUIRE(world->PublishedTick().appliedCommands == 1);
+            REQUIRE(world->TickStatistics().pendingCommands == 0);
         }
 
         struct TrackedRecord final {

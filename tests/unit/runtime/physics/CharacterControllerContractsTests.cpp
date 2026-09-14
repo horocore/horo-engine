@@ -223,13 +223,14 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Character errors expose stable actionable identities", "[physics][character][errors]") {
-            const std::array<const ErrorCodeDescriptor *, 10> descriptors{{
+            const std::array<const ErrorCodeDescriptor *, 11> descriptors{{
                 &CharacterErrors::WorldInvalid,
                 &CharacterErrors::HandleMalformed,
                 &CharacterErrors::HandleWorldMismatch,
                 &CharacterErrors::HandleStale,
                 &CharacterErrors::DescriptorInvalid,
                 &CharacterErrors::RequestInvalid,
+                &CharacterErrors::CommandOrderInvalid,
                 &CharacterErrors::CapacityExceeded,
                 &CharacterErrors::GenerationExhausted,
                 &CharacterErrors::InvalidState,

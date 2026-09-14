@@ -60,6 +60,15 @@ namespace Horo::Character::Detail {
             return ResolveSlot(handle);
         }
 
+        /** @brief Resolves one exact live record for owner-thread mutation. */
+        [[nodiscard]] Result<Value *> ResolveMutable(const CharacterControllerHandle &handle) {
+            if (const Result<void> owner = ValidateCharacterControllerHandleOwner(handle, sceneGeneration_, world_); owner.HasError())
+                return Result<Value *>::Failure(owner.ErrorValue());
+            if (Value *value = storage_.Resolve(handle.slot.index, handle.slot.generation); value != nullptr)
+                return Result<Value *>::Success(value);
+            return Result<Value *>::Failure(HandleError(handle));
+        }
+
         /** @brief Removes one exact live generation and recycles or permanently retires its slot. */
         [[nodiscard]] Result<void> Remove(const CharacterControllerHandle &handle) {
             if (const Result<void> owner = ValidateCharacterControllerHandleOwner(handle, sceneGeneration_, world_); owner.HasError())

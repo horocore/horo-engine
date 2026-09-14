@@ -33,6 +33,9 @@ namespace Horo::Character::CharacterErrors {
                    "Provide finite geometry, unit basis, valid filtering and coherent bounds.", true);
     const ErrorCodeDescriptor RequestInvalid = Descriptor("character.request.invalid", "The Character movement request is invalid.",
                                                           "Provide one finite, explicitly tick-addressed movement intent.");
+    const ErrorCodeDescriptor CommandOrderInvalid =
+        Descriptor("character.command.order_invalid", "The Character command order is invalid.",
+                   "Submit one future tick-addressed command per producer sequence before that tick closes.");
     const ErrorCodeDescriptor CapacityExceeded =
         Descriptor("character.capacity.exceeded", "A Character operation exceeded its admitted bounded capacity.",
                    "Lower the requested contact count or admit a larger qualified profile.", true);
