@@ -32,6 +32,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ufbx)
 
+set(HORO_MINIAUDIO_REVISION "9634bedb5b5a2ca38c1ee7108a9358a4e233f14d")
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG "${HORO_MINIAUDIO_REVISION}"
+    GIT_SHALLOW TRUE
+    SOURCE_SUBDIR .horo-header-only
+)
+FetchContent_MakeAvailable(miniaudio)
+
+add_library(HoroThirdPartyMiniaudio INTERFACE)
+add_library(HoroThirdParty::Miniaudio ALIAS HoroThirdPartyMiniaudio)
+target_include_directories(HoroThirdPartyMiniaudio INTERFACE "${miniaudio_SOURCE_DIR}" "${miniaudio_SOURCE_DIR}/extras")
+
 set(HORO_LUA_VERSION "5.4.8")
 FetchContent_Declare(
     lua

@@ -113,6 +113,51 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor SourceInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.source.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio source is malformed, truncated or internally contradictory.",
+        .remediationHint = "Re-export a valid RIFF/WAVE PCM or Ogg/Vorbis source with complete bounded metadata.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SourceUnsupported{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.source.unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio source container, codec or channel layout is unsupported.",
+        .remediationHint = "Use an approved WAV/PCM or Ogg/Vorbis source, or install an admitted codec contribution.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SourceLimitExceeded{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.source.limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio source or decoded result exceeds its admitted resource envelope.",
+        .remediationHint = "Reduce source duration, channels or analysis density, or explicitly admit larger qualified limits.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SourceReadFailed{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.source.read_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio source reader failed or violated its exact bounded read contract.",
+        .remediationHint = "Keep the admitted source generation readable for the complete import invocation and retry.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor SourceDecodeFailed{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.source.decode_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The admitted audio decoder could not produce the declared frame stream.",
+        .remediationHint = "Re-export the media or select a decoder contribution compatible with its exact codec tuple.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor CommandBufferInvalid{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.command_buffer.invalid"},

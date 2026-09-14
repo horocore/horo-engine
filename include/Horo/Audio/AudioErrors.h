@@ -21,6 +21,11 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor FormatContainerUnknown;
     extern const ErrorCodeDescriptor FormatCodecUnknown;
     extern const ErrorCodeDescriptor FormatCombinationUnsupported;
+    extern const ErrorCodeDescriptor SourceInvalid;
+    extern const ErrorCodeDescriptor SourceUnsupported;
+    extern const ErrorCodeDescriptor SourceLimitExceeded;
+    extern const ErrorCodeDescriptor SourceReadFailed;
+    extern const ErrorCodeDescriptor SourceDecodeFailed;
     extern const ErrorCodeDescriptor CommandBufferInvalid;
     extern const ErrorCodeDescriptor MemoryInvalid;
     extern const ErrorCodeDescriptor MemoryBudgetExceeded;
