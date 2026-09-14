@@ -331,6 +331,34 @@ namespace Horo::Navigation::NavigationErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor BakeJobInvalid{
+        .domain = NavigationDomain,
+        .code = ErrorCode{"navigation.bake_job.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The staged navigation bake job descriptor is invalid.",
+        .remediationHint = "Provide ordered non-empty stages, callbacks, positive work units, and finite positive resource bounds.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BakeJobBudgetExceeded{
+        .domain = NavigationDomain,
+        .code = ErrorCode{"navigation.bake_job.budget_exceeded"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The staged navigation bake exceeds a declared resource budget.",
+        .remediationHint =
+            "Reduce the bake scope or select a profile with sufficient concurrency, memory, temporary storage, item, and work bounds.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BakeJobAdmissionRejected{
+        .domain = NavigationDomain,
+        .code = ErrorCode{"navigation.bake_job.admission_rejected"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The operation store or process scheduler rejected the staged navigation bake.",
+        .remediationHint = "Retry after bounded operation or scheduler capacity becomes available.",
+        .retryable = true,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor ProjectProfileInvalid{
         .domain = NavigationDomain,
         .code = ErrorCode{"navigation.project_profile.invalid"},
