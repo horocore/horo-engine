@@ -18,60 +18,64 @@ namespace Horo::Render {
     namespace {
         /** @brief Selects the first explicit invalidation signal in deterministic diagnostic priority. */
         [[nodiscard]] std::optional<TemporalHistoryResetCause> ExplicitReset(const RenderMotionInvalidationSignals &signals) noexcept {
+            using enum TemporalHistoryResetCause;
             if (signals.invalidInput)
-                return TemporalHistoryResetCause::InvalidInput;
+                return InvalidInput;
             if (signals.suspended)
-                return TemporalHistoryResetCause::Suspension;
+                return Suspension;
             if (signals.cameraCut)
-                return TemporalHistoryResetCause::CameraCut;
+                return CameraCut;
             if (signals.explicitRequest)
-                return TemporalHistoryResetCause::ExplicitRequest;
+                return ExplicitRequest;
             if (signals.skippedFrame)
-                return TemporalHistoryResetCause::SkippedFrame;
+                return SkippedFrame;
             if (signals.providerRequested)
-                return TemporalHistoryResetCause::ProviderRequested;
+                return ProviderRequested;
             return std::nullopt;
         }
 
         /** @brief Maps view, surface, device, provider, and mode identity changes. */
         [[nodiscard]] std::optional<TemporalHistoryResetCause> IdentityReset(const TemporalHistoryCompatibility &previous,
                                                                              const TemporalHistoryCompatibility &current) noexcept {
+            using enum TemporalHistoryResetCause;
             if (previous.view != current.view)
-                return TemporalHistoryResetCause::ViewReplacement;
+                return ViewReplacement;
             if (previous.surfaceGeneration != current.surfaceGeneration)
-                return TemporalHistoryResetCause::SurfaceReplacement;
+                return SurfaceReplacement;
             if (previous.deviceGeneration != current.deviceGeneration)
-                return TemporalHistoryResetCause::DeviceReplacement;
+                return DeviceReplacement;
             if (previous.provider != current.provider || previous.providerGeneration != current.providerGeneration)
-                return TemporalHistoryResetCause::ProviderReplacement;
+                return ProviderReplacement;
             if (previous.mode != current.mode || previous.modeGeneration != current.modeGeneration)
-                return TemporalHistoryResetCause::ModeReplacement;
+                return ModeReplacement;
             return std::nullopt;
         }
 
         /** @brief Maps extent, schema, projection, and color compatibility changes. */
         [[nodiscard]] std::optional<TemporalHistoryResetCause> ImageReset(const TemporalHistoryCompatibility &previous,
                                                                           const TemporalHistoryCompatibility &current) noexcept {
+            using enum TemporalHistoryResetCause;
             if (previous.renderExtent != current.renderExtent || previous.targetExtent != current.targetExtent)
-                return TemporalHistoryResetCause::Resize;
+                return Resize;
             if (previous.inputSchemaGeneration != current.inputSchemaGeneration || previous.jitterGeneration != current.jitterGeneration)
-                return TemporalHistoryResetCause::SchemaReplacement;
+                return SchemaReplacement;
             if (previous.projectionGeneration != current.projectionGeneration)
-                return TemporalHistoryResetCause::ProjectionChange;
+                return ProjectionChange;
             if (previous.colorGeneration != current.colorGeneration || previous.exposureGeneration != current.exposureGeneration)
-                return TemporalHistoryResetCause::ColorPlanChange;
+                return ColorPlanChange;
             return std::nullopt;
         }
 
         /** @brief Maps scene, raster-profile, and recipe generation changes. */
         [[nodiscard]] std::optional<TemporalHistoryResetCause> SceneReset(const TemporalHistoryCompatibility &previous,
                                                                           const TemporalHistoryCompatibility &current) noexcept {
+            using enum TemporalHistoryResetCause;
             if (previous.sceneOriginGeneration != current.sceneOriginGeneration || previous.motionGeneration != current.motionGeneration)
-                return TemporalHistoryResetCause::SceneDiscontinuity;
+                return SceneDiscontinuity;
             if (previous.rasterGeneration != current.rasterGeneration)
-                return TemporalHistoryResetCause::ProfileChange;
+                return ProfileChange;
             if (previous.recipeGeneration != current.recipeGeneration)
-                return TemporalHistoryResetCause::RecipeChange;
+                return RecipeChange;
             return std::nullopt;
         }
 
@@ -201,8 +205,8 @@ namespace Horo::Render {
             while (previous != m_objects.end() && previous->object < sample.object)
                 ++previous;
             const bool hasPrevious = historyValid && previous != m_objects.end() && previous->object == sample.object;
-            frame.objects.push_back(
-                {sample.object, sample.localToWorld, hasPrevious ? previous->localToWorld : sample.localToWorld, hasPrevious});
+            frame.objects.emplace_back(RenderMotionObjectPair{sample.object, sample.localToWorld,
+                                                              hasPrevious ? previous->localToWorld : sample.localToWorld, hasPrevious});
         }
         return frame;
     }
@@ -242,7 +246,7 @@ namespace Horo::Render {
                     m_objects.reserve(m_limits.maxObjects);
                 m_objects.clear();
                 for (const RenderMotionObjectPair &object : frame.objects)
-                    m_objects.push_back({object.object, object.currentLocalToWorld});
+                    m_objects.emplace_back(PublishedObject{object.object, object.currentLocalToWorld});
                 m_compatibility = frame.compatibility;
                 m_camera = {frame.camera.currentUnjitteredViewProjection, frame.camera.currentJitterUv};
                 m_lastPublishedFrame = frame.frameId;
