@@ -76,6 +76,12 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor BakeInputFailed;
     /** @brief Application shutdown closed bake-input publication admission. */
     extern const ErrorCodeDescriptor BakeInputShuttingDown;
+    /** @brief A staged bake-job descriptor, work order, callback, or resource profile is malformed. */
+    extern const ErrorCodeDescriptor BakeJobInvalid;
+    /** @brief A staged bake cannot fit a declared concurrency, memory, temporary-storage, item, or work-unit budget. */
+    extern const ErrorCodeDescriptor BakeJobBudgetExceeded;
+    /** @brief The application operation store or process scheduler rejected a staged bake before execution. */
+    extern const ErrorCodeDescriptor BakeJobAdmissionRejected;
     /** @brief A project profile identity, revision, capability requirement or finite capacity is malformed. */
     extern const ErrorCodeDescriptor ProjectProfileInvalid;
     /** @brief A profile candidate or preview preference does not target the current project revision. */
