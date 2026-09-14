@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <variant>
 
@@ -72,9 +71,15 @@ namespace Horo::Character {
         DiagnosticCode code;
         std::optional<DiagnosticCode> originatingPhysicsCode;
         DiagnosticSeverity severity{DiagnosticSeverity::Error};
-        std::string message;
+        std::array<char, MaximumCharacterDiagnosticMessageBytes> message;
+        std::uint16_t messageLength{};
         std::array<CharacterDiagnosticMetadataEntry, MaximumCharacterDiagnosticMetadataEntries> metadata;
         std::uint8_t metadataCount{};
+
+        /** @brief Returns the exact owned message bytes. @return View valid for this record's lifetime. */
+        [[nodiscard]] std::string_view Message() const noexcept {
+            return {message.data(), messageLength};
+        }
     };
 
     /** @brief Allocation-free per-stream diagnostic admission policy in fixed-tick time. */

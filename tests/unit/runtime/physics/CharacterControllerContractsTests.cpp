@@ -223,21 +223,9 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Character errors expose stable actionable identities", "[physics][character][errors]") {
-            const std::array<const ErrorCodeDescriptor *, 11> descriptors{{
-                &CharacterErrors::WorldInvalid,
-                &CharacterErrors::HandleMalformed,
-                &CharacterErrors::HandleWorldMismatch,
-                &CharacterErrors::HandleStale,
-                &CharacterErrors::DescriptorInvalid,
-                &CharacterErrors::RequestInvalid,
-                &CharacterErrors::CommandOrderInvalid,
-                &CharacterErrors::CapacityExceeded,
-                &CharacterErrors::GenerationExhausted,
-                &CharacterErrors::InvalidState,
-                &CharacterErrors::OperationUnsupported,
-            }};
+            REQUIRE(CharacterErrors::Descriptors().size() == 11);
             std::set<std::string_view> unique;
-            for (const auto *descriptor : descriptors) {
+            for (const auto *descriptor : CharacterErrors::Descriptors()) {
                 REQUIRE(descriptor->domain.Value() == "horo.character");
                 REQUIRE(unique.insert(descriptor->code.Value()).second);
                 REQUIRE_FALSE(descriptor->summary.empty());

@@ -6,6 +6,8 @@
 
 #include "Horo/Foundation/ErrorCode.h"
 
+#include <span>
+
 namespace Horo::Character::CharacterErrors {
     /** @brief Missing or invalid Character-world identity. */
     extern const ErrorCodeDescriptor WorldInvalid;
@@ -29,4 +31,7 @@ namespace Horo::Character::CharacterErrors {
     extern const ErrorCodeDescriptor InvalidState;
     /** @brief An enum or operation is unknown to the active Character contract. */
     extern const ErrorCodeDescriptor OperationUnsupported;
+
+    /** @brief Returns the complete canonical Character error descriptor set. @return Stable process-lifetime descriptor view. */
+    [[nodiscard]] std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept;
 }  // namespace Horo::Character::CharacterErrors

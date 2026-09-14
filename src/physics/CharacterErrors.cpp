@@ -1,5 +1,7 @@
 #include "Horo/Physics/CharacterErrors.h"
 
+#include <array>
+
 namespace Horo::Character::CharacterErrors {
     namespace {
         const ErrorDomainId CharacterDomain{"horo.character"};
@@ -48,4 +50,13 @@ namespace Horo::Character::CharacterErrors {
     const ErrorCodeDescriptor OperationUnsupported =
         Descriptor("character.operation.unsupported", "The Character operation contains an unknown typed value.",
                    "Use a stance, collision flag or operation supported by this contract version.", true);
+
+    /** @copydoc Descriptors */
+    std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
+        static const std::array descriptors{
+            &WorldInvalid,        &HandleMalformed,  &HandleWorldMismatch, &HandleStale,  &DescriptorInvalid,    &RequestInvalid,
+            &CommandOrderInvalid, &CapacityExceeded, &GenerationExhausted, &InvalidState, &OperationUnsupported,
+        };
+        return descriptors;
+    }
 }  // namespace Horo::Character::CharacterErrors

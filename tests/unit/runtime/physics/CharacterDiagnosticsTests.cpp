@@ -62,10 +62,20 @@ namespace Horo::Character {
         REQUIRE(record.Value().metadataCount == MaximumCharacterDiagnosticMetadataEntries);
         REQUIRE(record.Value().code.Value() == CharacterErrors::CapacityExceeded.code.Value());
         error.message.front() = 'X';
-        REQUIRE(record.Value().message == "Contact scratch capacity was exhausted.");
+        REQUIRE(record.Value().Message() == "Contact scratch capacity was exhausted.");
     }
 
     TEST_CASE("Character diagnostics preserve an exact originating Physics error without parsing text", "[character][diagnostics]") {
+        for (const ErrorCodeDescriptor *descriptor : Physics::PhysicsErrors::Descriptors()) {
+            const auto declared = MakeCharacterDiagnosticRecord(CharacterDiagnosticCategory::Solver,
+                                                                WrapError(CharacterErrors::InvalidState, MakeError(*descriptor),
+                                                                          "Character movement degraded for this tick."),
+                                                                DiagnosticContext());
+            REQUIRE(declared.HasValue());
+            REQUIRE(declared.Value().originatingPhysicsCode.has_value());
+            REQUIRE(declared.Value().originatingPhysicsCode->Value() == descriptor->code.Value());
+        }
+
         const Error physics = MakeError(Physics::PhysicsErrors::SolverDeadlineExceeded, "native text may change");
         const Error character = WrapError(CharacterErrors::InvalidState, physics, "Character movement degraded for this tick.");
         const auto record = MakeCharacterDiagnosticRecord(CharacterDiagnosticCategory::Solver, character, DiagnosticContext());
@@ -137,7 +147,10 @@ namespace Horo::Character {
     TEST_CASE("Character diagnostic messages accept the exact byte bound", "[character][diagnostics]") {
         auto error = MakeError(CharacterErrors::InvalidState);
         error.message.assign(MaximumCharacterDiagnosticMessageBytes, 'a');
-        REQUIRE(MakeCharacterDiagnosticRecord(CharacterDiagnosticCategory::Lifecycle, error, DiagnosticContext()).HasValue());
+        const auto exactBound = MakeCharacterDiagnosticRecord(CharacterDiagnosticCategory::Lifecycle, error, DiagnosticContext());
+        REQUIRE(exactBound.HasValue());
+        REQUIRE(exactBound.Value().Message().size() == MaximumCharacterDiagnosticMessageBytes);
+        REQUIRE(exactBound.Value().Message() == error.message);
         error.message.push_back('b');
         RequireDiagnosticFailure(MakeCharacterDiagnosticRecord(CharacterDiagnosticCategory::Lifecycle, error, DiagnosticContext()),
                                  CharacterErrors::DescriptorInvalid);

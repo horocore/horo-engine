@@ -15,35 +15,6 @@ namespace Horo::Character {
         constexpr std::uint32_t MaximumEmissionsPerTick = 1'024;
         constexpr std::uint64_t MaximumMinimumTickInterval = 1'000'000;
 
-        const std::array CharacterDescriptors{
-            &CharacterErrors::DescriptorInvalid,    &CharacterErrors::RequestInvalid, &CharacterErrors::CommandOrderInvalid,
-            &CharacterErrors::OperationUnsupported, &CharacterErrors::WorldInvalid,   &CharacterErrors::HandleMalformed,
-            &CharacterErrors::HandleWorldMismatch,  &CharacterErrors::HandleStale,    &CharacterErrors::GenerationExhausted,
-            &CharacterErrors::CapacityExceeded,     &CharacterErrors::InvalidState,
-        };
-
-        const std::array PhysicsDescriptors{
-            &Physics::PhysicsErrors::WorldInvalid,
-            &Physics::PhysicsErrors::HandleMalformed,
-            &Physics::PhysicsErrors::HandleWorldMismatch,
-            &Physics::PhysicsErrors::HandleStale,
-            &Physics::PhysicsErrors::GenerationExhausted,
-            &Physics::PhysicsErrors::CapabilityUnavailable,
-            &Physics::PhysicsErrors::OperationUnsupported,
-            &Physics::PhysicsErrors::InvalidState,
-            &Physics::PhysicsErrors::ThreadAffinityViolation,
-            &Physics::PhysicsErrors::SolverDeadlineExceeded,
-            &Physics::PhysicsErrors::SolverValidationMessage,
-            &Physics::PhysicsErrors::SolverAssertionFailed,
-            &Physics::PhysicsErrors::SolverFatalCondition,
-            &Physics::PhysicsErrors::DescriptorInvalid,
-            &Physics::PhysicsErrors::ProfileUnsupported,
-            &Physics::PhysicsErrors::CapacityExceeded,
-            &Physics::PhysicsErrors::CapabilityStale,
-            &Physics::PhysicsErrors::QuerySnapshotStale,
-            &Physics::PhysicsErrors::InitializationFailed,
-        };
-
         struct PhysicsCauseProjection final {
             std::optional<DiagnosticCode> code;
             bool valid{true};
@@ -54,7 +25,7 @@ namespace Horo::Character {
             std::size_t depth{};
             while (candidate != nullptr && depth < MaximumCharacterDiagnosticCauseDepth) {
                 if (candidate->domain.Value() == "horo.physics") {
-                    auto code = DiagnosticCodeForDeclaredError(*candidate, "horo.physics", PhysicsDescriptors);
+                    auto code = DiagnosticCodeForDeclaredError(*candidate, "horo.physics", Physics::PhysicsErrors::Descriptors());
                     const bool valid = code.has_value();
                     return {std::move(code), valid};
                 }
@@ -178,7 +149,7 @@ namespace Horo::Character {
         if (CharacterDiagnosticCategoryName(category).empty())
             return Result<CharacterDiagnosticRecord>::Failure(
                 MakeError(CharacterErrors::OperationUnsupported, "Unknown Character diagnostic category."));
-        const auto code = DiagnosticCodeForDeclaredError(error, "horo.character", CharacterDescriptors);
+        const auto code = DiagnosticCodeForDeclaredError(error, "horo.character", CharacterErrors::Descriptors());
         const auto severity = DiagnosticSeverityForError(error.severity);
         if (!ValidateRecordInput(error, context, code, severity))
             return Result<CharacterDiagnosticRecord>::Failure(
@@ -200,7 +171,8 @@ namespace Horo::Character {
         record.code = *code;
         record.originatingPhysicsCode = physicsCause.code;
         record.severity = *severity;
-        record.message = error.message;
+        std::ranges::copy(error.message, record.message.begin());
+        record.messageLength = static_cast<std::uint16_t>(error.message.size());
         record.metadataCount = static_cast<std::uint8_t>(context.metadata.size());
         for (std::size_t index = 0; index < context.metadata.size(); ++index)
             record.metadata[index] = context.metadata[index];
