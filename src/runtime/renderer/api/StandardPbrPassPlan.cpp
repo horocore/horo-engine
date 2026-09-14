@@ -50,13 +50,12 @@ namespace Horo::Render {
                     return Result<std::vector<StandardPbrPassMaterial>>::Failure(MakeError(StandardPbrPassPlanErrors::InvalidMaterial));
                 canonical.push_back({material.id, material.sourceRevision, material.generation, material.pipeline, material.alphaMode});
             }
-            std::ranges::sort(canonical, [](const StandardPbrPassMaterial &left, const StandardPbrPassMaterial &right) {
-                if (left.alphaMode != right.alphaMode)
-                    return left.alphaMode == MaterialAlphaMode::Opaque;
-                return left.id < right.id;
-            });
+            std::ranges::sort(canonical, {}, &StandardPbrPassMaterial::id);
             if (std::ranges::adjacent_find(canonical, {}, &StandardPbrPassMaterial::id) != canonical.end())
                 return Result<std::vector<StandardPbrPassMaterial>>::Failure(MakeError(StandardPbrPassPlanErrors::DuplicateMaterial));
+            std::ranges::stable_sort(canonical, [](const StandardPbrPassMaterial &left, const StandardPbrPassMaterial &right) {
+                return left.alphaMode == MaterialAlphaMode::Opaque && right.alphaMode == MaterialAlphaMode::Masked;
+            });
             return Result<std::vector<StandardPbrPassMaterial>>::Success(std::move(canonical));
         }
 

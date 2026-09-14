@@ -126,11 +126,12 @@ TEST_CASE("PBR pass planning rejects unsupported classes and malformed resident 
                                             std::span<const ResidentStandardPbrMaterial>{&invalid, 1}),
                  StandardPbrPassPlanErrors::InvalidMaterial);
 
-    const std::array duplicate{Material(5, MaterialAlphaMode::Opaque), Material(5, MaterialAlphaMode::Masked)};
+    const std::array duplicate{Material(5, MaterialAlphaMode::Opaque), Material(10, MaterialAlphaMode::Opaque),
+                               Material(5, MaterialAlphaMode::Masked)};
     RequireError(PrepareStandardPbrPassPlan(Request(StandardPbrRasterFamily::Forward), duplicate),
                  StandardPbrPassPlanErrors::DuplicateMaterial);
     CHECK(duplicate[0].alphaMode == MaterialAlphaMode::Opaque);
-    CHECK(duplicate[1].alphaMode == MaterialAlphaMode::Masked);
+    CHECK(duplicate[2].alphaMode == MaterialAlphaMode::Masked);
 }
 
 TEST_CASE("PBR pass planning enforces finite capacity and known policy values", "[runtime][renderer][pbr-pass]") {
