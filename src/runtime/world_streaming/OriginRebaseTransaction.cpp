@@ -152,12 +152,11 @@ namespace Horo::WorldStreaming {
             return Result<std::vector<std::unique_ptr<IOriginRebasePreparedParticipant>>>::Success(std::move(prepared));
         }
 
-        [[nodiscard]] Result<void> ValidateActiveFrame(OriginFrameOwner &owner, const OriginFrame &expected) {
+        [[nodiscard]] Result<void> ValidateActiveFrame(const OriginFrameOwner &owner, const OriginFrame &expected) {
             const auto lease = owner.Lease();
             if (lease.HasError())
                 return Internal::Failure<void>(WorldStreamingErrors::OriginRebaseLifecycleUnavailable);
-            const auto active = lease.Value().Get();
-            if (active.HasError() || active.Value() != expected)
+            if (const auto active = lease.Value().Get(); active.HasError() || active.Value() != expected)
                 return Internal::Failure<void>(WorldStreamingErrors::OriginRebaseStale);
             return Result<void>::Success();
         }
