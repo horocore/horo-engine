@@ -11,6 +11,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
+#include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
 
 #include <memory>
@@ -111,6 +112,9 @@ namespace Horo::Editor {
         std::optional<Runtime::NavigationRegionComponent> navigationRegion;
         std::optional<Runtime::NavigationModifierComponent> navigationModifier;
         std::optional<Runtime::NavigationLinkComponent> navigationLink;
+        std::optional<Runtime::RigidBodyComponent> rigidBody;
+        std::vector<Runtime::ColliderComponent> colliders;
+        std::vector<Runtime::PhysicsConstraintComponent> physicsConstraints;
         std::vector<Gameplay::BehaviorComponent> behaviors;
 
         [[nodiscard]] bool operator==(const SceneObjectComponentSet &) const noexcept = default;

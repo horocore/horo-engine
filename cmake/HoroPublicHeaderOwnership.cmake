@@ -107,6 +107,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/FrameScheduler.h
     Horo/Runtime/RuntimeHost.h
     Horo/Runtime/RuntimeLifecycle.h
+    Horo/Runtime/Scene/SceneIdentity.h
     Horo/Runtime/Save/SaveErrors.h
     Horo/Runtime/Save/SaveDiagnostics.h
     Horo/Runtime/Save/SaveIdentity.h
@@ -270,6 +271,11 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
 )
+horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
+    Horo/Physics/PhysicsErrors.h
+    Horo/Physics/PhysicsFilterIdentity.h
+    Horo/Runtime/Scene/PhysicsSceneComponents.h
+)
 horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
@@ -287,8 +293,6 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsCookedShapeDescriptor.h
     Horo/Physics/PhysicsDiagnostics.h
     Horo/Physics/PhysicsDeterminismPolicy.h
-    Horo/Physics/PhysicsErrors.h
-    Horo/Physics/PhysicsFilterIdentity.h
     Horo/Physics/PhysicsIdentity.h
     Horo/Physics/PhysicsMetrics.h
     Horo/Physics/PhysicsPose.h
