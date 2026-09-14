@@ -2,7 +2,8 @@
 
 ## Status
 
-MIG-001A–E and the first production adoption slice MIG-001F-01 are implemented
+MIG-001A–E, the project-settings adoption slice MIG-001F-01, and prefab
+migration adoption PFB-001.8 are implemented
 and locally verified on macOS/AppleClang. Version/compatibility inspection,
 structured migration definitions, catalog generation, deterministic planning,
 constrained pipeline execution, verified dry-run, shared project mutation
@@ -85,6 +86,16 @@ version/contract binding, project settings, and migration history at the
 publication boundary. Transaction finalization starts from the pipeline's
 migrated `project.json` tree and overlays only transaction-owned root fields;
 it never reconstructs the root from the pre-migration document.
+
+The same definition discovers canonical `.prefab` sources and their
+`.prefab.horo` identity sidecars as distinct document families. It validates the
+sidecar-owned `core.prefab` `AssetId`, replaces legacy prefab-local `prefabId`
+metadata with that identity, advances the prefab's unified project version, and
+then converts legacy scene `sourcePath` or `prefabId` references to
+`sourceAsset`. Prefab sources are transformed before scenes, unknown JSON-owned
+component payloads remain present, and a missing, duplicate, future-version, or
+conflicting identity fails the unpublished candidate rather than mutating the
+project.
 
 ## Version Model
 

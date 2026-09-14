@@ -137,10 +137,26 @@ namespace Horo::Tests {
         }
         std::filesystem::create_directories(root_ / "assets/scenes", error);
         REQUIRE_FALSE((error));
+        std::filesystem::create_directories(root_ / "assets/prefabs", error);
+        REQUIRE_FALSE((error));
+        {
+            std::ofstream prefab(root_ / "assets/prefabs/player.prefab", std::ios::binary);
+            REQUIRE((prefab.good()));
+            prefab
+                << R"({"projectVersion":"0.0.1","prefabId":"00112233-4455-6677-8899-aabbccddeeff","objects":[{"components":[{"type":"game.unknown","payload":{"bytes":[0,127,255]}}]}]})";
+            REQUIRE((prefab.good()));
+        }
+        {
+            std::ofstream sidecar(root_ / "assets/prefabs/player.prefab.horo", std::ios::binary);
+            REQUIRE((sidecar.good()));
+            sidecar << R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})";
+            REQUIRE((sidecar.good()));
+        }
         {
             std::ofstream scene(root_ / "assets/scenes/main.horo", std::ios::binary);
             REQUIRE((scene.good()));
-            scene << R"({"schemaVersion":1,"objects":[]})";
+            scene
+                << R"({"schemaVersion":1,"objects":[],"prefabInstances":[{"instanceId":1,"sourcePath":"assets/prefabs/player.prefab","parent":null,"rootTransform":{"translation":[0.0,0.0,0.0],"rotation":[0.0,0.0,0.0,1.0],"scale":[1.0,1.0,1.0]}}]})";
             REQUIRE((scene.good()));
         }
         std::filesystem::create_directories(logRoot_, error);

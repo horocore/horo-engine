@@ -3,7 +3,7 @@
   "contractBaseline": "0.1.0",
   "projectContract": "project-contract.json",
   "persistentContract": "sha256:997e790fc23515b362847c755006156aa35353ce7f2624518acf7ed1214ddb03",
-  "migrationDefinitions": "sha256:93e3d685a48b28aabc3fc5d518577ebd30d95a999baf5a8709723efedc04102a",
+  "migrationDefinitions": "sha256:3382b3c37fe16c263b13da2ef81a76c9d1c8ea2b5026a35ef17ed2c102487c24",
   "migrationRecoveryContract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb",
   "supportedMigrationRecoveryContracts": [
     {
@@ -11,7 +11,7 @@
       "reader": "journal-v1"
     }
   ],
-  "decisionHash": "sha256:afdb932da996889a25069f1c9bc8ba5d77371d1c3350c09cb0285a2f3bdc8d30",
+  "decisionHash": "sha256:8f3669caeaa131ea584d3b4d822c38c77e2479bfad70297ac610190717a1f96b",
   "minimumMigratableVersion": "0.0.1",
   "migrationCheckpoints": []
 }
