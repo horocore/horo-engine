@@ -230,15 +230,10 @@ if(HORO_BUILD_RENDER_VULKAN)
 endif()
 
 
-if(HORO_BUILD_EDITOR_GUI)
+if(HORO_BUILD_EDITOR_GUI OR HORO_BUILD_AUDIO_SDL3)
     set(HORO_SDL3_REVISION
         "f87239e71e42da91ca317a12eefb82cfbf3393eb"
     )
-    set(HORO_IMGUI_REVISION
-        "993fa347495860ed44b83574254ef2a317d0c14f"
-    )
-
-
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)
     set(SDL_TEST OFF CACHE BOOL "" FORCE)
@@ -262,6 +257,12 @@ if(HORO_BUILD_EDITOR_GUI)
     else()
         message(FATAL_ERROR "SDL3 dependency did not provide a usable CMake target")
     endif()
+endif()
+
+if(HORO_BUILD_EDITOR_GUI)
+    set(HORO_IMGUI_REVISION
+        "993fa347495860ed44b83574254ef2a317d0c14f"
+    )
 
     FetchContent_Declare(
         imgui

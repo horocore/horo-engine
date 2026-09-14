@@ -447,6 +447,19 @@ target_include_directories(HoroAudioNull PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/null/include>")
 target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands)
 
+if(HORO_BUILD_AUDIO_SDL3)
+    add_library(HoroAudioSdl3 STATIC
+            audio/backend/sdl3/Sdl3AudioBackend.cpp
+    )
+    add_library(HoroEngine::AudioSdl3 ALIAS HoroAudioSdl3)
+    target_compile_features(HoroAudioSdl3 PUBLIC cxx_std_20)
+    target_include_directories(HoroAudioSdl3 PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/sdl3/include>")
+    target_link_libraries(HoroAudioSdl3
+            PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands
+            PRIVATE ${HORO_SDL3_TARGET})
+endif()
+
 add_library(HoroAudioDsp STATIC
         audio/resampling/AudioResampler.cpp
         audio/resampling/ResamplerSimd.cpp
