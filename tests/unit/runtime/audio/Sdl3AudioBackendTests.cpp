@@ -90,7 +90,14 @@ namespace Horo::Audio::Backend {
             auto backend = std::move(created).Value();
             REQUIRE(backend->Kind() == AudioBackendKind::SDL3Audio);
             const auto probe = Complete(*backend, Probe{});
-            REQUIRE(std::get<AudioBackendProbe>(probe.outcome).availability == AudioBackendAvailability::Available);
+            const auto &capabilities = std::get<AudioBackendProbe>(probe.outcome);
+            REQUIRE(capabilities.availability == AudioBackendAvailability::Available);
+            REQUIRE(capabilities.features[static_cast<std::size_t>(AudioBackendCapability::PhysicalEnumeration)] ==
+                    AudioCapabilitySupport::Available);
+            REQUIRE(capabilities.features[static_cast<std::size_t>(AudioBackendCapability::NativeDiagnostics)] ==
+                    AudioCapabilitySupport::Available);
+            REQUIRE(capabilities.features[static_cast<std::size_t>(AudioBackendCapability::NativeHotplug)] ==
+                    AudioCapabilitySupport::Unsupported);
             const auto catalog = std::get<AudioDeviceSnapshot>(Complete(*backend, Enumerate{}).outcome);
             REQUIRE(ValidateAudioDeviceSnapshot(catalog));
             REQUIRE_FALSE(catalog.devices.empty());

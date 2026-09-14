@@ -52,7 +52,6 @@ namespace Horo::Audio::Backend {
                                     .backendVersion = "SDL3"};
             probe.features.fill(AudioCapabilitySupport::Unsupported);
             probe.features[static_cast<std::size_t>(AudioBackendCapability::PhysicalEnumeration)] = AudioCapabilitySupport::Available;
-            probe.features[static_cast<std::size_t>(AudioBackendCapability::NativeHotplug)] = AudioCapabilitySupport::Available;
             probe.features[static_cast<std::size_t>(AudioBackendCapability::NativeDiagnostics)] = AudioCapabilitySupport::Available;
             return probe;
         }
