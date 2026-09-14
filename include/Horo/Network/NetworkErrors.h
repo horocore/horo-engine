@@ -56,6 +56,18 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor ReplicationSchemaUnknown;
     /** @brief Descriptor snapshot construction exceeded its explicit finite capacity. */
     extern const ErrorCodeDescriptor ReplicationCapacityExceeded;
+    /** @brief Serializer metadata, quantization policy, or typed value representation is malformed. */
+    extern const ErrorCodeDescriptor ReplicationSerializerInvalid;
+    /** @brief Multiple serializers claim the same owner, semantic type, and codec identity. */
+    extern const ErrorCodeDescriptor ReplicationSerializerConflict;
+    /** @brief A declared schema field has no exact serializer binding in the pinned generation. */
+    extern const ErrorCodeDescriptor ReplicationSerializerUnknown;
+    /** @brief Serializer input, output, or registry construction exceeded an explicit finite bound. */
+    extern const ErrorCodeDescriptor ReplicationSerializerCapacityExceeded;
+    /** @brief Encoded type/codec tags do not match the exact declared field contract. */
+    extern const ErrorCodeDescriptor ReplicationSerializerIncompatible;
+    /** @brief A runtime value or canonical byte sequence is invalid for its declared typed codec. */
+    extern const ErrorCodeDescriptor ReplicationSerializerValueInvalid;
     /** @brief A pinned replication role, peer, object, schema, or record context is malformed. */
     extern const ErrorCodeDescriptor ReplicationRoleContextInvalid;
     /** @brief A client role attempted to originate authority-server canonical state. */
