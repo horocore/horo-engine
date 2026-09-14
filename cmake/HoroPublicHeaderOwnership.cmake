@@ -214,6 +214,7 @@ horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
+    Horo/Assets/AssetDependency.h
     Horo/Assets/AssetCook.h
     Horo/Assets/AssetCookCache.h
     Horo/Assets/AssetCookOutput.h
@@ -443,7 +444,8 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
-    Horo/Prefab/PrefabDependencyGraph.h
+Horo/Prefab/PrefabAssetDependencyClosure.h
+Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
     Horo/Prefab/PrefabSourceResolver.h

@@ -44,6 +44,12 @@ namespace Horo::Prefab::PrefabErrors {
     extern const ErrorCodeDescriptor DependencyTypeMismatch;
     /** @brief A prefab dependency edge was authored against a different source revision. */
     extern const ErrorCodeDescriptor DependencyRevisionMismatch;
+    /** @brief One dependency identity carries incompatible type or source-revision evidence. */
+    extern const ErrorCodeDescriptor DependencyConflict;
+    /** @brief The requested dependency conflict policy is not supported by this contract version. */
+    extern const ErrorCodeDescriptor DependencyConflictPolicyUnsupported;
+    /** @brief A complete dependency closure exceeds its caller-owned hard capacity. */
+    extern const ErrorCodeDescriptor DependencyClosureCapacityExceeded;
     /** @brief A completed prefab resolution no longer matches the authoritative publication context. */
     extern const ErrorCodeDescriptor ResolutionStale;
     /** @brief A generated prefab scene identity collides with an authored or expanded identity. */

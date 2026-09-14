@@ -5,7 +5,7 @@
  * @brief Immutable validated handoff from authoring data to runtime scene construction.
  */
 
-#include "Horo/Assets/AssetId.h"
+#include "Horo/Assets/AssetDependency.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
 #include "Horo/Math/SceneMath.h"
@@ -71,12 +71,8 @@ namespace Horo::Runtime {
         RuntimeComponentSet components;
     };
 
-    /** @brief One required cooked asset and its expected runtime type. */
-    struct SceneAssetDependency {
-        Assets::AssetId id;               /**< Stable cooked asset identity. */
-        Assets::AssetTypeId expectedType; /**< Type required by scene construction. */
-        [[nodiscard]] auto operator<=>(const SceneAssetDependency &) const noexcept = default;
-    };
+    /** @brief Shared typed asset requirement accepted by runtime-scene definitions. */
+    using SceneAssetDependency = Assets::AssetDependency;
 
     /** @brief Validated immutable runtime-scene construction input. */
     class RuntimeSceneDefinition final {

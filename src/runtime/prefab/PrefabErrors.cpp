@@ -83,6 +83,15 @@ namespace Horo::Prefab::PrefabErrors {
     const ErrorCodeDescriptor DependencyRevisionMismatch =
         Describe("prefab.dependency.revision_mismatch", "A prefab dependency source revision does not match.",
                  "Reload the dependency graph from one coherent immutable source and Asset Registry snapshot.");
+    const ErrorCodeDescriptor DependencyConflict =
+        Describe("prefab.dependency.conflict", "Prefab dependency evidence conflicts for one asset identity.",
+                 "Use one registry snapshot and one exact type and source revision for each asset identity.");
+    const ErrorCodeDescriptor DependencyConflictPolicyUnsupported =
+        Describe("prefab.dependency.conflict_policy_unsupported", "The prefab dependency conflict policy is unsupported.",
+                 "Use the strict reject policy supported by this contract version.");
+    const ErrorCodeDescriptor DependencyClosureCapacityExceeded =
+        Describe("prefab.dependency.closure_capacity_exceeded", "The prefab dependency closure exceeds its capacity.",
+                 "Raise the caller-owned bound within project policy or reduce the transitive asset closure.");
     const ErrorCodeDescriptor ResolutionStale =
         Describe("prefab.resolution.stale", "A completed prefab resolution is stale.",
                  "Discard the candidate and resolve again from the current registry and document revisions.");

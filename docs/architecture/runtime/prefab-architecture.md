@@ -217,6 +217,30 @@ edge kinds, placement IDs, reachable source revisions and override digests, then
 flattens the hierarchy. Packaged runtime does not traverse authoring inheritance or
 composition graphs and never runs construction behavior to produce prefab data.
 
+#### Asset Dependency Closure And Conflict Policy
+
+`PrefabAssetDependencyClosure` is the owned, immutable handoff from prefab graph
+resolution to scene/prefab cook composition. It is pinned to the exact Asset
+Registry revision used by `PrefabDependencyGraphSnapshot` and contains the unique
+transitive dependency set in ascending `AssetId` order. Each entry retains the
+registry asset type and, for captured prefab sources, the exact source revision.
+The requested roots are resolution inputs and are excluded from their own closure.
+
+The closure builder may merge pre-existing scene/cook requirements, but validates
+them against the same immutable registry publication first. Equal requirements
+deduplicate. The same `AssetId` with another type or prefab source revision is an
+explicit `DependencyConflict`; V1 never guesses, overwrites, or uses insertion
+order as precedence. A stale registry/graph pairing, absent asset, invalid identity,
+unsupported policy, or exceeded caller-owned capacity returns a typed failure and
+publishes no partial result. This derived closure never mutates authored prefab
+documents or the active runtime/cook generation.
+
+`RuntimeDependencies()` is the source-free `RuntimeSceneDefinition` projection.
+It retains canonical `AssetId`/type pairs for ordinary cooked resources and
+pre-existing scene requirements, while excluding captured prefab-source nodes;
+their source revisions remain closure evidence for cook keys and stale-result
+rejection but never leak into the packaged runtime definition.
+
 ### External Reference Boundary And Binding Slots
 
 [ADR-096](../../adr/096-prefab-external-reference-and-binding-slot-contract.md)
