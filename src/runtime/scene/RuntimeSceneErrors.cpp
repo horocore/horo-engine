@@ -102,4 +102,29 @@ namespace Horo::Runtime::SceneErrors {
                                                                  "Persistent entity identity storage could not be allocated.",
                                                                  "Release candidate memory and retry within the explicit bound.",
                                                                  true};
+    const ErrorCodeDescriptor SaveableComponentInvalid{kDomain, ErrorCode{"scene.save_component.invalid"}, kError,
+                                                       "A saveable component declaration or request is invalid.",
+                                                       "Use a frozen component registry and bounded stable type/schema metadata."};
+    const ErrorCodeDescriptor SaveableComponentDuplicate{kDomain, ErrorCode{"scene.save_component.duplicate"}, kError,
+                                                         "A saveable component type is declared or adapted more than once.",
+                                                         "Assign one requirement and one semantic adapter to each component type."};
+    const ErrorCodeDescriptor SaveableComponentMissingAdapter{kDomain, ErrorCode{"scene.save_component.adapter_missing"}, kError,
+                                                              "A required saveable component adapter is missing.",
+                                                              "Bind every required component adapter before Scene activation."};
+    const ErrorCodeDescriptor
+        SaveableComponentIdentityMismatch{kDomain, ErrorCode{"scene.save_component.identity_mismatch"}, kError,
+                                          "Saved component state does not target a validated entity/type pair.",
+                                          "Resolve the current entity generation and component authority before applying state."};
+    const ErrorCodeDescriptor SaveableComponentSchemaUnsupported{kDomain, ErrorCode{"scene.save_component.schema_unsupported"}, kError,
+                                                                 "Saved component state uses an unsupported schema version.",
+                                                                 "Provide a deterministic migration to the active adapter schema."};
+    const ErrorCodeDescriptor SaveableComponentPayloadInvalid{kDomain, ErrorCode{"scene.save_component.payload_invalid"}, kError,
+                                                              "Saved component state is empty, oversized, or not canonical.",
+                                                              "Emit bounded canonical payloads through the save codec."};
+    const ErrorCodeDescriptor SaveableComponentAllocationFailed{kDomain,
+                                                                ErrorCode{"scene.save_component.allocation_failed"},
+                                                                kError,
+                                                                "Saveable component adapter storage could not be allocated.",
+                                                                "Release candidate memory and retry within the explicit bound.",
+                                                                true};
 }  // namespace Horo::Runtime::SceneErrors

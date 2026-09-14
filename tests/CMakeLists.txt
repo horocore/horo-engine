@@ -1497,6 +1497,11 @@ add_executable(HoroRuntimePersistentEntityIdentityTests
 )
 target_compile_features(HoroRuntimePersistentEntityIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimePersistentEntityIdentityTests PRIVATE HoroEngine::RuntimeScene)
+add_executable(HoroRuntimeSaveableComponentStateTests
+        unit/runtime/scene/SaveableComponentStateTests.cpp
+)
+target_compile_features(HoroRuntimeSaveableComponentStateTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveableComponentStateTests PRIVATE HoroEngine::RuntimeScene)
 add_executable(HoroRuntimeSaveStorageAdapterTests
         unit/runtime/save/SaveStorageAdapterTests.cpp
 )
@@ -2074,6 +2079,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveOperationTests
         HoroRuntimeSaveParticipationTests
         HoroRuntimePersistentEntityIdentityTests
+        HoroRuntimeSaveableComponentStateTests
         HoroRuntimeSaveStorageAdapterTests
         HoroRuntimeSaveStoragePolicyTests
         HoroRuntimeSaveOperationArbiterTests

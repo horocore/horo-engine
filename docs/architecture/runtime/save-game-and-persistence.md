@@ -140,6 +140,18 @@ and preserves destroyed authored entities as deletions rather than allowing defa
 silently recreate them. Prefab-backed spawns carry the existing path-free save asset and
 prefab-instance identities instead of a prefab object pointer or runtime occurrence handle.
 
+`SaveableComponentAdapterRegistry` is the host-composed bridge between that stable
+Scene identity map and gameplay component authority. The host declares required or
+optional component types before activation and binds at most one versioned semantic
+adapter per type against the frozen gameplay component registry. Required missing
+adapters reject composition. Capture can return only canonical codec output; restore
+first resolves the exact persistent entity generation and verifies current runtime
+component ownership, then performs explicit migration and validation before producing
+an inactive adapter-owned candidate. Defaults use the same validated entity/type route,
+and publication is a separate no-fail lifecycle transfer. The adapter owns its runtime
+save schema independently of the component descriptor's authoring schema. Authoring
+serializers and native component memory are not inputs to this contract.
+
 Always excluded unless a semantic owner defines a different canonical value are
 pointers/native objects, runtime handles/indices, container capacity, jobs/futures/
 cancellation/callbacks, pending queues/events, GPU/render extraction/fences, Audio
