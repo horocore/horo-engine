@@ -161,9 +161,11 @@ namespace Horo::Physics::Detail {
             DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
             if (inbox == nullptr)
                 return false;
-            const std::string_view evidence = message != nullptr && message[0] != '\0' ? std::string_view{message}
-                                              : expression == nullptr                  ? std::string_view{"Native solver assertion"}
-                                                                                       : std::string_view{expression};
+            std::string_view evidence{"Native solver assertion"};
+            if (message != nullptr && message[0] != '\0')
+                evidence = message;
+            else if (expression != nullptr)
+                evidence = expression;
             inbox->Submit(CanonicalDiagnosticKind::Assertion, evidence);
             return false;
         }
