@@ -84,12 +84,8 @@ namespace Horo::Audio::Backend {
             return false;
         }
 
-        TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {
-            auto created = CreateSdl3AudioBackend(Config());
-            REQUIRE(created.HasValue());
-            auto backend = std::move(created).Value();
-            REQUIRE(backend->Kind() == AudioBackendKind::SDL3Audio);
-            const auto probe = Complete(*backend, Probe{});
+        AudioDeviceEpoch OpenDefault(Sdl3AudioBackend &backend) {
+            const auto probe = Complete(backend, Probe{});
             const auto &capabilities = std::get<AudioBackendProbe>(probe.outcome);
             REQUIRE(capabilities.availability == AudioBackendAvailability::Available);
             REQUIRE(capabilities.features[static_cast<std::size_t>(AudioBackendCapability::PhysicalEnumeration)] ==
@@ -98,7 +94,7 @@ namespace Horo::Audio::Backend {
                     AudioCapabilitySupport::Available);
             REQUIRE(capabilities.features[static_cast<std::size_t>(AudioBackendCapability::NativeHotplug)] ==
                     AudioCapabilitySupport::Unsupported);
-            const auto catalog = std::get<AudioDeviceSnapshot>(Complete(*backend, Enumerate{}).outcome);
+            const auto catalog = std::get<AudioDeviceSnapshot>(Complete(backend, Enumerate{}).outcome);
             REQUIRE(ValidateAudioDeviceSnapshot(catalog));
             REQUIRE_FALSE(catalog.devices.empty());
 
@@ -107,12 +103,25 @@ namespace Horo::Audio::Backend {
                                                   .preferred = {48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)},
                                                   .period = {64, 256, 2'048},
                                                   .nativeRatePolicy = AudioDeviceRatePolicy::AllowPreparedResampler};
-            const auto opened = std::get<Opened>(Complete(*backend, Open{epoch, format, AccessMode::Shared}).outcome);
+            const auto opened = std::get<Opened>(Complete(backend, Open{epoch, format, AccessMode::Shared}).outcome);
             REQUIRE(opened.format.device == epoch.device);
             REQUIRE(ValidateAudioDeviceNegotiation(format, catalog, opened.format).status == AudioDeviceNegotiationStatus::Accepted);
+            return epoch;
+        }
+
+        void StartRendering(Sdl3AudioBackend &backend, const AudioDeviceEpoch &epoch, Trace &trace) {
+            REQUIRE(std::holds_alternative<Started>(Complete(backend, Start{epoch, {&trace, Render}}).outcome));
+            REQUIRE(WaitForEvent(backend, ExpectedCallbackEvent::Ready));
+        }
+
+        TEST_CASE("SDL3 audio drives the Horo render port and detaches before close", "[unit][audio][sdl3]") {
+            auto created = CreateSdl3AudioBackend(Config());
+            REQUIRE(created.HasValue());
+            auto backend = std::move(created).Value();
+            REQUIRE(backend->Kind() == AudioBackendKind::SDL3Audio);
+            const auto epoch = OpenDefault(*backend);
             Trace trace;
-            REQUIRE(std::holds_alternative<Started>(Complete(*backend, Start{epoch, {&trace, Render}}).outcome));
-            REQUIRE(WaitForEvent(*backend, ExpectedCallbackEvent::Ready));
+            StartRendering(*backend, epoch, trace);
             REQUIRE(backend->CommitRendering(epoch).HasValue());
             REQUIRE(trace.calls.load(std::memory_order_relaxed) > 0);
             trace.invalidResponse.store(true, std::memory_order_relaxed);
@@ -149,6 +158,17 @@ namespace Horo::Audio::Backend {
             REQUIRE(backend->CommitRendering({}).HasError());
             REQUIRE(backend->Begin(Start{}, {Config().clockDomain, 1}).HasError());
             REQUIRE(backend->Begin(Probe{}, {Config().clockDomain + 1, 1}).HasError());
+        }
+
+        TEST_CASE("SDL3 audio destruction releases an active native stream", "[unit][audio][sdl3]") {
+            auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();
+            const auto epoch = OpenDefault(*backend);
+            Trace trace;
+            StartRendering(*backend, epoch, trace);
+            backend.reset();
+
+            auto reopened = std::move(CreateSdl3AudioBackend(Config())).Value();
+            REQUIRE(std::holds_alternative<AudioBackendProbe>(Complete(*reopened, Probe{}).outcome));
         }
     }  // namespace
 }  // namespace Horo::Audio::Backend

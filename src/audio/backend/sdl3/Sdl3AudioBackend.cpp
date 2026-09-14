@@ -4,10 +4,7 @@ namespace Horo::Audio::Backend {
 
     Sdl3AudioBackend::Sdl3AudioBackend(std::unique_ptr<Impl> implementation) noexcept : impl_(std::move(implementation)) {}
 
-    Sdl3AudioBackend::~Sdl3AudioBackend() {
-        if (impl_->initialized && !impl_->logicalDevice && !impl_->stream)
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
-    }
+    Sdl3AudioBackend::~Sdl3AudioBackend() = default;
 
     /** @copydoc Sdl3AudioBackend::Kind */
     AudioBackendKind Sdl3AudioBackend::Kind() const noexcept {

@@ -64,7 +64,25 @@ namespace Horo::Audio::Backend {
             bool operator==(const DeviceBinding &) const noexcept = default;
         };
 
+        struct NativeOpenFacts final {
+            SDL_AudioSpec actual{};
+            int periodFrames{};
+        };
+
         explicit Impl(const Sdl3AudioBackendConfig &value) noexcept : config(value), defaultDevice{value.owner, 1, 1} {}
+
+        ~Impl() {
+            if (stream) {
+                if (logicalDevice)
+                    SDL_PauseAudioDevice(logicalDevice);
+                SDL_SetAudioStreamGetCallback(stream, nullptr, nullptr);
+                SDL_DestroyAudioStream(stream);
+            }
+            if (logicalDevice)
+                SDL_CloseAudioDevice(logicalDevice);
+            if (initialized)
+                SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        }
 
         Sdl3AudioBackendConfig config;
         AudioDeviceId defaultDevice;
@@ -381,6 +399,20 @@ namespace Horo::Audio::Backend {
             return negotiated;
         }
 
+        Result<NativeOpenFacts> OpenNativeDevice(const Open &request, const AudioDeviceResolution &resolved) {
+            const auto native = NativeDevice(resolved.device);
+            const SDL_AudioSpec requested{SDL_AUDIO_F32, static_cast<int>(request.format.preferred.layout.orderedChannels.size()),
+                                          static_cast<int>(request.format.preferred.sampleRate)};
+            logicalDevice = native ? SDL_OpenAudioDevice(native, &requested) : 0;
+            NativeOpenFacts facts;
+            if (logicalDevice && SDL_GetAudioDeviceFormat(logicalDevice, &facts.actual, &facts.periodFrames))
+                return Result<NativeOpenFacts>::Success(facts);
+            if (logicalDevice)
+                SDL_CloseAudioDevice(logicalDevice);
+            logicalDevice = 0;
+            return Result<NativeOpenFacts>::Failure(MakeError(AudioErrors::DeviceUnavailable));
+        }
+
         Result<void> Apply(const Open &request, const OperationId &operation) {
             if (!ValidateAudioDeviceSnapshot(snapshot)) {
                 Finish(operation, Failed{MakeError(AudioErrors::DeviceUnavailable), ResourceDisposition::Unchanged});
@@ -391,20 +423,13 @@ namespace Horo::Audio::Backend {
                 Finish(operation, Failed{MakeError(AudioErrors::IdentityInvalid), ResourceDisposition::Unchanged});
                 return Result<void>::Success();
             }
-            const auto native = NativeDevice(resolved.device);
-            SDL_AudioSpec requested{SDL_AUDIO_F32, static_cast<int>(request.format.preferred.layout.orderedChannels.size()),
-                                    static_cast<int>(request.format.preferred.sampleRate)};
-            logicalDevice = native ? SDL_OpenAudioDevice(native, &requested) : 0;
-            SDL_AudioSpec actual{};
-            int nativeFrames{};
-            if (!logicalDevice || !SDL_GetAudioDeviceFormat(logicalDevice, &actual, &nativeFrames)) {
-                if (logicalDevice)
-                    SDL_CloseAudioDevice(logicalDevice);
-                logicalDevice = 0;
-                Finish(operation, Failed{MakeError(AudioErrors::DeviceUnavailable), ResourceDisposition::Closed});
+            auto native = OpenNativeDevice(request, resolved);
+            if (native.HasError()) {
+                Finish(operation, Failed{native.ErrorValue(), ResourceDisposition::Closed});
                 return Result<void>::Success();
             }
-            auto effective = ResolveEffectiveFormat(request, actual);
+            const auto &facts = native.Value();
+            auto effective = ResolveEffectiveFormat(request, facts.actual);
             if (effective.HasError()) {
                 SDL_CloseAudioDevice(logicalDevice);
                 logicalDevice = 0;
@@ -412,8 +437,8 @@ namespace Horo::Audio::Backend {
                 return Result<void>::Success();
             }
             epoch = request.plannedEpoch;
-            PrepareBuffers(effective.Value(), request.format.period, nativeFrames);
-            auto negotiated = NegotiatedFormat(request, resolved, actual, nativeFrames);
+            PrepareBuffers(effective.Value(), request.format.period, facts.periodFrames);
+            auto negotiated = NegotiatedFormat(request, resolved, facts.actual, facts.periodFrames);
             const AudioDeviceTimingReport timing{.epoch = epoch,
                                                  .capturedAt = {config.clockDomain, SDL_GetTicksNS()},
                                                  .hardwareLatency = UnknownDuration(),

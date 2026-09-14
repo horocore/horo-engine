@@ -6,7 +6,10 @@
 
 #include "Horo/Audio/Internal/AudioBackend.h"
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 
 namespace Horo::Audio::Backend {
     /** @brief Fixed construction facts; construction performs no SDL initialization or discovery. */
