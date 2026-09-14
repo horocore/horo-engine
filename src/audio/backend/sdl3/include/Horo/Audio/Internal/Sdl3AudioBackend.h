@@ -45,26 +45,29 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] AudioBackendKind Kind() const noexcept override;
         /** @copydoc AudioBackend::Owner */
         [[nodiscard]] AudioRuntimeId Owner() const noexcept override;
+
+        /** @brief Return the current backend-local lifecycle fact. @return Current SDL3 adapter state. */
+        [[nodiscard]] Sdl3AudioBackendState State() const noexcept;
+
         /** @copydoc AudioBackend::Begin */
         [[nodiscard]] Result<OperationId> Begin(const Request &request, const AudioMonotonicTimestamp &deadline) override;
-        /** @copydoc AudioBackend::CommitRendering */
-        [[nodiscard]] Result<void> CommitRendering(const AudioDeviceEpoch &epoch) override;
-        /** @copydoc AudioBackend::Cancel */
-        [[nodiscard]] Result<CancelDisposition> Cancel(const OperationId &operation) override;
         /** @copydoc AudioBackend::Poll */
         [[nodiscard]] Result<std::optional<Completion>> Poll(const OperationId &operation) override;
-        /** @copydoc AudioBackend::AcknowledgeCompletion */
-        [[nodiscard]] Result<void> AcknowledgeCompletion(const OperationId &operation) override;
-        /** @copydoc AudioBackend::DrainEvents */
-        [[nodiscard]] std::size_t DrainEvents(std::span<Event> output) noexcept override;
 
         /**
          * @brief Execute one admitted native control operation.
          * @return Success when its outcome is published or remains asynchronously pending.
          */
         [[nodiscard]] Result<void> AdvanceControl();
-        /** @brief Return the current backend-local lifecycle fact. @return Current SDL3 adapter state. */
-        [[nodiscard]] Sdl3AudioBackendState State() const noexcept;
+
+        /** @copydoc AudioBackend::AcknowledgeCompletion */
+        [[nodiscard]] Result<void> AcknowledgeCompletion(const OperationId &operation) override;
+        /** @copydoc AudioBackend::Cancel */
+        [[nodiscard]] Result<CancelDisposition> Cancel(const OperationId &operation) override;
+        /** @copydoc AudioBackend::CommitRendering */
+        [[nodiscard]] Result<void> CommitRendering(const AudioDeviceEpoch &epoch) override;
+        /** @copydoc AudioBackend::DrainEvents */
+        [[nodiscard]] std::size_t DrainEvents(std::span<Event> output) noexcept override;
 
     private:
         struct Impl;

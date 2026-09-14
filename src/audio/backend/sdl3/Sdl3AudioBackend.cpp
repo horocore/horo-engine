@@ -40,8 +40,9 @@ namespace Horo::Audio::Backend {
             impl_->pendingRequest = request;
             return Result<OperationId>::Success(operation);
         } catch (const std::bad_alloc &) {
-            return Result<OperationId>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
+            // Translate allocation failure below after the operation slot remains unchanged.
         }
+        return Result<OperationId>::Failure(MakeError(AudioErrors::MemoryAllocationFailed));
     }
 
     /** @copydoc Sdl3AudioBackend::AdvanceControl */
