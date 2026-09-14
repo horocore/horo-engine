@@ -142,6 +142,8 @@ namespace {
         REQUIRE((opened.outcome == ProjectOpenOutcome::Failed));
         REQUIRE((opened.diagnostic.has_value()));
         REQUIRE((opened.diagnostic->code.Value() == "project.migration.stage_failed"));
+        REQUIRE_FALSE((opened.diagnostic->message.empty()));
+        REQUIRE_FALSE((opened.readySession.has_value()));
         REQUIRE((project.ReadProjectBytes() == metadata));
         REQUIRE_FALSE((std::filesystem::exists(project.Root() / ".horo/migration_history.json")));
     }
@@ -211,18 +213,7 @@ TEST_CASE("Invalid legacy project fails without authoritative mutation", "[integ
         output << invalid.dump(2) << '\n';
         REQUIRE((output.good()));
     }
-    const auto authoritativeBytes = project.ReadProjectBytes();
-
-    BackendProjectOpen backend;
-    const auto opened = OpenProject(backend, project);
-
-    REQUIRE((opened.outcome == ProjectOpenOutcome::Failed));
-    REQUIRE((opened.diagnostic.has_value()));
-    REQUIRE((opened.diagnostic->code.Value() == "project.migration.stage_failed"));
-    REQUIRE((!opened.diagnostic->message.empty()));
-    REQUIRE((!opened.readySession.has_value()));
-    REQUIRE((project.ReadProjectBytes() == authoritativeBytes));
-    REQUIRE((!std::filesystem::exists(project.Root() / ".horo/migration_history.json")));
+    RequireProjectOpenFailureWithoutMutation(project);
     const auto records = logs.Records();
     REQUIRE((std::ranges::any_of(records, [](const nlohmann::json &record) {
         return record.value("level", "") == "error" &&
