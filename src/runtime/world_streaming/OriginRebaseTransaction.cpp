@@ -81,7 +81,7 @@ namespace Horo::WorldStreaming {
             const std::size_t maximumParticipants) {
             if (required.empty() || required.size() != participantCount)
                 return Internal::Failure<std::vector<OriginRebaseParticipantRequirement>>(WorldStreamingErrors::OriginRebaseIncomplete);
-            if (required.size() > maximumParticipants || participantCount > maximumParticipants)
+            if (required.size() > maximumParticipants)
                 return Internal::Failure<std::vector<OriginRebaseParticipantRequirement>>(
                     WorldStreamingErrors::OriginRebaseCapacityExceeded);
 
