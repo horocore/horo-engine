@@ -134,7 +134,8 @@ namespace Horo::Runtime {
             if (const auto *analytic = std::get_if<PhysicsAnalyticCollider>(&component.source)) {
                 if (!IsValidAnalytic(*analytic))
                     return Failure("Physics collider analytic geometry is invalid.");
-                const bool uniform = component.scale.x == component.scale.y && component.scale.y == component.scale.z;
+                const bool uniform =
+                    Math::NearlyEqual(component.scale.x, component.scale.y) && Math::NearlyEqual(component.scale.y, component.scale.z);
                 if (!uniform &&
                     (std::holds_alternative<PhysicsSphereCollider>(*analytic) || std::holds_alternative<PhysicsCapsuleCollider>(*analytic)))
                     return Failure("Sphere and capsule colliders require uniform authored scale.");

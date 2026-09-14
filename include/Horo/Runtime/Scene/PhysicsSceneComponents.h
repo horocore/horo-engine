@@ -22,6 +22,7 @@ namespace Horo::Runtime {
     inline constexpr std::uint32_t PhysicsSceneComponentSchemaVersion = 1;       /**< Current durable authored schema version. */
     inline constexpr std::size_t MaximumPhysicsCollidersPerBody = 64;            /**< Maximum contributors to one body. */
     inline constexpr std::size_t MaximumPhysicsColliderMaterialBindings = 4'096; /**< Maximum authored slot mappings. */
+    inline constexpr std::size_t MaximumPhysicsConstraintsPerObject = 4'096;     /**< Maximum constraints authored by one object. */
 
     /** @brief Non-interchangeable persistent scalar identity used by an authored Physics component schema. */
     template <typename Tag> struct AuthoredPhysicsId final {

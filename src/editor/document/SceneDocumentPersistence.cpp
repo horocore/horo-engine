@@ -1309,7 +1309,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] Result<std::vector<Runtime::PhysicsConstraintComponent>> ParsePhysicsConstraints(const Json &value) {
-            if (!value.is_array() || value.size() > 4'096)
+            if (!value.is_array() || value.size() > Runtime::MaximumPhysicsConstraintsPerObject)
                 return Result<std::vector<Runtime::PhysicsConstraintComponent>>::Failure(
                     PersistenceError(SceneInvalid, "Physics constraint list is invalid."));
             std::vector<Runtime::PhysicsConstraintComponent> result;

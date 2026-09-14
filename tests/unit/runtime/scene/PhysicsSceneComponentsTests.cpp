@@ -67,6 +67,10 @@ namespace {
         collider.scale.x = 0.0F;
         REQUIRE(Runtime::ValidateColliderComponent(collider).HasError());
         collider = Collider(1);
+        collider.source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{}};
+        collider.scale.y += Math::DefaultEpsilon * 0.5F;
+        REQUIRE(Runtime::ValidateColliderComponent(collider).HasValue());
+        collider = Collider(1);
         collider.source = Runtime::PhysicsShapeAssetReference{.asset = Asset(4), .subresource = {7}};
         REQUIRE(Runtime::ValidateColliderComponent(collider).HasValue());
         std::get<Runtime::PhysicsShapeAssetReference>(collider.source).subresource = {};
