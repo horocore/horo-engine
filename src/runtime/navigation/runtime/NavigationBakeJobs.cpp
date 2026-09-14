@@ -13,7 +13,8 @@
 
 namespace Horo::Navigation {
     namespace NavigationBakeJobDetail {
-        struct SharedState final {
+        struct SharedState final {  // NOSONAR(cpp:S5414) Lock() protects the intentionally co-located shared job state.
+
             [[nodiscard]] std::unique_lock<std::mutex> Lock() const {
                 return std::unique_lock{mutex_};
             }
@@ -90,20 +91,21 @@ namespace Horo::Navigation {
                                                                                           const NavigationBakeJobBudget &budget,
                                                                                           std::uint64_t &totalTemporaryBytes,
                                                                                           std::uint64_t &totalWorkUnits) {
+            using enum NavigationBakeBudgetResource;
             if (static_cast<std::size_t>(item.stage) >= Stages.size() || !item.execute || item.workUnits == 0)
                 return BakeFailure<std::optional<NavigationBakeBudgetResource>>(NavigationErrors::BakeJobInvalid);
             if (item.residentBytes > budget.maximumResidentBytes)
-                return Result<std::optional<NavigationBakeBudgetResource>>::Success(NavigationBakeBudgetResource::ResidentMemory);
+                return Result<std::optional<NavigationBakeBudgetResource>>::Success(ResidentMemory);
             if (AddWouldOverflow(totalTemporaryBytes, item.temporaryBytes))
-                return Result<std::optional<NavigationBakeBudgetResource>>::Success(NavigationBakeBudgetResource::TemporaryStorage);
+                return Result<std::optional<NavigationBakeBudgetResource>>::Success(TemporaryStorage);
             totalTemporaryBytes += item.temporaryBytes;
             if (totalTemporaryBytes > budget.maximumTemporaryBytes)
-                return Result<std::optional<NavigationBakeBudgetResource>>::Success(NavigationBakeBudgetResource::TemporaryStorage);
+                return Result<std::optional<NavigationBakeBudgetResource>>::Success(TemporaryStorage);
             if (AddWouldOverflow(totalWorkUnits, item.workUnits))
-                return Result<std::optional<NavigationBakeBudgetResource>>::Success(NavigationBakeBudgetResource::WorkUnits);
+                return Result<std::optional<NavigationBakeBudgetResource>>::Success(WorkUnits);
             totalWorkUnits += item.workUnits;
             if (totalWorkUnits > budget.maximumWorkUnits)
-                return Result<std::optional<NavigationBakeBudgetResource>>::Success(NavigationBakeBudgetResource::WorkUnits);
+                return Result<std::optional<NavigationBakeBudgetResource>>::Success(WorkUnits);
             return Result<std::optional<NavigationBakeBudgetResource>>::Success(std::nullopt);
         }
 
@@ -404,7 +406,7 @@ namespace Horo::Navigation {
                 return ExecutePipeline(state, jobs, std::move(descriptor));
             } catch (const std::exception &) {
                 return FinishUnexpectedException(state);
-            } catch (...) {  // NOSONAR -- Foreign bake callbacks may throw non-standard exceptions; the async boundary must contain them.
+            } catch (...) {  // NOSONAR(cpp:S1181) Foreign callbacks may throw non-standard exceptions; contain the async boundary.
                 return FinishUnexpectedException(state);
             }
         });
