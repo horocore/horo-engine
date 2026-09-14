@@ -1756,7 +1756,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionAbiIntegrationTests.cpp
         unit/extensions/ExternalImporterRegistrationTests.cpp
 )
-foreach(abi_fixture_mode RANGE 0 7)
+foreach(abi_fixture_mode RANGE 0 8)
     set(abi_fixture_target HoroExtensionAbiFixture${abi_fixture_mode})
     add_library(${abi_fixture_target} MODULE fixtures/extensions/AbiModule.c)
     target_compile_features(${abi_fixture_target} PRIVATE c_std_11)
@@ -1774,6 +1774,16 @@ target_link_libraries(HoroExtensionAbiMissingLoadFixture PRIVATE HoroEngine::Ext
 add_dependencies(HoroExtensionManagerTests HoroExtensionAbiMissingLoadFixture)
 target_compile_definitions(HoroExtensionManagerTests PRIVATE
         HORO_ABI_MISSING_LOAD_FIXTURE="$<TARGET_FILE:HoroExtensionAbiMissingLoadFixture>")
+foreach(abi_cleanup_fixture_mode RANGE 0 2)
+    set(abi_cleanup_fixture_target HoroExtensionAbiCleanupFixture${abi_cleanup_fixture_mode})
+    add_library(${abi_cleanup_fixture_target} MODULE fixtures/extensions/AbiCleanupModule.cpp)
+    target_compile_features(${abi_cleanup_fixture_target} PRIVATE cxx_std_20)
+    target_link_libraries(${abi_cleanup_fixture_target} PRIVATE HoroEngine::Extensions)
+    target_compile_definitions(${abi_cleanup_fixture_target} PRIVATE HORO_ABI_CLEANUP_FIXTURE_MODE=${abi_cleanup_fixture_mode})
+    add_dependencies(HoroExtensionManagerTests ${abi_cleanup_fixture_target})
+    target_compile_definitions(HoroExtensionManagerTests PRIVATE
+            HORO_ABI_CLEANUP_FIXTURE_${abi_cleanup_fixture_mode}="$<TARGET_FILE:${abi_cleanup_fixture_target}>")
+endforeach()
 add_dependencies(HoroExtensionManagerTests horo-extension-conformance)
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")

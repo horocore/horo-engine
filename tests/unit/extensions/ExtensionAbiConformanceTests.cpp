@@ -43,12 +43,23 @@ namespace Horo::Extensions {
         CHECK(RunExtensionAbiConformance(HORO_ABI_FIXTURE_5).code == ExtensionAbiConformanceCode::RegistrationRejected);
         CHECK(RunExtensionAbiConformance(HORO_ABI_FIXTURE_6).code == ExtensionAbiConformanceCode::LoadRejected);
         CHECK(RunExtensionAbiConformance(HORO_ABI_FIXTURE_7).code == ExtensionAbiConformanceCode::ModuleIdentityRejected);
+        const auto capacity = RunExtensionAbiConformance(HORO_ABI_FIXTURE_8);
+        CHECK(capacity.code == ExtensionAbiConformanceCode::RegistrationRejected);
+        CHECK(capacity.registrationCount == 256);
     }
 
     TEST_CASE("ABI conformance identifies a missing module load entry point", "[Extensions][ABI][SDK]") {
         const auto report = RunExtensionAbiConformance(HORO_ABI_MISSING_LOAD_FIXTURE);
         CHECK(report.code == ExtensionAbiConformanceCode::MissingLoadEntryPoint);
         CHECK_FALSE(report.unloadInvoked);
+    }
+
+    TEST_CASE("ABI conformance enforces reverse cleanup and contains callback exceptions", "[Extensions][ABI][SDK]") {
+        const auto reverseOrder = RunExtensionAbiConformance(HORO_ABI_CLEANUP_FIXTURE_0);
+        CHECK(reverseOrder.Passed());
+        CHECK(reverseOrder.registrationCount == 2);
+        CHECK(RunExtensionAbiConformance(HORO_ABI_CLEANUP_FIXTURE_1).code == ExtensionAbiConformanceCode::CleanupRejected);
+        CHECK(RunExtensionAbiConformance(HORO_ABI_CLEANUP_FIXTURE_2).code == ExtensionAbiConformanceCode::CleanupRejected);
     }
 
     TEST_CASE("ABI conformance reports missing libraries without invoking module lifecycle", "[Extensions][ABI][SDK]") {

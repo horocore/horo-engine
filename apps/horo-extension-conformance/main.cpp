@@ -45,15 +45,17 @@ namespace {
                   << ",\"unloadPresent\":" << (report.unloadPresent ? "true" : "false")
                   << ",\"unloadInvoked\":" << (report.unloadInvoked ? "true" : "false") << "}\n";
     }
+
+    [[nodiscard]] int RunConformance(const Options &options) {
+        const auto report = Horo::Extensions::RunExtensionAbiConformance(options.modulePath);
+        PrintReport(report, options.json);
+        return report.Passed() ? 0 : 1;
+    }
 }  // namespace
 
 int main(const int argc, char **argv) {
-    const auto options = ParseOptions(std::span{argv, static_cast<std::size_t>(argc)});
-    if (!options) {
-        PrintUsage();
-        return 2;
-    }
-    const auto report = Horo::Extensions::RunExtensionAbiConformance(options->modulePath);
-    PrintReport(report, options->json);
-    return report.Passed() ? 0 : 1;
+    if (const auto options = ParseOptions(std::span{argv, static_cast<std::size_t>(argc)}); options.has_value())
+        return RunConformance(*options);
+    PrintUsage();
+    return 2;
 }
