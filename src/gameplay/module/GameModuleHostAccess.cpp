@@ -63,6 +63,11 @@ namespace Horo::Gameplay {
         return *impl_->systems;
     }
 
+    /** @copydoc LoadedGameModule::Replication */
+    const ReplicationRegistrationRegistry &LoadedGameModule::Replication() const noexcept {
+        return *impl_->replication;
+    }
+
     /** @copydoc LoadedGameModule::ActiveServices */
     std::span<const GameplayServiceId> LoadedGameModule::ActiveServices() const noexcept {
         return impl_->runtimeContext.activeServices;

@@ -58,4 +58,8 @@ namespace Horo::Gameplay::GameplayErrors {
     extern const ErrorCodeDescriptor IncompatibleGameModule;
     extern const ErrorCodeDescriptor InvalidGeneratedDescriptorBundle;
     extern const ErrorCodeDescriptor GeneratedDescriptorDiagnosticsPresent;
+    extern const ErrorCodeDescriptor InvalidReplicationRegistration;
+    extern const ErrorCodeDescriptor DuplicateReplicationSchema;
+    extern const ErrorCodeDescriptor ReplicationOwnerMissing;
+    extern const ErrorCodeDescriptor ReplicationRegistryFrozen;
 }  // namespace Horo::Gameplay::GameplayErrors

@@ -6,6 +6,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/GameplayRegistrationRuntime.h"
+#include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
 #include "Horo/Platform/DynamicLibrary.h"
 
@@ -32,6 +33,12 @@ namespace Horo::Gameplay {
                 Bind(behaviors, lease, admission);
                 Bind(systems, lease, admission);
             }
+
+            static void Bind(ReplicationRegistrationRegistry &replication, const std::weak_ptr<void> &lease,
+                             const std::atomic_bool &admission) noexcept {
+                replication.generationLease_ = lease;
+                replication.generationLeaseAdmission_ = &admission;
+            }
         };
     }  // namespace Detail
 
@@ -49,6 +56,7 @@ namespace Horo::Gameplay {
         std::unique_ptr<GameAssetTypeRegistry> assetTypes;
         std::unique_ptr<GameServiceRegistry> services;
         std::unique_ptr<SystemRegistry> systems;
+        std::unique_ptr<ReplicationRegistrationRegistry> replication;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         IGameModule *gameplayModule{};

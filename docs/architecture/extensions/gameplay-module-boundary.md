@@ -97,7 +97,7 @@ LoadLibrary
   -> GetGameplayDescriptorBundle
   -> validate manifest identity, complete registrations, diagnostics, and lifecycle callbacks
   -> CreateGameModule
-  -> Register components, systems, services, and game-owned asset types
+  -> Register components, systems, services, game-owned asset types, and native replication bindings
   -> freeze every registration transaction
   -> create project services in provider-first order
   -> Start
@@ -134,6 +134,7 @@ Game registration may contribute:
 - asset type handlers owned by the game
 - project settings descriptors
 - console or diagnostic commands approved for runtime use
+- Network-owned replication schemas, typed serializers, and gameplay owner safe-point bindings
 
 Registration does not mutate an active scene or start background work.
 Duplicate IDs and incompatible descriptors fail module startup.
@@ -149,6 +150,7 @@ struct GameRegistrationContext {
     GameServiceRegistry& services;
     InputActionRegistry& inputActions;
     AssetTypeRegistry& assetTypes;
+    ReplicationRegistrationRegistry& replication;
     SettingsRegistry& settings;
     RuntimeCommandRegistry& commands;
     RuntimeDiagnostics& diagnostics;
@@ -160,6 +162,12 @@ state, renderer backends, or global service lookup. Descriptor registration is
 declarative and is frozen before scene activation. Registries validate stable
 IDs, schema versions, dependency references, and descriptor compatibility before
 `Start()` is called.
+
+The replication registry resolves its owner against these same component,
+generated behavior, and service registrations during freeze. It does not create
+a parallel component registry. Project modules see only Horo's replication
+descriptor/serializer contracts; transport and backend headers remain outside
+the gameplay SDK boundary.
 
 Game-owned IDs use the `game.<project_or_module>.*` namespace. Engine-owned IDs
 use `engine.*`. Duplicate IDs across all loaded engine and game descriptors fail

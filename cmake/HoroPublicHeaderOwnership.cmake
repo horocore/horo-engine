@@ -187,6 +187,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/GameModule.h
     Horo/Gameplay/GameplayErrors.h
     Horo/Gameplay/GameplayRegistration.h
+    Horo/Gameplay/ReplicationRegistration.h
     Horo/Gameplay/NativeBehavior.h
     Horo/Gameplay/SystemRegistry.h
 )
