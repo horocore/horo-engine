@@ -40,10 +40,10 @@ namespace {
                       << " unload=" << report.unloadPresent << " unloadInvoked=" << report.unloadInvoked << '\n';
             return;
         }
-        std::cout << "{\"passed\":" << (report.Passed() ? "true" : "false") << ",\"code\":\"" << code << "\",\"status\":" << report.status
-                  << ",\"registrations\":" << report.registrationCount << ",\"queryPresent\":" << (report.queryPresent ? "true" : "false")
-                  << ",\"unloadPresent\":" << (report.unloadPresent ? "true" : "false")
-                  << ",\"unloadInvoked\":" << (report.unloadInvoked ? "true" : "false") << "}\n";
+        std::cout << R"({"passed":)" << (report.Passed() ? "true" : "false") << R"(,"code":")" << code << R"(","status":)" << report.status
+                  << R"(,"registrations":)" << report.registrationCount << R"(,"queryPresent":)" << (report.queryPresent ? "true" : "false")
+                  << R"(,"unloadPresent":)" << (report.unloadPresent ? "true" : "false") << R"(,"unloadInvoked":)"
+                  << (report.unloadInvoked ? "true" : "false") << "}\n";
     }
 
     [[nodiscard]] int RunConformance(const Options &options) {

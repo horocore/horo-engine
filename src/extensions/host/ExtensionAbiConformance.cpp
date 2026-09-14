@@ -29,7 +29,7 @@ namespace Horo::Extensions {
             return text.length <= maximumBytes && (text.data != nullptr || text.length == 0) && (allowEmpty || text.length != 0);
         }
 
-        [[nodiscard]] bool ValidList(const void *values, const std::uint32_t count) noexcept {
+        template <typename Element> [[nodiscard]] bool ValidList(const Element *values, const std::uint32_t count) noexcept {
             return count <= MaximumRegistrations && (values != nullptr || count == 0);
         }
 
@@ -75,25 +75,27 @@ namespace Horo::Extensions {
             return clean;
         }
 
-        [[nodiscard]] bool InvokeUnload(const HoroExtensionUnloadFunc unload, HoroExtensionModuleApi &module) noexcept {
+        template <typename UnloadCallback>
+        [[nodiscard]] bool InvokeUnload(const UnloadCallback unload, HoroExtensionModuleApi &moduleApi) noexcept {
             if (unload == nullptr)
                 return true;
             try {
-                unload(&module);
+                unload(&moduleApi);
                 return true;
             } catch (...) {  // NOSONAR(cpp:S1181) Contain contract-violating cleanup callbacks.
                 return false;
             }
         }
 
-        [[nodiscard]] bool ValidModuleIdentity(const HoroExtensionModuleApi &module) noexcept {
-            return ValidText(module.moduleId, MaximumIdentityBytes) && ValidText(module.moduleVersion, MaximumIdentityBytes);
+        [[nodiscard]] bool ValidModuleIdentity(const HoroExtensionModuleApi &moduleApi) noexcept {
+            return ValidText(moduleApi.moduleId, MaximumIdentityBytes) && ValidText(moduleApi.moduleVersion, MaximumIdentityBytes);
         }
 
-        [[nodiscard]] HoroExtensionStatus InvokeLoad(const HoroExtensionLoadFunc load, const HoroExtensionHostApi &host,
-                                                     HoroExtensionModuleApi &module) noexcept {
+        template <typename LoadCallback>
+        [[nodiscard]] HoroExtensionStatus InvokeLoad(const LoadCallback load, const HoroExtensionHostApi &host,
+                                                     HoroExtensionModuleApi &moduleApi) noexcept {
             try {
-                return load(&host, &module);
+                return load(&host, &moduleApi);
             } catch (...) {  // NOSONAR(cpp:S1181) Contain contract-violating native callbacks.
                 return HORO_EXTENSION_ERROR_INIT_FAILED;
             }
@@ -166,22 +168,22 @@ namespace Horo::Extensions {
             return report;
         }
 
-        HoroExtensionModuleApi module{.structSize = sizeof(HoroExtensionModuleApi)};
-        report.status = InvokeLoad(load, host, module);
+        HoroExtensionModuleApi moduleApi{.structSize = sizeof(HoroExtensionModuleApi)};
+        report.status = InvokeLoad(load, host, moduleApi);
         report.registrationCount = static_cast<std::uint32_t>(registration.importers.size());
         ExtensionAbiConformanceCode loadCode = ExtensionAbiConformanceCode::Passed;
         if (registration.rejected)
             loadCode = ExtensionAbiConformanceCode::RegistrationRejected;
         else if (report.status != HORO_EXTENSION_SUCCESS)
             loadCode = ExtensionAbiConformanceCode::LoadRejected;
-        else if (!NormalizeModuleApi(module))
+        else if (!NormalizeModuleApi(moduleApi))
             loadCode = ExtensionAbiConformanceCode::ModuleTableRejected;
-        else if (!ValidModuleIdentity(module))
+        else if (!ValidModuleIdentity(moduleApi))
             loadCode = ExtensionAbiConformanceCode::ModuleIdentityRejected;
 
         const bool registrationsClean = DestroyRegistrations(registration);
         report.unloadInvoked = unload != nullptr;
-        const bool unloadClean = InvokeUnload(unload, module);
+        const bool unloadClean = InvokeUnload(unload, moduleApi);
         report.code = registrationsClean && unloadClean ? loadCode : ExtensionAbiConformanceCode::CleanupRejected;
         return report;
     }
