@@ -6,6 +6,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayRegistrationRuntime.h"
+#include "Horo/Gameplay/ReplicationRegistration.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -90,9 +91,9 @@ namespace {
     template <typename CreateRuntime, typename ExerciseRuntime>
     void CheckGenerationLease(CreateRuntime createRuntime, ExerciseRuntime exerciseRuntime) {
         GameModuleHost host;
-        auto loadedResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
-        REQUIRE(loadedResult.HasValue());
-        std::unique_ptr<LoadedGameModule> loaded = std::move(loadedResult).Value();
+        auto moduleResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(moduleResult.HasValue());
+        std::unique_ptr<LoadedGameModule> loaded = std::move(moduleResult).Value();
         auto created = createRuntime(*loaded);
         REQUIRE(created.HasValue());
         auto runtime = std::move(created).Value();
@@ -104,6 +105,20 @@ namespace {
         loaded.reset();
         CHECK(exerciseRuntime(*runtime).HasValue());
         runtime->Shutdown();
+    }
+
+    void RequireFrozenRegistries(const LoadedGameModule &loaded) {
+        REQUIRE(loaded.Registry().IsFrozen());
+        REQUIRE(loaded.Components().IsFrozen());
+        REQUIRE(loaded.Components().Descriptors().size() == 1);
+        REQUIRE(loaded.Components().Descriptors().front().typeId.Value() == "game.tests.movement_settings");
+        REQUIRE(loaded.AssetTypes().IsFrozen());
+        REQUIRE(loaded.AssetTypes().Registrations().size() == 1);
+        REQUIRE(loaded.AssetTypes().Registrations().front().descriptor.typeId.Value() == "game.tests.quest_definition");
+        REQUIRE(loaded.Services().IsFrozen());
+        REQUIRE(loaded.Services().Registrations().size() == 1);
+        REQUIRE(loaded.Systems().IsFrozen());
+        REQUIRE(loaded.Systems().Registrations().size() == 1);
     }
 }  // namespace
 
@@ -120,17 +135,7 @@ TEST_CASE("game module host validates fingerprint and keeps factories alive thro
     auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loaded.HasValue());
     REQUIRE(loaded.Value()->ModuleId() == "game.tests");
-    REQUIRE(loaded.Value()->Registry().IsFrozen());
-    REQUIRE(loaded.Value()->Components().IsFrozen());
-    REQUIRE(loaded.Value()->Components().Descriptors().size() == 1);
-    REQUIRE(loaded.Value()->Components().Descriptors().front().typeId.Value() == "game.tests.movement_settings");
-    REQUIRE(loaded.Value()->AssetTypes().IsFrozen());
-    REQUIRE(loaded.Value()->AssetTypes().Registrations().size() == 1);
-    REQUIRE(loaded.Value()->AssetTypes().Registrations().front().descriptor.typeId.Value() == "game.tests.quest_definition");
-    REQUIRE(loaded.Value()->Services().IsFrozen());
-    REQUIRE(loaded.Value()->Services().Registrations().size() == 1);
-    REQUIRE(loaded.Value()->Systems().IsFrozen());
-    REQUIRE(loaded.Value()->Systems().Registrations().size() == 1);
+    RequireFrozenRegistries(*loaded.Value());
     REQUIRE(loaded.Value()->ActiveServices().size() == 1);
     REQUIRE(loaded.Value()->Capabilities().size() == 1);
     REQUIRE_FALSE(loaded.Value()->Cancellation().IsCancellationRequested());
@@ -165,6 +170,18 @@ TEST_CASE("game module host validates fingerprint and keeps factories alive thro
     REQUIRE(replacement.Value()->RestoreReload(reloadSnapshot.Value()).HasValue());
 }
 
+TEST_CASE("game module host publishes native replication registrations") {
+    GameModuleHost host;
+    auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value()->Replication().IsFrozen());
+
+    auto replication = loaded.Value()->Replication().Acquire();
+    REQUIRE(replication.HasValue());
+    REQUIRE(replication.Value().Registrations().size() == 1);
+    REQUIRE(replication.Value().Descriptors()->Schemas().size() == 1);
+}
+
 TEST_CASE("default game module reload contract requires a restart") {
     RestartRequiredModule module;
     GameRuntimeContext context;
@@ -191,6 +208,23 @@ TEST_CASE("game module generation remains pinned by external behavior and system
         }, [](GameplaySystemRuntime &runtime) {
             return runtime.Execute(GameplaySystemPhase::Gameplay, GameplayThreadAffinity::RuntimeOwner, 1.0 / 60.0);
         });
+    }
+
+    SECTION("replication generation") {
+        GameModuleHost host;
+        auto loadedResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+        REQUIRE(loadedResult.HasValue());
+        auto replication = loadedResult.Value()->Replication().Acquire();
+        REQUIRE(replication.HasValue());
+        std::unique_ptr<LoadedGameModule> loaded = std::move(loadedResult).Value();
+
+        RequireRestartRequired(loaded->PrepareReload());
+        RequireRestartRequired(loaded->Replication().Acquire());
+        loaded.reset();
+
+        const auto encoded = replication.Value().Serializers().Encode(Network::ReplicationSchemaId::Create(1001).Value(),
+                                                                      Network::FieldId::Create(1).Value(), 3.5);
+        REQUIRE(encoded.HasValue());
     }
 }
 

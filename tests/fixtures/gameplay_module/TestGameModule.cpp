@@ -4,6 +4,7 @@
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/NativeBehavior.h"
+#include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
 #include "gameplay/GameAssetTestSupport.h"
 
@@ -102,8 +103,9 @@ namespace {
     class Module final : public IGameModule {
     public:
         Result<void> Register(GameRegistrationContext &context) override {
+            const ComponentTypeId movementType = ComponentTypeId::Parse("game.tests.movement_settings").Value();
             ComponentDescriptor descriptor{
-                .typeId = ComponentTypeId::Parse("game.tests.movement_settings").Value(),
+                .typeId = movementType,
                 .schemaVersion = 2,
                 .displayName = "Movement Settings",
                 .category = "Gameplay/Movement",
@@ -112,6 +114,40 @@ namespace {
             };
             if (Result<void> component = context.components.Register(std::move(descriptor)); component.HasError())
                 return component;
+
+            const auto schemaId = Network::ReplicationSchemaId::Create(1001).Value();
+            const auto valueType = Network::ReplicationValueTypeId::Create(1).Value();
+            const auto codec = Network::ReplicationCodecId::Create(1).Value();
+            GameplayReplicationRegistration replication{
+                .owner = movementType,
+                .schema =
+                    {
+                        .id = schemaId,
+                        .version = {1, 0},
+                        .compatibility = {{1, 0}, {1, 0}},
+                        .owner = {.value = "game.tests"},
+                        .fields = {{.id = Network::FieldId::Create(1).Value(),
+                                    .valueType = valueType,
+                                    .codec = codec,
+                                    .introducedVersion = {1, 0},
+                                    .limits = {8, 1}}},
+                    },
+                .serializers = {Network::CanonicalScalarReplicationSerializer::Create(
+                                    {.valueType = valueType,
+                                     .codec = codec,
+                                     .owner = {.value = "game.tests"},
+                                     .valueKind = Network::ReplicationValueKind::FloatingPoint,
+                                     .maximumEncodedBytes = 8,
+                                     .maximumElementCount = 1})
+                                    .Value()},
+                .schedule =
+                    {
+                        .captureAccess = {.reads = {movementType}},
+                        .applyAccess = {.writes = {movementType}},
+                    },
+            };
+            if (Result<void> registered = context.replication.Register(std::move(replication)); registered.HasError())
+                return registered;
 
             GameAssetTypeRegistration asset{
                 .descriptor = Tests::QuestGameAssetDescriptor(),

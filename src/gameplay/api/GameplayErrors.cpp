@@ -455,4 +455,41 @@ namespace Horo::Gameplay::GameplayErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor InvalidReplicationRegistration{
+        .domain = GameplayDomain,
+        .code = ErrorCode{"gameplay.replication_registration_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The native gameplay replication registration is invalid.",
+        .remediationHint =
+            "Declare an existing gameplay owner, deterministic owner-thread safe points, bounded access and an exact module-owned schema.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor DuplicateReplicationSchema{
+        .domain = GameplayDomain,
+        .code = ErrorCode{"gameplay.replication_schema_duplicate"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A native gameplay replication schema is registered more than once.",
+        .remediationHint = "Give each schema one gameplay owner and one registration in the module transaction.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor ReplicationOwnerMissing{
+        .domain = GameplayDomain,
+        .code = ErrorCode{"gameplay.replication_owner_missing"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A replication registration names gameplay metadata that is not registered.",
+        .remediationHint = "Register the component, behavior, service and every accessed component before freezing replication metadata.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor ReplicationRegistryFrozen{
+        .domain = GameplayDomain,
+        .code = ErrorCode{"gameplay.replication_registry_frozen"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The native gameplay replication registry is frozen.",
+        .remediationHint = "Register complete replication metadata before module startup.",
+        .retryable = false,
+        .userActionable = false,
+    };
 }  // namespace Horo::Gameplay::GameplayErrors

@@ -557,6 +557,7 @@ add_executable(HoroGameplayRuntimeTests
         unit/gameplay/ComponentRegistryTests.cpp
         unit/gameplay/GameAssetTypeRegistryTests.cpp
         unit/gameplay/GameplayRegistrationTests.cpp
+        unit/gameplay/ReplicationRegistrationTests.cpp
 )
 target_compile_features(HoroGameplayRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")

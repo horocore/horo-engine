@@ -270,16 +270,33 @@ uses the same stable component/behavior IDs and upgrade rules as persistent
 content, but it is not allowed to serialize raw C++ object memory, function
 pointers, entity runtime addresses, or module allocator ownership.
 
+## Replication Registration
+
+Native gameplay modules contribute replication through the host-owned
+`ReplicationRegistrationRegistry` in their open `GameRegistrationContext`.
+Each contribution names an already registered component, generated behavior, or
+gameplay service; carries one Network-owned schema and exact typed serializers;
+and declares its owner-thread capture/apply phases plus component access. This is
+an integration over the canonical component, behavior, and service registries,
+not a second gameplay type registry.
+
+Freeze resolves every owner and accessed component, rejects presentation/render
+capture, non-owner affinity, foreign module schemas, duplicate schema ownership,
+and incomplete serializer coverage, then publishes one immutable Network schema
+and serializer generation. Consumers acquire a `GameplayReplicationLease`.
+That lease pins the exact native module generation, its adapters, descriptor
+snapshot, and code image; reload closes lease admission and becomes
+restart-required while any prior replication lease remains alive.
+
+Gameplay modules include only the backend-neutral replication declarations from
+`Horo::Network`. They never depend on transport, socket, session backend, or host
+headers. Behavior code does not infer network authority from local process state
+or mutate replicated state outside declared simulation phases.
+
 ## Deferred Runtime Extension Points
 
-Networking, save-game, memory budgeting, and advanced platform integration are
-separate runtime contracts, but gameplay module contracts must leave room for them.
-
-Future networking support must declare replicated component or behavior state
-through stable descriptors, explicit authority policy, prediction/rollback
-contracts where used, and schema-versioned network payloads. Behavior code must
-not infer network authority from local process state or mutate replicated state
-outside declared simulation phases.
+Save-game, memory budgeting, and advanced platform integration are separate
+runtime contracts, but gameplay module contracts must leave room for them.
 
 Memory budget participation is required for production and console targets.
 Development-only targets may run without enforced budgets, but allocations must

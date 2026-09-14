@@ -69,7 +69,8 @@ namespace Horo::Gameplay {
         assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
         services = std::make_unique<GameServiceRegistry>(moduleId);
         systems = std::make_unique<SystemRegistry>(moduleId);
-        GameRegistrationContext registration{moduleId, *components, *systems, *services, *assetTypes};
+        replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
+        GameRegistrationContext registration{moduleId, *components, *systems, *services, *assetTypes, *replication};
         if (Result<void> registered = InvokeRegister(*gameplayModule, registration); registered.HasError())
             return registered;
         if (Result<void> frozen = components->Freeze(); frozen.HasError())
@@ -82,7 +83,11 @@ namespace Horo::Gameplay {
         const std::vector<GameplayCapabilityId> capabilities = CombinedCapabilities(hostCapabilities, *services);
         if (Result<void> frozen = systems->Freeze(serviceIds, capabilities); frozen.HasError())
             return frozen;
+        if (Result<void> frozen = replication->Freeze(components->Descriptors(), registry->Registrations(), services->Registrations());
+            frozen.HasError())
+            return frozen;
         Detail::GenerationLeaseBinding::Bind(*registry, *systems, weak_from_this(), runtimeLeaseAdmission);
+        Detail::GenerationLeaseBinding::Bind(*replication, weak_from_this(), runtimeLeaseAdmission);
 
         auto activated = GameplayServiceRuntime::Create(*services, GameplayServiceScope::Project, {{}, hostCapabilities});
         if (activated.HasError())
@@ -129,6 +134,7 @@ namespace Horo::Gameplay {
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
         projectServices.reset();
         assetTypes.reset();
+        replication.reset();
         if (gameplayModule != nullptr) {
             destroy(gameplayModule);
             gameplayModule = nullptr;

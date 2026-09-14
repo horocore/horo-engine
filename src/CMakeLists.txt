@@ -282,6 +282,7 @@ add_library(HoroGameplayApi STATIC
         gameplay/api/ComponentValidation.cpp
         gameplay/api/GameplayIdentityValidation.h
         gameplay/api/GameplayRegistration.cpp
+        gameplay/api/ReplicationRegistration.cpp
         gameplay/api/GameServiceRegistryDetail.h
         gameplay/api/GameServiceValidation.cpp
         gameplay/api/GameServiceGraph.cpp
@@ -301,7 +302,7 @@ add_library(HoroGameplayApi STATIC
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayApi PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi)
 target_compile_definitions(HoroGameplayApi PRIVATE
         HORO_GAMEPLAY_SDK_FINGERPRINT="${HORO_GAMEPLAY_SDK_FINGERPRINT}"
 )
