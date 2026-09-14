@@ -185,7 +185,7 @@ namespace Horo::WorldStreaming {
         RequireError(trace.Complete(IdentityFrom<StreamingTraceSpanId>(201), Telemetry::SpanStatus::Failed, revision),
                      WorldStreamingErrors::TraceLifecycleUnavailable);
         RequireError(trace.Complete(IdentityFrom<StreamingTraceSpanId>(999), Telemetry::SpanStatus::Failed, revision),
-                     WorldStreamingErrors::TraceStale);
+                     WorldStreamingErrors::TraceIdentityConflict);
     }
 
     TEST_CASE("World Streaming trace replacement is revision-fenced and atomic", "[unit][world_streaming][trace][lifecycle]") {
@@ -202,6 +202,11 @@ namespace Horo::WorldStreaming {
         CHECK(trace.Revision() == successor.bindingRevision);
         CHECK(trace.Stages().empty());
         RequireError(trace.Replace(revision, successor), WorldStreamingErrors::TraceStale);
+
+        auto sameRoot = Configuration(4, 4);
+        sameRoot.ownerRevision = successor.ownerRevision;
+        sameRoot.operation = successor.operation;
+        RequireError(trace.Replace(successor.bindingRevision, sameRoot), WorldStreamingErrors::TraceIdentityConflict);
     }
 
     TEST_CASE("World Streaming trace cancellation and close retain lifecycle evidence", "[unit][world_streaming][trace][lifecycle]") {

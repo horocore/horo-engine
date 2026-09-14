@@ -57,21 +57,17 @@ namespace Horo::WorldStreaming {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateStageAdmission(std::span<const StreamingTraceStageSnapshot> snapshots,
-                                                          const StreamingTraceStageBegin &begin, const std::size_t maximumSpans) {
-            if (std::ranges::any_of(snapshots, [&begin](const StreamingTraceStageSnapshot &snapshot) {
-                return snapshot.begin.span == begin.span;
-            }))
+        [[nodiscard]] Result<void> ValidateStageAdmission(const std::unordered_map<std::uint64_t, std::size_t> &spanIndices,
+                                                          const std::size_t spanCount, const StreamingTraceStageBegin &begin,
+                                                          const std::size_t maximumSpans) {
+            if (spanIndices.contains(begin.span.Value()))
                 return Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
-            if (snapshots.size() == maximumSpans)
+            if (spanCount == maximumSpans)
                 return Internal::Failure<void>(WorldStreamingErrors::TraceCapacityExceeded);
             if (!begin.parentSpan.IsValid())
                 return Result<void>::Success();
-            const auto parentMatch = [&begin](const StreamingTraceStageSnapshot &snapshot) {
-                return snapshot.begin.span == begin.parentSpan;
-            };
-            return std::ranges::any_of(snapshots, parentMatch) ? Result<void>::Success()
-                                                               : Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
+            return spanIndices.contains(begin.parentSpan.Value()) ? Result<void>::Success()
+                                                                  : Internal::Failure<void>(WorldStreamingErrors::TraceIdentityConflict);
         }
 
         [[nodiscard]] bool HasActiveStage(std::span<const StreamingTraceStageSnapshot> snapshots) noexcept {
@@ -135,12 +131,13 @@ namespace Horo::WorldStreaming {
         : configuration_(configuration), ownerThread_(std::this_thread::get_id()), lifecycle_(StreamingTraceLifecycle::Active) {
         snapshots_.reserve(configuration.maximumSpans);
         startedAt_.reserve(configuration.maximumSpans);
+        spanIndices_.reserve(configuration.maximumSpans);
     }
 
     /** @copydoc WorldStreamingTrace::WorldStreamingTrace */
     WorldStreamingTrace::WorldStreamingTrace(WorldStreamingTrace &&other) noexcept
         : configuration_(other.configuration_), snapshots_(std::move(other.snapshots_)), startedAt_(std::move(other.startedAt_)),
-          ownerThread_(other.ownerThread_), lifecycle_(other.lifecycle_) {
+          spanIndices_(std::move(other.spanIndices_)), ownerThread_(other.ownerThread_), lifecycle_(other.lifecycle_) {
         other.lifecycle_ = StreamingTraceLifecycle::Closed;
     }
 
@@ -165,8 +162,14 @@ namespace Horo::WorldStreaming {
             return Internal::Failure<void>(WorldStreamingErrors::TraceStale);
         if (auto validation = ValidateStageBegin(begin, configuration_.operation); validation.HasError())
             return validation;
-        if (auto admission = ValidateStageAdmission(snapshots_, begin, configuration_.maximumSpans); admission.HasError())
+        if (auto admission = ValidateStageAdmission(spanIndices_, snapshots_.size(), begin, configuration_.maximumSpans);
+            admission.HasError())
             return admission;
+        try {
+            spanIndices_.emplace(begin.span.Value(), snapshots_.size());
+        } catch (const std::bad_alloc &) {
+            return Internal::Failure<void>(WorldStreamingErrors::TraceStorageUnavailable);
+        }
         snapshots_.push_back({.begin = begin});
         startedAt_.push_back(std::chrono::steady_clock::now());
         return Result<void>::Success();
@@ -186,14 +189,12 @@ namespace Horo::WorldStreaming {
             return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceInvalid);
         if (!TerminalStatus(status))
             return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceUnsupported);
-        const auto found = std::ranges::find_if(snapshots_, [span](const StreamingTraceStageSnapshot &snapshot) {
-            return snapshot.begin.span == span;
-        });
-        if (found == snapshots_.end())
-            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceStale);
-        if (found->status != Telemetry::SpanStatus::Unset)
+        const auto found = spanIndices_.find(span.Value());
+        if (found == spanIndices_.end())
+            return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceIdentityConflict);
+        const auto index = found->second;
+        if (snapshots_[index].status != Telemetry::SpanStatus::Unset)
             return Internal::Failure<StreamingTracePublishDisposition>(WorldStreamingErrors::TraceLifecycleUnavailable);
-        const auto index = static_cast<std::size_t>(std::distance(snapshots_.begin(), found));
         return Result<StreamingTracePublishDisposition>::Success(Emit(index, status));
     }
 
@@ -209,11 +210,14 @@ namespace Horo::WorldStreaming {
         try {
             std::vector<StreamingTraceStageSnapshot> successorSnapshots;
             std::vector<std::chrono::steady_clock::time_point> successorStarts;
+            std::unordered_map<std::uint64_t, std::size_t> successorIndices;
             successorSnapshots.reserve(successor.maximumSpans);
             successorStarts.reserve(successor.maximumSpans);
+            successorIndices.reserve(successor.maximumSpans);
             configuration_ = successor;
             snapshots_.swap(successorSnapshots);
             startedAt_.swap(successorStarts);
+            spanIndices_.swap(successorIndices);
         } catch (const std::bad_alloc &) {
             return Internal::Failure<void>(WorldStreamingErrors::TraceStorageUnavailable);
         }
@@ -301,6 +305,7 @@ namespace Horo::WorldStreaming {
             snapshot.publication = Telemetry::Runtime::EmitRecord(std::move(record)) ? StreamingTracePublishDisposition::Submitted
                                                                                      : StreamingTracePublishDisposition::Dropped;
         } catch (...) {
+            // Observability must never alter or escape terminal streaming control flow.
             snapshot.publication = StreamingTracePublishDisposition::Dropped;
         }
         return snapshot.publication;
