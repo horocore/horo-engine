@@ -679,6 +679,30 @@ immediately; shutdown closes idempotently and releases the handles. Telemetry
 backpressure or shutdown may lose observations but never changes streaming control
 flow, budget admission, residency or retirement.
 
+`WorldStreamingTrace` is the WST-010.4 owner-side correlation boundary. One
+host-issued root operation joins source evaluation, cell-asset request, activation
+and provider work beneath unique typed span identities. A stage may name either the
+root or an earlier admitted stage as its parent. Each stage accepts only its closed
+typed subject: a source identity for evaluation, request plus fenced cell operation
+for asset work, activation plus fenced operation for publication, or provider plus
+fenced operation for provider work. These identities are record fields and never
+metric dimensions.
+
+The trace preallocates a mandatory lifetime span ceiling and validates complete
+parentage and subject facts before retaining evidence. Duplicate spans, missing
+parents, stale binding revisions, unsupported vocabulary and over-capacity input
+return distinct typed errors without partial state or emission. Completion is
+terminal and once-only. Cancellation closes admission and completes every active
+stage as cancelled; shutdown is idempotent. Binding replacement is allowed only
+when no stage remains active and requires the same owner, a strictly newer binding
+revision and a same-or-newer composition revision.
+
+Telemetry publication is best-effort and occurs only for terminal spans. The trace
+retains terminal status, monotonic duration and submitted/dropped disposition even
+when collection is disabled, the bounded Telemetry queue rejects the record, or
+shutdown races publication. Observability loss therefore cannot change streaming
+admission, activation, provider ownership, cancellation or replacement decisions.
+
 ## Scene, Prefab And Navigation Reconciliation
 
 Cell CoreEcs packages use ADR-017 Tier 0-style offline expansion: placed prefab

@@ -8,6 +8,22 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief A streaming trace binding, stage, subject, parent, or terminal request is malformed. */
+    extern const ErrorCodeDescriptor TraceInvalid;
+    /** @brief A streaming trace stage or terminal status is unknown to this contract version. */
+    extern const ErrorCodeDescriptor TraceUnsupported;
+    /** @brief A streaming trace command names a foreign or superseded binding revision. */
+    extern const ErrorCodeDescriptor TraceStale;
+    /** @brief A streaming trace repeats a span identity or names an unavailable parent. */
+    extern const ErrorCodeDescriptor TraceIdentityConflict;
+    /** @brief A streaming trace cannot admit another stage within its mandatory lifetime ceiling. */
+    extern const ErrorCodeDescriptor TraceCapacityExceeded;
+    /** @brief Streaming trace admission, completion, or replacement is unavailable in the current lifecycle. */
+    extern const ErrorCodeDescriptor TraceLifecycleUnavailable;
+    /** @brief Storage required for a streaming trace binding could not be allocated. */
+    extern const ErrorCodeDescriptor TraceStorageUnavailable;
+    /** @brief A streaming trace mutation ran outside its declaring authority owner thread. */
+    extern const ErrorCodeDescriptor TraceThreadAffinityViolation;
     /** @brief A streaming metric binding, policy, handle set or sample is malformed. */
     extern const ErrorCodeDescriptor MetricInvalid;
     /** @brief A streaming metric availability, requirement, collection level or lifecycle value is unsupported. */

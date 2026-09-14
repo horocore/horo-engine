@@ -426,6 +426,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/WorldStreamingRuntimeComposition.h
     Horo/WorldStreaming/WorldStreamingDiagnosticSnapshot.h
     Horo/WorldStreaming/WorldStreamingMetrics.h
+    Horo/WorldStreaming/WorldStreamingTrace.h
     Horo/WorldStreaming/WorldStreamingErrors.h
     Horo/WorldStreaming/WorldStreamingIdentity.h
 )
