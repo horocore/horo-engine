@@ -201,4 +201,5 @@ TEST_CASE("Transform gizmo rejects non-representable extreme updates", "[unit][e
     const Result<TransformGizmoMathOutcome> outcome =
         EvaluateTransformGizmoMath(session.Value(), TransformGizmoMathUpdate{.projectedPixels = std::numeric_limits<float>::max()});
     REQUIRE((outcome.HasError()));
+    REQUIRE((outcome.ErrorValue().code.Value() == "math.non_finite_input"));
 }

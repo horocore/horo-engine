@@ -82,7 +82,10 @@ namespace Horo::Editor {
             Math::Transform next = session.initialLocalTransform;
             const float worldDistance = update.projectedPixels / session.pixelsPerWorldUnit;
             const Math::Vec3 worldPosition = session.initialWorldPosition + session.worldAxis * worldDistance;
-            next.translation = Math::TransformAffinePoint(session.parentWorldInverse, worldPosition);
+            const Result<Math::Vec3> localPosition = Math::TryTransformPoint(session.parentWorldInverse, worldPosition);
+            if (localPosition.HasError())
+                return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(localPosition.ErrorValue());
+            next.translation = localPosition.Value();
             return Result<std::pair<Math::Transform, Math::Vec3>>::Success({std::move(next), worldPosition});
         }
 
