@@ -110,21 +110,32 @@ namespace Horo::Editor {
             };
         }
 
-        Math::Vec3 center = worldBounds.Center();
-        const float radius = std::max(Math::Length(worldBounds.Extents()), 1.0F);
-        const float paddedRadius = radius * 1.15F;
-        const Math::Vec3 direction = Math::Normalize(light->direction);
-        const Math::Vec3 up = std::abs(Math::Dot(direction, Math::Vec3{0.0F, 1.0F, 0.0F})) > 0.95F ? Math::Vec3{1.0F, 0.0F, 0.0F}
-                                                                                                   : Math::Vec3{0.0F, 1.0F, 0.0F};
-        const Math::Vec3 side = Math::Normalize(Math::Cross(direction, up));
-        const Math::Vec3 lightUp = Math::Cross(side, direction);
+        const Result<Math::BoundingSphere> worldSphere = Math::SphereFromAabb(worldBounds);
+        if (worldSphere.HasError())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(worldSphere.ErrorValue());
+        Math::Vec3 center = worldSphere.Value().center;
+        const float radius = std::max(worldSphere.Value().radius, 1.0F);
+        const double paddedRadiusValue = static_cast<double>(radius) * 1.15;
+        if (!std::isfinite(paddedRadiusValue) || paddedRadiusValue > std::numeric_limits<float>::max())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Directional shadow bounds are not representable."));
+        const auto paddedRadius = static_cast<float>(paddedRadiusValue);
+        const Result<Math::Vec3> direction = Math::TryNormalize(light->direction);
+        if (direction.HasError())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(direction.ErrorValue());
+        const Math::Vec3 up = std::abs(Math::Dot(direction.Value(), Math::Vec3{0.0F, 1.0F, 0.0F})) > 0.95F ? Math::Vec3{1.0F, 0.0F, 0.0F}
+                                                                                                           : Math::Vec3{0.0F, 1.0F, 0.0F};
+        const Result<Math::Vec3> side = Math::TryNormalize(Math::Cross(direction.Value(), up));
+        if (side.HasError())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(side.ErrorValue());
+        const Math::Vec3 lightUp = Math::Cross(side.Value(), direction.Value());
         const float worldUnitsPerTexel = (paddedRadius * 2.0F) / static_cast<float>(EditorViewportDirectionalShadowMapResolution);
         const auto snapToTexel = [worldUnitsPerTexel](const float coordinate) {
             return std::round(coordinate / worldUnitsPerTexel) * worldUnitsPerTexel;
         };
-        center += side * (snapToTexel(Math::Dot(center, side)) - Math::Dot(center, side));
+        center += side.Value() * (snapToTexel(Math::Dot(center, side.Value())) - Math::Dot(center, side.Value()));
         center += lightUp * (snapToTexel(Math::Dot(center, lightUp)) - Math::Dot(center, lightUp));
-        const Math::Vec3 eye = center - direction * (paddedRadius * 2.0F);
+        const Math::Vec3 eye = center - direction.Value() * (paddedRadius * 2.0F);
         const Result<Math::Mat4> view = Math::TryLookAt(eye, center, lightUp);
         if (view.HasError())
             return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(view.ErrorValue());

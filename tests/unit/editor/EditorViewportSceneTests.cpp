@@ -90,6 +90,34 @@ namespace {
         REQUIRE(metalClip.z / metalClip.w <= 1.0F);
     }
 
+    TEST_CASE("Directional Shadow View Preserves Degenerate And Extreme Failures", "[unit][editor]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        const std::array instances{EditorViewportInstance{
+            .localToWorld = Math::Mat4::Identity(),
+            .localBounds = {{-1.0F, -1.0F, -1.0F}, {1.0F, 1.0F, 1.0F}},
+        }};
+        const std::array degenerateLights{Render::RenderLight{
+            .kind = Render::RenderLightKind::Directional,
+            .direction = {},
+        }};
+        const Render::RenderSceneView degenerateScene{.instances = instances, .lights = degenerateLights};
+        REQUIRE((BuildEditorViewportDirectionalShadowView(degenerateScene, Math::ClipDepthRange::ZeroToOne).HasError()));
+
+        const float extreme = std::numeric_limits<float>::max();
+        const std::array extremeInstances{EditorViewportInstance{
+            .localToWorld = Math::Mat4::Identity(),
+            .localBounds = {{-extreme, -extreme, -extreme}, {extreme, extreme, extreme}},
+        }};
+        const std::array lights{Render::RenderLight{
+            .kind = Render::RenderLightKind::Directional,
+            .direction = {0.0F, -1.0F, 0.0F},
+        }};
+        const Render::RenderSceneView extremeScene{.instances = extremeInstances, .lights = lights};
+        REQUIRE((BuildEditorViewportDirectionalShadowView(extremeScene, Math::ClipDepthRange::ZeroToOne).HasError()));
+    }
+
     TEST_CASE("Look At Uses Right Handed Negative Z View Space", "[unit][editor]") {
         using namespace Horo::Math;
         const Mat4 view = LookAt({0.0F, 0.0F, 4.0F}, {}, {0.0F, 1.0F, 0.0F});
