@@ -23,10 +23,10 @@ namespace Horo::Editor {
                 return Result<std::optional<ImVec2>>::Failure(projected.ErrorValue());
             if (!projected.Value().has_value())
                 return Result<std::optional<ImVec2>>::Success(std::nullopt);
-            return Result<std::optional<ImVec2>>::Success(ImVec2{
-                origin.x + projected.Value()->viewportPosition.x * width,
-                origin.y + projected.Value()->viewportPosition.y * height,
-            });
+            const Result<Math::Vec2> pixels = MapEditorViewportPointToPixels(*projected.Value(), {origin.x, origin.y}, {width, height});
+            if (pixels.HasError())
+                return Result<std::optional<ImVec2>>::Failure(pixels.ErrorValue());
+            return Result<std::optional<ImVec2>>::Success(ImVec2{pixels.Value().x, pixels.Value().y});
         }
 
         [[nodiscard]] float DistanceToSegment(const ImVec2 point, const ImVec2 start, const ImVec2 end) noexcept {

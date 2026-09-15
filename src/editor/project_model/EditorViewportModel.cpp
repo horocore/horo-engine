@@ -11,6 +11,8 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr float CameraVerticalLimitThreshold = 0.995F;
+
         [[nodiscard]] Result<Math::Vec3> RotateAroundAxis(const Math::Vec3 value, const Math::Vec3 axis, const float radians) noexcept {
             const Result<Math::Quaternion> rotation = Math::Quaternion::TryFromAxisAngle(axis, radians);
             if (rotation.HasError())
@@ -24,10 +26,14 @@ namespace Horo::Editor {
             Math::Vec3 up{};
         };
 
+        [[nodiscard]] Result<Math::Vec3> TryCameraForward(const EditorViewportCamera &camera) noexcept {
+            return Math::TryNormalize(camera.target - camera.position);
+        }
+
         [[nodiscard]] Result<NavigationBasis> TryNavigationBasis(const EditorViewportCamera &camera,
                                                                  const EditorViewportNavigationDelta &delta) noexcept {
             constexpr Math::Vec3 sceneUp{0.0F, 1.0F, 0.0F};
-            Result<Math::Vec3> forward = Math::TryNormalize(camera.target - camera.position);
+            Result<Math::Vec3> forward = TryCameraForward(camera);
             if (forward.HasError())
                 return Result<NavigationBasis>::Failure(forward.ErrorValue());
             forward = RotateAroundAxis(forward.Value(), sceneUp, delta.yawRadians);
@@ -39,7 +45,7 @@ namespace Horo::Editor {
             const Result<Math::Vec3> pitched = RotateAroundAxis(forward.Value(), right.Value(), delta.pitchRadians);
             if (pitched.HasError())
                 return Result<NavigationBasis>::Failure(pitched.ErrorValue());
-            if (std::fabs(Math::Dot(pitched.Value(), sceneUp)) < 0.995F)
+            if (std::fabs(Math::Dot(pitched.Value(), sceneUp)) < CameraVerticalLimitThreshold)
                 forward = pitched;
             right = Math::TryNormalize(Math::Cross(forward.Value(), sceneUp));
             if (right.HasError())
@@ -138,7 +144,7 @@ namespace Horo::Editor {
         if (current_.camera.projection == projection)
             return Result<void>::Success();
         EditorViewportCamera camera = current_.camera;
-        const Result<Math::Vec3> forwardResult = Math::TryNormalize(camera.target - camera.position);
+        const Result<Math::Vec3> forwardResult = TryCameraForward(camera);
         if (forwardResult.HasError())
             return Result<void>::Failure(forwardResult.ErrorValue());
         const Math::Vec3 forward = forwardResult.Value();
@@ -170,7 +176,7 @@ namespace Horo::Editor {
         const Math::BoundingSphere sphere = sphereResult.Value();
         const float radius = std::max(sphere.radius, 0.25F);
         EditorViewportCamera camera = current_.camera;
-        const Result<Math::Vec3> forwardResult = Math::TryNormalize(camera.target - camera.position);
+        const Result<Math::Vec3> forwardResult = TryCameraForward(camera);
         if (forwardResult.HasError())
             return Result<void>::Failure(forwardResult.ErrorValue());
         const Math::Vec3 forward = forwardResult.Value();

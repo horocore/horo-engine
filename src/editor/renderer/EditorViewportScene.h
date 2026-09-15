@@ -79,6 +79,16 @@ namespace Horo::Editor {
                                                                                                   Math::Vec3 worldPoint, float aspect,
                                                                                                   Math::ClipDepthRange depthRange) noexcept;
 
+    /**
+     * @brief Maps a normalized viewport projection to finite top-left-origin pixel coordinates.
+     * @param projection Finite normalized viewport projection.
+     * @param origin Finite top-left viewport origin in pixels.
+     * @param extent Positive finite viewport extent in pixels.
+     * @return Mapped pixel coordinates or a typed coordinate failure.
+     */
+    [[nodiscard]] Result<Math::Vec2> MapEditorViewportPointToPixels(const EditorViewportPointProjection &projection, Math::Vec2 origin,
+                                                                    Math::Vec2 extent) noexcept;
+
     /** @brief Builds a world-space ray from top-left-origin normalized viewport coordinates and an explicit clip-depth range. */
     [[nodiscard]] Result<Math::Ray> BuildEditorViewportRay(const EditorViewportCamera &camera, float normalizedX, float normalizedY,
                                                            float aspect, Math::ClipDepthRange depthRange) noexcept;

@@ -38,9 +38,11 @@ namespace Horo::Editor {
                 return Result<std::optional<ImVec2>>::Failure(projected.ErrorValue());
             if (!projected.Value().has_value())
                 return Result<std::optional<ImVec2>>::Success(std::nullopt);
-            return Result<std::optional<ImVec2>>::Success(
-                ImVec2{context.origin.x + projected.Value()->viewportPosition.x * context.width,
-                       context.origin.y + projected.Value()->viewportPosition.y * context.height});
+            const Result<Math::Vec2> pixels =
+                MapEditorViewportPointToPixels(*projected.Value(), {context.origin.x, context.origin.y}, {context.width, context.height});
+            if (pixels.HasError())
+                return Result<std::optional<ImVec2>>::Failure(pixels.ErrorValue());
+            return Result<std::optional<ImVec2>>::Success(ImVec2{pixels.Value().x, pixels.Value().y});
         }
 
         void DrawMarker(ImDrawList &drawList, const ViewportLightPresentation &presentation, const ImVec2 center, const bool selected) {

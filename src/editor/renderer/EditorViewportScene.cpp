@@ -116,7 +116,7 @@ namespace Horo::Editor {
         Math::Vec3 center = worldSphere.Value().center;
         const float radius = std::max(worldSphere.Value().radius, 1.0F);
         const double paddedRadiusValue = static_cast<double>(radius) * 1.15;
-        if (!std::isfinite(paddedRadiusValue) || paddedRadiusValue > std::numeric_limits<float>::max())
+        if (!std::isfinite(paddedRadiusValue) || paddedRadiusValue * 4.0 > std::numeric_limits<float>::max())
             return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(
                 MakeError(RendererErrors::InvalidCoordinates, "Directional shadow bounds are not representable."));
         const auto paddedRadius = static_cast<float>(paddedRadiusValue);
@@ -197,6 +197,25 @@ namespace Horo::Editor {
             .viewportPosition = {projected.Value().x * 0.5F + 0.5F, 0.5F - projected.Value().y * 0.5F},
             .ndcDepth = projected.Value().z,
         });
+    }
+
+    /** @copydoc MapEditorViewportPointToPixels */
+    Result<Math::Vec2> MapEditorViewportPointToPixels(const EditorViewportPointProjection &projection, const Math::Vec2 origin,
+                                                      const Math::Vec2 extent) noexcept {
+        if (!Math::IsFinite(projection.viewportPosition) || !Math::IsFinite(origin) || !Math::IsFinite(extent) || extent.x <= 0.0F ||
+            extent.y <= 0.0F) {
+            return Result<Math::Vec2>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport projection and pixel bounds must be finite and positive."));
+        }
+        const Math::Vec2 pixels{
+            origin.x + projection.viewportPosition.x * extent.x,
+            origin.y + projection.viewportPosition.y * extent.y,
+        };
+        if (!Math::IsFinite(pixels)) {
+            return Result<Math::Vec2>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport projection does not map to representable pixel coordinates."));
+        }
+        return Result<Math::Vec2>::Success(pixels);
     }
 
     /** @copydoc BuildEditorViewportRay */

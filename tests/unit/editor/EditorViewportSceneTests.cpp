@@ -116,6 +116,14 @@ namespace {
         }};
         const Render::RenderSceneView extremeScene{.instances = extremeInstances, .lights = lights};
         REQUIRE((BuildEditorViewportDirectionalShadowView(extremeScene, Math::ClipDepthRange::ZeroToOne).HasError()));
+
+        const float farPlaneExtreme = extreme / 7.0F;
+        const std::array farPlaneInstances{EditorViewportInstance{
+            .localToWorld = Math::Mat4::Identity(),
+            .localBounds = {{-farPlaneExtreme, -farPlaneExtreme, -farPlaneExtreme}, {farPlaneExtreme, farPlaneExtreme, farPlaneExtreme}},
+        }};
+        const Render::RenderSceneView farPlaneScene{.instances = farPlaneInstances, .lights = lights};
+        REQUIRE((BuildEditorViewportDirectionalShadowView(farPlaneScene, Math::ClipDepthRange::ZeroToOne).HasError()));
     }
 
     TEST_CASE("Look At Uses Right Handed Negative Z View Space", "[unit][editor]") {
@@ -236,6 +244,20 @@ namespace {
         degenerate.target = degenerate.position;
         REQUIRE((ProjectEditorViewportPoint(degenerate, {}, 1.0F, NegativeOneToOne).HasError()));
         REQUIRE((BuildEditorViewportRay(perspective, 0.5F, 0.5F, 0.0F, NegativeOneToOne).HasError()));
+    }
+
+    TEST_CASE("Viewport Projection Maps To Finite Pixel Coordinates", "[unit][editor]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const EditorViewportPointProjection projection{{0.5F, 0.5F}, 0.0F};
+        const Result<Math::Vec2> pixels = MapEditorViewportPointToPixels(projection, {10.0F, 20.0F}, {200.0F, 100.0F});
+        REQUIRE((pixels.HasValue()));
+        REQUIRE((Math::NearlyEqual(pixels.Value(), {110.0F, 70.0F})));
+        REQUIRE((MapEditorViewportPointToPixels(projection, {}, {}).HasError()));
+        const float extremeCoordinate = std::numeric_limits<float>::max();
+        REQUIRE((MapEditorViewportPointToPixels(EditorViewportPointProjection{{extremeCoordinate, extremeCoordinate}, 0.0F},
+                                                {extremeCoordinate, extremeCoordinate}, {extremeCoordinate, extremeCoordinate})
+                     .HasError()));
     }
 
     TEST_CASE("Viewport Grid Keeps A Stable Screen Density Across Camera Distances", "[unit][editor]") {
