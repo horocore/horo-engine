@@ -91,6 +91,11 @@ namespace {
         REQUIRE((viewport.Navigate(EditorViewportNavigationDelta{.dollyScale = 0.5F}).HasValue()));
         REQUIRE((NearlyEqual(viewport.Current().camera.orthographicHeight, orthographicHeight * 0.5F)));
         REQUIRE((viewport.Focus(bounds, 0.0F).HasError()));
+
+        const ViewportRevision revision = viewport.Current().revision;
+        const float extreme = std::numeric_limits<float>::max();
+        REQUIRE((viewport.Focus(Horo::Math::Aabb{{-extreme, -extreme, -extreme}, {extreme, extreme, extreme}}, 1.0F).HasError()));
+        REQUIRE((viewport.Current().revision == revision));
     }
 
     TEST_CASE("Transform Preview Is Authoritative Workspace State", "[unit][editor]") {

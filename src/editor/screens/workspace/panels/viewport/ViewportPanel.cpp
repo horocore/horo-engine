@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
@@ -24,6 +25,22 @@ namespace Horo::Editor {
             if (result.assetId.back() != '\0' || result.assetType.back() != '\0')
                 return std::nullopt;
             return result;
+        }
+
+        [[nodiscard]] bool ResolveLightMarkerInteraction(const Result<std::optional<SceneObjectId>> &clickedLight, bool &failureReported,
+                                                         EditorWorkspaceViewCommandData &command) {
+            if (clickedLight.HasError()) {
+                if (!failureReported)
+                    LOG_ERROR("editor.viewport", "Viewport light marker projection failed: %s", clickedLight.ErrorValue().message.c_str());
+                failureReported = true;
+                return false;
+            }
+            failureReported = false;
+            if (!clickedLight.Value().has_value())
+                return true;
+            command.command = EditorWorkspaceViewCommand::SelectObject;
+            command.objectPayload = *clickedLight.Value();
+            return false;
         }
     }  // namespace
 
@@ -163,7 +180,7 @@ namespace Horo::Editor {
             surfaceHovered = ImGui::IsItemHovered();
         }
         const bool assetDragActive = surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, depthRange);
-        const std::optional<SceneObjectId> clickedLight =
+        const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
                                       .width = layout.width,
@@ -172,10 +189,7 @@ namespace Horo::Editor {
                                       .depthRange = depthRange,
                                       .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive},
                                      viewModel.viewportLights, viewModel.primarySelection);
-        if (clickedLight.has_value()) {
-            command.command = EditorWorkspaceViewCommand::SelectObject;
-            command.objectPayload = *clickedLight;
-        } else if (surfaceInteractive && !assetDragActive) {
+        if (ResolveLightMarkerInteraction(clickedLight, lightMarkerFailureReported_, command) && surfaceInteractive && !assetDragActive) {
             interaction_.Draw({.drawList = drawList,
                                .origin = layout.origin,
                                .width = layout.width,

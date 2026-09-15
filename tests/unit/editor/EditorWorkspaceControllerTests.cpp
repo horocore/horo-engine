@@ -2032,6 +2032,28 @@ namespace {
         static_cast<void>(subscription);
     }
 
+    TEST_CASE("Viewport Focus Treats An Empty Selection As No Interaction", "[unit][editor]") {
+        TestWorkspaceController controller;
+        const EditorViewportCamera before = controller.ViewportScene().camera;
+        const ViewportRevision viewportRevision = controller.CurrentViewportRevision();
+        std::vector<ViewportChangedEvent> events;
+        auto subscription = controller.DataBus().Subscribe<ViewportChangedEvent>([&events](const ViewportChangedEvent &event) {
+            events.push_back(event);
+        });
+
+        REQUIRE_FALSE(controller.ViewModel().primarySelectionWorldBounds.has_value());
+        EditorWorkspaceViewCommandData focus;
+        focus.command = EditorWorkspaceViewCommand::FocusViewportSelection;
+        focus.floatPayload = 1.0F;
+        controller.ProcessCommand(focus);
+
+        REQUIRE((controller.CurrentViewportRevision() == viewportRevision));
+        REQUIRE((controller.ViewportScene().camera.position == before.position));
+        REQUIRE((controller.ViewportScene().camera.target == before.target));
+        REQUIRE(events.empty());
+        static_cast<void>(subscription);
+    }
+
     TEST_CASE("Gizmo Preview Is Transient And Commit Creates One Undoable Document Change", "[unit][editor]") {
         TestWorkspaceController controller;
         const SceneObjectId object = controller.ViewModel().objects.front().id;

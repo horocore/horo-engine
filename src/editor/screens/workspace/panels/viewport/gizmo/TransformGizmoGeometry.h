@@ -50,7 +50,10 @@ namespace Horo::Editor {
     [[nodiscard]] Result<TransformGizmoFrameGeometry> DrawTransformGizmoGeometry(ImDrawList &drawList,
                                                                                  const TransformGizmoGeometryRequest &request);
 
-    /** @brief Projects a pointer ray onto a rotation plane and returns its normalized center-relative vector. */
-    [[nodiscard]] std::optional<Math::Vec3> ProjectTransformGizmoRotationVector(
+    /**
+     * @brief Projects a pointer ray onto a rotation plane and returns its normalized center-relative vector.
+     * @return A vector on hit, empty on geometric miss, or the typed camera/ray/plane failure.
+     */
+    [[nodiscard]] Result<std::optional<Math::Vec3>> ProjectTransformGizmoRotationVector(
         const TransformGizmoRotationProjectionRequest &request) noexcept;
 }  // namespace Horo::Editor

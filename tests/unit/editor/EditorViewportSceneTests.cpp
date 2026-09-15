@@ -161,11 +161,10 @@ namespace {
     TEST_CASE("Viewport Projection And Rays Share The Camera Contract", "[unit][editor]") {
         using namespace Horo;
         using namespace Horo::Editor;
+        using enum Math::ClipDepthRange;
         EditorViewportCamera perspective;
-        const Result<Math::Ray> perspectiveOpenGl =
-            BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Ray> perspectiveZeroToOne =
-            BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::ZeroToOne);
+        const Result<Math::Ray> perspectiveOpenGl = BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, NegativeOneToOne);
+        const Result<Math::Ray> perspectiveZeroToOne = BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, ZeroToOne);
         REQUIRE((perspectiveOpenGl.HasValue() && perspectiveZeroToOne.HasValue()));
         REQUIRE((Math::NearlyEqual(perspectiveOpenGl.Value().origin, perspective.position)));
         REQUIRE((Math::NearlyEqual(perspectiveOpenGl.Value().direction, Math::Normalize(perspective.target - perspective.position))));
@@ -175,12 +174,10 @@ namespace {
         EditorViewportCamera orthographic = perspective;
         orthographic.projection = Runtime::CameraProjection::Orthographic;
         orthographic.orthographicHeight = 4.0F;
-        const Result<Math::Ray> centerOpenGl =
-            BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Ray> rightOpenGl =
-            BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Ray> centerZeroToOne = BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::ZeroToOne);
-        const Result<Math::Ray> rightZeroToOne = BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, Math::ClipDepthRange::ZeroToOne);
+        const Result<Math::Ray> centerOpenGl = BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, NegativeOneToOne);
+        const Result<Math::Ray> rightOpenGl = BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, NegativeOneToOne);
+        const Result<Math::Ray> centerZeroToOne = BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, ZeroToOne);
+        const Result<Math::Ray> rightZeroToOne = BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, ZeroToOne);
         REQUIRE((centerOpenGl.HasValue() && rightOpenGl.HasValue()));
         REQUIRE((centerZeroToOne.HasValue() && rightZeroToOne.HasValue()));
         REQUIRE((Math::NearlyEqual(centerOpenGl.Value().direction, rightOpenGl.Value().direction)));
@@ -189,10 +186,28 @@ namespace {
         REQUIRE((Math::NearlyEqual(rightOpenGl.Value().origin, rightZeroToOne.Value().origin, 1e-4F)));
         REQUIRE((Math::NearlyEqual(centerOpenGl.Value().direction, centerZeroToOne.Value().direction)));
 
-        const Result<Math::Mat4> openGl = BuildEditorViewportViewProjection(orthographic, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Mat4> metal = BuildEditorViewportViewProjection(orthographic, 1.0F, Math::ClipDepthRange::ZeroToOne);
+        const Result<Math::Mat4> openGl = BuildEditorViewportViewProjection(orthographic, 1.0F, NegativeOneToOne);
+        const Result<Math::Mat4> metal = BuildEditorViewportViewProjection(orthographic, 1.0F, ZeroToOne);
         REQUIRE((openGl.HasValue() && metal.HasValue()));
         REQUIRE((!Math::NearlyEqual(openGl.Value().values[10], metal.Value().values[10])));
+
+        const Result<std::optional<EditorViewportPointProjection>> projectedOpenGl =
+            ProjectEditorViewportPoint(perspective, {}, 1.0F, NegativeOneToOne);
+        const Result<std::optional<EditorViewportPointProjection>> projectedZeroToOne =
+            ProjectEditorViewportPoint(perspective, {}, 1.0F, ZeroToOne);
+        REQUIRE((projectedOpenGl.HasValue() && projectedOpenGl.Value().has_value()));
+        REQUIRE((projectedZeroToOne.HasValue() && projectedZeroToOne.Value().has_value()));
+        REQUIRE((Math::NearlyEqual(projectedOpenGl.Value()->viewportPosition, {0.5F, 0.5F})));
+        REQUIRE((Math::NearlyEqual(projectedOpenGl.Value()->viewportPosition, projectedZeroToOne.Value()->viewportPosition)));
+
+        const Result<std::optional<EditorViewportPointProjection>> behind =
+            ProjectEditorViewportPoint(perspective, {0.0F, 0.0F, 10.0F}, 1.0F, ZeroToOne);
+        REQUIRE((behind.HasValue() && !behind.Value().has_value()));
+
+        EditorViewportCamera degenerate = perspective;
+        degenerate.target = degenerate.position;
+        REQUIRE((ProjectEditorViewportPoint(degenerate, {}, 1.0F, NegativeOneToOne).HasError()));
+        REQUIRE((BuildEditorViewportRay(perspective, 0.5F, 0.5F, 0.0F, NegativeOneToOne).HasError()));
     }
 
     TEST_CASE("Viewport Grid Keeps A Stable Screen Density Across Camera Distances", "[unit][editor]") {

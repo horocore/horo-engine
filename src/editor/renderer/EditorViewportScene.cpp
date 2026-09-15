@@ -5,7 +5,6 @@
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <limits>
 #include <span>
@@ -55,14 +54,6 @@ namespace Horo::Editor {
     bool EditorViewportDirectionalShadowView::IsValid(const Render::RenderSceneView &scene) const noexcept {
         return lightIndex < scene.lights.size() && scene.lights[lightIndex].kind == Render::RenderLightKind::Directional &&
                Math::IsFinite(viewProjection);
-    }
-
-    /** @copydoc BuildEditorViewportMvp */
-    Math::Mat4 BuildEditorViewportMvp(const EditorViewportCamera &camera, const Math::Mat4 &localToWorld, const float aspect,
-                                      const Math::ClipDepthRange depthRange) noexcept {
-        const Result<Math::Mat4> viewProjection = BuildEditorViewportViewProjection(camera, aspect, depthRange);
-        assert(viewProjection.HasValue());
-        return Math::Multiply(viewProjection.Value(), localToWorld);
     }
 
     /** @copydoc BuildRenderMvp */
@@ -168,6 +159,33 @@ namespace Horo::Editor {
         if (projection.HasError())
             return Result<Math::Mat4>::Failure(projection.ErrorValue());
         return Result<Math::Mat4>::Success(Math::Multiply(projection.Value(), view.Value()));
+    }
+
+    /** @copydoc ProjectEditorViewportPoint */
+    Result<std::optional<EditorViewportPointProjection>> ProjectEditorViewportPoint(const EditorViewportCamera &camera,
+                                                                                    const Math::Vec3 worldPoint, const float aspect,
+                                                                                    const Math::ClipDepthRange depthRange) noexcept {
+        const Result<Math::Mat4> viewProjection = BuildEditorViewportViewProjection(camera, aspect, depthRange);
+        if (viewProjection.HasError())
+            return Result<std::optional<EditorViewportPointProjection>>::Failure(viewProjection.ErrorValue());
+        if (!Math::IsFinite(worldPoint))
+            return Result<std::optional<EditorViewportPointProjection>>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport projection point must be finite."));
+        if (const Math::Vec4 clip = Math::TransformHomogeneous(viewProjection.Value(), {worldPoint.x, worldPoint.y, worldPoint.z, 1.0F});
+            Math::IsFinite(clip) && clip.w <= Math::DefaultEpsilon) {
+            return Result<std::optional<EditorViewportPointProjection>>::Success(std::nullopt);
+        }
+        const Result<Math::Vec3> projected = Math::TryProject(viewProjection.Value(), worldPoint);
+        if (projected.HasError())
+            return Result<std::optional<EditorViewportPointProjection>>::Failure(projected.ErrorValue());
+        if (const float minimumDepth = depthRange == Math::ClipDepthRange::NegativeOneToOne ? -1.0F : 0.0F;
+            projected.Value().z < minimumDepth || projected.Value().z > 1.0F) {
+            return Result<std::optional<EditorViewportPointProjection>>::Success(std::nullopt);
+        }
+        return Result<std::optional<EditorViewportPointProjection>>::Success(EditorViewportPointProjection{
+            .viewportPosition = {projected.Value().x * 0.5F + 0.5F, 0.5F - projected.Value().y * 0.5F},
+            .ndcDepth = projected.Value().z,
+        });
     }
 
     /** @copydoc BuildEditorViewportRay */

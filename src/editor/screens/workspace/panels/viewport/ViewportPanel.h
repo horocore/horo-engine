@@ -63,5 +63,6 @@ namespace Horo::Editor {
 
         IEditorViewportRenderer *viewportRenderer_{nullptr};
         ViewportInteractionController interaction_;
+        bool lightMarkerFailureReported_{false};
     };
 }  // namespace Horo::Editor

@@ -11,12 +11,43 @@
 
 namespace Horo::Editor {
     namespace {
-        [[nodiscard]] Math::Vec3 RotateAroundAxis(const Math::Vec3 value, const Math::Vec3 axis, const float radians) noexcept {
-            const Math::Vec3 normalizedAxis = Math::Normalize(axis);
-            const float cosine = std::cos(radians);
-            const float sine = std::sin(radians);
-            return value * cosine + Math::Cross(normalizedAxis, value) * sine +
-                   normalizedAxis * (Math::Dot(normalizedAxis, value) * (1.0F - cosine));
+        [[nodiscard]] Result<Math::Vec3> RotateAroundAxis(const Math::Vec3 value, const Math::Vec3 axis, const float radians) noexcept {
+            const Result<Math::Quaternion> rotation = Math::Quaternion::TryFromAxisAngle(axis, radians);
+            if (rotation.HasError())
+                return Result<Math::Vec3>::Failure(rotation.ErrorValue());
+            return rotation.Value().TryRotate(value);
+        }
+
+        struct NavigationBasis {
+            Math::Vec3 forward{};
+            Math::Vec3 right{};
+            Math::Vec3 up{};
+        };
+
+        [[nodiscard]] Result<NavigationBasis> TryNavigationBasis(const EditorViewportCamera &camera,
+                                                                 const EditorViewportNavigationDelta &delta) noexcept {
+            constexpr Math::Vec3 sceneUp{0.0F, 1.0F, 0.0F};
+            Result<Math::Vec3> forward = Math::TryNormalize(camera.target - camera.position);
+            if (forward.HasError())
+                return Result<NavigationBasis>::Failure(forward.ErrorValue());
+            forward = RotateAroundAxis(forward.Value(), sceneUp, delta.yawRadians);
+            if (forward.HasError())
+                return Result<NavigationBasis>::Failure(forward.ErrorValue());
+            Result<Math::Vec3> right = Math::TryNormalize(Math::Cross(forward.Value(), sceneUp));
+            if (right.HasError())
+                return Result<NavigationBasis>::Failure(right.ErrorValue());
+            const Result<Math::Vec3> pitched = RotateAroundAxis(forward.Value(), right.Value(), delta.pitchRadians);
+            if (pitched.HasError())
+                return Result<NavigationBasis>::Failure(pitched.ErrorValue());
+            if (std::fabs(Math::Dot(pitched.Value(), sceneUp)) < 0.995F)
+                forward = pitched;
+            right = Math::TryNormalize(Math::Cross(forward.Value(), sceneUp));
+            if (right.HasError())
+                return Result<NavigationBasis>::Failure(right.ErrorValue());
+            const Result<Math::Vec3> up = Math::TryNormalize(Math::Cross(right.Value(), forward.Value()));
+            if (up.HasError())
+                return Result<NavigationBasis>::Failure(up.ErrorValue());
+            return Result<NavigationBasis>::Success({forward.Value(), right.Value(), up.Value()});
         }
 
         [[nodiscard]] bool IsFinite(const EditorViewportNavigationDelta &delta) noexcept {
@@ -63,18 +94,13 @@ namespace Horo::Editor {
         }
 
         EditorViewportCamera camera = current_.camera;
-        const Math::Vec3 sceneUp{0.0F, 1.0F, 0.0F};
+        if (!camera.IsValid())
+            return Result<void>::Failure(MakeViewportError(ViewportModelErrors::InvalidCamera, "Viewport camera is invalid."));
         const float targetDistance = Math::Length(camera.target - camera.position);
-        Math::Vec3 forward = Math::Normalize(camera.target - camera.position);
-        forward = Math::Normalize(RotateAroundAxis(forward, sceneUp, delta.yawRadians));
-        Math::Vec3 right = Math::Normalize(Math::Cross(forward, sceneUp));
-        if (const Math::Vec3 pitchedForward = Math::Normalize(RotateAroundAxis(forward, right, delta.pitchRadians));
-            std::fabs(Math::Dot(pitchedForward, sceneUp)) < 0.995F) {
-            forward = pitchedForward;
-        }
-
-        right = Math::Normalize(Math::Cross(forward, sceneUp));
-        const Math::Vec3 localUp = Math::Normalize(Math::Cross(right, forward));
+        const Result<NavigationBasis> basis = TryNavigationBasis(camera, delta);
+        if (basis.HasError())
+            return Result<void>::Failure(basis.ErrorValue());
+        const auto &[forward, right, localUp] = basis.Value();
 
         if (delta.orbit) {
             camera.position = camera.target - forward * targetDistance;
@@ -93,7 +119,7 @@ namespace Horo::Editor {
                 camera.orthographicHeight = std::clamp(camera.orthographicHeight * delta.dollyScale, 0.01F, 100000.0F);
             }
         }
-        camera.up = sceneUp;
+        camera.up = {0.0F, 1.0F, 0.0F};
         if (!camera.IsValid()) {
             return Result<void>::Failure(
                 MakeViewportError(ViewportModelErrors::InvalidCamera, "Viewport navigation produced an invalid camera."));
@@ -112,7 +138,10 @@ namespace Horo::Editor {
         if (current_.camera.projection == projection)
             return Result<void>::Success();
         EditorViewportCamera camera = current_.camera;
-        const Math::Vec3 forward = Math::Normalize(camera.target - camera.position);
+        const Result<Math::Vec3> forwardResult = Math::TryNormalize(camera.target - camera.position);
+        if (forwardResult.HasError())
+            return Result<void>::Failure(forwardResult.ErrorValue());
+        const Math::Vec3 forward = forwardResult.Value();
         const float distance = Math::Length(camera.target - camera.position);
         if (projection == Runtime::CameraProjection::Orthographic)
             camera.orthographicHeight = std::max(0.01F, 2.0F * distance * std::tan(camera.verticalFovRadians * 0.5F));
@@ -141,7 +170,10 @@ namespace Horo::Editor {
         const Math::BoundingSphere sphere = sphereResult.Value();
         const float radius = std::max(sphere.radius, 0.25F);
         EditorViewportCamera camera = current_.camera;
-        const Math::Vec3 forward = Math::Normalize(camera.target - camera.position);
+        const Result<Math::Vec3> forwardResult = Math::TryNormalize(camera.target - camera.position);
+        if (forwardResult.HasError())
+            return Result<void>::Failure(forwardResult.ErrorValue());
+        const Math::Vec3 forward = forwardResult.Value();
         camera.target = sphere.center;
         if (camera.projection == Runtime::CameraProjection::Perspective) {
             const float verticalHalfFov = camera.verticalFovRadians * 0.5F;
