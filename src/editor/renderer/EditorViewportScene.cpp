@@ -5,7 +5,6 @@
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
 #include <limits>
 #include <span>
@@ -55,14 +54,6 @@ namespace Horo::Editor {
     bool EditorViewportDirectionalShadowView::IsValid(const Render::RenderSceneView &scene) const noexcept {
         return lightIndex < scene.lights.size() && scene.lights[lightIndex].kind == Render::RenderLightKind::Directional &&
                Math::IsFinite(viewProjection);
-    }
-
-    /** @copydoc BuildEditorViewportMvp */
-    Math::Mat4 BuildEditorViewportMvp(const EditorViewportCamera &camera, const Math::Mat4 &localToWorld, const float aspect,
-                                      const Math::ClipDepthRange depthRange) noexcept {
-        const Result<Math::Mat4> viewProjection = BuildEditorViewportViewProjection(camera, aspect, depthRange);
-        assert(viewProjection.HasValue());
-        return Math::Multiply(viewProjection.Value(), localToWorld);
     }
 
     /** @copydoc BuildRenderMvp */
@@ -119,21 +110,32 @@ namespace Horo::Editor {
             };
         }
 
-        Math::Vec3 center = worldBounds.Center();
-        const float radius = std::max(Math::Length(worldBounds.Extents()), 1.0F);
-        const float paddedRadius = radius * 1.15F;
-        const Math::Vec3 direction = Math::Normalize(light->direction);
-        const Math::Vec3 up = std::abs(Math::Dot(direction, Math::Vec3{0.0F, 1.0F, 0.0F})) > 0.95F ? Math::Vec3{1.0F, 0.0F, 0.0F}
-                                                                                                   : Math::Vec3{0.0F, 1.0F, 0.0F};
-        const Math::Vec3 side = Math::Normalize(Math::Cross(direction, up));
-        const Math::Vec3 lightUp = Math::Cross(side, direction);
+        const Result<Math::BoundingSphere> worldSphere = Math::SphereFromAabb(worldBounds);
+        if (worldSphere.HasError())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(worldSphere.ErrorValue());
+        Math::Vec3 center = worldSphere.Value().center;
+        const float radius = std::max(worldSphere.Value().radius, 1.0F);
+        const double paddedRadiusValue = static_cast<double>(radius) * 1.15;
+        if (!std::isfinite(paddedRadiusValue) || paddedRadiusValue * 4.0 > std::numeric_limits<float>::max())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Directional shadow bounds are not representable."));
+        const auto paddedRadius = static_cast<float>(paddedRadiusValue);
+        const Result<Math::Vec3> direction = Math::TryNormalize(light->direction);
+        if (direction.HasError())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(direction.ErrorValue());
+        const Math::Vec3 up = std::abs(Math::Dot(direction.Value(), Math::Vec3{0.0F, 1.0F, 0.0F})) > 0.95F ? Math::Vec3{1.0F, 0.0F, 0.0F}
+                                                                                                           : Math::Vec3{0.0F, 1.0F, 0.0F};
+        const Result<Math::Vec3> side = Math::TryNormalize(Math::Cross(direction.Value(), up));
+        if (side.HasError())
+            return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(side.ErrorValue());
+        const Math::Vec3 lightUp = Math::Cross(side.Value(), direction.Value());
         const float worldUnitsPerTexel = (paddedRadius * 2.0F) / static_cast<float>(EditorViewportDirectionalShadowMapResolution);
         const auto snapToTexel = [worldUnitsPerTexel](const float coordinate) {
             return std::round(coordinate / worldUnitsPerTexel) * worldUnitsPerTexel;
         };
-        center += side * (snapToTexel(Math::Dot(center, side)) - Math::Dot(center, side));
+        center += side.Value() * (snapToTexel(Math::Dot(center, side.Value())) - Math::Dot(center, side.Value()));
         center += lightUp * (snapToTexel(Math::Dot(center, lightUp)) - Math::Dot(center, lightUp));
-        const Math::Vec3 eye = center - direction * (paddedRadius * 2.0F);
+        const Math::Vec3 eye = center - direction.Value() * (paddedRadius * 2.0F);
         const Result<Math::Mat4> view = Math::TryLookAt(eye, center, lightUp);
         if (view.HasError())
             return Result<std::optional<EditorViewportDirectionalShadowView>>::Failure(view.ErrorValue());
@@ -168,6 +170,52 @@ namespace Horo::Editor {
         if (projection.HasError())
             return Result<Math::Mat4>::Failure(projection.ErrorValue());
         return Result<Math::Mat4>::Success(Math::Multiply(projection.Value(), view.Value()));
+    }
+
+    /** @copydoc ProjectEditorViewportPoint */
+    Result<std::optional<EditorViewportPointProjection>> ProjectEditorViewportPoint(const EditorViewportCamera &camera,
+                                                                                    const Math::Vec3 worldPoint, const float aspect,
+                                                                                    const Math::ClipDepthRange depthRange) noexcept {
+        const Result<Math::Mat4> viewProjection = BuildEditorViewportViewProjection(camera, aspect, depthRange);
+        if (viewProjection.HasError())
+            return Result<std::optional<EditorViewportPointProjection>>::Failure(viewProjection.ErrorValue());
+        if (!Math::IsFinite(worldPoint))
+            return Result<std::optional<EditorViewportPointProjection>>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport projection point must be finite."));
+        if (const Math::Vec4 clip = Math::TransformHomogeneous(viewProjection.Value(), {worldPoint.x, worldPoint.y, worldPoint.z, 1.0F});
+            Math::IsFinite(clip) && clip.w <= Math::DefaultEpsilon) {
+            return Result<std::optional<EditorViewportPointProjection>>::Success(std::nullopt);
+        }
+        const Result<Math::Vec3> projected = Math::TryProject(viewProjection.Value(), worldPoint);
+        if (projected.HasError())
+            return Result<std::optional<EditorViewportPointProjection>>::Failure(projected.ErrorValue());
+        if (const float minimumDepth = depthRange == Math::ClipDepthRange::NegativeOneToOne ? -1.0F : 0.0F;
+            projected.Value().z < minimumDepth || projected.Value().z > 1.0F) {
+            return Result<std::optional<EditorViewportPointProjection>>::Success(std::nullopt);
+        }
+        return Result<std::optional<EditorViewportPointProjection>>::Success(EditorViewportPointProjection{
+            .viewportPosition = {projected.Value().x * 0.5F + 0.5F, 0.5F - projected.Value().y * 0.5F},
+            .ndcDepth = projected.Value().z,
+        });
+    }
+
+    /** @copydoc MapEditorViewportPointToPixels */
+    Result<Math::Vec2> MapEditorViewportPointToPixels(const EditorViewportPointProjection &projection, const Math::Vec2 origin,
+                                                      const Math::Vec2 extent) noexcept {
+        if (!Math::IsFinite(projection.viewportPosition) || !Math::IsFinite(origin) || !Math::IsFinite(extent) || extent.x <= 0.0F ||
+            extent.y <= 0.0F) {
+            return Result<Math::Vec2>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport projection and pixel bounds must be finite and positive."));
+        }
+        const Math::Vec2 pixels{
+            origin.x + projection.viewportPosition.x * extent.x,
+            origin.y + projection.viewportPosition.y * extent.y,
+        };
+        if (!Math::IsFinite(pixels)) {
+            return Result<Math::Vec2>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport projection does not map to representable pixel coordinates."));
+        }
+        return Result<Math::Vec2>::Success(pixels);
     }
 
     /** @copydoc BuildEditorViewportRay */

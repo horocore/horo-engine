@@ -90,6 +90,42 @@ namespace {
         REQUIRE(metalClip.z / metalClip.w <= 1.0F);
     }
 
+    TEST_CASE("Directional Shadow View Preserves Degenerate And Extreme Failures", "[unit][editor]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        const std::array instances{EditorViewportInstance{
+            .localToWorld = Math::Mat4::Identity(),
+            .localBounds = {{-1.0F, -1.0F, -1.0F}, {1.0F, 1.0F, 1.0F}},
+        }};
+        const std::array degenerateLights{Render::RenderLight{
+            .kind = Render::RenderLightKind::Directional,
+            .direction = {},
+        }};
+        const Render::RenderSceneView degenerateScene{.instances = instances, .lights = degenerateLights};
+        REQUIRE((BuildEditorViewportDirectionalShadowView(degenerateScene, Math::ClipDepthRange::ZeroToOne).HasError()));
+
+        const float extreme = std::numeric_limits<float>::max();
+        const std::array extremeInstances{EditorViewportInstance{
+            .localToWorld = Math::Mat4::Identity(),
+            .localBounds = {{-extreme, -extreme, -extreme}, {extreme, extreme, extreme}},
+        }};
+        const std::array lights{Render::RenderLight{
+            .kind = Render::RenderLightKind::Directional,
+            .direction = {0.0F, -1.0F, 0.0F},
+        }};
+        const Render::RenderSceneView extremeScene{.instances = extremeInstances, .lights = lights};
+        REQUIRE((BuildEditorViewportDirectionalShadowView(extremeScene, Math::ClipDepthRange::ZeroToOne).HasError()));
+
+        const float farPlaneExtreme = extreme / 7.0F;
+        const std::array farPlaneInstances{EditorViewportInstance{
+            .localToWorld = Math::Mat4::Identity(),
+            .localBounds = {{-farPlaneExtreme, -farPlaneExtreme, -farPlaneExtreme}, {farPlaneExtreme, farPlaneExtreme, farPlaneExtreme}},
+        }};
+        const Render::RenderSceneView farPlaneScene{.instances = farPlaneInstances, .lights = lights};
+        REQUIRE((BuildEditorViewportDirectionalShadowView(farPlaneScene, Math::ClipDepthRange::ZeroToOne).HasError()));
+    }
+
     TEST_CASE("Look At Uses Right Handed Negative Z View Space", "[unit][editor]") {
         using namespace Horo::Math;
         const Mat4 view = LookAt({0.0F, 0.0F, 4.0F}, {}, {0.0F, 1.0F, 0.0F});
@@ -161,11 +197,10 @@ namespace {
     TEST_CASE("Viewport Projection And Rays Share The Camera Contract", "[unit][editor]") {
         using namespace Horo;
         using namespace Horo::Editor;
+        using enum Math::ClipDepthRange;
         EditorViewportCamera perspective;
-        const Result<Math::Ray> perspectiveOpenGl =
-            BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Ray> perspectiveZeroToOne =
-            BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::ZeroToOne);
+        const Result<Math::Ray> perspectiveOpenGl = BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, NegativeOneToOne);
+        const Result<Math::Ray> perspectiveZeroToOne = BuildEditorViewportRay(perspective, 0.5F, 0.5F, 1.0F, ZeroToOne);
         REQUIRE((perspectiveOpenGl.HasValue() && perspectiveZeroToOne.HasValue()));
         REQUIRE((Math::NearlyEqual(perspectiveOpenGl.Value().origin, perspective.position)));
         REQUIRE((Math::NearlyEqual(perspectiveOpenGl.Value().direction, Math::Normalize(perspective.target - perspective.position))));
@@ -175,12 +210,10 @@ namespace {
         EditorViewportCamera orthographic = perspective;
         orthographic.projection = Runtime::CameraProjection::Orthographic;
         orthographic.orthographicHeight = 4.0F;
-        const Result<Math::Ray> centerOpenGl =
-            BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Ray> rightOpenGl =
-            BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Ray> centerZeroToOne = BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, Math::ClipDepthRange::ZeroToOne);
-        const Result<Math::Ray> rightZeroToOne = BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, Math::ClipDepthRange::ZeroToOne);
+        const Result<Math::Ray> centerOpenGl = BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, NegativeOneToOne);
+        const Result<Math::Ray> rightOpenGl = BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, NegativeOneToOne);
+        const Result<Math::Ray> centerZeroToOne = BuildEditorViewportRay(orthographic, 0.5F, 0.5F, 1.0F, ZeroToOne);
+        const Result<Math::Ray> rightZeroToOne = BuildEditorViewportRay(orthographic, 0.75F, 0.5F, 1.0F, ZeroToOne);
         REQUIRE((centerOpenGl.HasValue() && rightOpenGl.HasValue()));
         REQUIRE((centerZeroToOne.HasValue() && rightZeroToOne.HasValue()));
         REQUIRE((Math::NearlyEqual(centerOpenGl.Value().direction, rightOpenGl.Value().direction)));
@@ -189,10 +222,42 @@ namespace {
         REQUIRE((Math::NearlyEqual(rightOpenGl.Value().origin, rightZeroToOne.Value().origin, 1e-4F)));
         REQUIRE((Math::NearlyEqual(centerOpenGl.Value().direction, centerZeroToOne.Value().direction)));
 
-        const Result<Math::Mat4> openGl = BuildEditorViewportViewProjection(orthographic, 1.0F, Math::ClipDepthRange::NegativeOneToOne);
-        const Result<Math::Mat4> metal = BuildEditorViewportViewProjection(orthographic, 1.0F, Math::ClipDepthRange::ZeroToOne);
+        const Result<Math::Mat4> openGl = BuildEditorViewportViewProjection(orthographic, 1.0F, NegativeOneToOne);
+        const Result<Math::Mat4> metal = BuildEditorViewportViewProjection(orthographic, 1.0F, ZeroToOne);
         REQUIRE((openGl.HasValue() && metal.HasValue()));
         REQUIRE((!Math::NearlyEqual(openGl.Value().values[10], metal.Value().values[10])));
+
+        const Result<std::optional<EditorViewportPointProjection>> projectedOpenGl =
+            ProjectEditorViewportPoint(perspective, {}, 1.0F, NegativeOneToOne);
+        const Result<std::optional<EditorViewportPointProjection>> projectedZeroToOne =
+            ProjectEditorViewportPoint(perspective, {}, 1.0F, ZeroToOne);
+        REQUIRE((projectedOpenGl.HasValue() && projectedOpenGl.Value().has_value()));
+        REQUIRE((projectedZeroToOne.HasValue() && projectedZeroToOne.Value().has_value()));
+        REQUIRE((Math::NearlyEqual(projectedOpenGl.Value()->viewportPosition, {0.5F, 0.5F})));
+        REQUIRE((Math::NearlyEqual(projectedOpenGl.Value()->viewportPosition, projectedZeroToOne.Value()->viewportPosition)));
+
+        const Result<std::optional<EditorViewportPointProjection>> behind =
+            ProjectEditorViewportPoint(perspective, {0.0F, 0.0F, 10.0F}, 1.0F, ZeroToOne);
+        REQUIRE((behind.HasValue() && !behind.Value().has_value()));
+
+        EditorViewportCamera degenerate = perspective;
+        degenerate.target = degenerate.position;
+        REQUIRE((ProjectEditorViewportPoint(degenerate, {}, 1.0F, NegativeOneToOne).HasError()));
+        REQUIRE((BuildEditorViewportRay(perspective, 0.5F, 0.5F, 0.0F, NegativeOneToOne).HasError()));
+    }
+
+    TEST_CASE("Viewport Projection Maps To Finite Pixel Coordinates", "[unit][editor]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const EditorViewportPointProjection projection{{0.5F, 0.5F}, 0.0F};
+        const Result<Math::Vec2> pixels = MapEditorViewportPointToPixels(projection, {10.0F, 20.0F}, {200.0F, 100.0F});
+        REQUIRE((pixels.HasValue()));
+        REQUIRE((Math::NearlyEqual(pixels.Value(), {110.0F, 70.0F})));
+        REQUIRE((MapEditorViewportPointToPixels(projection, {}, {}).HasError()));
+        const float extremeCoordinate = std::numeric_limits<float>::max();
+        REQUIRE((MapEditorViewportPointToPixels(EditorViewportPointProjection{{extremeCoordinate, extremeCoordinate}, 0.0F},
+                                                {extremeCoordinate, extremeCoordinate}, {extremeCoordinate, extremeCoordinate})
+                     .HasError()));
     }
 
     TEST_CASE("Viewport Grid Keeps A Stable Screen Density Across Camera Distances", "[unit][editor]") {

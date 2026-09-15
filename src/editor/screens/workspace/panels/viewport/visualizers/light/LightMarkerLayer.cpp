@@ -3,27 +3,13 @@
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/EditorViewportScene.h"
+
+#include <cmath>
 
 namespace Horo::Editor {
     namespace {
-        [[nodiscard]] std::optional<ImVec2> Project(const EditorViewportCamera &camera, const Math::Vec3 world, const ImVec2 origin,
-                                                    const float width, const float height, const Math::ClipDepthRange depthRange) noexcept {
-            if (width <= 0.0F || height <= 0.0F)
-                return std::nullopt;
-            const Result<Math::Mat4> viewProjection = BuildEditorViewportViewProjection(camera, width / height, depthRange);
-            if (viewProjection.HasError())
-                return std::nullopt;
-            const Result<Math::Vec3> projected = Math::TryProject(viewProjection.Value(), world);
-            if (const float minimumDepth = depthRange == Math::ClipDepthRange::NegativeOneToOne ? -1.0F : 0.0F;
-                projected.HasError() || projected.Value().z < minimumDepth || projected.Value().z > 1.0F)
-                return std::nullopt;
-            return ImVec2{
-                origin.x + (projected.Value().x * 0.5F + 0.5F) * width,
-                origin.y + (0.5F - projected.Value().y * 0.5F) * height,
-            };
-        }
-
         [[nodiscard]] Ui::UiIcon IconFor(const Render::RenderLightKind kind) noexcept {
             using enum Render::RenderLightKind;
             using enum Ui::UiIcon;
@@ -43,40 +29,68 @@ namespace Horo::Editor {
             const float y = left.y - right.y;
             return x * x + y * y;
         }
-    }  // namespace
 
-    std::optional<SceneObjectId> DrawViewportLightMarkers(const ViewportLightMarkerContext &context,
-                                                          const std::span<const ViewportLightPresentation> lights,
-                                                          const std::optional<SceneObjectId> primarySelection) {
-        const auto &[drawList, origin, width, height, camera, depthRange, acceptInput] = context;
-        constexpr float markerSize = 22.0F;
-        constexpr float hitRadius = 14.0F;
-        const ImVec2 pointer = ImGui::GetMousePos();
-        std::optional<SceneObjectId> clicked;
-        float closestHit = hitRadius * hitRadius;
+        [[nodiscard]] Result<std::optional<ImVec2>> ProjectMarkerCenter(const ViewportLightMarkerContext &context,
+                                                                        const ViewportLightPresentation &presentation) noexcept {
+            const Result<std::optional<EditorViewportPointProjection>> projected =
+                ProjectEditorViewportPoint(context.camera, presentation.light.position, context.width / context.height, context.depthRange);
+            if (projected.HasError())
+                return Result<std::optional<ImVec2>>::Failure(projected.ErrorValue());
+            if (!projected.Value().has_value())
+                return Result<std::optional<ImVec2>>::Success(std::nullopt);
+            const Result<Math::Vec2> pixels =
+                MapEditorViewportPointToPixels(*projected.Value(), {context.origin.x, context.origin.y}, {context.width, context.height});
+            if (pixels.HasError())
+                return Result<std::optional<ImVec2>>::Failure(pixels.ErrorValue());
+            return Result<std::optional<ImVec2>>::Success(ImVec2{pixels.Value().x, pixels.Value().y});
+        }
 
-        for (const ViewportLightPresentation &presentation : lights) {
-            const std::optional<ImVec2> anchor = Project(camera, presentation.light.position, origin, width, height, depthRange);
-            if (!anchor.has_value())
-                continue;
-
-            const bool selected = primarySelection == presentation.object;
-            const ImVec2 center = *anchor;
-
+        void DrawMarker(ImDrawList &drawList, const ViewportLightPresentation &presentation, const ImVec2 center, const bool selected) {
+            constexpr float markerSize = 22.0F;
             const ImU32 background = Theme::U32(selected ? Theme::AccentSoft() : Theme::Bg2());
             const ImU32 border = Theme::U32(selected ? Theme::Accent() : Theme::BorderStrong());
             drawList.AddCircleFilled(center, 13.0F, background, 24);
             drawList.AddCircle(center, 13.0F, border, 24, selected ? 2.0F : 1.2F);
             Ui::DrawEditorIcon(&drawList, IconFor(presentation.light.kind), {center.x - markerSize * 0.5F, center.y - markerSize * 0.5F},
                                {markerSize, markerSize}, Theme::U32(Theme::Text()));
-
-            if (acceptInput && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                if (const float distance = DistanceSquared(pointer, center); distance <= closestHit) {
-                    closestHit = distance;
-                    clicked = presentation.object;
-                }
-            }
         }
-        return clicked;
+
+        void UpdateClickedMarker(const ViewportLightMarkerContext &context, const ViewportLightPresentation &presentation,
+                                 const ImVec2 center, const ImVec2 pointer, float &closestHit,
+                                 std::optional<SceneObjectId> &clicked) noexcept {
+            if (!context.acceptInput || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                return;
+            const float distance = DistanceSquared(pointer, center);
+            if (distance > closestHit)
+                return;
+            closestHit = distance;
+            clicked = presentation.object;
+        }
+    }  // namespace
+
+    Result<std::optional<SceneObjectId>> DrawViewportLightMarkers(const ViewportLightMarkerContext &context,
+                                                                  const std::span<const ViewportLightPresentation> lights,
+                                                                  const std::optional<SceneObjectId> primarySelection) {
+        ImDrawList &drawList = context.drawList;
+        if (!std::isfinite(context.width) || !std::isfinite(context.height) || context.width <= 0.0F || context.height <= 0.0F) {
+            return Result<std::optional<SceneObjectId>>::Failure(
+                MakeError(RendererErrors::InvalidCoordinates, "Viewport Light marker extent must be positive and finite."));
+        }
+        constexpr float hitRadius = 14.0F;
+        const ImVec2 pointer = ImGui::GetMousePos();
+        std::optional<SceneObjectId> clicked;
+        float closestHit = hitRadius * hitRadius;
+
+        for (const ViewportLightPresentation &presentation : lights) {
+            const Result<std::optional<ImVec2>> center = ProjectMarkerCenter(context, presentation);
+            if (center.HasError())
+                return Result<std::optional<SceneObjectId>>::Failure(center.ErrorValue());
+            if (!center.Value().has_value())
+                continue;
+            const bool selected = primarySelection == presentation.object;
+            DrawMarker(drawList, presentation, *center.Value(), selected);
+            UpdateClickedMarker(context, presentation, *center.Value(), pointer, closestHit, clicked);
+        }
+        return Result<std::optional<SceneObjectId>>::Success(clicked);
     }
 }  // namespace Horo::Editor

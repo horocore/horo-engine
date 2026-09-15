@@ -26,12 +26,6 @@ namespace Horo::Editor {
             return Math::Vec3{0.0F, 0.0F, 1.0F};
         }
 
-        void SetTranslation(Math::Mat4 &matrix, const Math::Vec3 translation) noexcept {
-            matrix.values[12] = translation.x;
-            matrix.values[13] = translation.y;
-            matrix.values[14] = translation.z;
-        }
-
         [[nodiscard]] Math::Mat4 WorldAxisScaleMatrix(const Math::Vec3 axis, const float factor) noexcept {
             Math::Mat4 result = Math::Mat4::Identity();
             const float delta = factor - 1.0F;
@@ -45,6 +39,12 @@ namespace Horo::Editor {
             result.values[6] += delta * axis.z * axis.y;
             result.values[10] += delta * axis.z * axis.z;
             return result;
+        }
+
+        [[nodiscard]] Math::Mat4 TransformAroundPivot(const Math::Mat4 &operation, const Math::Mat4 &initial,
+                                                      const Math::Vec3 pivot) noexcept {
+            return Math::Multiply(Math::TranslationMatrix(pivot),
+                                  Math::Multiply(operation, Math::Multiply(Math::TranslationMatrix(-pivot), initial)));
         }
 
         void PreserveScaleSigns(Math::Vec3 &value, const Math::Vec3 initial) noexcept {
@@ -82,7 +82,10 @@ namespace Horo::Editor {
             Math::Transform next = session.initialLocalTransform;
             const float worldDistance = update.projectedPixels / session.pixelsPerWorldUnit;
             const Math::Vec3 worldPosition = session.initialWorldPosition + session.worldAxis * worldDistance;
-            next.translation = Math::TransformAffinePoint(session.parentWorldInverse, worldPosition);
+            const Result<Math::Vec3> localPosition = Math::TryTransformPoint(session.parentWorldInverse, worldPosition);
+            if (localPosition.HasError())
+                return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(localPosition.ErrorValue());
+            next.translation = localPosition.Value();
             return Result<std::pair<Math::Transform, Math::Vec3>>::Success({std::move(next), worldPosition});
         }
 
@@ -108,9 +111,8 @@ namespace Horo::Editor {
                 const Result<Math::Quaternion> delta = Math::Quaternion::TryFromAxisAngle(session.worldAxis, angle);
                 if (delta.HasError())
                     return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(delta.ErrorValue());
-                Math::Mat4 desiredWorld =
-                    Math::Multiply(Math::Transform{.rotation = delta.Value()}.ToMatrix(), session.initialWorldTransform);
-                SetTranslation(desiredWorld, session.initialWorldPosition);
+                const Math::Mat4 desiredWorld =
+                    TransformAroundPivot(Math::RotationMatrix(delta.Value()), session.initialWorldTransform, session.initialWorldPosition);
                 const Result<Math::Transform> local = Math::TryDecomposeAffineTRS(Math::Multiply(session.parentWorldInverse, desiredWorld));
                 if (local.HasError())
                     return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(local.ErrorValue());
@@ -128,8 +130,8 @@ namespace Horo::Editor {
             } else {
                 const Math::Mat4 scaleMatrix = session.axis == 3 ? Math::Transform{.scale = {factor, factor, factor}}.ToMatrix()
                                                                  : WorldAxisScaleMatrix(session.worldAxis, factor);
-                Math::Mat4 desiredWorld = Math::Multiply(scaleMatrix, session.initialWorldTransform);
-                SetTranslation(desiredWorld, session.initialWorldPosition);
+                const Math::Mat4 desiredWorld =
+                    TransformAroundPivot(scaleMatrix, session.initialWorldTransform, session.initialWorldPosition);
                 const Result<Math::Transform> local = Math::TryDecomposeAffineTRS(Math::Multiply(session.parentWorldInverse, desiredWorld));
                 if (local.HasError())
                     return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(local.ErrorValue());

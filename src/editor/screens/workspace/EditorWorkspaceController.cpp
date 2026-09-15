@@ -1281,6 +1281,8 @@ namespace Horo::Editor {
             if (transforms.HasValue()) {
                 m_viewModel.primarySelectionWorldTransform = transforms.Value().localToWorld;
                 m_viewModel.primarySelectionParentWorldTransform = transforms.Value().parentToWorld;
+            } else {
+                LOG_ERROR("editor.viewport", "Selected object transform projection failed: %s", transforms.ErrorValue().message.c_str());
             }
         }
         if (m_viewportScene.instances.size() != m_viewportScene.instanceObjects.size()) {
@@ -1295,6 +1297,8 @@ namespace Horo::Editor {
                     Math::TransformAabb(m_viewportScene.instances[index].localBounds, m_viewportScene.instances[index].localToWorld);
                 if (bounds.HasValue())
                     m_viewModel.primarySelectionWorldBounds = bounds.Value();
+                else
+                    LOG_ERROR("editor.viewport", "Selected object bounds projection failed: %s", bounds.ErrorValue().message.c_str());
             }
         }
     }

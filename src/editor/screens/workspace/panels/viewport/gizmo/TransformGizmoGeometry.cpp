@@ -11,19 +11,22 @@
 
 namespace Horo::Editor {
     namespace {
-        [[nodiscard]] std::optional<ImVec2> ProjectToViewport(const EditorViewportCamera &camera, const Math::Vec3 worldPosition,
-                                                              const ImVec2 origin, const float width, const float height,
-                                                              const Math::ClipDepthRange depthRange) noexcept {
-            if (width <= 0.0F || height <= 0.0F)
-                return std::nullopt;
-            const Result<Math::Mat4> viewProjection = BuildEditorViewportViewProjection(camera, width / height, depthRange);
-            if (viewProjection.HasError())
-                return std::nullopt;
-            const Result<Math::Vec3> projected = Math::TryProject(viewProjection.Value(), worldPosition);
-            if (const float minimumDepth = depthRange == Math::ClipDepthRange::NegativeOneToOne ? -1.0F : 0.0F;
-                projected.HasError() || projected.Value().z < minimumDepth || projected.Value().z > 1.0F)
-                return std::nullopt;
-            return ImVec2{origin.x + (projected.Value().x * 0.5F + 0.5F) * width, origin.y + (0.5F - projected.Value().y * 0.5F) * height};
+        [[nodiscard]] Result<std::optional<ImVec2>> ProjectToViewport(const EditorViewportCamera &camera, const Math::Vec3 worldPosition,
+                                                                      const ImVec2 origin, const float width, const float height,
+                                                                      const Math::ClipDepthRange depthRange) noexcept {
+            if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.0F || height <= 0.0F)
+                return Result<std::optional<ImVec2>>::Failure(
+                    MakeError(TransformGizmoErrors::InvalidRequest, "Transform gizmo viewport extent must be positive and finite."));
+            const Result<std::optional<EditorViewportPointProjection>> projected =
+                ProjectEditorViewportPoint(camera, worldPosition, width / height, depthRange);
+            if (projected.HasError())
+                return Result<std::optional<ImVec2>>::Failure(projected.ErrorValue());
+            if (!projected.Value().has_value())
+                return Result<std::optional<ImVec2>>::Success(std::nullopt);
+            const Result<Math::Vec2> pixels = MapEditorViewportPointToPixels(*projected.Value(), {origin.x, origin.y}, {width, height});
+            if (pixels.HasError())
+                return Result<std::optional<ImVec2>>::Failure(pixels.ErrorValue());
+            return Result<std::optional<ImVec2>>::Success(ImVec2{pixels.Value().x, pixels.Value().y});
         }
 
         [[nodiscard]] float DistanceToSegment(const ImVec2 point, const ImVec2 start, const ImVec2 end) noexcept {
@@ -44,31 +47,39 @@ namespace Horo::Editor {
             return std::sqrt(x * x + y * y);
         }
 
-        void DrawRotationHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
-                                 const std::array<ImU32, 3> &axisColors) {
+        [[nodiscard]] Result<void> DrawRotationHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                       TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors) {
             float closestDistance = std::numeric_limits<float>::max();
             for (int axis = 0; axis < 3; ++axis) {
                 const Math::Vec3 basisU = geometry.worldAxes[(axis + 1) % 3];
-                const Math::Vec3 basisV = Math::Normalize(Math::Cross(geometry.worldAxes[axis], basisU));
-                const auto projectedUnit = ProjectToViewport(request.camera, geometry.worldPosition + basisU, request.origin, request.width,
-                                                             request.height, request.depthRange);
-                if (!projectedUnit.has_value() || basisV == Math::Vec3{})
+                const Result<Math::Vec3> basisV = Math::TryNormalize(Math::Cross(geometry.worldAxes[axis], basisU));
+                if (basisV.HasError())
+                    return Result<void>::Failure(basisV.ErrorValue());
+                const Result<std::optional<ImVec2>> projectedUnit =
+                    ProjectToViewport(request.camera, geometry.worldPosition + basisU, request.origin, request.width, request.height,
+                                      request.depthRange);
+                if (projectedUnit.HasError())
+                    return Result<void>::Failure(projectedUnit.ErrorValue());
+                if (!projectedUnit.Value().has_value())
                     continue;
-                const float unitPixels = std::max(Distance(*projectedUnit, *geometry.center), 1.0F);
+                const float unitPixels = std::max(Distance(*projectedUnit.Value(), *geometry.center), 1.0F);
                 const float radiusWorld = (42.0F + static_cast<float>(axis) * 3.0F) / unitPixels;
                 geometry.pixelsPerWorldUnit[axis] = unitPixels;
                 float distance = std::numeric_limits<float>::max();
                 std::optional<ImVec2> previous;
                 for (int segment = 0; segment <= 64; ++segment) {
                     const float angle = 2.0F * std::numbers::pi_v<float> * static_cast<float>(segment) / 64.0F;
-                    const Math::Vec3 point = geometry.worldPosition + (basisU * std::cos(angle) + basisV * std::sin(angle)) * radiusWorld;
-                    const auto projected =
+                    const Math::Vec3 point =
+                        geometry.worldPosition + (basisU * std::cos(angle) + basisV.Value() * std::sin(angle)) * radiusWorld;
+                    const Result<std::optional<ImVec2>> projected =
                         ProjectToViewport(request.camera, point, request.origin, request.width, request.height, request.depthRange);
-                    if (previous.has_value() && projected.has_value()) {
-                        distance = std::min(distance, DistanceToSegment(request.pointer, *previous, *projected));
-                        drawList.AddLine(*previous, *projected, axisColors[axis], 2.0F);
+                    if (projected.HasError())
+                        return Result<void>::Failure(projected.ErrorValue());
+                    if (previous.has_value() && projected.Value().has_value()) {
+                        distance = std::min(distance, DistanceToSegment(request.pointer, *previous, *projected.Value()));
+                        drawList.AddLine(*previous, *projected.Value(), axisColors[axis], 2.0F);
                     }
-                    previous = projected;
+                    previous = projected.Value();
                 }
                 const bool active = request.activeAxis == axis;
                 const bool hit = request.hovered && distance <= 5.0F;
@@ -79,18 +90,23 @@ namespace Horo::Editor {
                     geometry.hoveredAxis = axis;
                 }
             }
+            return Result<void>::Success();
         }
 
-        void DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
-                                  const int axis, const ImU32 axisColor, float &closestDistance) {
-            const auto projected = ProjectToViewport(request.camera, geometry.worldPosition + geometry.worldAxes[axis], request.origin,
-                                                     request.width, request.height, request.depthRange);
-            if (!projected.has_value())
-                return;
-            const ImVec2 delta{projected->x - geometry.center->x, projected->y - geometry.center->y};
+        [[nodiscard]] Result<void> DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                        TransformGizmoFrameGeometry &geometry, const int axis, const ImU32 axisColor,
+                                                        float &closestDistance) {
+            const Result<std::optional<ImVec2>> projected =
+                ProjectToViewport(request.camera, geometry.worldPosition + geometry.worldAxes[axis], request.origin, request.width,
+                                  request.height, request.depthRange);
+            if (projected.HasError())
+                return Result<void>::Failure(projected.ErrorValue());
+            if (!projected.Value().has_value())
+                return Result<void>::Success();
+            const ImVec2 delta{projected.Value()->x - geometry.center->x, projected.Value()->y - geometry.center->y};
             geometry.pixelsPerWorldUnit[axis] = std::sqrt(delta.x * delta.x + delta.y * delta.y);
             if (geometry.pixelsPerWorldUnit[axis] < 4.0F)
-                return;
+                return Result<void>::Success();
             geometry.screenDirections[axis] = {
                 delta.x / geometry.pixelsPerWorldUnit[axis],
                 delta.y / geometry.pixelsPerWorldUnit[axis],
@@ -111,13 +127,16 @@ namespace Horo::Editor {
                 closestDistance = distance;
                 geometry.hoveredAxis = axis;
             }
+            return Result<void>::Success();
         }
 
-        void DrawLinearHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request, TransformGizmoFrameGeometry &geometry,
-                               const std::array<ImU32, 3> &axisColors) {
+        [[nodiscard]] Result<void> DrawLinearHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
+                                                     TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors) {
             float closestDistance = std::numeric_limits<float>::max();
             for (int axis = 0; axis < 3; ++axis) {
-                DrawLinearAxisHandle(drawList, request, geometry, axis, axisColors[axis], closestDistance);
+                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry, axis, axisColors[axis], closestDistance);
+                if (drawn.HasError())
+                    return drawn;
             }
             if (request.tool == EditorTransformTool::Scale) {
                 const bool uniformHit = request.hovered && Distance(request.pointer, *geometry.center) <= 8.0F;
@@ -128,19 +147,30 @@ namespace Horo::Editor {
                     geometry.hoveredAxis = 3;
             } else
                 drawList.AddCircleFilled(*geometry.center, 4.0F, Theme::U32(Theme::Text()));
+            return Result<void>::Success();
         }
     }  // namespace
 
     /** @copydoc DrawTransformGizmoGeometry */
     Result<TransformGizmoFrameGeometry> DrawTransformGizmoGeometry(ImDrawList &drawList, const TransformGizmoGeometryRequest &request) {
         TransformGizmoFrameGeometry geometry;
-        geometry.worldPosition = request.activeWorldPosition.value_or(Math::TransformPoint(request.worldTransform, {}));
+        if (request.activeWorldPosition.has_value()) {
+            geometry.worldPosition = *request.activeWorldPosition;
+        } else {
+            const Result<Math::Vec3> worldPosition = Math::TryTransformPoint(request.worldTransform, {});
+            if (worldPosition.HasError())
+                return Result<TransformGizmoFrameGeometry>::Failure(worldPosition.ErrorValue());
+            geometry.worldPosition = worldPosition.Value();
+        }
         const Result<std::array<Math::Vec3, 3>> worldAxes = ResolveTransformGizmoWorldAxes(request.worldTransform, request.space);
         if (worldAxes.HasError())
             return Result<TransformGizmoFrameGeometry>::Failure(worldAxes.ErrorValue());
         geometry.worldAxes = worldAxes.Value();
-        geometry.center =
+        const Result<std::optional<ImVec2>> center =
             ProjectToViewport(request.camera, geometry.worldPosition, request.origin, request.width, request.height, request.depthRange);
+        if (center.HasError())
+            return Result<TransformGizmoFrameGeometry>::Failure(center.ErrorValue());
+        geometry.center = center.Value();
         if (!geometry.center.has_value())
             return Result<TransformGizmoFrameGeometry>::Success(std::move(geometry));
 
@@ -149,27 +179,36 @@ namespace Horo::Editor {
             ImGui::GetColorU32(ImVec4{0.37F, 0.72F, 0.54F, 1.0F}),
             ImGui::GetColorU32(ImVec4{0.29F, 0.56F, 0.85F, 1.0F}),
         };
-        if (request.tool == EditorTransformTool::Rotate)
-            DrawRotationHandles(drawList, request, geometry, axisColors);
-        else
-            DrawLinearHandles(drawList, request, geometry, axisColors);
+        if (const Result<void> handles = request.tool == EditorTransformTool::Rotate
+                                             ? DrawRotationHandles(drawList, request, geometry, axisColors)
+                                             : DrawLinearHandles(drawList, request, geometry, axisColors);
+            handles.HasError()) {
+            return Result<TransformGizmoFrameGeometry>::Failure(handles.ErrorValue());
+        }
         return Result<TransformGizmoFrameGeometry>::Success(std::move(geometry));
     }
 
     /** @copydoc ProjectTransformGizmoRotationVector */
-    std::optional<Math::Vec3> ProjectTransformGizmoRotationVector(const TransformGizmoRotationProjectionRequest &request) noexcept {
-        if (request.width <= 0.0F || request.height <= 0.0F)
-            return std::nullopt;
+    Result<std::optional<Math::Vec3>> ProjectTransformGizmoRotationVector(const TransformGizmoRotationProjectionRequest &request) noexcept {
+        if (!std::isfinite(request.width) || !std::isfinite(request.height) || request.width <= 0.0F || request.height <= 0.0F)
+            return Result<std::optional<Math::Vec3>>::Failure(
+                MakeError(TransformGizmoErrors::InvalidRequest, "Transform gizmo viewport extent must be positive and finite."));
         const Result<Math::Ray> ray = BuildEditorViewportRay(request.camera, (request.pointer.x - request.origin.x) / request.width,
                                                              (request.pointer.y - request.origin.y) / request.height,
                                                              request.width / request.height, request.depthRange);
+        if (ray.HasError())
+            return Result<std::optional<Math::Vec3>>::Failure(ray.ErrorValue());
         const Result<Math::Plane> plane = Math::TryMakePlane(request.center, request.normal);
-        if (ray.HasError() || plane.HasError())
-            return std::nullopt;
+        if (plane.HasError())
+            return Result<std::optional<Math::Vec3>>::Failure(plane.ErrorValue());
         const Result<std::optional<Math::RayHit>> hit = Math::IntersectRayPlane(ray.Value(), plane.Value());
-        if (hit.HasError() || !hit.Value().has_value())
-            return std::nullopt;
+        if (hit.HasError())
+            return Result<std::optional<Math::Vec3>>::Failure(hit.ErrorValue());
+        if (!hit.Value().has_value())
+            return Result<std::optional<Math::Vec3>>::Success(std::nullopt);
         const Result<Math::Vec3> vector = Math::TryNormalize(hit.Value()->position - request.center);
-        return vector.HasValue() ? std::optional{vector.Value()} : std::nullopt;
+        if (vector.HasError())
+            return Result<std::optional<Math::Vec3>>::Failure(vector.ErrorValue());
+        return Result<std::optional<Math::Vec3>>::Success(vector.Value());
     }
 }  // namespace Horo::Editor

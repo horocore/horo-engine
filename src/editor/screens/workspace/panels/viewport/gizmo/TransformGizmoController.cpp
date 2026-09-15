@@ -108,19 +108,25 @@ namespace Horo::Editor {
         const Math::Vec3 chosenAxis = axis < 3 ? geometry.worldAxes[axis] : Math::Vec3{};
         const ImVec2 direction = axis < 3 ? geometry.screenDirections[axis] : ImVec2{0.7071F, -0.7071F};
         const ImVec2 pointer{input.pointer.x, input.pointer.y};
-        const std::optional<Math::Vec3> startRotationVector = viewModel.activeTransformTool == EditorTransformTool::Rotate
-                                                                  ? ProjectTransformGizmoRotationVector({.camera = viewModel.viewportCamera,
-                                                                                                         .center = geometry.worldPosition,
-                                                                                                         .normal = chosenAxis,
-                                                                                                         .pointer = pointer,
-                                                                                                         .origin = context.origin,
-                                                                                                         .width = context.width,
-                                                                                                         .height = context.height,
-                                                                                                         .depthRange = context.depthRange})
-                                                                  : std::nullopt;
-        if (viewModel.activeTransformTool == EditorTransformTool::Rotate && !startRotationVector.has_value()) {
-            capture.Finish();
-            return Result<void>::Success();
+        std::optional<Math::Vec3> startRotationVector;
+        if (viewModel.activeTransformTool == EditorTransformTool::Rotate) {
+            const Result<std::optional<Math::Vec3>> projected = ProjectTransformGizmoRotationVector({.camera = viewModel.viewportCamera,
+                                                                                                     .center = geometry.worldPosition,
+                                                                                                     .normal = chosenAxis,
+                                                                                                     .pointer = pointer,
+                                                                                                     .origin = context.origin,
+                                                                                                     .width = context.width,
+                                                                                                     .height = context.height,
+                                                                                                     .depthRange = context.depthRange});
+            if (projected.HasError()) {
+                capture.Finish();
+                return Result<void>::Failure(projected.ErrorValue());
+            }
+            if (!projected.Value().has_value()) {
+                capture.Finish();
+                return Result<void>::Success();
+            }
+            startRotationVector = projected.Value();
         }
 
         Result<TransformGizmoMathSession> math = BeginTransformGizmoMath(BeginTransformGizmoMathRequest{
@@ -180,16 +186,25 @@ namespace Horo::Editor {
         const float projectedPixels = mouseDelta.x * drag_->screenDirection.x + mouseDelta.y * drag_->screenDirection.y;
         std::optional<Math::Vec3> currentRotationVector;
         if (drag_->tool == EditorTransformTool::Rotate) {
-            currentRotationVector = ProjectTransformGizmoRotationVector({.camera = context.viewModel.viewportCamera,
-                                                                         .center = drag_->math.initialWorldPosition,
-                                                                         .normal = drag_->math.worldAxis,
-                                                                         .pointer = pointer,
-                                                                         .origin = context.origin,
-                                                                         .width = context.width,
-                                                                         .height = context.height,
-                                                                         .depthRange = context.depthRange});
-            if (!currentRotationVector.has_value())
+            const Result<std::optional<Math::Vec3>> projected =
+                ProjectTransformGizmoRotationVector({.camera = context.viewModel.viewportCamera,
+                                                     .center = drag_->math.initialWorldPosition,
+                                                     .normal = drag_->math.worldAxis,
+                                                     .pointer = pointer,
+                                                     .origin = context.origin,
+                                                     .width = context.width,
+                                                     .height = context.height,
+                                                     .depthRange = context.depthRange});
+            if (projected.HasError()) {
+                LOG_ERROR("editor.viewport_gizmo", "Gizmo rotation projection failed: %s", projected.ErrorValue().message.c_str());
+                capture.Cancel(Input::CaptureCancellationReason::Explicit);
+                cancelPreviewOnNextDraw_ = false;
+                context.command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
                 return;
+            }
+            if (!projected.Value().has_value())
+                return;
+            currentRotationVector = projected.Value();
         }
 
         Result<TransformGizmoMathOutcome> outcome =

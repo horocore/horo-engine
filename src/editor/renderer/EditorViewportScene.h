@@ -43,9 +43,11 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsValid(const Render::RenderSceneView &scene) const noexcept;
     };
 
-    /** @brief Builds one instance MVP using Horo scene conventions and the requested API clip-depth range. */
-    [[nodiscard]] Math::Mat4 BuildEditorViewportMvp(const EditorViewportCamera &camera, const Math::Mat4 &localToWorld, float aspect,
-                                                    Math::ClipDepthRange depthRange) noexcept;
+    /** @brief One visible world point projected to top-left-origin normalized viewport coordinates. */
+    struct EditorViewportPointProjection {
+        Math::Vec2 viewportPosition{};
+        float ndcDepth{0.0F};
+    };
 
     /** @brief Builds one generic render-camera MVP using Horo scene conventions. */
     [[nodiscard]] Result<Math::Mat4> BuildRenderMvp(const Render::RenderCameraView &camera, const Math::Mat4 &localToWorld, float aspect,
@@ -63,6 +65,29 @@ namespace Horo::Editor {
     /** @brief Builds the validated view-projection matrix for one editor camera. */
     [[nodiscard]] Result<Math::Mat4> BuildEditorViewportViewProjection(const EditorViewportCamera &camera, float aspect,
                                                                        Math::ClipDepthRange depthRange) noexcept;
+
+    /**
+     * @brief Projects a world point through the canonical editor camera contract.
+     * @param camera Valid editor viewport camera.
+     * @param worldPoint Finite point in scene space.
+     * @param aspect Positive finite viewport width-to-height ratio.
+     * @param depthRange Explicit consuming-backend clip-depth convention.
+     * @return A visible top-left-origin normalized projection, empty when behind the view origin or outside the depth interval, or a typed
+     * math failure.
+     */
+    [[nodiscard]] Result<std::optional<EditorViewportPointProjection>> ProjectEditorViewportPoint(const EditorViewportCamera &camera,
+                                                                                                  Math::Vec3 worldPoint, float aspect,
+                                                                                                  Math::ClipDepthRange depthRange) noexcept;
+
+    /**
+     * @brief Maps a normalized viewport projection to finite top-left-origin pixel coordinates.
+     * @param projection Finite normalized viewport projection.
+     * @param origin Finite top-left viewport origin in pixels.
+     * @param extent Positive finite viewport extent in pixels.
+     * @return Mapped pixel coordinates or a typed coordinate failure.
+     */
+    [[nodiscard]] Result<Math::Vec2> MapEditorViewportPointToPixels(const EditorViewportPointProjection &projection, Math::Vec2 origin,
+                                                                    Math::Vec2 extent) noexcept;
 
     /** @brief Builds a world-space ray from top-left-origin normalized viewport coordinates and an explicit clip-depth range. */
     [[nodiscard]] Result<Math::Ray> BuildEditorViewportRay(const EditorViewportCamera &camera, float normalizedX, float normalizedY,

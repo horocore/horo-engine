@@ -19,9 +19,9 @@ namespace Horo::Editor {
 
     /**
      * @brief Draws constant-size viewport Light markers and resolves one clicked object.
-     * @return Stable Light object identity when a visible marker was clicked.
+     * @return Stable Light object identity when clicked, empty when no marker was clicked, or a typed projection failure.
      */
-    [[nodiscard]] std::optional<SceneObjectId> DrawViewportLightMarkers(const ViewportLightMarkerContext &context,
-                                                                        std::span<const ViewportLightPresentation> lights,
-                                                                        std::optional<SceneObjectId> primarySelection);
+    [[nodiscard]] Result<std::optional<SceneObjectId>> DrawViewportLightMarkers(const ViewportLightMarkerContext &context,
+                                                                                std::span<const ViewportLightPresentation> lights,
+                                                                                std::optional<SceneObjectId> primarySelection);
 }  // namespace Horo::Editor

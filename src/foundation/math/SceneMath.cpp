@@ -81,25 +81,34 @@ namespace Horo::Math {
     Result<Vec2> TryNormalize(const Vec2 value) noexcept {
         if (!IsFinite(value))
             return Result<Vec2>::Failure(MakeMathError(Errors::NonFiniteInput, "Vector must be finite."));
-        if (LengthSquared(value) <= DefaultEpsilon * DefaultEpsilon)
+        const double length = std::hypot(static_cast<double>(value.x), static_cast<double>(value.y));
+        if (length <= static_cast<double>(DefaultEpsilon))
             return Result<Vec2>::Failure(MakeMathError(Errors::ZeroLength, "Vector length is too small to normalize."));
-        return Result<Vec2>::Success(Normalize(value));
+        return Result<Vec2>::Success(
+            {static_cast<float>(static_cast<double>(value.x) / length), static_cast<float>(static_cast<double>(value.y) / length)});
     }
 
     Result<Vec3> TryNormalize(const Vec3 value) noexcept {
         if (!IsFinite(value))
             return Result<Vec3>::Failure(MakeMathError(Errors::NonFiniteInput, "Vector must be finite."));
-        if (LengthSquared(value) <= DefaultEpsilon * DefaultEpsilon)
+        const double length = std::hypot(static_cast<double>(value.x), static_cast<double>(value.y), static_cast<double>(value.z));
+        if (length <= static_cast<double>(DefaultEpsilon))
             return Result<Vec3>::Failure(MakeMathError(Errors::ZeroLength, "Vector length is too small to normalize."));
-        return Result<Vec3>::Success(Normalize(value));
+        return Result<Vec3>::Success({static_cast<float>(static_cast<double>(value.x) / length),
+                                      static_cast<float>(static_cast<double>(value.y) / length),
+                                      static_cast<float>(static_cast<double>(value.z) / length)});
     }
 
     Result<Vec4> TryNormalize(const Vec4 value) noexcept {
         if (!IsFinite(value))
             return Result<Vec4>::Failure(MakeMathError(Errors::NonFiniteInput, "Vector must be finite."));
-        if (LengthSquared(value) <= DefaultEpsilon * DefaultEpsilon)
+        const double length = std::hypot(std::hypot(static_cast<double>(value.x), static_cast<double>(value.y)),
+                                         std::hypot(static_cast<double>(value.z), static_cast<double>(value.w)));
+        if (length <= static_cast<double>(DefaultEpsilon))
             return Result<Vec4>::Failure(MakeMathError(Errors::ZeroLength, "Vector length is too small to normalize."));
-        return Result<Vec4>::Success(Normalize(value));
+        return Result<Vec4>::Success(
+            {static_cast<float>(static_cast<double>(value.x) / length), static_cast<float>(static_cast<double>(value.y) / length),
+             static_cast<float>(static_cast<double>(value.z) / length), static_cast<float>(static_cast<double>(value.w) / length)});
     }
 
     bool NearlyEqual(const float lhs, const float rhs, const float epsilon) noexcept {
@@ -171,9 +180,11 @@ namespace Horo::Math {
     Result<Quaternion> Quaternion::TryNormalized() const noexcept {
         if (!IsFinite(*this))
             return Result<Quaternion>::Failure(MakeMathError(Errors::NonFiniteInput, "Quaternion must be finite."));
-        if (!IsValidQuaternion(*this))
-            return Result<Quaternion>::Failure(MakeMathError(Errors::ZeroLength, "Quaternion length is too small."));
-        return Result<Quaternion>::Success(Normalized());
+        const Result<Vec4> normalized = TryNormalize({x, y, z, w});
+        if (normalized.HasError())
+            return Result<Quaternion>::Failure(normalized.ErrorValue());
+        const Vec4 value = normalized.Value();
+        return Result<Quaternion>::Success({value.x, value.y, value.z, value.w});
     }
 
     Quaternion Quaternion::Inverse() const noexcept {
@@ -355,6 +366,8 @@ namespace Horo::Math {
             for (int column = 0; column < 4; ++column)
                 inverse.values[static_cast<std::size_t>(column * 4 + row)] = augmented[row][column + 4];
         }
+        if (!IsFinite(inverse))
+            return Result<Mat4>::Failure(MakeMathError(Errors::SingularMatrix, "Matrix inverse is not representable."));
         return Result<Mat4>::Success(inverse);
     }
 
@@ -604,7 +617,10 @@ namespace Horo::Math {
                     .maximum = {std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
                                 std::numeric_limits<float>::lowest()}};
         for (const Vec3 corner : corners) {
-            const Vec3 transformed = TransformAffinePoint(localToWorld, corner);
+            const Result<Vec3> transformedResult = TryTransformPoint(localToWorld, corner);
+            if (transformedResult.HasError())
+                return Result<Aabb>::Failure(transformedResult.ErrorValue());
+            const Vec3 transformed = transformedResult.Value();
             result.minimum = {std::min(result.minimum.x, transformed.x), std::min(result.minimum.y, transformed.y),
                               std::min(result.minimum.z, transformed.z)};
             result.maximum = {std::max(result.maximum.x, transformed.x), std::max(result.maximum.y, transformed.y),
@@ -616,8 +632,16 @@ namespace Horo::Math {
     Result<BoundingSphere> SphereFromAabb(const Aabb &bounds) noexcept {
         if (!bounds.IsValid())
             return Result<BoundingSphere>::Failure(MakeMathError(Errors::InvalidBounds, "AABB is invalid."));
-        const Vec3 center = bounds.Center();
-        return Result<BoundingSphere>::Success({center, Length(bounds.maximum - center)});
+        const auto midpoint = [](const float minimum, const float maximum) {
+            return static_cast<float>((static_cast<double>(minimum) + static_cast<double>(maximum)) * 0.5);
+        };
+        const Vec3 center{midpoint(bounds.minimum.x, bounds.maximum.x), midpoint(bounds.minimum.y, bounds.maximum.y),
+                          midpoint(bounds.minimum.z, bounds.maximum.z)};
+        const double radius = std::hypot(static_cast<double>(bounds.maximum.x) - center.x, static_cast<double>(bounds.maximum.y) - center.y,
+                                         static_cast<double>(bounds.maximum.z) - center.z);
+        if (!IsFinite(center) || !std::isfinite(radius) || radius > std::numeric_limits<float>::max())
+            return Result<BoundingSphere>::Failure(MakeMathError(Errors::InvalidBounds, "Bounding sphere is not representable."));
+        return Result<BoundingSphere>::Success({center, static_cast<float>(radius)});
     }
 
     Result<std::optional<RayHit>> IntersectRayPlane(const Ray &ray, const Plane &plane) noexcept {

@@ -1,3 +1,4 @@
+#include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -171,4 +172,34 @@ TEST_CASE("Transform gizmo axes reject non-finite transforms in every space", "[
     REQUIRE(world.HasError());
     REQUIRE(local.ErrorValue().code.Value() == "transform_gizmo.invalid_request");
     REQUIRE(world.ErrorValue().code.Value() == "transform_gizmo.invalid_request");
+}
+
+TEST_CASE("Transform gizmo rotation projection distinguishes misses from invalid inputs", "[unit][editor][viewport][gizmo]") {
+    EditorViewportCamera camera;
+    const Result<std::optional<Math::Vec3>> miss = ProjectTransformGizmoRotationVector({.camera = camera,
+                                                                                        .center = {},
+                                                                                        .normal = {1.0F, 0.0F, 0.0F},
+                                                                                        .pointer = {50.0F, 50.0F},
+                                                                                        .origin = {},
+                                                                                        .width = 100.0F,
+                                                                                        .height = 100.0F});
+    REQUIRE((miss.HasValue()));
+    REQUIRE((!miss.Value().has_value()));
+
+    const Result<std::optional<Math::Vec3>> invalid = ProjectTransformGizmoRotationVector(
+        {.camera = camera, .center = {}, .normal = {}, .pointer = {50.0F, 50.0F}, .origin = {}, .width = 100.0F, .height = 100.0F});
+    REQUIRE((invalid.HasError()));
+    REQUIRE((ProjectTransformGizmoRotationVector({.camera = camera, .width = 0.0F, .height = 100.0F}).HasError()));
+}
+
+TEST_CASE("Transform gizmo rejects non-representable extreme updates", "[unit][editor][viewport][gizmo]") {
+    BeginTransformGizmoMathRequest request = MakeRequest();
+    request.pixelsPerWorldUnit = std::numeric_limits<float>::min();
+    const Result<TransformGizmoMathSession> session = BeginTransformGizmoMath(request);
+    REQUIRE((session.HasValue()));
+
+    const Result<TransformGizmoMathOutcome> outcome =
+        EvaluateTransformGizmoMath(session.Value(), TransformGizmoMathUpdate{.projectedPixels = std::numeric_limits<float>::max()});
+    REQUIRE((outcome.HasError()));
+    REQUIRE((outcome.ErrorValue().code.Value() == "math.non_finite_input"));
 }

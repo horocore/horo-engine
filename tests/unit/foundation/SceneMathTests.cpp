@@ -18,6 +18,10 @@ namespace {
         REQUIRE((NearlyEqual(Normalize(Vec3{0.0F, 3.0F, 4.0F}), Vec3{0.0F, 0.6F, 0.8F})));
         REQUIRE((TryNormalize(Vec3{}).HasError()));
         REQUIRE((TryNormalize(Vec3{std::numeric_limits<float>::infinity(), 0.0F, 0.0F}).HasError()));
+        const float extreme = std::numeric_limits<float>::max();
+        const Horo::Result<Vec3> extremeNormalized = TryNormalize(Vec3{extreme, extreme, extreme});
+        REQUIRE((extremeNormalized.HasValue()));
+        REQUIRE((NearlyEqual(LengthSquared(extremeNormalized.Value()), 1.0F, 0.0001F)));
         REQUIRE((Near(DegreesToRadians(180.0F), Pi)));
         REQUIRE((Near(RadiansToDegrees(Pi * 0.5F), 90.0F)));
     }
@@ -34,6 +38,8 @@ namespace {
         REQUIRE((NearlyEqual(Slerp(Quaternion::Identity(), rotation, 0.5F).Rotate({1.0F, 0.0F, 0.0F}), Vec3{0.7071067F, 0.0F, -0.7071067F},
                              0.0002F)));
         REQUIRE((Quaternion{0.0F, 0.0F, 0.0F, 0.0F}.TryNormalized().HasError()));
+        const float extreme = std::numeric_limits<float>::max();
+        REQUIRE((Quaternion{extreme, extreme, extreme, extreme}.TryNormalized().HasValue()));
         REQUIRE((TrySlerp(Quaternion::Identity(), rotation, std::numeric_limits<float>::quiet_NaN()).HasError()));
     }
 
@@ -59,6 +65,9 @@ namespace {
         sheared.values[4] += 0.35F;
         REQUIRE((TryDecomposeAffineTRS(sheared).HasValue()));
         REQUIRE((TryInverseAffine(ScaleMatrix({0.0F, 1.0F, 1.0F})).HasError()));
+        Mat4 nonInvertible = Mat4::Identity();
+        nonInvertible.values[0] = 0.0F;
+        REQUIRE((TryInverse(nonInvertible).HasError()));
         Mat4 nonFinite = Mat4::Identity();
         nonFinite.values[5] = std::numeric_limits<float>::infinity();
         REQUIRE((TryDecomposeAffineTRS(nonFinite).HasError()));
@@ -115,5 +124,11 @@ namespace {
         REQUIRE((transformed.HasValue()));
         REQUIRE((NearlyEqual(transformed.Value().Center(), transform.translation, 0.0001F)));
         REQUIRE((NearlyEqual(transformed.Value().Extents(), Vec3{0.5F, 1.0F, 2.0F}, 0.0001F)));
+
+        Mat4 extremeTransform = Mat4::Identity();
+        extremeTransform.values[0] = std::numeric_limits<float>::max();
+        REQUIRE((TransformAabb(Aabb{{-2.0F, -1.0F, -1.0F}, {2.0F, 1.0F, 1.0F}}, extremeTransform).HasError()));
+        const float extreme = std::numeric_limits<float>::max();
+        REQUIRE((SphereFromAabb(Aabb{{-extreme, -extreme, -extreme}, {extreme, extreme, extreme}}).HasError()));
     }
 }  // namespace
