@@ -391,6 +391,7 @@ add_library(HoroAssets STATIC
         runtime/assets/registry/AssetRegistry.cpp
         runtime/assets/runtime_provider/AssetProviderRead.h
         runtime/assets/runtime_provider/AssetProvider.cpp
+        runtime/assets/preview/AssetPreviewService.cpp
         runtime/assets/cooker/AssetCookTypes.cpp
         runtime/assets/cooker/CookCatalog.cpp
         runtime/assets/cooker/builtin/HeadlessMeshCooker.cpp

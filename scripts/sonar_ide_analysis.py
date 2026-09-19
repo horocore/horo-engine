@@ -1,36 +1,58 @@
 #!/usr/bin/env python3
-"""Request local C/C++ diagnostics from the SonarQube for IDE HTTP bridge.
+# Codacy profiles alternate between the mutually exclusive D212 and D213 layouts.
+# noqa: D212,D213
+"""
+Prepare a worktree and request C/C++ diagnostics from SonarQube for IDE.
 
-The bridge is created by a running, trusted VS Code window with the
-SonarQube for IDE extension enabled.  This tool does not authenticate to, upload
-to, or query SonarQube Cloud.
+With no ``--port``, the script configures a compilation database, writes an
+ignored VS Code workspace, opens it in a dedicated window, discovers that
+window's bridge port, and analyzes the selected files. JSON is the only stdout.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import os
+import re
+import shutil
+# Process execution is restricted to resolved, fixed tool names below.
+import subprocess  # nosec B404
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
 SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"})
-DEFAULT_COMPILE_COMMANDS = Path("build/sonar-local/compile_commands.json")
+TRANSLATION_UNIT_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
+DEFAULT_BUILD_DIRECTORY = Path("build/sonar-local")
+COMPILE_COMMANDS_FILENAME = "compile_commands.json"
+DEFAULT_COMPILE_COMMANDS = DEFAULT_BUILD_DIRECTORY / COMPILE_COMMANDS_FILENAME
+BRIDGE_PORTS = range(64120, 64131)
 BRIDGE_STATUS_PATH = "/sonarlint/api/status"
 BRIDGE_ANALYZE_PATH = "/sonarlint/api/analysis/files"
+BRIDGE_PATHS = frozenset({BRIDGE_STATUS_PATH, BRIDGE_ANALYZE_PATH})
+FIXED_TOOLS = frozenset({"cmake", "code", "git"})
+GIT_REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}")
 
 
 class AnalysisError(RuntimeError):
+
+    # Codacy profiles alternate between the mutually exclusive D203 and D211 layouts.
+    # noqa: D203,D211
     """A prerequisite or the local IDE bridge prevented analysis."""
 
 
 @dataclass(frozen=True)
 class Selection:
+
+    # Codacy profiles alternate between the mutually exclusive D203 and D211 layouts.
+    # noqa: D203,D211
     """Files selected for one bridge request and paths intentionally omitted."""
 
     submitted: list[Path]
@@ -39,33 +61,77 @@ class Selection:
 
 
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse the local selection and bridge connection options."""
+    """Parse preparation, selection, and bridge options."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", type=Path, help="C/C++ files relative to the worktree")
     selector = parser.add_mutually_exclusive_group()
     selector.add_argument("--base", help="Analyze committed C/C++ changes since this Git ref")
     selector.add_argument("--dirty", action="store_true", help="Analyze staged, unstaged, and untracked changes (default)")
-    parser.add_argument("--port", required=True, type=int, help="SonarQube for IDE bridge port (64120-64130)")
-    parser.add_argument("--timeout", type=float, default=90.0, help="HTTP timeout in seconds (default: 90)")
-    parser.add_argument(
-        "--compile-commands",
-        type=Path,
-        default=DEFAULT_COMPILE_COMMANDS,
-        help="Compilation database configured in the VS Code workspace",
-    )
+    parser.add_argument("--port", type=int, help="Use an already identified bridge port instead of opening a VS Code window")
+    parser.add_argument("--timeout", type=float, default=600.0, help="Bridge request timeout in seconds (default: 600)")
+    parser.add_argument("--startup-timeout", type=float, default=60.0, help="Seconds to wait for a new IDE bridge (default: 60)")
+    parser.add_argument("--build-directory", type=Path, default=DEFAULT_BUILD_DIRECTORY)
+    parser.add_argument("--connection-id", default="horocore")
+    parser.add_argument("--project-key", default="horocore_horo-engine")
+    parser.add_argument("--no-prepare", action="store_true", help="Require an existing compilation database and IDE window")
     return parser.parse_args(arguments)
+
+
+def resolved_tool(name: str) -> str:
+    """Resolve one fixed prerequisite without delegating lookup to a child process."""
+    if name not in FIXED_TOOLS:
+        raise AnalysisError(f"Unsupported prerequisite: {name}")
+    executable = shutil.which(name)
+    if executable is None:
+        raise AnalysisError(f"{name} is required")
+    return executable
+
+
+def run_command(tool: str, arguments: Sequence[str], error_message: str) -> subprocess.CompletedProcess[str]:
+    """Run a fixed prerequisite without contaminating JSON stdout."""
+    if tool == "cmake":
+        executable = resolved_tool("cmake")
+        # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
+        result = subprocess.run(  # nosec B603, B607
+            ["cmake", *arguments],
+            executable=executable,
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    elif tool == "code":
+        executable = resolved_tool("code")
+        # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
+        result = subprocess.run(  # nosec B603, B607
+            ["code", *arguments],
+            executable=executable,
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    else:
+        raise AnalysisError(f"Unsupported prerequisite: {tool}")
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise AnalysisError(f"{error_message}{': ' + detail if detail else ''}")
+    return result
 
 
 def run_git(root: Path, *arguments: str) -> bytes:
     """Run Git in *root* and return its NUL-safe stdout."""
     try:
-        return subprocess.run(
+        executable = resolved_tool("git")
+        # Callers validate external refs and place them after Git's end-of-options marker.
+        # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
+        return subprocess.run(  # nosec B603, B607
             ["git", "-C", str(root), *arguments],
+            executable=executable,
             check=True,
             capture_output=True,
+            shell=False,
         ).stdout
-    except FileNotFoundError as error:
-        raise AnalysisError("git is required to select worktree files") from error
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", errors="replace").strip()
         raise AnalysisError(detail or "git could not select files for analysis") from error
@@ -85,13 +151,13 @@ def paths_from_nul_output(output: bytes) -> list[Path]:
 def changed_paths(root: Path, base: str | None) -> tuple[list[Path], str]:
     """Return changed paths for a base ref or the current dirty worktree."""
     if base is not None:
-        merge_base = run_git(root, "merge-base", base, "HEAD").decode("utf-8").strip()
-        return paths_from_nul_output(
-            run_git(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", merge_base, "HEAD")
-        ), f"base:{base}"
+        base = validated_git_ref(base)
+        merge_base = run_git(root, "merge-base", "--", base, "HEAD").decode("utf-8").strip()
+        tracked = paths_from_nul_output(run_git(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", merge_base))
+        untracked = paths_from_nul_output(run_git(root, "ls-files", "--others", "--exclude-standard", "-z"))
+        return list(dict.fromkeys([*tracked, *untracked])), f"base:{base}"
 
-    status = run_git(root, "status", "--porcelain=v1", "-z")
-    records = status.split(b"\0")
+    records = run_git(root, "status", "--porcelain=v1", "-z").split(b"\0")
     paths: list[Path] = []
     index = 0
     while index < len(records):
@@ -102,10 +168,16 @@ def changed_paths(root: Path, base: str | None) -> tuple[list[Path], str]:
         if len(record) < 4:
             raise AnalysisError("Git returned an invalid porcelain status record")
         paths.append(Path(record[3:].decode("utf-8", errors="surrogateescape")))
-        # Rename/copy records carry a second NUL-delimited original path.
         if record[0:1] in {b"R", b"C"} or record[1:2] in {b"R", b"C"}:
             index += 1
     return paths, "dirty"
+
+
+def validated_git_ref(value: str) -> str:
+    """Accept only an option-safe, bounded Git ref spelling."""
+    if GIT_REF_PATTERN.fullmatch(value) is None or ".." in value or "//" in value or value.endswith(("/", ".")):
+        raise AnalysisError("--base must be a conventional Git ref name")
+    return value
 
 
 def select_files(root: Path, requested: Sequence[Path], source: str) -> Selection:
@@ -114,8 +186,7 @@ def select_files(root: Path, requested: Sequence[Path], source: str) -> Selectio
     skipped: list[dict[str, str]] = []
     seen: set[Path] = set()
     for candidate in requested:
-        path = candidate if candidate.is_absolute() else root / candidate
-        path = path.resolve()
+        path = (candidate if candidate.is_absolute() else root / candidate).resolve()
         try:
             path.relative_to(root)
         except ValueError:
@@ -133,45 +204,89 @@ def select_files(root: Path, requested: Sequence[Path], source: str) -> Selectio
     return Selection(submitted, skipped, source)
 
 
-def validate_compile_commands(compilation_database: Path, files: Sequence[Path]) -> None:
-    """Require a concrete compilation command for every submitted C/C++ path."""
+def prepare_compilation_database(root: Path, build_directory: Path) -> Path:
+    """Configure all first-party targets so changed tests also have commands."""
+    build = (root / build_directory).resolve() if not build_directory.is_absolute() else build_directory.resolve()
+    run_command(
+        "cmake",
+        [
+            "-S",
+            str(root),
+            "-B",
+            str(build),
+            "-G",
+            "Ninja",
+            "-DCMAKE_BUILD_TYPE=Debug",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DBUILD_TESTING=ON",
+        ],
+        "CMake could not prepare SonarQube for IDE analysis",
+    )
+    database = build / COMPILE_COMMANDS_FILENAME
+    if not database.is_file():
+        raise AnalysisError(f"CMake did not create the compilation database: {database}")
+    return database
+
+
+def _load_compilation_database(compilation_database: Path) -> list[object]:
+    """Read and validate the top-level shape of a compilation database."""
     try:
         entries = json.loads(compilation_database.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise AnalysisError(f"Cannot read compilation database: {compilation_database}") from error
     if not isinstance(entries, list):
         raise AnalysisError(f"Compilation database is not an array: {compilation_database}")
+    return cast(list[object], entries)
 
+
+def _compiled_sources(root: Path, compilation_database: Path, entries: Sequence[object]) -> set[Path]:
+    """Collect the in-worktree source paths represented by a compilation database."""
     compiled_files: set[Path] = set()
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("file"), str):
             continue
-        directory = Path(entry["directory"]) if isinstance(entry.get("directory"), str) else compilation_database.parent
+        directory_value = entry.get("directory")
+        directory = Path(directory_value) if isinstance(directory_value, str) else compilation_database.parent
         source = Path(entry["file"])
-        compiled_files.add((source if source.is_absolute() else directory / source).resolve())
+        absolute_source = Path(os.path.abspath(source if source.is_absolute() else directory / source))
+        if absolute_source.is_relative_to(root):
+            compiled_files.add(absolute_source)
+    return compiled_files
 
-    missing = [str(path) for path in files if path not in compiled_files]
+
+def validate_compile_commands(root: Path, compilation_database: Path, files: Sequence[Path]) -> None:
+    """Require a command for every submitted translation unit; headers use IDE context."""
+    entries = _load_compilation_database(compilation_database)
+    compiled_files = _compiled_sources(root, compilation_database, entries)
+    missing = [
+        str(path)
+        for path in files
+        if path.suffix.lower() in TRANSLATION_UNIT_SUFFIXES and path not in compiled_files
+    ]
     if missing:
-        raise AnalysisError(
-            "Compilation database has no command for submitted file(s): " + ", ".join(missing)
-        )
+        raise AnalysisError("Compilation database has no command for submitted file(s): " + ", ".join(missing))
 
 
 def bridge_url(port: int, path: str) -> str:
     """Build a loopback-only bridge URL after validating Sonar's port range."""
-    if not 64120 <= port <= 64130:
+    if port not in BRIDGE_PORTS:
         raise AnalysisError("--port must be in SonarQube for IDE's 64120-64130 range")
+    if path not in BRIDGE_PATHS:
+        raise AnalysisError("Unsupported SonarQube for IDE bridge path")
     return f"http://127.0.0.1:{port}{path}"
 
 
-def request_bridge(url: str, timeout: float, body: bytes | None = None) -> object:
+def request_bridge(port: int, path: str, timeout: float, body: bytes | None = None) -> object:
     """Call the bridge with the localhost headers required by its origin checks."""
+    url = bridge_url(port, path)
     headers = {"Host": "localhost", "Origin": "http://localhost"}
     if body is not None:
         headers["Content-Type"] = "application/json"
-    request = Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
+    # bridge_url restricts both the host/port range and endpoint path to fixed local values.
+    request = Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")  # NOSONAR
     try:
-        with urlopen(request, timeout=timeout) as response:  # nosec B310: loopback URL is validated above
+        # URL is loopback-only and its port was validated by bridge_url.
+        with urlopen(request, timeout=timeout) as response:  # nosec B310
             return json.loads(response.read().decode("utf-8")) if body is not None else response.status
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
@@ -184,6 +299,65 @@ def request_bridge(url: str, timeout: float, body: bytes | None = None) -> objec
         raise AnalysisError("IDE bridge returned invalid JSON") from error
 
 
+def available_bridge_ports(timeout: float = 0.2) -> set[int]:
+    """Return responsive official bridge ports without inspecting unrelated listeners."""
+    available: set[int] = set()
+    for port in BRIDGE_PORTS:
+        try:
+            request_bridge(port, BRIDGE_STATUS_PATH, timeout)
+            available.add(port)
+        except AnalysisError:
+            continue
+    return available
+
+
+def write_workspace(root: Path, build_directory: Path, connection_id: str, project_key: str) -> Path:
+    """Write an ignored dedicated workspace without mutating user VS Code settings."""
+    build = (root / build_directory).resolve() if not build_directory.is_absolute() else build_directory.resolve()
+    workspace = build / "sonar-ide.code-workspace"
+    payload = {
+        "folders": [{"path": str(root)}],
+        "settings": {
+            "sonarlint.pathToCompileCommands": str(build / COMPILE_COMMANDS_FILENAME),
+            "sonarlint.connectedMode.project": {"connectionId": connection_id, "projectKey": project_key},
+        },
+    }
+    workspace.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return workspace
+
+
+def open_workspace_and_find_bridge(workspace: Path, startup_timeout: float) -> int:
+    """Open a dedicated VS Code window and return its new or remembered bridge."""
+    if startup_timeout <= 0:
+        raise AnalysisError("--startup-timeout must be greater than zero")
+    marker = workspace.parent / f"{workspace.name}.bridge.json"
+    remembered_port: int | None = None
+    try:
+        marker_payload = json.loads(marker.read_text(encoding="utf-8"))
+        candidate = marker_payload.get("port") if isinstance(marker_payload, dict) else None
+        if isinstance(candidate, int) and candidate in BRIDGE_PORTS:
+            remembered_port = candidate
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    existing = available_bridge_ports()
+    run_command("code", ["--new-window", str(workspace)], "VS Code could not open the Sonar workspace")
+    if remembered_port in existing:
+        return remembered_port
+
+    deadline = time.monotonic() + startup_timeout
+    while time.monotonic() < deadline:
+        created = available_bridge_ports() - existing
+        if len(created) == 1:
+            port = created.pop()
+            marker.write_text(json.dumps({"port": port}) + "\n", encoding="utf-8")
+            return port
+        if len(created) > 1:
+            raise AnalysisError(f"Multiple new IDE bridges appeared: {sorted(created)}")
+        time.sleep(0.5)
+    raise AnalysisError("The dedicated VS Code window did not expose a new SonarQube for IDE bridge")
+
+
 def normalized_findings(response: object) -> list[dict[str, object]]:
     """Validate the official bridge response shape while preserving Sonar fields."""
     if not isinstance(response, dict) or not isinstance(response.get("findings"), list):
@@ -194,7 +368,90 @@ def normalized_findings(response: object) -> list[dict[str, object]]:
     return findings
 
 
-def result_payload(selection: Selection, port: int, compile_commands: Path, findings: list[dict[str, object]]) -> dict[str, object]:
+def parse_changed_line_ranges(root: Path, diff: str) -> dict[Path, list[tuple[int, int]]]:
+    """Parse inclusive added-line ranges from one zero-context Git diff."""
+    ranges: dict[Path, list[tuple[int, int]]] = {}
+    current: Path | None = None
+    hunk = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            name = line[4:]
+            current = None if name == "/dev/null" else (root / name.removeprefix("b/")).resolve()
+            continue
+        match = hunk.match(line)
+        if current is not None and match is not None:
+            start = int(match.group(1))
+            count = int(match.group(2) or "1")
+            if count > 0:
+                ranges.setdefault(current, []).append((start, start + count - 1))
+    return ranges
+
+
+def add_untracked_line_ranges(root: Path, files: Sequence[Path], ranges: dict[Path, list[tuple[int, int]]]) -> None:
+    """Treat the complete contents of selected untracked files as changed."""
+    tracked = set(paths_from_nul_output(run_git(root, "ls-files", "-z")))
+    for path in files:
+        if path.relative_to(root) in tracked:
+            continue
+        line_count = len(path.read_text(encoding="utf-8", errors="surrogateescape").splitlines())
+        if line_count > 0:
+            ranges[path] = [(1, line_count)]
+
+
+def changed_line_ranges(root: Path, base: str, files: Sequence[Path]) -> dict[Path, list[tuple[int, int]]]:
+    """Return inclusive added-line ranges, including the full contents of untracked files."""
+    merge_base = run_git(root, "merge-base", "--", validated_git_ref(base), "HEAD").decode("utf-8").strip()
+    relative = [str(path.relative_to(root)) for path in files]
+    diff = run_git(root, "diff", "--unified=0", "--no-color", "--diff-filter=ACMR", merge_base, "--", *relative).decode(
+        "utf-8", errors="surrogateescape"
+    )
+    ranges = parse_changed_line_ranges(root, diff)
+    add_untracked_line_ranges(root, files, ranges)
+    return ranges
+
+
+def filter_findings_to_ranges(
+    findings: Sequence[dict[str, object]], ranges: dict[Path, list[tuple[int, int]]]
+) -> tuple[list[dict[str, object]], int]:
+    """Keep findings overlapping changed lines and count file-level baseline findings."""
+    selected: list[dict[str, object]] = []
+    for finding in findings:
+        file_path = finding.get("filePath")
+        text_range = finding.get("textRange")
+        path = Path(file_path).resolve() if isinstance(file_path, str) else None
+        if path not in ranges:
+            continue
+        if not isinstance(text_range, dict):
+            selected.append(finding)
+            continue
+        start = text_range.get("startLine")
+        end = text_range.get("endLine", start)
+        if isinstance(start, int) and isinstance(end, int) and any(start <= last and end >= first for first, last in ranges[path]):
+            selected.append(finding)
+    return selected, len(findings) - len(selected)
+
+
+def analyze_when_indexed(port: int, files: Sequence[Path], request_timeout: float, startup_timeout: float) -> list[dict[str, object]]:
+    """Retry only the bridge's explicit not-yet-indexed startup response."""
+    body = json.dumps({"fileAbsolutePaths": [str(path) for path in files]}).encode("utf-8")
+    deadline = time.monotonic() + startup_timeout
+    while True:
+        try:
+            response = request_bridge(port, BRIDGE_ANALYZE_PATH, request_timeout, body)
+            return normalized_findings(response)
+        except AnalysisError as error:
+            if "No files were found to be indexed by SonarQube for IDE" not in str(error) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.5)
+
+
+def result_payload(
+    selection: Selection,
+    port: int,
+    compile_commands: Path,
+    findings: list[dict[str, object]],
+    baseline_findings_suppressed: int = 0,
+) -> dict[str, object]:
     """Create the stable machine-readable report written to stdout."""
     return {
         "status": "issues_found" if findings else "clean",
@@ -205,35 +462,79 @@ def result_payload(selection: Selection, port: int, compile_commands: Path, find
             "submitted": [str(path) for path in selection.submitted],
             "skipped": selection.skipped,
         },
+        "baselineFindingsSuppressed": baseline_findings_suppressed,
         "findings": findings,
     }
 
 
+def _validate_arguments(args: argparse.Namespace) -> None:
+    """Reject combinations that cannot produce a deterministic analysis."""
+    if args.timeout <= 0:
+        raise AnalysisError("--timeout must be greater than zero")
+    if args.files and (args.base is not None or args.dirty):
+        raise AnalysisError("Explicit files cannot be combined with a change selector")
+
+
+def _analysis_database(root: Path, args: argparse.Namespace) -> Path:
+    """Prepare or locate the compilation database requested by the CLI."""
+    database = (
+        (root / args.build_directory / COMPILE_COMMANDS_FILENAME).resolve()
+        if args.no_prepare
+        else prepare_compilation_database(root, args.build_directory)
+    )
+    if not database.is_file():
+        raise AnalysisError(f"Compilation database is missing: {database}")
+    return database
+
+
+def _selected_files(root: Path, args: argparse.Namespace) -> Selection:
+    """Resolve the CLI file selector and require at least one analyzable file."""
+    requested, source = (list(args.files), "explicit") if args.files else changed_paths(root, args.base)
+    selection = select_files(root, requested, source)
+    if not selection.submitted:
+        raise AnalysisError("No analyzable C/C++ files were selected")
+    return selection
+
+
+def _analysis_bridge(root: Path, args: argparse.Namespace) -> int:
+    """Return the requested bridge or open a dedicated workspace to discover one."""
+    if args.port is not None:
+        return args.port
+    if args.no_prepare:
+        raise AnalysisError("--no-prepare requires --port")
+    workspace = write_workspace(root, args.build_directory, args.connection_id, args.project_key)
+    return open_workspace_and_find_bridge(workspace, args.startup_timeout)
+
+
+def _analyze_selection(
+    root: Path,
+    args: argparse.Namespace,
+    selection: Selection,
+    port: int,
+) -> tuple[list[dict[str, object]], int]:
+    """Run the bridge request and optionally retain only findings on changed lines."""
+    request_bridge(port, BRIDGE_STATUS_PATH, args.timeout)
+    findings = analyze_when_indexed(port, selection.submitted, args.timeout, args.startup_timeout)
+    if args.base is None:
+        return findings, 0
+    filtered, suppressed = filter_findings_to_ranges(
+        findings, changed_line_ranges(root, args.base, selection.submitted)
+    )
+    return filtered, suppressed
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
-    """Run one local IDE analysis request and print a JSON report."""
+    """Prepare the worktree, run one local IDE request, and print JSON."""
     args = parse_arguments(arguments)
     try:
-        if args.timeout <= 0:
-            raise AnalysisError("--timeout must be greater than zero")
-        if args.files and (args.base is not None or args.dirty):
-            raise AnalysisError("Explicit files cannot be combined with --base or --dirty")
+        _validate_arguments(args)
         root = repository_root()
-        compile_commands = (root / args.compile_commands).resolve() if not args.compile_commands.is_absolute() else args.compile_commands.resolve()
-        if not compile_commands.is_file():
-            raise AnalysisError(f"Compilation database is missing: {compile_commands}")
-        requested, source = (list(args.files), "explicit") if args.files else changed_paths(root, args.base)
-        selection = select_files(root, requested, source)
-        if not selection.submitted:
-            raise AnalysisError("No analyzable C/C++ files were selected")
-        validate_compile_commands(compile_commands, selection.submitted)
-        request_bridge(bridge_url(args.port, BRIDGE_STATUS_PATH), args.timeout)
-        response = request_bridge(
-            bridge_url(args.port, BRIDGE_ANALYZE_PATH),
-            args.timeout,
-            json.dumps({"fileAbsolutePaths": [str(path) for path in selection.submitted]}).encode("utf-8"),
-        )
-        findings = normalized_findings(response)
-        print(json.dumps(result_payload(selection, args.port, compile_commands, findings), ensure_ascii=False, indent=2))
+        database = _analysis_database(root, args)
+        selection = _selected_files(root, args)
+        validate_compile_commands(root, database, selection.submitted)
+        port = _analysis_bridge(root, args)
+        findings, suppressed = _analyze_selection(root, args, selection, port)
+        print(json.dumps(result_payload(selection, port, database, findings, suppressed), ensure_ascii=False, indent=2))
         return 1 if findings else 0
     except AnalysisError as error:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False), file=sys.stderr)

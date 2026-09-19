@@ -253,6 +253,11 @@ Rules:
   RGBA8 image. It must not retain borrowed input, call ImGui, create GPU
   resources, or mutate the project. Returning a failure selects the declared
   mesh, image, audio, or generic host fallback.
+- Preview providers must poll the supplied cancellation token during expensive
+  decode or raster work. The host schedules calls through a bounded service,
+  retains the provider until completion, validates output, and reuses successful
+  results by contribution/version, request dimensions, asset type, and payload
+  digest. Providers must not add their own global preview cache or worker pool.
 
 ## Module Shapes
 

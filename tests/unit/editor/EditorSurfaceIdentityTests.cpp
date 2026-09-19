@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -24,9 +25,21 @@ namespace {
         REQUIRE(source.Value().Value() == "assets/scripts/player.horo_script");
 
         for (const std::string_view invalid :
-             {"", "/tmp/player.horo_script", "../outside.horo_script", "assets/./player.horo_script", "assets\\\\player.horo_script"}) {
+             {"", "/tmp/player.horo_script", "../outside.horo_script", "assets/./player.horo_script", "assets\\\\player.horo_script",
+              "assets/invalid*name.horo_script", "assets/invalid?name.horo_script", "assets/invalid\"name.horo_script",
+              "assets/invalid<name.horo_script", "assets/invalid>name.horo_script", "assets/invalid|name.horo_script"}) {
             REQUIRE(SourceDocumentId::Parse(invalid).HasError());
         }
+    }
+
+    TEST_CASE("Identity text bounds are inclusive and reject oversized values", "[unit][editor][surface]") {
+        const auto maximumSurface = SurfaceTypeId::Parse(std::string(MaximumSurfaceTypeIdBytes, 'a'));
+        REQUIRE(maximumSurface.HasValue());
+        REQUIRE(SurfaceTypeId::Parse(std::string(MaximumSurfaceTypeIdBytes + 1, 'a')).HasError());
+
+        const auto maximumSource = SourceDocumentId::Parse(std::string(MaximumSourceDocumentIdBytes, 'a'));
+        REQUIRE(maximumSource.HasValue());
+        REQUIRE(SourceDocumentId::Parse(std::string(MaximumSourceDocumentIdBytes + 1, 'a')).HasError());
     }
 
     TEST_CASE("Document kinds have stable serialized names", "[unit][editor][surface]") {

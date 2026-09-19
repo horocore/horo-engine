@@ -140,10 +140,10 @@ namespace Horo::Editor {
 
     /** @brief Explicit lifecycle capabilities for one surface descriptor. */
     struct SurfaceCapabilities final {
-        std::uint8_t bits{};
+        std::byte bits{};
 
         [[nodiscard]] constexpr bool Has(const SurfaceCapability capability) const noexcept {
-            return (bits & static_cast<std::uint8_t>(capability)) != 0;
+            return (bits & std::byte{static_cast<unsigned char>(capability)}) != std::byte{0};
         }
 
         [[nodiscard]] constexpr auto operator<=>(const SurfaceCapabilities &) const noexcept = default;
@@ -244,6 +244,10 @@ namespace Horo::Editor {
         [[nodiscard]] std::size_t Size() const noexcept;
 
     private:
+        [[nodiscard]] auto FindInstanceIterator(DocumentInstanceId instance) noexcept -> std::vector<DocumentIdentity>::iterator;
+        [[nodiscard]] auto FindInstanceIterator(DocumentInstanceId instance) const noexcept
+            -> std::vector<DocumentIdentity>::const_iterator;
+
         std::uint64_t nextInstanceValue_{1};
         std::vector<DocumentIdentity> openDocuments_;
     };

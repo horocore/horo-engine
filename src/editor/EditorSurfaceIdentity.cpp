@@ -1,16 +1,22 @@
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 
 #include <algorithm>
-#include <cctype>
 #include <limits>
+#include <ranges>
 #include <utility>
 
 namespace Horo::Editor {
     namespace {
         const ErrorDomainId SurfaceIdentityDomain{"horo.editor.surface_identity"};
-        constexpr std::uint8_t KnownSurfaceCapabilityBits =
-            static_cast<std::uint8_t>(SurfaceCapability::Pinned) | static_cast<std::uint8_t>(SurfaceCapability::Conditional) |
-            static_cast<std::uint8_t>(SurfaceCapability::Closable) | static_cast<std::uint8_t>(SurfaceCapability::Restorable);
+
+        using enum SurfaceCapability;
+
+        [[nodiscard]] constexpr std::byte CapabilityByte(const SurfaceCapability capability) noexcept {
+            return std::byte{static_cast<unsigned char>(capability)};
+        }
+
+        constexpr std::byte KnownSurfaceCapabilityBits =
+            CapabilityByte(Pinned) | CapabilityByte(Conditional) | CapabilityByte(Closable) | CapabilityByte(Restorable);
 
         [[nodiscard]] bool IsAsciiAlphaNumeric(const char value) noexcept {
             const auto character = static_cast<unsigned char>(value);
@@ -19,14 +25,15 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] bool IsKnownDocumentKind(const DocumentKind kind) noexcept {
+            using enum DocumentKind;
             switch (kind) {
-                case DocumentKind::None:
-                case DocumentKind::Scene:
-                case DocumentKind::Source:
-                case DocumentKind::Shader:
-                case DocumentKind::Asset:
-                case DocumentKind::Project:
-                case DocumentKind::Custom:
+                case None:
+                case Scene:
+                case Source:
+                case Shader:
+                case Asset:
+                case Project:
+                case Custom:
                     return true;
             }
             return false;
@@ -51,10 +58,7 @@ namespace Horo::Editor {
             }
 
             std::size_t segmentStart = 0;
-            for (std::size_t index = 0; index <= value.size(); ++index) {
-                if (index == value.size()) {
-                    return segmentStart < value.size();
-                }
+            for (std::size_t index = 0; index < value.size(); ++index) {
                 if (value[index] == '.') {
                     if (index == segmentStart) {
                         return false;
@@ -66,18 +70,16 @@ namespace Horo::Editor {
                     return false;
                 }
             }
-            return false;
+            return segmentStart < value.size();
         }
 
         [[nodiscard]] bool IsValidSourceDocumentCharacter(const char value) noexcept {
             const auto character = static_cast<unsigned char>(value);
-            if (value == '\\') {
+            if (value == '\\' || value == ':' || value == '*' || value == '?' || value == '"' || value == '<' || value == '>' ||
+                value == '|') {
                 return false;
             }
-            if (value == ':') {
-                return false;
-            }
-            return std::iscntrl(character) == 0;
+            return character >= 0x20U && character != 0x7FU;
         }
 
         [[nodiscard]] bool IsValidSourceDocumentSegment(const std::string_view segment) noexcept {
@@ -108,10 +110,7 @@ namespace Horo::Editor {
             }
 
             std::size_t segmentStart = 0;
-            for (std::size_t index = 0; index <= value.size(); ++index) {
-                if (index == value.size()) {
-                    return IsValidSourceDocumentSegment(value.substr(segmentStart));
-                }
+            for (std::size_t index = 0; index < value.size(); ++index) {
                 if (value[index] == '/') {
                     if (!IsValidSourceDocumentSegment(value.substr(segmentStart, index - segmentStart))) {
                         return false;
@@ -123,7 +122,13 @@ namespace Horo::Editor {
                     return false;
                 }
             }
-            return false;
+            return IsValidSourceDocumentSegment(value.substr(segmentStart));
+        }
+
+        template <typename Range> [[nodiscard]] auto FindDocumentInstance(Range &documents, const DocumentInstanceId instance) noexcept {
+            return std::ranges::find_if(documents, [instance](const DocumentIdentity &identity) {
+                return identity.instance == instance;
+            });
         }
 
         [[nodiscard]] Error MakeInvalidSerializedKeyError() {
@@ -222,28 +227,29 @@ namespace Horo::Editor {
     }
 
     std::string_view ToString(const DocumentKind kind) noexcept {
+        using enum DocumentKind;
         switch (kind) {
-            case DocumentKind::None:
+            case None:
                 return {};
-            case DocumentKind::Scene:
+            case Scene:
                 return "scene";
-            case DocumentKind::Source:
+            case Source:
                 return "source";
-            case DocumentKind::Shader:
+            case Shader:
                 return "shader";
-            case DocumentKind::Asset:
+            case Asset:
                 return "asset";
-            case DocumentKind::Project:
+            case Project:
                 return "project";
-            case DocumentKind::Custom:
+            case Custom:
                 return "custom";
         }
         return {};
     }
 
     Result<DocumentKind> ParseDocumentKind(const std::string_view value) {
-        for (const DocumentKind kind : {DocumentKind::Scene, DocumentKind::Source, DocumentKind::Shader, DocumentKind::Asset,
-                                        DocumentKind::Project, DocumentKind::Custom}) {
+        using enum DocumentKind;
+        for (const DocumentKind kind : {Scene, Source, Shader, Asset, Project, Custom}) {
             if (ToString(kind) == value) {
                 return Result<DocumentKind>::Success(kind);
             }
@@ -274,11 +280,12 @@ namespace Horo::Editor {
     }
 
     bool SurfaceDescriptor::IsValid() const noexcept {
-        return type.IsValid() && IsKnownDocumentKind(documentKind) &&
-               (capabilities.bits & static_cast<std::uint8_t>(~KnownSurfaceCapabilityBits)) == 0;
+        return type.IsValid() && IsKnownDocumentKind(documentKind) && (capabilities.bits & ~KnownSurfaceCapabilityBits) == std::byte{0};
     }
 
     Result<SurfaceDescriptor> SurfaceDescriptor::MakeViewport() {
+        using enum DocumentKind;
+        using enum SurfaceCapability;
         const auto type = SurfaceTypeId::Parse("horo.viewport");
         if (type.HasError()) {
             return Result<SurfaceDescriptor>::Failure(type.ErrorValue());
@@ -286,12 +293,13 @@ namespace Horo::Editor {
         return Result<SurfaceDescriptor>::Success(SurfaceDescriptor{
             .type = type.Value(),
             .documentKind = DocumentKind::None,
-            .capabilities = SurfaceCapabilities{static_cast<std::uint8_t>(SurfaceCapability::Pinned) |
-                                                static_cast<std::uint8_t>(SurfaceCapability::Restorable)},
+            .capabilities = SurfaceCapabilities{CapabilityByte(Pinned) | CapabilityByte(Restorable)},
         });
     }
 
     Result<SurfaceDescriptor> SurfaceDescriptor::MakeGame() {
+        using enum DocumentKind;
+        using enum SurfaceCapability;
         const auto type = SurfaceTypeId::Parse("horo.game");
         if (type.HasError()) {
             return Result<SurfaceDescriptor>::Failure(type.ErrorValue());
@@ -299,14 +307,13 @@ namespace Horo::Editor {
         return Result<SurfaceDescriptor>::Success(SurfaceDescriptor{
             .type = type.Value(),
             .documentKind = DocumentKind::None,
-            .capabilities = SurfaceCapabilities{static_cast<std::uint8_t>(SurfaceCapability::Conditional) |
-                                                static_cast<std::uint8_t>(SurfaceCapability::Closable) |
-                                                static_cast<std::uint8_t>(SurfaceCapability::Restorable)},
+            .capabilities = SurfaceCapabilities{CapabilityByte(Conditional) | CapabilityByte(Closable) | CapabilityByte(Restorable)},
         });
     }
 
     bool DocumentOpenKey::IsValid() const noexcept {
-        return kind != DocumentKind::None && IsKnownDocumentKind(kind) && source.IsValid();
+        using enum DocumentKind;
+        return kind != None && IsKnownDocumentKind(kind) && source.IsValid();
     }
 
     bool DocumentIdentity::IsValid() const noexcept {
@@ -366,14 +373,22 @@ namespace Horo::Editor {
         });
     }
 
+    auto DocumentIdentityRegistry::FindInstanceIterator(const DocumentInstanceId instance) noexcept
+        -> std::vector<DocumentIdentity>::iterator {
+        return FindDocumentInstance(openDocuments_, instance);
+    }
+
+    auto DocumentIdentityRegistry::FindInstanceIterator(const DocumentInstanceId instance) const noexcept
+        -> std::vector<DocumentIdentity>::const_iterator {
+        return FindDocumentInstance(openDocuments_, instance);
+    }
+
     Result<void> DocumentIdentityRegistry::Close(const DocumentInstanceId instance) {
         if (!instance.IsValid()) {
             return Result<void>::Failure(MakeError(EditorSurfaceErrors::InvalidDocumentInstance));
         }
 
-        const auto iterator = std::find_if(openDocuments_.begin(), openDocuments_.end(), [instance](const DocumentIdentity &identity) {
-            return identity.instance == instance;
-        });
+        const auto iterator = FindInstanceIterator(instance);
         if (iterator == openDocuments_.end()) {
             return Result<void>::Failure(MakeError(EditorSurfaceErrors::InstanceUnknown));
         }
@@ -386,7 +401,7 @@ namespace Horo::Editor {
         if (!key.IsValid()) {
             return std::nullopt;
         }
-        const auto iterator = std::find_if(openDocuments_.begin(), openDocuments_.end(), [&key](const DocumentIdentity &identity) {
+        const auto iterator = std::ranges::find_if(openDocuments_, [&key](const DocumentIdentity &identity) {
             return identity.key == key;
         });
         if (iterator == openDocuments_.end()) {
@@ -399,9 +414,7 @@ namespace Horo::Editor {
         if (!instance.IsValid()) {
             return std::nullopt;
         }
-        const auto iterator = std::find_if(openDocuments_.begin(), openDocuments_.end(), [instance](const DocumentIdentity &identity) {
-            return identity.instance == instance;
-        });
+        const auto iterator = FindInstanceIterator(instance);
         if (iterator == openDocuments_.end()) {
             return std::nullopt;
         }
