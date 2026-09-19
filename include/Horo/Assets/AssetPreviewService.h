@@ -64,11 +64,11 @@ namespace Horo::Assets {
         /** @brief Returns the current lifecycle state without blocking. */
         [[nodiscard]] AssetPreviewState State() const noexcept;
         /** @brief Requests cooperative cancellation of queued or running work. */
-        [[nodiscard]] Result<void> RequestCancel();
+        [[nodiscard]] Result<void> RequestCancel() const;
         /** @brief Waits for this request to reach a terminal state. */
         [[nodiscard]] Result<void> Wait() const;
         /** @brief Consumes the terminal result exactly once. */
-        [[nodiscard]] Result<AssetPreviewResult> TakeResult();
+        [[nodiscard]] Result<AssetPreviewResult> TakeResult() const;
 
     private:
         struct Request;

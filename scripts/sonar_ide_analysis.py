@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 # Process execution is restricted to resolved, fixed tool names below.
@@ -26,10 +27,14 @@ from urllib.request import Request, urlopen
 SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"})
 TRANSLATION_UNIT_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
 DEFAULT_BUILD_DIRECTORY = Path("build/sonar-local")
-DEFAULT_COMPILE_COMMANDS = DEFAULT_BUILD_DIRECTORY / "compile_commands.json"
+COMPILE_COMMANDS_FILENAME = "compile_commands.json"
+DEFAULT_COMPILE_COMMANDS = DEFAULT_BUILD_DIRECTORY / COMPILE_COMMANDS_FILENAME
 BRIDGE_PORTS = range(64120, 64131)
 BRIDGE_STATUS_PATH = "/sonarlint/api/status"
 BRIDGE_ANALYZE_PATH = "/sonarlint/api/analysis/files"
+BRIDGE_PATHS = frozenset({BRIDGE_STATUS_PATH, BRIDGE_ANALYZE_PATH})
+FIXED_TOOLS = frozenset({"cmake", "code", "git"})
+GIT_REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}")
 
 
 class AnalysisError(RuntimeError):
@@ -64,6 +69,8 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
 
 def resolved_tool(name: str) -> str:
     """Resolve one fixed prerequisite without delegating lookup to a child process."""
+    if name not in FIXED_TOOLS:
+        raise AnalysisError(f"Unsupported prerequisite: {name}")
     executable = shutil.which(name)
     if executable is None:
         raise AnalysisError(f"{name} is required")
@@ -74,9 +81,8 @@ def run_command(tool: str, arguments: Sequence[str], error_message: str) -> subp
     """Run a fixed prerequisite without contaminating JSON stdout."""
     command = [resolved_tool(tool), *arguments]
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    result = subprocess.run(  # nosec B603
-        command, check=False, capture_output=True, text=True, shell=False
-    )
+    # The executable is allowlisted/resolved and arguments are never evaluated by a shell.
+    result = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)  # NOSONAR # nosec B603
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise AnalysisError(f"{error_message}{': ' + detail if detail else ''}")
@@ -88,9 +94,8 @@ def run_git(root: Path, *arguments: str) -> bytes:
     try:
         command = [resolved_tool("git"), "-C", str(root), *arguments]
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        return subprocess.run(  # nosec B603
-            command, check=True, capture_output=True, shell=False
-        ).stdout
+        # Callers validate external refs and place them after Git's end-of-options marker.
+        return subprocess.run(command, check=True, capture_output=True, shell=False).stdout  # NOSONAR # nosec B603
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", errors="replace").strip()
         raise AnalysisError(detail or "git could not select files for analysis") from error
@@ -110,7 +115,8 @@ def paths_from_nul_output(output: bytes) -> list[Path]:
 def changed_paths(root: Path, base: str | None) -> tuple[list[Path], str]:
     """Return changed paths for a base ref or the current dirty worktree."""
     if base is not None:
-        merge_base = run_git(root, "merge-base", base, "HEAD").decode("utf-8").strip()
+        base = validated_git_ref(base)
+        merge_base = run_git(root, "merge-base", "--", base, "HEAD").decode("utf-8").strip()
         tracked = paths_from_nul_output(run_git(root, "diff", "--name-only", "--diff-filter=ACMR", "-z", merge_base))
         untracked = paths_from_nul_output(run_git(root, "ls-files", "--others", "--exclude-standard", "-z"))
         return list(dict.fromkeys([*tracked, *untracked])), f"base:{base}"
@@ -129,6 +135,13 @@ def changed_paths(root: Path, base: str | None) -> tuple[list[Path], str]:
         if record[0:1] in {b"R", b"C"} or record[1:2] in {b"R", b"C"}:
             index += 1
     return paths, "dirty"
+
+
+def validated_git_ref(value: str) -> str:
+    """Accept only an option-safe, bounded Git ref spelling."""
+    if GIT_REF_PATTERN.fullmatch(value) is None or ".." in value or "//" in value or value.endswith(("/", ".")):
+        raise AnalysisError("--base must be a conventional Git ref name")
+    return value
 
 
 def select_files(root: Path, requested: Sequence[Path], source: str) -> Selection:
@@ -173,13 +186,13 @@ def prepare_compilation_database(root: Path, build_directory: Path) -> Path:
         ],
         "CMake could not prepare SonarQube for IDE analysis",
     )
-    database = build / "compile_commands.json"
+    database = build / COMPILE_COMMANDS_FILENAME
     if not database.is_file():
         raise AnalysisError(f"CMake did not create the compilation database: {database}")
     return database
 
 
-def validate_compile_commands(compilation_database: Path, files: Sequence[Path]) -> None:
+def validate_compile_commands(root: Path, compilation_database: Path, files: Sequence[Path]) -> None:
     """Require a command for every submitted translation unit; headers use IDE context."""
     try:
         entries = json.loads(compilation_database.read_text(encoding="utf-8"))
@@ -194,7 +207,9 @@ def validate_compile_commands(compilation_database: Path, files: Sequence[Path])
             continue
         directory = Path(entry["directory"]) if isinstance(entry.get("directory"), str) else compilation_database.parent
         source = Path(entry["file"])
-        compiled_files.add((source if source.is_absolute() else directory / source).resolve())
+        absolute_source = Path(os.path.abspath(source if source.is_absolute() else directory / source))
+        if absolute_source.is_relative_to(root):
+            compiled_files.add(absolute_source)
 
     required = [path for path in files if path.suffix.lower() in TRANSLATION_UNIT_SUFFIXES]
     missing = [str(path) for path in required if path not in compiled_files]
@@ -206,15 +221,19 @@ def bridge_url(port: int, path: str) -> str:
     """Build a loopback-only bridge URL after validating Sonar's port range."""
     if port not in BRIDGE_PORTS:
         raise AnalysisError("--port must be in SonarQube for IDE's 64120-64130 range")
+    if path not in BRIDGE_PATHS:
+        raise AnalysisError("Unsupported SonarQube for IDE bridge path")
     return f"http://127.0.0.1:{port}{path}"
 
 
-def request_bridge(url: str, timeout: float, body: bytes | None = None) -> object:
+def request_bridge(port: int, path: str, timeout: float, body: bytes | None = None) -> object:
     """Call the bridge with the localhost headers required by its origin checks."""
+    url = bridge_url(port, path)
     headers = {"Host": "localhost", "Origin": "http://localhost"}
     if body is not None:
         headers["Content-Type"] = "application/json"
-    request = Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
+    # bridge_url restricts both the host/port range and endpoint path to fixed local values.
+    request = Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")  # NOSONAR
     try:
         # URL is loopback-only and its port was validated by bridge_url.
         with urlopen(request, timeout=timeout) as response:  # nosec B310
@@ -235,7 +254,7 @@ def available_bridge_ports(timeout: float = 0.2) -> set[int]:
     available: set[int] = set()
     for port in BRIDGE_PORTS:
         try:
-            request_bridge(bridge_url(port, BRIDGE_STATUS_PATH), timeout)
+            request_bridge(port, BRIDGE_STATUS_PATH, timeout)
             available.add(port)
         except AnalysisError:
             continue
@@ -249,7 +268,7 @@ def write_workspace(root: Path, build_directory: Path, connection_id: str, proje
     payload = {
         "folders": [{"path": str(root)}],
         "settings": {
-            "sonarlint.pathToCompileCommands": str(build / "compile_commands.json"),
+            "sonarlint.pathToCompileCommands": str(build / COMPILE_COMMANDS_FILENAME),
             "sonarlint.connectedMode.project": {"connectionId": connection_id, "projectKey": project_key},
         },
     }
@@ -299,13 +318,8 @@ def normalized_findings(response: object) -> list[dict[str, object]]:
     return findings
 
 
-def changed_line_ranges(root: Path, base: str, files: Sequence[Path]) -> dict[Path, list[tuple[int, int]]]:
-    """Return inclusive added-line ranges, including the full contents of untracked files."""
-    merge_base = run_git(root, "merge-base", base, "HEAD").decode("utf-8").strip()
-    relative = [str(path.relative_to(root)) for path in files]
-    diff = run_git(root, "diff", "--unified=0", "--no-color", "--diff-filter=ACMR", merge_base, "--", *relative).decode(
-        "utf-8", errors="surrogateescape"
-    )
+def parse_changed_line_ranges(root: Path, diff: str) -> dict[Path, list[tuple[int, int]]]:
+    """Parse inclusive added-line ranges from one zero-context Git diff."""
     ranges: dict[Path, list[tuple[int, int]]] = {}
     current: Path | None = None
     hunk = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -320,14 +334,29 @@ def changed_line_ranges(root: Path, base: str, files: Sequence[Path]) -> dict[Pa
             count = int(match.group(2) or "1")
             if count > 0:
                 ranges.setdefault(current, []).append((start, start + count - 1))
+    return ranges
 
+
+def add_untracked_line_ranges(root: Path, files: Sequence[Path], ranges: dict[Path, list[tuple[int, int]]]) -> None:
+    """Treat the complete contents of selected untracked files as changed."""
     tracked = set(paths_from_nul_output(run_git(root, "ls-files", "-z")))
     for path in files:
-        relative_path = path.relative_to(root)
-        if relative_path not in tracked:
-            line_count = len(path.read_text(encoding="utf-8", errors="surrogateescape").splitlines())
-            if line_count > 0:
-                ranges[path] = [(1, line_count)]
+        if path.relative_to(root) in tracked:
+            continue
+        line_count = len(path.read_text(encoding="utf-8", errors="surrogateescape").splitlines())
+        if line_count > 0:
+            ranges[path] = [(1, line_count)]
+
+
+def changed_line_ranges(root: Path, base: str, files: Sequence[Path]) -> dict[Path, list[tuple[int, int]]]:
+    """Return inclusive added-line ranges, including the full contents of untracked files."""
+    merge_base = run_git(root, "merge-base", "--", validated_git_ref(base), "HEAD").decode("utf-8").strip()
+    relative = [str(path.relative_to(root)) for path in files]
+    diff = run_git(root, "diff", "--unified=0", "--no-color", "--diff-filter=ACMR", merge_base, "--", *relative).decode(
+        "utf-8", errors="surrogateescape"
+    )
+    ranges = parse_changed_line_ranges(root, diff)
+    add_untracked_line_ranges(root, files, ranges)
     return ranges
 
 
@@ -358,7 +387,7 @@ def analyze_when_indexed(port: int, files: Sequence[Path], request_timeout: floa
     deadline = time.monotonic() + startup_timeout
     while True:
         try:
-            response = request_bridge(bridge_url(port, BRIDGE_ANALYZE_PATH), request_timeout, body)
+            response = request_bridge(port, BRIDGE_ANALYZE_PATH, request_timeout, body)
             return normalized_findings(response)
         except AnalysisError as error:
             if "No files were found to be indexed by SonarQube for IDE" not in str(error) or time.monotonic() >= deadline:
@@ -399,7 +428,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         root = repository_root()
         build_directory = args.build_directory
         database = (
-            (root / build_directory / "compile_commands.json").resolve()
+            (root / build_directory / COMPILE_COMMANDS_FILENAME).resolve()
             if args.no_prepare
             else prepare_compilation_database(root, build_directory)
         )
@@ -409,7 +438,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         selection = select_files(root, requested, source)
         if not selection.submitted:
             raise AnalysisError("No analyzable C/C++ files were selected")
-        validate_compile_commands(database, selection.submitted)
+        validate_compile_commands(root, database, selection.submitted)
 
         port = args.port
         if port is None:
@@ -417,7 +446,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 raise AnalysisError("--no-prepare requires --port")
             workspace = write_workspace(root, build_directory, args.connection_id, args.project_key)
             port = open_workspace_and_find_bridge(workspace, args.startup_timeout)
-        request_bridge(bridge_url(port, BRIDGE_STATUS_PATH), args.timeout)
+        request_bridge(port, BRIDGE_STATUS_PATH, args.timeout)
         findings = analyze_when_indexed(port, selection.submitted, args.timeout, args.startup_timeout)
         suppressed = 0
         if args.base is not None:

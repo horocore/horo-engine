@@ -275,7 +275,7 @@ namespace Horo::Assets {
     }
 
     /** @copydoc AssetPreviewHandle::RequestCancel */
-    Result<void> AssetPreviewHandle::RequestCancel() {
+    Result<void> AssetPreviewHandle::RequestCancel() const {
         if (!request_ || !request_->job)
             return Result<void>::Failure(MakeError(AssetErrors::PreviewShutdown));
         const JobSystem *const jobs = request_->ActiveJobs();
@@ -295,7 +295,7 @@ namespace Horo::Assets {
     }
 
     /** @copydoc AssetPreviewHandle::TakeResult */
-    Result<AssetPreviewResult> AssetPreviewHandle::TakeResult() {
+    Result<AssetPreviewResult> AssetPreviewHandle::TakeResult() const {
         if (!request_)
             return Failure<AssetPreviewResult>(AssetErrors::PreviewShutdown);
         if (!IsTerminal(request_->state.load()))
