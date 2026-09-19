@@ -92,6 +92,20 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor ReplicationRoleWrongThread;
     /** @brief Replication role state rejected work after shutdown. */
     extern const ErrorCodeDescriptor ReplicationRoleShuttingDown;
+    /** @brief A replication world activation or identity tuple is malformed. */
+    extern const ErrorCodeDescriptor ReplicationWorldInvalid;
+    /** @brief A replication world request names a replaced Scene/session generation. */
+    extern const ErrorCodeDescriptor ReplicationWorldStale;
+    /** @brief A replication world is not currently active for the requested operation. */
+    extern const ErrorCodeDescriptor ReplicationWorldUnavailable;
+    /** @brief A replication world request names a phase not declared by the active world. */
+    extern const ErrorCodeDescriptor ReplicationWorldPhaseInvalid;
+    /** @brief A replication world candidate or retired-world ledger exceeded its bound. */
+    extern const ErrorCodeDescriptor ReplicationWorldCapacityExceeded;
+    /** @brief A replication world operation was cancelled before publication or admission. */
+    extern const ErrorCodeDescriptor ReplicationWorldCancelled;
+    /** @brief A replication world rejected work after shutdown began. */
+    extern const ErrorCodeDescriptor ReplicationWorldShuttingDown;
     /** @brief Transport capability evidence or a bounded requirement is malformed. */
     extern const ErrorCodeDescriptor TransportCapabilityDescriptorInvalid;
     /** @brief Transport capability evidence changed after the caller captured its revision. */

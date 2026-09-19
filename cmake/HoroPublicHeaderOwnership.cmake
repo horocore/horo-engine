@@ -174,6 +174,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/HandshakeNegotiation.h
     Horo/Network/NetworkObjectMapping.h
     Horo/Network/PeerSessionLifecycle.h
+    Horo/Network/ReplicationWorldLifecycle.h
 )
 horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
     Horo/Network/DeterministicTransport.h

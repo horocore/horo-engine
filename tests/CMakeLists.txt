@@ -219,6 +219,7 @@ add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/HandshakeNegotiationTests.cpp
         unit/runtime/networking/NetworkObjectMappingTests.cpp
         unit/runtime/networking/PeerSessionLifecycleTests.cpp
+        unit/runtime/networking/ReplicationWorldLifecycleTests.cpp
 )
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime)
