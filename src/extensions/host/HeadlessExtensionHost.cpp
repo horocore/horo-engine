@@ -3,18 +3,37 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <atomic>
+#include <deque>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <utility>
 
 namespace Horo::Extensions {
+    namespace {
+        class HeadlessHostSynchronization final {
+        public:
+            [[nodiscard]] std::shared_mutex &Lifecycle() const noexcept {
+                return lifecycle_;
+            }
+
+            [[nodiscard]] std::mutex &Shutdown() const noexcept {
+                return shutdown_;
+            }
+
+        private:
+            mutable std::shared_mutex lifecycle_;
+            mutable std::mutex shutdown_;
+        };
+    }  // namespace
+
     class HeadlessExtensionHost::Impl final {
         friend class HeadlessExtensionHost;
 
         HeadlessExtensionHostConfiguration configuration;
-        mutable std::mutex lifecycleMutex;
+        HeadlessHostSynchronization synchronization;
         mutable std::mutex diagnosticMutex;
-        mutable std::vector<HeadlessExtensionHostDiagnostic> diagnostics;
+        mutable std::deque<HeadlessExtensionHostDiagnostic> diagnostics;
         std::atomic<HeadlessExtensionHostState> state{HeadlessExtensionHostState::Configuring};
         std::vector<std::string> discoveredPackages;
         std::vector<Discovery::RootDiagnostic> rootDiagnostics;
@@ -45,7 +64,7 @@ namespace Horo::Extensions {
         void Record(const HeadlessExtensionHostStage stage, std::string subject, const Error &error) const {
             std::scoped_lock lock{diagnosticMutex};
             if (diagnostics.size() >= configuration.maximumDiagnostics)
-                diagnostics.erase(diagnostics.begin());
+                diagnostics.pop_front();
             diagnostics.emplace_back(stage, std::move(subject), error);
         }
 
@@ -72,7 +91,7 @@ namespace Horo::Extensions {
 
         template <typename Operation> [[nodiscard]] auto Configure(std::string subject, Operation &&operation) -> decltype(operation()) {
             using OperationResult = decltype(operation());
-            std::scoped_lock lock{lifecycleMutex};
+            std::unique_lock lock{synchronization.Lifecycle()};
             if (Result<void> configuring = RequireConfiguring(); configuring.HasError()) {
                 Record(HeadlessExtensionHostStage::Registration, std::move(subject), configuring.ErrorValue());
                 return OperationResult::Failure(configuring.ErrorValue());
@@ -83,18 +102,30 @@ namespace Horo::Extensions {
             return result;
         }
 
-        template <typename T>
-        [[nodiscard]] Result<T> RejectWork(const HeadlessExtensionHostStage stage, const std::string_view subject,
-                                           const Error &error) const {
-            Record(stage, std::string{subject}, error);
-            return Result<T>::Failure(error);
+        template <typename Operation>
+        [[nodiscard]] auto ExecuteReady(const HeadlessExtensionHostStage stage, std::string subject, Operation &&operation) const
+            -> decltype(operation()) {
+            using OperationResult = decltype(operation());
+            std::shared_lock lock{synchronization.Lifecycle()};
+            if (const auto error = ReadyFailure()) {
+                Record(stage, std::move(subject), *error);
+                return OperationResult::Failure(*error);
+            }
+            OperationResult result = operation();
+            if (result.HasError())
+                Record(stage, std::move(subject), result.ErrorValue());
+            return result;
         }
 
         [[nodiscard]] Result<void> FailStartup(const HeadlessExtensionHostStage stage, std::string subject, Error error) {
             Record(stage, std::move(subject), error);
-            manager->UnloadAll();
+            importerSnapshot.reset();
             importers->Reset();
-            state.store(HeadlessExtensionHostState::Failed);
+            if (manager != nullptr)
+                manager->UnloadAll();
+            manager.reset();
+            HeadlessExtensionHostState expected = HeadlessExtensionHostState::Configuring;
+            static_cast<void>(state.compare_exchange_strong(expected, HeadlessExtensionHostState::Failed));
             return Result<void>::Failure(std::move(error));
         }
     };
@@ -185,7 +216,7 @@ namespace Horo::Extensions {
 
     /** @copydoc HeadlessExtensionHost::Start */
     Result<void> HeadlessExtensionHost::Start(const std::span<const Discovery::PackageLocation> locations) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
+        std::unique_lock lock{impl_->synchronization.Lifecycle()};
         if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
             impl_->Record(HeadlessExtensionHostStage::Activation, "headless-host", configuring.ErrorValue());
             return configuring;
@@ -216,7 +247,13 @@ namespace Horo::Extensions {
             return impl_->FailStartup(HeadlessExtensionHostStage::Activation, "asset.importer", std::move(failure));
         }
         impl_->importerSnapshot = std::move(published).Value();
-        impl_->state.store(HeadlessExtensionHostState::Ready);
+        if (HeadlessExtensionHostState expected = HeadlessExtensionHostState::Configuring;
+            !impl_->state.compare_exchange_strong(expected, HeadlessExtensionHostState::Ready)) {
+            Error failure =
+                MakeError(ExtensionErrors::HeadlessHostStateInvalid, "Headless extension host shutdown began before startup completed.");
+            impl_->Record(HeadlessExtensionHostStage::Activation, "headless-host", failure);
+            return Result<void>::Failure(std::move(failure));
+        }
         return Result<void>::Success();
     }
 
@@ -224,69 +261,50 @@ namespace Horo::Extensions {
     Result<Assets::PreparedAssetImport> HeadlessExtensionHost::Import(const std::string_view contributionId,
                                                                       const Assets::AssetImportInput &input,
                                                                       const CancellationToken &cancellation) const {
-        if (const auto error = impl_->ReadyFailure())
-            return impl_->RejectWork<Assets::PreparedAssetImport>(HeadlessExtensionHostStage::Import, contributionId, *error);
-        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> snapshot;
-        {
-            std::scoped_lock lock{impl_->lifecycleMutex};
-            snapshot = impl_->importerSnapshot;
-        }
-        const Assets::AssetImporterContribution *contribution = snapshot != nullptr ? snapshot->FindById(contributionId) : nullptr;
-        if (contribution == nullptr || contribution->strategy == nullptr) {
-            Error error = MakeError(ExtensionErrors::HeadlessImporterUnavailable,
-                                    "No published importer matches contribution: " + std::string{contributionId});
-            impl_->Record(HeadlessExtensionHostStage::Import, std::string{contributionId}, error);
-            return Result<Assets::PreparedAssetImport>::Failure(std::move(error));
-        }
-        auto imported = contribution->strategy->Import(input, cancellation);
-        if (imported.HasError())
-            impl_->Record(HeadlessExtensionHostStage::Import, std::string{contributionId}, imported.ErrorValue());
-        return imported;
+        return impl_->ExecuteReady(HeadlessExtensionHostStage::Import, std::string{contributionId},
+                                   [this, contributionId, &input, &cancellation] {
+            const std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> &snapshot = impl_->importerSnapshot;
+            const Assets::AssetImporterContribution *contribution = snapshot != nullptr ? snapshot->FindById(contributionId) : nullptr;
+            if (contribution == nullptr || contribution->strategy == nullptr)
+                return Result<Assets::PreparedAssetImport>::Failure(
+                    MakeError(ExtensionErrors::HeadlessImporterUnavailable,
+                              "No published importer matches contribution: " + std::string{contributionId}));
+            return contribution->strategy->Import(input, cancellation);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::Cook */
     Result<AssetCookerResult> HeadlessExtensionHost::Cook(const AssetCookerRequest &request, const CancellationToken &cancellation) const {
-        if (const auto error = impl_->ReadyFailure())
-            return impl_->RejectWork<AssetCookerResult>(HeadlessExtensionHostStage::Cook, request.input.assetType.Value(), *error);
-        auto result = impl_->cookers.Cook(request, cancellation);
-        if (result.HasError())
-            impl_->Record(HeadlessExtensionHostStage::Cook, request.input.assetType.Value(), result.ErrorValue());
-        return result;
+        return impl_->ExecuteReady(HeadlessExtensionHostStage::Cook, request.input.assetType.Value(), [this, &request, &cancellation] {
+            return impl_->cookers.Cook(request, cancellation);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::Validate */
     Result<std::vector<AttributedProjectValidationResult>> HeadlessExtensionHost::Validate(const ProjectValidationSnapshot &snapshot,
                                                                                            const CancellationToken &cancellation) const {
-        if (const auto error = impl_->ReadyFailure())
-            return impl_->RejectWork<std::vector<AttributedProjectValidationResult>>(HeadlessExtensionHostStage::Validation,
-                                                                                     snapshot.projectId, *error);
-        auto result = impl_->validators.ValidateAll(snapshot, cancellation);
-        if (result.HasError())
-            impl_->Record(HeadlessExtensionHostStage::Validation, std::string{snapshot.projectId}, result.ErrorValue());
-        return result;
+        return impl_->ExecuteReady(HeadlessExtensionHostStage::Validation, std::string{snapshot.projectId},
+                                   [this, &snapshot, &cancellation] {
+            return impl_->validators.ValidateAll(snapshot, cancellation);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::ExecutePipeline */
     Result<PipelineRunResult> HeadlessExtensionHost::ExecutePipeline(const std::span<const PipelineArtifactView> initialArtifacts,
                                                                      const CancellationToken &cancellation) const {
-        if (const auto error = impl_->ReadyFailure())
-            return impl_->RejectWork<PipelineRunResult>(HeadlessExtensionHostStage::Pipeline, "pipeline", *error);
-        auto result = impl_->pipeline.Execute(initialArtifacts, cancellation);
-        if (result.HasError())
-            impl_->Record(HeadlessExtensionHostStage::Pipeline, "pipeline", result.ErrorValue());
-        return result;
+        return impl_->ExecuteReady(HeadlessExtensionHostStage::Pipeline, "pipeline", [this, initialArtifacts, &cancellation] {
+            return impl_->pipeline.Execute(initialArtifacts, cancellation);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::InvokeToolchain */
     Result<ToolchainInvocationResult> HeadlessExtensionHost::InvokeToolchain(const ToolchainInvocationAuthority &authority,
                                                                              const ToolchainInvocationIntent &intent,
                                                                              const CancellationToken &cancellation) const {
-        if (const auto error = impl_->ReadyFailure())
-            return impl_->RejectWork<ToolchainInvocationResult>(HeadlessExtensionHostStage::Toolchain, authority.contributionId, *error);
-        auto result = impl_->toolchains.Invoke(authority, intent, cancellation);
-        if (result.HasError())
-            impl_->Record(HeadlessExtensionHostStage::Toolchain, authority.contributionId, result.ErrorValue());
-        return result;
+        return impl_->ExecuteReady(HeadlessExtensionHostStage::Toolchain, authority.contributionId,
+                                   [this, &authority, &intent, &cancellation] {
+            return impl_->toolchains.Invoke(authority, intent, cancellation);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::ResolveCapability */
@@ -295,25 +313,23 @@ namespace Horo::Extensions {
                                                                                         const std::string_view extensionId,
                                                                                         const std::string_view moduleId,
                                                                                         const std::uint64_t activationGeneration) const {
-        if (const auto error = impl_->ReadyFailure())
-            return impl_->RejectWork<ApplicationCapabilityProviderLease>(HeadlessExtensionHostStage::CapabilityResolution,
-                                                                         authority.Capability().value, *error);
-        auto result = impl_->capabilities.Resolve(authority, versions, extensionId, moduleId, activationGeneration);
-        if (result.HasError())
-            impl_->Record(HeadlessExtensionHostStage::CapabilityResolution, authority.Capability().value, result.ErrorValue());
-        return result;
+        return impl_->ExecuteReady(HeadlessExtensionHostStage::CapabilityResolution, authority.Capability().value,
+                                   [this, &authority, &versions, extensionId, moduleId, activationGeneration] {
+            return impl_->capabilities.Resolve(authority, versions, extensionId, moduleId, activationGeneration);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::Inspect */
     HeadlessExtensionHostSnapshot HeadlessExtensionHost::Inspect() const {
         HeadlessExtensionHostSnapshot snapshot;
-        std::scoped_lock lock{impl_->lifecycleMutex, impl_->diagnosticMutex};
+        std::shared_lock lifecycleLock{impl_->synchronization.Lifecycle()};
         snapshot.state = impl_->state.load();
         snapshot.discoveredPackages = impl_->discoveredPackages;
         snapshot.rootDiagnostics = impl_->rootDiagnostics;
         if (impl_->manager != nullptr)
             snapshot.loadedExtensions = impl_->manager->GetLoadedExtensionIds();
-        snapshot.diagnostics = impl_->diagnostics;
+        std::scoped_lock diagnosticLock{impl_->diagnosticMutex};
+        snapshot.diagnostics.assign(impl_->diagnostics.begin(), impl_->diagnostics.end());
         return snapshot;
     }
 
@@ -321,9 +337,8 @@ namespace Horo::Extensions {
     void HeadlessExtensionHost::Shutdown() noexcept {
         if (impl_ == nullptr)
             return;
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (const HeadlessExtensionHostState current = impl_->state.load();
-            current == HeadlessExtensionHostState::Shutdown || current == HeadlessExtensionHostState::ShuttingDown)
+        std::scoped_lock shutdownLock{impl_->synchronization.Shutdown()};
+        if (impl_->state.load() == HeadlessExtensionHostState::Shutdown)
             return;
         impl_->state.store(HeadlessExtensionHostState::ShuttingDown);
 
@@ -332,16 +347,20 @@ namespace Horo::Extensions {
         impl_->validators.BeginShutdown();
         impl_->cookers.BeginShutdown();
         impl_->capabilities.BeginShutdown();
+
+        std::unique_lock lock{impl_->synchronization.Lifecycle()};
         impl_->toolchainRegistrations.clear();
         impl_->pipelineRegistrations.clear();
         impl_->validatorRegistrations.clear();
         impl_->cookerRegistrations.clear();
         impl_->capabilityRegistrations.clear();
+        impl_->importerSnapshot.reset();
+        if (impl_->importers != nullptr)
+            impl_->importers->Reset();
         if (impl_->manager != nullptr)
             impl_->manager->UnloadAll();
-        impl_->importerSnapshot.reset();
-        impl_->importers.reset();
         impl_->manager.reset();
+        impl_->importers.reset();
         impl_->state.store(HeadlessExtensionHostState::Shutdown);
     }
 }  // namespace Horo::Extensions
