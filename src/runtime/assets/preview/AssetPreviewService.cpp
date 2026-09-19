@@ -8,9 +8,9 @@
 #include <atomic>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -20,7 +20,8 @@ namespace Horo::Assets {
         constexpr std::size_t kReadChunkBytes = 64U * 1024U;
 
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
-            return Result<T>::Failure(MakeError(descriptor, std::move(message)));
+            auto error = MakeError(descriptor, std::move(message));
+            return Result<T>::Failure(std::move(error));
         }
 
         [[nodiscard]] bool IsTerminal(const AssetPreviewState state) noexcept {
@@ -30,8 +31,8 @@ namespace Horo::Assets {
 
         [[nodiscard]] Result<std::size_t> PayloadSize(const std::filesystem::path &path, const std::size_t maximumBytes) {
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (error || std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status))
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                error || std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status))
                 return Failure<std::size_t>(AssetErrors::PreviewReadFailed);
             const std::uintmax_t fileBytes = std::filesystem::file_size(path, error);
             if (error)
@@ -133,32 +134,48 @@ namespace Horo::Assets {
         std::optional<Result<AssetPreviewResult>> result;
         bool consumed{};
 
+        [[nodiscard]] JobSystem *ActiveJobs() const noexcept {
+            return control ? control->jobs.load() : nullptr;
+        }
+
+        void CancelBeforeExecution() {
+            if (AssetPreviewState expected = AssetPreviewState::Queued;
+                !state.compare_exchange_strong(expected, AssetPreviewState::Cancelled))
+                return;
+            std::scoped_lock lock{resultMutex};
+            result = Failure<AssetPreviewResult>(AssetErrors::PreviewCancelled);
+        }
+
         void Complete(Result<AssetPreviewResult> value, const CancellationToken &cancellation) {
+            using enum AssetPreviewState;
             std::scoped_lock lock{resultMutex};
             if (cancellation.IsCancellationRequested()) {
                 result = Failure<AssetPreviewResult>(AssetErrors::PreviewCancelled);
-                state.store(AssetPreviewState::Cancelled);
+                state.store(Cancelled);
                 return;
             }
             if (value.HasError()) {
                 const bool cancelled = value.ErrorValue().code.Value() == "asset.preview.cancelled";
                 result = std::move(value);
-                state.store(cancelled ? AssetPreviewState::Cancelled : AssetPreviewState::Failed);
+                state.store(cancelled ? Cancelled : Failed);
                 return;
             }
             result = std::move(value);
-            state.store(AssetPreviewState::Succeeded);
+            state.store(Succeeded);
         }
     };
 
     struct AssetPreviewService::State {
         struct CacheEntry {
+            CacheEntry(const AssetPreviewImage &sourceImage, const std::uint64_t sequence, const std::size_t imageBytes)
+                : image(sourceImage), useSequence(sequence), bytes(imageBytes) {}
+
             AssetPreviewImage image;
             std::uint64_t useSequence{};
             std::size_t bytes{};
         };
 
-        State(JobSystem &jobSystem, AssetPreviewServiceLimits configuredLimits) : jobs(jobSystem), limits(configuredLimits) {
+        State(JobSystem &jobSystem, const AssetPreviewServiceLimits &configuredLimits) : jobs(jobSystem), limits(configuredLimits) {
             control->jobs.store(&jobs);
         }
 
@@ -187,7 +204,7 @@ namespace Horo::Assets {
                 cachedBytes -= existing->second.bytes;
                 cache.erase(existing);
             }
-            cache.emplace(std::move(key), CacheEntry{image, ++sequence, imageBytes});
+            cache.try_emplace(std::move(key), image, ++sequence, imageBytes);
             cachedBytes += imageBytes;
         }
 
@@ -200,7 +217,7 @@ namespace Horo::Assets {
                 pending->Complete(Result<AssetPreviewResult>::Failure(payload.ErrorValue()), cancellation);
                 return;
             }
-            const std::string key = CacheKey(pending->input, payload.Value());
+            std::string key = CacheKey(pending->input, payload.Value());
             if (auto cached = FindCached(key)) {
                 pending->Complete(Result<AssetPreviewResult>::Success({std::move(*cached), true}), cancellation);
                 return;
@@ -246,7 +263,7 @@ namespace Horo::Assets {
         std::shared_ptr<PreviewControl> control{std::make_shared<PreviewControl>()};
         std::mutex mutex;
         std::vector<std::shared_ptr<AssetPreviewHandle::Request>> requests;
-        std::unordered_map<std::string, CacheEntry> cache;
+        std::map<std::string, CacheEntry, std::less<>> cache;
         std::size_t cachedBytes{};
         std::uint64_t sequence{};
         bool accepting{true};
@@ -261,18 +278,12 @@ namespace Horo::Assets {
     Result<void> AssetPreviewHandle::RequestCancel() {
         if (!request_ || !request_->job)
             return Result<void>::Failure(MakeError(AssetErrors::PreviewShutdown));
-        const JobSystem *jobs = request_->control ? request_->control->jobs.load() : nullptr;
+        const JobSystem *const jobs = request_->ActiveJobs();
         if (jobs == nullptr)
             return Result<void>::Failure(MakeError(AssetErrors::PreviewShutdown));
-        if (AssetPreviewState expected = AssetPreviewState::Queued;
-            request_->state.compare_exchange_strong(expected, AssetPreviewState::Cancelled)) {
-            std::scoped_lock lock{request_->resultMutex};
-            request_->result = Failure<AssetPreviewResult>(AssetErrors::PreviewCancelled);
-        }
-        if (const Result<void> cancelled = jobs->RequestCancel(request_->job->Id());
-            cancelled.HasError() && !IsTerminal(request_->state.load()))
-            return cancelled;
-        return Result<void>::Success();
+        request_->CancelBeforeExecution();
+        const Result<void> cancelled = jobs->RequestCancel(request_->job->Id());
+        return cancelled.HasValue() || IsTerminal(request_->state.load()) ? Result<void>::Success() : cancelled;
     }
 
     /** @copydoc AssetPreviewHandle::Wait */

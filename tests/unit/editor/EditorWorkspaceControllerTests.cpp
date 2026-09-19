@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -224,8 +225,8 @@ namespace {
 
     TEST_CASE("Content browser schedules preview providers and reuses cached images", "[unit][editor][assets][preview]") {
         const std::filesystem::path projectRoot =
-            std::filesystem::temp_directory_path() /
-            ("horo-workspace-preview-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+            std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443): Unique test-only path; no untrusted input.
+            std::format("horo-workspace-preview-{}", std::chrono::steady_clock::now().time_since_epoch().count());
         const std::filesystem::path assetRoot = projectRoot / "assets";
         const std::filesystem::path assetPath = assetRoot / "sample.horoasset";
         WritePreviewTestAsset(assetPath);

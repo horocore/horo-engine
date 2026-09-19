@@ -442,11 +442,10 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
         std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
-            const Assets::AssetPreviewState state = pending.handle.State();
-            if (state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
+            if (const Assets::AssetPreviewState state = pending.handle.State();
+                state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
                 return false;
-            auto completed = pending.handle.TakeResult();
-            if (completed.HasValue()) {
+            if (auto completed = pending.handle.TakeResult(); completed.HasValue()) {
                 const auto entry =
                     std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
                 if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&

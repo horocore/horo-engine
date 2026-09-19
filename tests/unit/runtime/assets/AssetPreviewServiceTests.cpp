@@ -4,9 +4,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -68,10 +68,13 @@ namespace {
         }
     };
 
+    class PreviewTestException final : public std::exception {};
+
     class ThrowingPreviewProvider final : public IAssetPreviewProvider {
     public:
-        [[nodiscard]] Result<AssetPreviewImage> GeneratePreview(const AssetPreviewInput &, const CancellationToken &) const override {
-            throw std::runtime_error{"injected preview exception"};
+        [[nodiscard, noreturn]] Result<AssetPreviewImage> GeneratePreview(const AssetPreviewInput &,
+                                                                          const CancellationToken &) const override {
+            throw PreviewTestException{};
         }
     };
 
@@ -79,12 +82,17 @@ namespace {
     public:
         explicit TemporaryAsset(const std::vector<std::uint8_t> &bytes) {
             static std::atomic<std::uint64_t> nextId{};
-            path_ = std::filesystem::temp_directory_path() /
-                    ("horo-preview-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
-                     std::to_string(nextId.fetch_add(1)) + ".horoasset");
+            path_ = std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443): Unique test-only path; no untrusted input.
+                    std::format("horo-preview-{}-{}.horoasset", std::chrono::steady_clock::now().time_since_epoch().count(),
+                                nextId.fetch_add(1));
             std::ofstream output(path_, std::ios::binary);
             output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         }
+
+        TemporaryAsset(const TemporaryAsset &) = delete;
+        TemporaryAsset &operator=(const TemporaryAsset &) = delete;
+        TemporaryAsset(TemporaryAsset &&) = delete;
+        TemporaryAsset &operator=(TemporaryAsset &&) = delete;
 
         ~TemporaryAsset() {
             std::error_code error;
@@ -260,10 +268,10 @@ TEST_CASE("Asset preview cache identity includes payload, provider version, and 
     REQUIRE_FALSE(run(MakeRequest(secondAsset.Path(), provider)));
     auto newerProvider = MakeRequest(firstAsset.Path(), provider);
     newerProvider.providerVersion = "2.0.0";
-    REQUIRE_FALSE(run(std::move(newerProvider)));
+    REQUIRE_FALSE(run(newerProvider));
     auto wider = MakeRequest(firstAsset.Path(), provider);
     wider.width = 3;
-    REQUIRE_FALSE(run(std::move(wider)));
+    REQUIRE_FALSE(run(wider));
     REQUIRE(provider->calls.load() == 4);
 }
 
@@ -294,7 +302,7 @@ TEST_CASE("Asset preview service validates files, cancellation ancestry, and shu
 
     auto relative = MakeRequest(asset.Path(), provider);
     relative.absoluteAssetPath = "relative.horoasset";
-    REQUIRE(service.Submit(std::move(relative)).HasError());
+    REQUIRE(service.Submit(relative).HasError());
 
     CancellationSource cancelled;
     cancelled.RequestCancellation();
