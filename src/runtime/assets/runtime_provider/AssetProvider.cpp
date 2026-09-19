@@ -27,23 +27,32 @@ namespace Horo::Assets {
         };
     }  // namespace
 
-    /** @copydoc Internal::ReadExactArtifact */
-    Result<std::vector<std::uint8_t>> Internal::ReadExactArtifact(std::istream &input, const std::size_t expectedBytes,
-                                                                  const CancellationToken &cancellation) {
+    /** @copydoc Internal::ReadExactBytes */
+    Result<std::vector<std::uint8_t>> Internal::ReadExactBytes(std::istream &input, const std::size_t expectedBytes,
+                                                               const CancellationToken &cancellation,
+                                                               const ErrorCodeDescriptor &cancellationError,
+                                                               const ErrorCodeDescriptor &readError,
+                                                               const std::string_view readErrorMessage) {
         std::vector<std::uint8_t> bytes(expectedBytes);
         constexpr std::size_t kChunkBytes = 64U * 1024U;
         std::size_t offset{};
         while (offset < bytes.size()) {
             if (cancellation.IsCancellationRequested())
-                return Failure<std::vector<std::uint8_t>>(AssetErrors::LoadCancelled);
+                return Failure<std::vector<std::uint8_t>>(cancellationError);
             const std::size_t count = std::min(kChunkBytes, bytes.size() - offset);
             input.read(reinterpret_cast<char *>(bytes.data() + offset), static_cast<std::streamsize>(count));
             if (input.gcount() != static_cast<std::streamsize>(count))
-                return Failure<std::vector<std::uint8_t>>(AssetErrors::ProviderReadFailed,
-                                                          "Cooked artifact changed or was truncated during the read.");
+                return Failure<std::vector<std::uint8_t>>(readError, std::string{readErrorMessage});
             offset += count;
         }
         return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
+    }
+
+    /** @copydoc Internal::ReadExactArtifact */
+    Result<std::vector<std::uint8_t>> Internal::ReadExactArtifact(std::istream &input, const std::size_t expectedBytes,
+                                                                  const CancellationToken &cancellation) {
+        return ReadExactBytes(input, expectedBytes, cancellation, AssetErrors::LoadCancelled, AssetErrors::ProviderReadFailed,
+                              "Cooked artifact changed or was truncated during the read.");
     }
 
     /** @copydoc FilesystemAssetProvider::FilesystemAssetProvider */

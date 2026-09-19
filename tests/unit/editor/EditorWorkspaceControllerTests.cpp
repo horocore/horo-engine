@@ -128,6 +128,42 @@ namespace {
         mutable std::atomic<std::uint32_t> calls{};
     };
 
+    void WritePreviewTestAsset(const std::filesystem::path &assetPath) {
+        std::filesystem::create_directories(assetPath.parent_path());
+        std::ofstream payload(assetPath, std::ios::binary);
+        payload << "preview-payload";
+        std::ofstream metadata(assetPath.string() + ".meta", std::ios::binary);
+        metadata << R"({"sourceFile":"sample.preview","type":"core.mesh"})";
+    }
+
+    void RegisterPreviewTestProvider(Assets::AssetImporterCatalog &catalog, const std::shared_ptr<PreviewTestProvider> &previewProvider) {
+        auto type = Assets::AssetTypeId::Parse("core.mesh");
+        REQUIRE(type.HasValue());
+        REQUIRE(catalog
+                    .Register(Assets::AssetImporterContribution{
+                        .contributionId = "test.preview",
+                        .packageId = "test.package",
+                        .moduleId = "test.module",
+                        .moduleVersion = "1.0.0",
+                        .version = "1.0.0",
+                        .fileExtensions = {"preview"},
+                        .assetTypes = {std::move(type).Value()},
+                        .strategy = std::make_shared<PreviewTestImporter>(),
+                        .previewProvider = previewProvider,
+                        .previewFallback = Assets::AssetPreviewFallback::Mesh,
+                    })
+                    .HasValue());
+    }
+
+    void WaitForPreview(EditorWorkspaceController &controller) {
+        for (std::size_t attempt = 0; attempt < 100'000 && (controller.ViewModel().contentBrowser.entries.empty() ||
+                                                            !controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+             ++attempt) {
+            controller.UpdateContentBrowser();
+            std::this_thread::yield();
+        }
+    }
+
     class TestWorkspaceController final {
     public:
         explicit TestWorkspaceController(std::string projectRoot = "test-project", DiagnosticSourceNavigator diagnosticNavigator = {})
@@ -192,32 +228,11 @@ namespace {
             ("horo-workspace-preview-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         const std::filesystem::path assetRoot = projectRoot / "assets";
         const std::filesystem::path assetPath = assetRoot / "sample.horoasset";
-        std::filesystem::create_directories(assetRoot);
-        {
-            std::ofstream payload(assetPath, std::ios::binary);
-            payload << "preview-payload";
-            std::ofstream metadata(assetPath.string() + ".meta", std::ios::binary);
-            metadata << R"({"sourceFile":"sample.preview","type":"core.mesh"})";
-        }
+        WritePreviewTestAsset(assetPath);
 
-        auto type = Assets::AssetTypeId::Parse("core.mesh");
-        REQUIRE(type.HasValue());
         const auto previewProvider = std::make_shared<PreviewTestProvider>();
         Assets::AssetImporterCatalog catalog;
-        REQUIRE(catalog
-                    .Register(Assets::AssetImporterContribution{
-                        .contributionId = "test.preview",
-                        .packageId = "test.package",
-                        .moduleId = "test.module",
-                        .moduleVersion = "1.0.0",
-                        .version = "1.0.0",
-                        .fileExtensions = {"preview"},
-                        .assetTypes = {std::move(type).Value()},
-                        .strategy = std::make_shared<PreviewTestImporter>(),
-                        .previewProvider = previewProvider,
-                        .previewFallback = Assets::AssetPreviewFallback::Mesh,
-                    })
-                    .HasValue());
+        RegisterPreviewTestProvider(catalog, previewProvider);
         auto published = catalog.Publish();
         REQUIRE(published.HasValue());
 
@@ -232,12 +247,7 @@ namespace {
                                                  .importerCatalog = published.Value().get(),
                                                  .jobs = &jobs,
                                              }};
-        for (std::size_t attempt = 0; attempt < 100'000 && (controller.ViewModel().contentBrowser.entries.empty() ||
-                                                            !controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
-             ++attempt) {
-            controller.UpdateContentBrowser();
-            std::this_thread::yield();
-        }
+        WaitForPreview(controller);
         REQUIRE(controller.ViewModel().contentBrowser.entries.size() == 1);
         REQUIRE(controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
         REQUIRE(previewProvider->calls.load() == 1);
@@ -245,11 +255,7 @@ namespace {
         controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RefreshContentBrowser});
         controller.UpdateContentBrowser();
         controller.UpdateContentBrowser();
-        for (std::size_t attempt = 0; attempt < 100'000 && !controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid();
-             ++attempt) {
-            controller.UpdateContentBrowser();
-            std::this_thread::yield();
-        }
+        WaitForPreview(controller);
         REQUIRE(controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
         REQUIRE(previewProvider->calls.load() == 1);
 

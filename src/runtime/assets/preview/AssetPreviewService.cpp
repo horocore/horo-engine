@@ -1,16 +1,15 @@
 #include "Horo/Assets/AssetPreviewService.h"
 
 #include "../AssetErrors.h"
+#include "../runtime_provider/AssetProviderRead.h"
 #include "Horo/Foundation/Sha256.h"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <fstream>
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -18,7 +17,6 @@
 namespace Horo::Assets {
     namespace {
         constexpr std::size_t kMaximumIdentityBytes = 256;
-        constexpr std::size_t kReadChunkBytes = 64U * 1024U;
 
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
             return Result<T>::Failure(MakeError(descriptor, std::move(message)));
@@ -52,18 +50,8 @@ namespace Horo::Assets {
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return Failure<std::vector<std::uint8_t>>(AssetErrors::PreviewReadFailed);
-            std::vector<std::uint8_t> bytes(std::move(payloadSize).Value());
-            std::size_t offset{};
-            while (offset < bytes.size()) {
-                if (cancellation.IsCancellationRequested())
-                    return Failure<std::vector<std::uint8_t>>(AssetErrors::PreviewCancelled);
-                const std::size_t count = std::min(kReadChunkBytes, bytes.size() - offset);
-                input.read(reinterpret_cast<char *>(bytes.data() + offset), static_cast<std::streamsize>(count));
-                if (input.gcount() != static_cast<std::streamsize>(count))
-                    return Failure<std::vector<std::uint8_t>>(AssetErrors::PreviewReadFailed);
-                offset += count;
-            }
-            return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
+            return Internal::ReadExactBytes(input, std::move(payloadSize).Value(), cancellation, AssetErrors::PreviewCancelled,
+                                            AssetErrors::PreviewReadFailed);
         }
 
         void AppendField(std::vector<std::byte> &bytes, const std::string_view value) {
@@ -237,8 +225,6 @@ namespace Horo::Assets {
                         .height = pending->input.height,
                     },
                     cancellation);
-            } catch (const std::exception &) {
-                return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::PreviewProviderFailed));
             } catch (...) {  // NOSONAR(cpp:S2738) Extension code cannot be permitted to escape the host boundary.
                 return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::PreviewProviderFailed));
             }

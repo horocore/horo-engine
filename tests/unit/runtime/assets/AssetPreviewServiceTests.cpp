@@ -114,6 +114,14 @@ namespace {
             .provider = std::move(provider),
         };
     }
+
+    [[nodiscard]] Result<AssetPreviewResult> RunPreview(AssetPreviewService &service, AssetPreviewRequest request) {
+        auto submitted = service.Submit(std::move(request));
+        REQUIRE(submitted.HasValue());
+        AssetPreviewHandle handle = std::move(submitted).Value();
+        REQUIRE(handle.Wait().HasValue());
+        return handle.TakeResult();
+    }
 }  // namespace
 
 TEST_CASE("Asset preview service reuses a content-addressed provider result", "[unit][assets][preview]") {
@@ -122,20 +130,12 @@ TEST_CASE("Asset preview service reuses a content-addressed provider result", "[
     TemporaryAsset asset{{1, 2, 3, 4}};
     const auto provider = std::make_shared<CountingPreviewProvider>();
 
-    auto first = service.Submit(MakeRequest(asset.Path(), provider));
-    REQUIRE(first.HasValue());
-    AssetPreviewHandle firstHandle = std::move(first).Value();
-    REQUIRE(firstHandle.Wait().HasValue());
-    auto firstResult = firstHandle.TakeResult();
+    auto firstResult = RunPreview(service, MakeRequest(asset.Path(), provider));
     REQUIRE(firstResult.HasValue());
     REQUIRE_FALSE(firstResult.Value().cacheHit);
     REQUIRE(firstResult.Value().image.IsValid());
 
-    auto second = service.Submit(MakeRequest(asset.Path(), provider));
-    REQUIRE(second.HasValue());
-    AssetPreviewHandle secondHandle = std::move(second).Value();
-    REQUIRE(secondHandle.Wait().HasValue());
-    auto secondResult = secondHandle.TakeResult();
+    auto secondResult = RunPreview(service, MakeRequest(asset.Path(), provider));
     REQUIRE(secondResult.HasValue());
     REQUIRE(secondResult.Value().cacheHit);
     REQUIRE(provider->calls.load() == 1);
@@ -173,11 +173,7 @@ TEST_CASE("Asset preview service rejects oversized input before provider executi
     TemporaryAsset asset{{1, 2, 3, 4}};
     const auto provider = std::make_shared<CountingPreviewProvider>();
 
-    auto submitted = service.Submit(MakeRequest(asset.Path(), provider));
-    REQUIRE(submitted.HasValue());
-    AssetPreviewHandle handle = std::move(submitted).Value();
-    REQUIRE(handle.Wait().HasValue());
-    auto result = handle.TakeResult();
+    auto result = RunPreview(service, MakeRequest(asset.Path(), provider));
     REQUIRE(result.HasError());
     REQUIRE(result.ErrorValue().code.Value() == "asset.preview.input_too_large");
     REQUIRE(provider->calls.load() == 0);
@@ -188,11 +184,7 @@ TEST_CASE("Asset preview service rejects malformed provider output", "[unit][ass
     AssetPreviewService service{jobs};
     TemporaryAsset asset{{1, 2, 3, 4}};
 
-    auto submitted = service.Submit(MakeRequest(asset.Path(), std::make_shared<InvalidPreviewProvider>()));
-    REQUIRE(submitted.HasValue());
-    AssetPreviewHandle handle = std::move(submitted).Value();
-    REQUIRE(handle.Wait().HasValue());
-    auto result = handle.TakeResult();
+    auto result = RunPreview(service, MakeRequest(asset.Path(), std::make_shared<InvalidPreviewProvider>()));
     REQUIRE(result.HasError());
     REQUIRE(result.ErrorValue().code.Value() == "asset.preview.output_invalid");
 }
@@ -202,11 +194,7 @@ TEST_CASE("Asset preview service contains provider exceptions", "[unit][assets][
     AssetPreviewService service{jobs};
     TemporaryAsset asset{{1, 2, 3, 4}};
 
-    auto submitted = service.Submit(MakeRequest(asset.Path(), std::make_shared<ThrowingPreviewProvider>()));
-    REQUIRE(submitted.HasValue());
-    AssetPreviewHandle handle = std::move(submitted).Value();
-    REQUIRE(handle.Wait().HasValue());
-    auto result = handle.TakeResult();
+    auto result = RunPreview(service, MakeRequest(asset.Path(), std::make_shared<ThrowingPreviewProvider>()));
     REQUIRE(result.HasError());
     REQUIRE(result.ErrorValue().code.Value() == "asset.preview.provider_failed");
 }
@@ -265,11 +253,7 @@ TEST_CASE("Asset preview cache identity includes payload, provider version, and 
     const auto provider = std::make_shared<CountingPreviewProvider>();
 
     const auto run = [&service](AssetPreviewRequest request) {
-        auto submitted = service.Submit(std::move(request));
-        REQUIRE(submitted.HasValue());
-        AssetPreviewHandle handle = std::move(submitted).Value();
-        REQUIRE(handle.Wait().HasValue());
-        auto result = handle.TakeResult();
+        auto result = RunPreview(service, std::move(request));
         REQUIRE(result.HasValue());
         return result.Value().cacheHit;
     };
@@ -293,11 +277,7 @@ TEST_CASE("Asset preview cache evicts least recently used entries within configu
     const auto provider = std::make_shared<CountingPreviewProvider>();
 
     for (const std::filesystem::path &path : {firstAsset.Path(), secondAsset.Path(), firstAsset.Path()}) {
-        auto submitted = service.Submit(MakeRequest(path, provider));
-        REQUIRE(submitted.HasValue());
-        AssetPreviewHandle handle = std::move(submitted).Value();
-        REQUIRE(handle.Wait().HasValue());
-        REQUIRE(handle.TakeResult().HasValue());
+        REQUIRE(RunPreview(service, MakeRequest(path, provider)).HasValue());
     }
     REQUIRE(provider->calls.load() == 3);
 }
@@ -325,11 +305,7 @@ TEST_CASE("Asset preview service validates files, cancellation ancestry, and shu
     REQUIRE(rejected.ErrorValue().code.Value() == "asset.preview.cancelled");
 
     const std::filesystem::path missing = asset.Path().parent_path() / "missing-preview.horoasset";
-    auto missingRequest = service.Submit(MakeRequest(missing, provider));
-    REQUIRE(missingRequest.HasValue());
-    AssetPreviewHandle missingHandle = std::move(missingRequest).Value();
-    REQUIRE(missingHandle.Wait().HasValue());
-    auto missingResult = missingHandle.TakeResult();
+    auto missingResult = RunPreview(service, MakeRequest(missing, provider));
     REQUIRE(missingResult.HasError());
     REQUIRE(missingResult.ErrorValue().code.Value() == "asset.preview.read_failed");
 
