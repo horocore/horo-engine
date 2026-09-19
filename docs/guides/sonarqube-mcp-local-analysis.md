@@ -2,13 +2,58 @@
 
 ## Policy
 
-The SonarQube CLI (`sonar`) is the single supported path for local SonarQube
-analysis in this repository. It is the worktree-friendly developer workflow:
-each invocation reads the Git change set of the worktree in which it runs.
+The SonarQube CLI (`sonar`) is the supported full local-analysis path in this
+repository. It is the worktree-friendly developer workflow: each invocation
+reads the Git change set of the worktree in which it runs.
 
-Do not use the VS Code SonarQube for IDE bridge, the SonarQube MCP IDE tools, or
-`sonar-scanner` as an alternative local-change workflow. `sonar-scanner` remains
-the CI/full-project scanner; it is not a substitute for this workflow.
+For a bounded C/C++ file diagnosis, the repository also provides
+`scripts/sonar_ide_analysis.py`. It asks a trusted, running VS Code SonarQube
+for IDE extension to analyze explicit local files and returns its findings as
+JSON. This is supplemental IDE feedback, not a SonarCloud PR result or a
+replacement for the CLI/CI quality gate. `sonar-scanner` remains the
+CI/full-project scanner; it is not a substitute for either local workflow.
+
+## Local C/C++ IDE diagnostics
+
+Use this path when a developer needs issue-level feedback for one or more local
+C/C++ files, especially when the SonarQube CLI cannot analyze C++ because the
+connection lacks Vortex entitlement. It requires no Sonar token and does not
+upload source.
+
+1. Generate `build/sonar-local/compile_commands.json` in the target worktree:
+
+   ```sh
+   cmake -S . -B build/sonar-local -G Ninja \
+     -DCMAKE_BUILD_TYPE=Debug \
+     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+     -DBUILD_TESTING=OFF
+   ```
+
+2. Configure that path in the trusted worktree's VS Code settings under
+   `sonarlint.pathToCompileCommands`, open the worktree in its own VS Code
+   window, and wait for SonarQube for IDE to activate.
+3. Identify that window's loopback bridge port (it must be `64120`–`64130`):
+
+   ```sh
+   lsof -nP -iTCP -sTCP:LISTEN | rg '6412[0-9]'
+   ```
+
+4. Submit explicit paths, which is the preferred narrow mode:
+
+   ```sh
+   python3 scripts/sonar_ide_analysis.py --port 64121 \
+     src/runtime/renderer/api/ShaderReflection.cpp
+   ```
+
+   Use `--base origin/main` for a committed delta or no path arguments for the
+   staged, unstaged, and untracked C/C++ changes in the current worktree.
+
+The script checks the bridge status before posting absolute file paths to its
+loopback endpoint. It reports `status: "clean"` only after at least one C/C++
+path was submitted and the bridge returned an empty `findings` array. Its exit
+status is `0` for clean, `1` for findings, and `2` for missing compilation
+database, bridge, selection, or response prerequisites. Always report submitted
+and skipped paths; a bridge error or skipped request is not a clean result.
 
 `sonar analyze` combines two kinds of feedback:
 
@@ -177,7 +222,7 @@ worktree and compare the findings. Do not modify issue status automatically.
 | --- | --- | --- |
 | `Authentication failed` | Wrong token, server, or organization | Run `sonar auth status`; use a user token and the correct Cloud region. |
 | Project list is empty | The authenticated organization cannot see the project | Recheck `SONARQUBE_CLI_ORG` and project access; do not guess a key. |
-| `403` / Vortex unavailable | Vortex is not entitled for this connection | Enable the required SonarQube Cloud subscription or use the local secrets result only. |
+| `403` / Vortex unavailable | Vortex is not entitled for this connection | Report failed CLI quality validation; when file-level local C++ feedback is needed, run the IDE bridge workflow separately. |
 | `no files in the change set` | The worktree is clean or the command ran in another directory | Run from the intended worktree and inspect `git status --porcelain`. |
 | Files are skipped | The change set includes unsupported, ignored, binary, or oversized files | Report skipped paths; do not call the result clean without checking them. |
 | C++ analysis has no usable context | No suitable long-lived-branch CI analysis exists | Run the supported CI analysis first, then repeat the worktree scan. |
