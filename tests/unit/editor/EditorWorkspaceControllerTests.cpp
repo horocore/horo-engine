@@ -13,6 +13,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <string>
@@ -165,6 +166,36 @@ namespace {
         }
     }
 
+    struct PreviewWorkspaceFixture final {
+        std::filesystem::path projectRoot =
+            std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443): Unique test-only path; no untrusted input.
+            std::format("horo-workspace-preview-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        std::shared_ptr<PreviewTestProvider> previewProvider = std::make_shared<PreviewTestProvider>();
+        Assets::AssetImporterCatalog catalog;
+        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> publishedCatalog;
+        Runtime::RuntimeSceneService runtimeScene;
+        CancellationSource cancellation;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        std::unique_ptr<EditorWorkspaceController> controller;
+
+        PreviewWorkspaceFixture() {
+            WritePreviewTestAsset(projectRoot / "assets" / "sample.horoasset");
+            RegisterPreviewTestProvider(catalog, previewProvider);
+            auto published = catalog.Publish();
+            REQUIRE(published.HasValue());
+            publishedCatalog = std::move(published).Value();
+            REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
+            controller = std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene, Assets::AssetRegistrySnapshot{},
+                                                                     EditorWorkspaceDependencies{.importerCatalog = publishedCatalog.get(),
+                                                                                                 .jobs = &jobs});
+        }
+
+        ~PreviewWorkspaceFixture() {
+            std::error_code cleanupError;
+            std::filesystem::remove_all(projectRoot, cleanupError);
+        }
+    };
+
     class TestWorkspaceController final {
     public:
         explicit TestWorkspaceController(std::string projectRoot = "test-project", DiagnosticSourceNavigator diagnosticNavigator = {})
@@ -224,44 +255,18 @@ namespace {
     }
 
     TEST_CASE("Content browser schedules preview providers and reuses cached images", "[unit][editor][assets][preview]") {
-        const std::filesystem::path projectRoot =
-            std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443): Unique test-only path; no untrusted input.
-            std::format("horo-workspace-preview-{}", std::chrono::steady_clock::now().time_since_epoch().count());
-        const std::filesystem::path assetRoot = projectRoot / "assets";
-        const std::filesystem::path assetPath = assetRoot / "sample.horoasset";
-        WritePreviewTestAsset(assetPath);
+        PreviewWorkspaceFixture fixture;
+        WaitForPreview(*fixture.controller);
+        REQUIRE(fixture.controller->ViewModel().contentBrowser.entries.size() == 1);
+        REQUIRE(fixture.controller->ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+        REQUIRE(fixture.previewProvider->calls.load() == 1);
 
-        const auto previewProvider = std::make_shared<PreviewTestProvider>();
-        Assets::AssetImporterCatalog catalog;
-        RegisterPreviewTestProvider(catalog, previewProvider);
-        auto published = catalog.Publish();
-        REQUIRE(published.HasValue());
-
-        Runtime::RuntimeSceneService runtimeScene;
-        CancellationSource cancellation;
-        REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
-        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
-        EditorWorkspaceController controller{projectRoot,
-                                             runtimeScene,
-                                             {},
-                                             {
-                                                 .importerCatalog = published.Value().get(),
-                                                 .jobs = &jobs,
-                                             }};
-        WaitForPreview(controller);
-        REQUIRE(controller.ViewModel().contentBrowser.entries.size() == 1);
-        REQUIRE(controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
-        REQUIRE(previewProvider->calls.load() == 1);
-
-        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RefreshContentBrowser});
-        controller.UpdateContentBrowser();
-        controller.UpdateContentBrowser();
-        WaitForPreview(controller);
-        REQUIRE(controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
-        REQUIRE(previewProvider->calls.load() == 1);
-
-        std::error_code cleanupError;
-        std::filesystem::remove_all(projectRoot, cleanupError);
+        fixture.controller->ProcessCommand({.command = EditorWorkspaceViewCommand::RefreshContentBrowser});
+        fixture.controller->UpdateContentBrowser();
+        fixture.controller->UpdateContentBrowser();
+        WaitForPreview(*fixture.controller);
+        REQUIRE(fixture.controller->ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+        REQUIRE(fixture.previewProvider->calls.load() == 1);
     }
 
     TEST_CASE("Gameplay behavior creation requests reject invalid destinations and names", "[unit][editor][behavior]") {

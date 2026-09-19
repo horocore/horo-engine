@@ -417,7 +417,8 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::ScheduleContentBrowserPreviews() {
         for (const PendingContentBrowserPreview &pending : m_pendingContentBrowserPreviews)
-            static_cast<void>(pending.handle.RequestCancel());
+            if (pending.handle.has_value())
+                static_cast<void>(pending.handle->RequestCancel());
         m_pendingContentBrowserPreviews.clear();
         if (m_assetPreviews == nullptr || m_importerCatalog == nullptr)
             return;
@@ -428,24 +429,31 @@ namespace Horo::Editor {
                 continue;
             const std::string contributionId = request->contributionId;
             const std::string providerVersion = request->providerVersion;
-            auto submitted = m_assetPreviews->Submit(std::move(*request));
-            if (submitted.HasError())
+            auto submitted = m_assetPreviews->Submit(*request);
+            if (submitted.HasError() && submitted.ErrorValue().code.Value() != "asset.preview.queue_full")
                 continue;
             m_pendingContentBrowserPreviews.push_back(PendingContentBrowserPreview{
                 .absolutePath = entry.absolutePath,
                 .contributionId = contributionId,
                 .providerVersion = providerVersion,
-                .handle = std::move(submitted).Value(),
+                .request = std::move(*request),
+                .handle = submitted.HasValue() ? std::optional{std::move(submitted).Value()} : std::nullopt,
             });
         }
     }
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
-        std::erase_if(m_pendingContentBrowserPreviews, [this](const PendingContentBrowserPreview &pending) {
-            if (const Assets::AssetPreviewState state = pending.handle.State();
+        std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
+            if (!pending.handle.has_value()) {
+                auto submitted = m_assetPreviews->Submit(pending.request);
+                if (submitted.HasError())
+                    return submitted.ErrorValue().code.Value() != "asset.preview.queue_full";
+                pending.handle = std::move(submitted).Value();
+            }
+            if (const Assets::AssetPreviewState state = pending.handle->State();
                 state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
                 return false;
-            if (auto completed = pending.handle.TakeResult(); completed.HasValue()) {
+            if (auto completed = pending.handle->TakeResult(); completed.HasValue()) {
                 const auto entry =
                     std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
                 if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&
