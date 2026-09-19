@@ -6,6 +6,7 @@
 #include <array>
 #include <bit>
 #include <cstddef>
+#include <cstring>
 #include <span>
 #include <string>
 #include <string_view>
@@ -93,8 +94,7 @@ namespace Horo {
                 std::size_t offset = 0;
                 while (offset < input.size()) {
                     const std::size_t copied = std::min(block_.size() - blockBytes_, input.size() - offset);
-                    for (std::size_t index = 0; index < copied; ++index)
-                        block_[blockBytes_ + index] = std::to_integer<std::uint8_t>(input[offset + index]);
+                    std::memcpy(block_.data() + blockBytes_, input.data() + offset, copied);
                     blockBytes_ += copied;
                     offset += copied;
                     if (blockBytes_ == block_.size()) {
@@ -115,7 +115,7 @@ namespace Horo {
                 }
                 while (blockBytes_ < 56)
                     block_[blockBytes_++] = 0;
-                const std::uint64_t bitLength = static_cast<std::uint64_t>(totalBytes_) * 8U;
+                const std::uint64_t bitLength = totalBytes_ * 8U;
                 for (std::size_t index = 0; index < 8; ++index) {
                     const auto shift = static_cast<unsigned int>((7 - index) * 8);
                     block_[56 + index] = static_cast<std::uint8_t>(bitLength >> shift);

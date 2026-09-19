@@ -61,8 +61,8 @@ namespace Horo::Runtime {
                                                          const std::span<const std::byte> archive) {
             const std::uint64_t preambleLength = integrity.preambleByteLength;
             const std::uint64_t payloadLength = integrity.payloadByteLength;
-            const std::uint64_t trailerLength = integrity.trailerByteLength;
-            if (preambleLength > std::numeric_limits<std::uint64_t>::max() - payloadLength ||
+            if (const std::uint64_t trailerLength = integrity.trailerByteLength;
+                preambleLength > std::numeric_limits<std::uint64_t>::max() - payloadLength ||
                 preambleLength + payloadLength > std::numeric_limits<std::uint64_t>::max() - trailerLength ||
                 preambleLength + payloadLength + trailerLength != archive.size())
                 return Result<void>::Failure(MakeError(SaveErrors::ArchivePayloadTruncated));
@@ -201,9 +201,9 @@ namespace Horo::Runtime {
             return valid;
 
         const auto preamble = archive.first(static_cast<std::size_t>(integrity.preambleByteLength));
-        const auto payload =
-            archive.subspan(static_cast<std::size_t>(integrity.preambleByteLength), static_cast<std::size_t>(integrity.payloadByteLength));
-        if (ComputeArchiveContentHash(preamble, payload) != integrity.archiveContent) {
+        if (const auto payload = archive.subspan(static_cast<std::size_t>(integrity.preambleByteLength),
+                                                 static_cast<std::size_t>(integrity.payloadByteLength));
+            ComputeArchiveContentHash(preamble, payload) != integrity.archiveContent) {
             Error error = MakeError(SaveErrors::ArchiveContentHashMismatch);
             error.diagnostics.push_back({DiagnosticCode{"save.archive.content_integrity"},
                                          DiagnosticSeverity::Error,
