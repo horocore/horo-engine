@@ -205,7 +205,8 @@ namespace Horo::Extensions {
             }
         }
 
-        void DestroyExternalImporter(const HoroAssetImporterDestroyFunc destroy, void *context) noexcept {
+        void DestroyExternalImporter(const HoroAssetImporterDestroyFunc destroy,
+                                     void *context) noexcept {  // NOSONAR(cpp:S5205,cpp:S5008) C ABI callback.
             if (destroy == nullptr)
                 return;
             try {
@@ -294,8 +295,8 @@ namespace Horo::Extensions {
             }, "importer");
             outputRejected = output.rejected;
 
-            std::string assetType;
-            if (status == HORO_EXTENSION_SUCCESS && !output.rejected && CopyExternalText(response.assetType, assetType)) {
+            if (std::string assetType;
+                status == HORO_EXTENSION_SUCCESS && !output.rejected && CopyExternalText(response.assetType, assetType)) {
                 auto parsedType = Assets::AssetTypeId::Parse(assetType);
                 if (parsedType.HasValue())
                     prepared.type = std::move(parsedType).Value();

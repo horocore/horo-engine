@@ -337,7 +337,7 @@ namespace Horo::Assets {
                 return Result<AssetImportSnapshot>::Failure(prepared.ErrorValue());
             if (!prepared.Value().has_value())
                 return Result<AssetImportSnapshot>::Success(snapshot_);
-            pending = std::move(*prepared.Value());
+            pending = *prepared.Value();
         }
 
         auto source = ReadAssetImportSource(pending.absoluteSourcePath);

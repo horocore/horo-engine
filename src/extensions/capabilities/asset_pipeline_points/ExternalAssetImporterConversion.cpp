@@ -61,12 +61,15 @@ namespace Horo::Extensions::Detail {
             }
         }
 
+        [[nodiscard]] bool IsChoiceListValid(const HoroAssetImportSettingDescriptor &source) {
+            return source.choiceCount <= kMaxListEntries && (source.choices != nullptr || source.choiceCount == 0);
+        }
+
         [[nodiscard]] bool ConvertHeader(const HoroAssetImportSettingDescriptor &source, Assets::ImportSettingDescriptor &output) {
             const bool validIdentity = CopyExternalText(source.id, output.id) && CopyExternalText(source.labelKey, output.labelKey) &&
                                        CopyExternalText(source.descriptionKey, output.descriptionKey, true);
             const bool validValue = ConvertKind(source.kind, output.kind) && ConvertValue(source.defaultValue, output.defaultValue);
-            const bool validChoices = source.choiceCount <= kMaxListEntries && (source.choices != nullptr || source.choiceCount == 0);
-            if (!validIdentity || !validValue || !validChoices)
+            if (!validIdentity || !validValue || !IsChoiceListValid(source))
                 return false;
             if (source.hasMinimum != 0)
                 output.minimum = source.minimum;
