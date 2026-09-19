@@ -70,14 +70,32 @@ def test_validate_compile_commands_rejects_invalid_and_outside_entries(tmp_path:
 
 def test_resolved_tool_and_run_command_enforce_fixed_successful_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sonar_ide_analysis.shutil, "which", lambda name: f"/tools/{name}")
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def run(command: object, **kwargs: object) -> SimpleNamespace:
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
     monkeypatch.setattr(
         sonar_ide_analysis.subprocess,
         "run",
-        lambda command, **_: SimpleNamespace(returncode=0, stdout="ok", stderr="", args=command),
+        run,
     )
 
     assert sonar_ide_analysis.resolved_tool("git") == "/tools/git"
     assert sonar_ide_analysis.run_command("cmake", ["--version"], "failed").stdout == "ok"
+    assert calls == [
+        (
+            ["cmake", "--version"],
+            {
+                "executable": "/tools/cmake",
+                "check": False,
+                "capture_output": True,
+                "text": True,
+                "shell": False,
+            },
+        )
+    ]
     with pytest.raises(sonar_ide_analysis.AnalysisError, match="Unsupported prerequisite"):
         sonar_ide_analysis.resolved_tool("shell")
 
@@ -292,6 +310,25 @@ def test_run_git_translates_process_failures(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(sonar_ide_analysis.subprocess, "run", fail)
     with pytest.raises(sonar_ide_analysis.AnalysisError, match="bad ref"):
         sonar_ide_analysis.run_git(tmp_path, "status")
+
+
+def test_run_git_uses_a_literal_argv0_and_resolved_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+    monkeypatch.setattr(sonar_ide_analysis, "resolved_tool", lambda _: "/tools/git")
+
+    def run(command: object, **kwargs: object) -> SimpleNamespace:
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+    monkeypatch.setattr(sonar_ide_analysis.subprocess, "run", run)
+
+    assert sonar_ide_analysis.run_git(tmp_path, "status") == b"ok"
+    assert calls == [
+        (
+            ["git", "-C", str(tmp_path), "status"],
+            {"executable": "/tools/git", "check": True, "capture_output": True, "shell": False},
+        )
+    ]
 
 
 def test_main_rejects_combining_explicit_files_with_a_change_selector(capsys: pytest.CaptureFixture[str]) -> None:

@@ -89,10 +89,30 @@ def resolved_tool(name: str) -> str:
 
 def run_command(tool: str, arguments: Sequence[str], error_message: str) -> subprocess.CompletedProcess[str]:
     """Run a fixed prerequisite without contaminating JSON stdout."""
-    command = [resolved_tool(tool), *arguments]
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    # The executable is allowlisted/resolved and arguments are never evaluated by a shell.
-    result = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)  # NOSONAR # nosec B603
+    if tool == "cmake":
+        executable = resolved_tool("cmake")
+        # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
+        result = subprocess.run(  # nosec B603, B607
+            ["cmake", *arguments],
+            executable=executable,
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    elif tool == "code":
+        executable = resolved_tool("code")
+        # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
+        result = subprocess.run(  # nosec B603, B607
+            ["code", *arguments],
+            executable=executable,
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    else:
+        raise AnalysisError(f"Unsupported prerequisite: {tool}")
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise AnalysisError(f"{error_message}{': ' + detail if detail else ''}")
@@ -102,10 +122,16 @@ def run_command(tool: str, arguments: Sequence[str], error_message: str) -> subp
 def run_git(root: Path, *arguments: str) -> bytes:
     """Run Git in *root* and return its NUL-safe stdout."""
     try:
-        command = [resolved_tool("git"), "-C", str(root), *arguments]
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        executable = resolved_tool("git")
         # Callers validate external refs and place them after Git's end-of-options marker.
-        return subprocess.run(command, check=True, capture_output=True, shell=False).stdout  # NOSONAR # nosec B603
+        # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
+        return subprocess.run(  # nosec B603, B607
+            ["git", "-C", str(root), *arguments],
+            executable=executable,
+            check=True,
+            capture_output=True,
+            shell=False,
+        ).stdout
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", errors="replace").strip()
         raise AnalysisError(detail or "git could not select files for analysis") from error
