@@ -20,7 +20,9 @@ namespace Horo::Runtime {
         PollPlatformEvents,
         BuildInputSnapshot,
         ApplyQueuedOwnerThreadCommands,
+        NetworkPoll,
         FixedUpdate, /**< Ordering marker delivered through OnFixedUpdate rather than OnPhase. */
+        NetworkFlush,
         VariableUpdate,
         RenderExtraction,
         RenderExecution,

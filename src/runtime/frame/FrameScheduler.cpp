@@ -89,6 +89,8 @@ namespace Horo::Runtime {
         }
         if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, context, ApplyQueuedOwnerThreadCommands); result.HasError())
             return result;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, context, NetworkPoll); result.HasError())
+            return result;
 
         if (suspended) {
             if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, context, EndFrame); result.HasError())
@@ -156,6 +158,9 @@ namespace Horo::Runtime {
         accumulator_ += variableDelta;
         Duration droppedSimulationTime{};
         if (Result<void> result = RunFixedSteps(lifecycle, cancellation, droppedSimulationTime); result.HasError())
+            return result;
+        if (Result<void> result = DispatchPhaseChecked(lifecycle, cancellation, frameContext, RuntimePhase::NetworkFlush);
+            result.HasError())
             return result;
         frameContext.droppedSimulationTime = droppedSimulationTime;
         frameContext.completedSimulationTick = completedSimulationTick_;

@@ -213,6 +213,8 @@ namespace {
                                       RuntimePhase::PollPlatformEvents,
                                       RuntimePhase::BuildInputSnapshot,
                                       RuntimePhase::ApplyQueuedOwnerThreadCommands,
+                                      RuntimePhase::NetworkPoll,
+                                      RuntimePhase::NetworkFlush,
                                       RuntimePhase::VariableUpdate,
                                       RuntimePhase::RenderExtraction,
                                       RuntimePhase::RenderExecution,
@@ -363,7 +365,7 @@ namespace {
         clock.Advance(Duration::FromMilliseconds(500));
         Check(host->RunFrame().HasValue());
         constexpr std::array suspended{RuntimePhase::BeginFrame, RuntimePhase::PollPlatformEvents,
-                                       RuntimePhase::ApplyQueuedOwnerThreadCommands, RuntimePhase::EndFrame};
+                                       RuntimePhase::ApplyQueuedOwnerThreadCommands, RuntimePhase::NetworkPoll, RuntimePhase::EndFrame};
         Check(phases.size() == suspended.size());
         for (std::size_t index = 0; index < suspended.size(); ++index)
             Check(phases[index] == suspended[index]);
