@@ -159,8 +159,8 @@ namespace Horo::Extensions {
         }
         bool recorded = false;
         try {
-            const auto insertion = dependenciesSeen_.insert(dependency);
-            if (!insertion.second) {
+            if (const auto [entry, inserted] = dependenciesSeen_.insert(dependency); !inserted) {
+                static_cast<void>(entry);
                 rejected_ = true;
                 return Result<void>::Failure(MakeError(ExtensionErrors::AssetCookerOutputInvalid));
             }
@@ -228,8 +228,7 @@ namespace Horo::Extensions {
     void AssetCookerRegistration::Reset() {
         if (provider_ == nullptr)
             return;
-        const auto registry = registry_.lock();
-        if (registry != nullptr) {
+        if (const auto registry = registry_.lock(); registry != nullptr) {
             std::scoped_lock lock{registry->mutex};
             provider_->registered.store(false, std::memory_order_release);
             std::erase_if(registry->providers, [retired = provider_](const auto &candidate) {
