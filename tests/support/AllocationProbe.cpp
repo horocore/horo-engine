@@ -38,6 +38,22 @@ namespace {
             return storage;
         }
 
+        [[nodiscard]] static void *TryAcquire(const std::size_t byteCount) noexcept {
+            try {
+                return Acquire(byteCount);
+            } catch (...) {
+                return nullptr;
+            }
+        }
+
+        [[nodiscard]] static void *TryAcquireAligned(const std::size_t byteCount, const std::size_t alignment) noexcept {
+            try {
+                return AcquireAligned(byteCount, alignment);
+            } catch (...) {
+                return nullptr;
+            }
+        }
+
         static void ReleaseAligned(void *const storage) noexcept {
 #ifdef _WIN32
             _aligned_free(storage);
@@ -86,12 +102,28 @@ void *operator new[](const std::size_t size) {
     return AllocationMeter::Acquire(size);
 }
 
+void *operator new(const std::size_t size, const std::nothrow_t &) noexcept {
+    return AllocationMeter::TryAcquire(size);
+}
+
+void *operator new[](const std::size_t size, const std::nothrow_t &) noexcept {
+    return AllocationMeter::TryAcquire(size);
+}
+
 void *operator new(const std::size_t size, const std::align_val_t alignment) {
     return AllocationMeter::AcquireAligned(size, static_cast<std::size_t>(alignment));
 }
 
 void *operator new[](const std::size_t size, const std::align_val_t alignment) {
     return AllocationMeter::AcquireAligned(size, static_cast<std::size_t>(alignment));
+}
+
+void *operator new(const std::size_t size, const std::align_val_t alignment, const std::nothrow_t &) noexcept {
+    return AllocationMeter::TryAcquireAligned(size, static_cast<std::size_t>(alignment));
+}
+
+void *operator new[](const std::size_t size, const std::align_val_t alignment, const std::nothrow_t &) noexcept {
+    return AllocationMeter::TryAcquireAligned(size, static_cast<std::size_t>(alignment));
 }
 
 void operator delete(void *memory) noexcept {
@@ -110,6 +142,14 @@ void operator delete[](void *memory, std::size_t) noexcept {
     AllocationMeter::Release(memory);
 }
 
+void operator delete(void *memory, const std::nothrow_t &) noexcept {
+    AllocationMeter::Release(memory);
+}
+
+void operator delete[](void *memory, const std::nothrow_t &) noexcept {
+    AllocationMeter::Release(memory);
+}
+
 void operator delete(void *memory, const std::align_val_t) noexcept {
     AllocationMeter::ReleaseAligned(memory);
 }
@@ -123,6 +163,14 @@ void operator delete(void *memory, std::size_t, const std::align_val_t) noexcept
 }
 
 void operator delete[](void *memory, std::size_t, const std::align_val_t) noexcept {
+    AllocationMeter::ReleaseAligned(memory);
+}
+
+void operator delete(void *memory, const std::align_val_t, const std::nothrow_t &) noexcept {
+    AllocationMeter::ReleaseAligned(memory);
+}
+
+void operator delete[](void *memory, const std::align_val_t, const std::nothrow_t &) noexcept {
     AllocationMeter::ReleaseAligned(memory);
 }
 
