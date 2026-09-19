@@ -106,6 +106,14 @@ namespace Horo::Extensions {
             state.terminal = true;
         }
 
+        [[nodiscard]] bool TerminalizePendingCancellationLocked(BackendOperationStateData &state) noexcept {
+            const auto reason = PendingCancellation(state);
+            if (!reason.has_value())
+                return false;
+            TerminalizeLocked(state, BackendOperationState::Cancelled, std::move(state.cancellationError), *reason);
+            return true;
+        }
+
         [[nodiscard]] BackendOperationCancellationObservation CancelIfRequested(
             const std::shared_ptr<BackendOperationStateData> &operation) noexcept {
             if (!operation)
@@ -315,8 +323,7 @@ namespace Horo::Extensions {
             std::scoped_lock lock{state_->synchronization.Mutex()};
             if (IsTerminal(*state_))
                 return AlreadyTerminal;
-            if (const auto reason = PendingCancellation(*state_); reason.has_value()) {
-                TerminalizeLocked(*state_, BackendOperationState::Cancelled, std::move(state_->cancellationError), *reason);
+            if (TerminalizePendingCancellationLocked(*state_)) {
                 terminalized = true;
                 result = CancellationWon;
             } else if (!ValidTypedId(phase.value) || !ValidProgress(progress) ||
@@ -346,8 +353,7 @@ namespace Horo::Extensions {
             if (IsTerminal(*state_))
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::BackendOperationRegistryShutdown, "Backend operation is already terminal."));
-            if (const auto reason = PendingCancellation(*state_); reason.has_value()) {
-                TerminalizeLocked(*state_, BackendOperationState::Cancelled, std::move(state_->cancellationError), *reason);
+            if (TerminalizePendingCancellationLocked(*state_)) {
                 terminalized = true;
                 result = Result<void>::Failure(MakeError(ExtensionErrors::BackendOperationCancelled));
             } else {
@@ -397,8 +403,7 @@ namespace Horo::Extensions {
             std::scoped_lock lock{state_->synchronization.Mutex()};
             if (IsTerminal(*state_))
                 return AlreadyTerminal;
-            if (const auto reason = PendingCancellation(*state_); reason.has_value()) {
-                TerminalizeLocked(*state_, BackendOperationState::Cancelled, std::move(state_->cancellationError), *reason);
+            if (TerminalizePendingCancellationLocked(*state_)) {
                 terminalized = true;
                 transition = CancellationWon;
             } else {
@@ -430,8 +435,7 @@ namespace Horo::Extensions {
             std::scoped_lock lock{state_->synchronization.Mutex()};
             if (IsTerminal(*state_))
                 return AlreadyTerminal;
-            if (const auto reason = PendingCancellation(*state_); reason.has_value()) {
-                TerminalizeLocked(*state_, BackendOperationState::Cancelled, std::move(state_->cancellationError), *reason);
+            if (TerminalizePendingCancellationLocked(*state_)) {
                 terminalized = true;
                 transition = CancellationWon;
             } else {
@@ -452,11 +456,8 @@ namespace Horo::Extensions {
         {
             std::scoped_lock lock{state_->synchronization.Mutex()};
             if (!IsTerminal(*state_)) {
-                if (const auto reason = PendingCancellation(*state_); reason.has_value()) {
-                    TerminalizeLocked(*state_, BackendOperationState::Cancelled, std::move(state_->cancellationError), *reason);
-                } else {
+                if (!TerminalizePendingCancellationLocked(*state_))
                     TerminalizeLocked(*state_, BackendOperationState::Failed, std::move(state_->abandonmentError));
-                }
                 terminalized = true;
             }
         }
