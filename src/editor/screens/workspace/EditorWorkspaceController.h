@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/ProjectMutation.h"
@@ -141,6 +142,7 @@ namespace Horo::Editor {
         ProjectMutationCoordinator *m_mutations{};
         DurableFileSystem *m_durableFiles{};
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
+        std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
         DiagnosticSourceNavigator m_diagnosticSourceNavigator;
         Application::GameplayBuildService *m_gameplayBuilds{};
         Application::GameplayBuildEnvironment m_gameplayBuildEnvironment;
@@ -177,6 +179,16 @@ namespace Horo::Editor {
         std::vector<std::filesystem::path> m_contentBrowserForwardHistory;
         bool m_contentBrowserRefreshPending{false};
         bool m_contentBrowserLoadingPresented{false};
+
+        struct PendingContentBrowserPreview {
+            std::string absolutePath;
+            std::string contributionId;
+            std::string providerVersion;
+            Assets::AssetPreviewRequest request;
+            std::optional<Assets::AssetPreviewHandle> handle;
+        };
+
+        std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
         float m_autosaveElapsedSeconds{0.0F};
         float m_autosaveRetryDelaySeconds{0.0F};
         float m_sceneFileWatchElapsedSeconds{0.0F};
@@ -204,6 +216,10 @@ namespace Horo::Editor {
         };
 
         using ContentBrowserPathMoves = std::vector<std::pair<std::filesystem::path, std::filesystem::path>>;
+
+        void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
+        void ScheduleContentBrowserPreviews();
+        void PollContentBrowserPreviews();
 
         struct NativeGameplayReloadTransaction {
             enum class Phase : std::uint8_t {

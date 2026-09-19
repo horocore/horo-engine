@@ -222,21 +222,6 @@ namespace Horo::Editor {
             return points;
         }
 
-        [[nodiscard]] std::vector<std::uint8_t> ReadBoundedPayload(const std::filesystem::path &assetPath) {
-            std::error_code error;
-            const std::uintmax_t payloadSize = std::filesystem::file_size(assetPath, error);
-            if (error || payloadSize == 0 || payloadSize > kMaximumMeshPreviewPayloadBytes)
-                return {};
-            std::ifstream input(assetPath, std::ios::binary);
-            if (!input)
-                return {};
-            std::vector<std::uint8_t> payload(static_cast<std::size_t>(payloadSize));
-            input.read(reinterpret_cast<char *>(payload.data()), static_cast<std::streamsize>(payload.size()));
-            if (input.gcount() != static_cast<std::streamsize>(payload.size()))
-                return {};
-            return payload;
-        }
-
         [[nodiscard]] Assets::AssetPreviewFallback InferFallback(const std::string_view assetType) {
             using enum Assets::AssetPreviewFallback;
             if (assetType.find("mesh") != std::string_view::npos)
@@ -308,7 +293,7 @@ namespace Horo::Editor {
         }
 
         void PopulateAssetImporterContribution(ContentBrowserEntry &entry, const Assets::AssetImporterCatalogSnapshot *importerCatalog,
-                                               const std::string &legacySourceExtension, const std::filesystem::path &absoluteEntry) {
+                                               const std::string &legacySourceExtension) {
             if (importerCatalog == nullptr || entry.assetType.empty())
                 return;
 
@@ -345,22 +330,6 @@ namespace Horo::Editor {
             entry.previewFallback = contribution->previewFallback == Assets::AssetPreviewFallback::Automatic
                                         ? entry.previewFallback
                                         : contribution->previewFallback;
-            if (contribution->previewProvider != nullptr && parsedType.HasValue()) {
-                const std::vector<std::uint8_t> payload = ReadBoundedPayload(absoluteEntry);
-                if (!payload.empty()) {
-                    auto generated = contribution->previewProvider->GeneratePreview(
-                        Assets::AssetPreviewInput{
-                            .editorPayload = payload,
-                            .absoluteAssetPath = entry.absolutePath,
-                            .assetType = parsedType.Value(),
-                            .width = 128,
-                            .height = 128,
-                        },
-                        CancellationToken{});
-                    if (generated.HasValue() && generated.Value().IsValid())
-                        entry.previewImage = std::move(generated).Value();
-                }
-            }
         }
 
         [[nodiscard]] ContentBrowserEntry CreateAssetFileEntry(
@@ -384,7 +353,7 @@ namespace Horo::Editor {
             }
 
             entry.previewFallback = InferFallback(entry.assetType);
-            PopulateAssetImporterContribution(entry, importerCatalog, legacySourceExtension, absoluteEntry);
+            PopulateAssetImporterContribution(entry, importerCatalog, legacySourceExtension);
             if (!entry.previewImage.IsValid() && entry.assetType == "core.mesh" && importerCatalog == nullptr)
                 entry.meshPreviewPoints = ReadMeshPreview(absoluteEntry);
             return entry;

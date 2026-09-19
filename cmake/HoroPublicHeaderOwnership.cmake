@@ -229,6 +229,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetImportOperation.h
     Horo/Assets/AssetImporter.h
     Horo/Assets/AssetPreview.h
+    Horo/Assets/AssetPreviewService.h
     Horo/Assets/AssetProvider.h
     Horo/Assets/AssetRegistry.h
     Horo/Assets/AssetReimport.h

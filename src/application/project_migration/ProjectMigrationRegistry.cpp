@@ -270,7 +270,7 @@ namespace Horo::Application {
             return Result<ProjectMigrationPlan>::Failure(weightResult.ErrorValue());
 
         for (const ProjectMigrationDefinition &definition : plan.definitions)
-            LOG_DEBUG("application.project_migration.plan", "Selected migration definition=%s.", definition.id.value.c_str());
+            LOG_INFO("application.project_migration.plan", "Selected migration definition=%s.", definition.id.value.c_str());
         LOG_INFO("application.project_migration.plan", "Migration plan ready source=%s target=%s.", sourceText.c_str(), targetText.c_str());
         LOG_DEBUG("application.project_migration.plan", "Migration plan aggregate definitions=%zu estimated_weight=%llu.",
                   plan.definitions.size(), static_cast<unsigned long long>(plan.estimatedWeight));

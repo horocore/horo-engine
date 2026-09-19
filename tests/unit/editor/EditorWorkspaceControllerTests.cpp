@@ -4,13 +4,16 @@
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
 
 #include <algorithm>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <string>
@@ -104,6 +107,95 @@ namespace {
         NativeDurableFileSystem native_;
     };
 
+    class PreviewTestImporter final : public Assets::IAssetImporter {
+    public:
+        [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &,
+                                                                 const CancellationToken &) const override {
+            return Result<Assets::PreparedAssetImport>::Success({});
+        }
+    };
+
+    class PreviewTestProvider final : public Assets::IAssetPreviewProvider {
+    public:
+        [[nodiscard]] Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
+                                                                        const CancellationToken &) const override {
+            ++calls;
+            return Result<Assets::AssetPreviewImage>::Success({
+                .width = input.width,
+                .height = input.height,
+                .pixels = std::vector<std::uint8_t>(static_cast<std::size_t>(input.width) * input.height * 4U, 0x80),
+            });
+        }
+
+        mutable std::atomic<std::uint32_t> calls{};
+    };
+
+    void WritePreviewTestAsset(const std::filesystem::path &assetPath) {
+        std::filesystem::create_directories(assetPath.parent_path());
+        std::ofstream payload(assetPath, std::ios::binary);
+        payload << "preview-payload";
+        std::ofstream metadata(assetPath.string() + ".meta", std::ios::binary);
+        metadata << R"({"sourceFile":"sample.preview","type":"core.mesh"})";
+    }
+
+    void RegisterPreviewTestProvider(Assets::AssetImporterCatalog &catalog, const std::shared_ptr<PreviewTestProvider> &previewProvider) {
+        auto type = Assets::AssetTypeId::Parse("core.mesh");
+        REQUIRE(type.HasValue());
+        REQUIRE(catalog
+                    .Register(Assets::AssetImporterContribution{
+                        .contributionId = "test.preview",
+                        .packageId = "test.package",
+                        .moduleId = "test.module",
+                        .moduleVersion = "1.0.0",
+                        .version = "1.0.0",
+                        .fileExtensions = {"preview"},
+                        .assetTypes = {std::move(type).Value()},
+                        .strategy = std::make_shared<PreviewTestImporter>(),
+                        .previewProvider = previewProvider,
+                        .previewFallback = Assets::AssetPreviewFallback::Mesh,
+                    })
+                    .HasValue());
+    }
+
+    void WaitForPreview(EditorWorkspaceController &controller) {
+        for (std::size_t attempt = 0; attempt < 100'000 && (controller.ViewModel().contentBrowser.entries.empty() ||
+                                                            !controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+             ++attempt) {
+            controller.UpdateContentBrowser();
+            std::this_thread::yield();
+        }
+    }
+
+    struct PreviewWorkspaceFixture final {
+        std::filesystem::path projectRoot =
+            std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443): Unique test-only path; no untrusted input.
+            std::format("horo-workspace-preview-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        std::shared_ptr<PreviewTestProvider> previewProvider = std::make_shared<PreviewTestProvider>();
+        Assets::AssetImporterCatalog catalog;
+        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> publishedCatalog;
+        Runtime::RuntimeSceneService runtimeScene;
+        CancellationSource cancellation;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        std::unique_ptr<EditorWorkspaceController> controller;
+
+        PreviewWorkspaceFixture() {
+            WritePreviewTestAsset(projectRoot / "assets" / "sample.horoasset");
+            RegisterPreviewTestProvider(catalog, previewProvider);
+            auto published = catalog.Publish();
+            REQUIRE(published.HasValue());
+            publishedCatalog = std::move(published).Value();
+            REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
+            controller = std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene, Assets::AssetRegistrySnapshot{},
+                                                                     EditorWorkspaceDependencies{.importerCatalog = publishedCatalog.get(),
+                                                                                                 .jobs = &jobs});
+        }
+
+        ~PreviewWorkspaceFixture() {
+            std::error_code cleanupError;
+            std::filesystem::remove_all(projectRoot, cleanupError);
+        }
+    };
+
     class TestWorkspaceController final {
     public:
         explicit TestWorkspaceController(std::string projectRoot = "test-project", DiagnosticSourceNavigator diagnosticNavigator = {})
@@ -160,6 +252,21 @@ namespace {
             const CreateGameplayBehaviorRequest request{.destination = destination, .baseName = "PlayerBehavior", .kind = kind};
             REQUIRE((ValidateCreateGameplayBehaviorRequest(request).HasValue()));
         }
+    }
+
+    TEST_CASE("Content browser schedules preview providers and reuses cached images", "[unit][editor][assets][preview]") {
+        PreviewWorkspaceFixture fixture;
+        WaitForPreview(*fixture.controller);
+        REQUIRE(fixture.controller->ViewModel().contentBrowser.entries.size() == 1);
+        REQUIRE(fixture.controller->ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+        REQUIRE(fixture.previewProvider->calls.load() == 1);
+
+        fixture.controller->ProcessCommand({.command = EditorWorkspaceViewCommand::RefreshContentBrowser});
+        fixture.controller->UpdateContentBrowser();
+        fixture.controller->UpdateContentBrowser();
+        WaitForPreview(*fixture.controller);
+        REQUIRE(fixture.controller->ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+        REQUIRE(fixture.previewProvider->calls.load() == 1);
     }
 
     TEST_CASE("Gameplay behavior creation requests reject invalid destinations and names", "[unit][editor][behavior]") {
