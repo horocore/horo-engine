@@ -866,6 +866,11 @@ add_executable(HoroWorkspacePanelHostTests
         unit/editor/WorkspacePanelHostTests.cpp
 )
 target_link_libraries(HoroWorkspacePanelHostTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroEditorSurfaceIdentityTests
+        unit/editor/EditorSurfaceIdentityTests.cpp
+)
+target_compile_features(HoroEditorSurfaceIdentityTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -2077,6 +2082,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroEditorSettingsStoreTests
         HoroWorkspaceLayoutTests
         HoroWorkspacePanelHostTests
+        HoroEditorSurfaceIdentityTests
         HoroWorkspaceLayoutPersistenceTests
         HoroActivityBarLayoutTests
         HoroWorkspaceSplitterInteractionTests

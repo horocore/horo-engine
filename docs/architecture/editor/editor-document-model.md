@@ -39,6 +39,29 @@ One document session has a stable `DocumentSessionId`, a monotonic
 content state. Undo and redo create a new revision notification while restoring
 the state ID of the semantic history entry they apply.
 
+## Surface And Document Identity
+
+Workspace routing uses separate identities for application surfaces and persistent
+source documents. `SurfaceTypeId` names a registered surface type such as
+`horo.viewport` or `horo.game`; it is not a document instance and must not be
+used as a mutable tab handle. `DocumentKind` describes the document semantics,
+while `SourceDocumentId` stores a validated project-relative path using `/`
+separators. `DocumentOpenKey` combines those two persistent values.
+
+`DocumentInstanceId` is session-local and monotonic. `DocumentIdentity` combines
+it with a `DocumentOpenKey` for the lifetime of one open instance. Opening an
+existing key returns `FocusExisting` and the existing instance; it never creates
+a second tab for the same source identity. Different source identities with the
+same `DocumentKind` are independent and may be open concurrently. Workspace
+serialization persists only `DocumentOpenKey`, never a session instance value;
+restore allocates a fresh instance and therefore cannot resurrect a stale handle.
+
+Surface lifecycle is explicit through `SurfaceCapability` flags. The built-in
+Viewport surface is pinned and restorable but not closable. The Game surface is
+conditional on the play-session state, closable, and restorable. These descriptors
+capture existing behavior without making the identity layer own rendering,
+play-session, or panel lifetime; those remain in the workspace/application host.
+
 ## Document Model
 
 The document stores authoring state:
