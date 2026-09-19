@@ -205,8 +205,9 @@ namespace Horo::Extensions {
             }
         }
 
-        void DestroyExternalImporter(const HoroAssetImporterDestroyFunc destroy,
-                                     void *context) noexcept {  // NOSONAR(cpp:S5205,cpp:S5008) C ABI callback.
+        template <typename Destroyer>
+        void DestroyExternalImporter(const Destroyer destroy,
+                                     void *context) noexcept {  // NOSONAR(cpp:S5008) C ABI callback context.
             if (destroy == nullptr)
                 return;
             try {

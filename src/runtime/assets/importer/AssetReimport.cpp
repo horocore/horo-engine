@@ -89,16 +89,16 @@ namespace Horo::Assets {
                 .projectRoot = Detail::NormalizeAssetImportPath(request.absoluteProjectRoot),
                 .assetPath = Detail::NormalizeAssetImportPath(request.absoluteAssetPath),
             };
-            const std::filesystem::path assetRoot = Detail::NormalizeAssetImportPath(paths.projectRoot / "assets");
-            if (paths.projectRoot.empty() || assetRoot.empty() || paths.assetPath.empty() || !request.absoluteAssetPath.is_absolute() ||
+            if (const std::filesystem::path assetRoot = Detail::NormalizeAssetImportPath(paths.projectRoot / "assets");
+                paths.projectRoot.empty() || assetRoot.empty() || paths.assetPath.empty() || !request.absoluteAssetPath.is_absolute() ||
                 !HasPathPrefix(assetRoot, paths.assetPath)) {
                 return Result<ReimportPaths>::Failure(
                     MakeError(AssetErrors::SourceMissing, "Reimport target is outside the project asset root."));
             }
 
             std::error_code error;
-            const auto targetStatus = std::filesystem::symlink_status(paths.assetPath, error);
-            if (error || std::filesystem::is_symlink(targetStatus) || !std::filesystem::is_regular_file(targetStatus))
+            if (const auto targetStatus = std::filesystem::symlink_status(paths.assetPath, error);
+                error || std::filesystem::is_symlink(targetStatus) || !std::filesystem::is_regular_file(targetStatus))
                 return Result<ReimportPaths>::Failure(MakeError(AssetErrors::SourceMissing, "Reimport target is missing or unsafe."));
 
             paths.metadataPath = paths.assetPath;

@@ -68,8 +68,8 @@ namespace Horo::Extensions::Detail {
         [[nodiscard]] bool ConvertHeader(const HoroAssetImportSettingDescriptor &source, Assets::ImportSettingDescriptor &output) {
             const bool validIdentity = CopyExternalText(source.id, output.id) && CopyExternalText(source.labelKey, output.labelKey) &&
                                        CopyExternalText(source.descriptionKey, output.descriptionKey, true);
-            const bool validValue = ConvertKind(source.kind, output.kind) && ConvertValue(source.defaultValue, output.defaultValue);
-            if (!validIdentity || !validValue || !IsChoiceListValid(source))
+            if (const bool validValue = ConvertKind(source.kind, output.kind) && ConvertValue(source.defaultValue, output.defaultValue);
+                !validIdentity || !validValue || !IsChoiceListValid(source))
                 return false;
             if (source.hasMinimum != 0)
                 output.minimum = source.minimum;
