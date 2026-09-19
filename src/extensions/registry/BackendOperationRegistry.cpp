@@ -564,17 +564,10 @@ namespace Horo::Extensions {
         std::scoped_lock lock{state_->mutex};
         if (state_->shutdown)
             return Result<BackendOperationRegistration>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryShutdown));
-        for (const auto &provider : state_->providers) {
-            if (provider->descriptor.provider != descriptor.provider)
-                continue;
-            const bool duplicate = std::ranges::any_of(provider->descriptor.operationTypes, [&](const auto &existing) {
-                return std::ranges::any_of(descriptor.operationTypes, [&](const auto &requested) {
-                    return existing.type == requested.type;
-                });
-            });
-            if (duplicate)
-                return Result<BackendOperationRegistration>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryDuplicate));
-        }
+        if (std::ranges::any_of(state_->providers, [&](const auto &provider) {
+            return provider->descriptor.provider == descriptor.provider;
+        }))
+            return Result<BackendOperationRegistration>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryDuplicate));
         if (state_->providers.size() >= MaximumProviders)
             return Result<BackendOperationRegistration>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryCapacityExceeded));
         try {

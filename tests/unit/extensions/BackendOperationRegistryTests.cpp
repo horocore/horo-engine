@@ -63,6 +63,9 @@ namespace Horo::Extensions::Tests {
         REQUIRE(firstResult.HasValue());
         auto first = std::move(firstResult).Value();
         RequireErrorCode(registry.Register(Provider()), "backend_operation_registry_duplicate");
+        auto disjointOperations = Provider();
+        disjointOperations.operationTypes = {{{"thumbnail"}, {"thumbnail.result"}}};
+        RequireErrorCode(registry.Register(std::move(disjointOperations)), "backend_operation_registry_duplicate");
         CHECK(first.IsRegistered());
 
         registry.BeginShutdown();
