@@ -60,14 +60,24 @@ namespace Horo::Extensions {
         }
 
         template <typename Registration>
-        [[nodiscard]] Result<void> Retain(Result<Registration> registration, std::vector<Registration> &registrations,
-                                          const std::string_view subject) {
-            if (registration.HasError()) {
-                Record(HeadlessExtensionHostStage::Registration, std::string{subject}, registration.ErrorValue());
+        [[nodiscard]] Result<void> Retain(Result<Registration> registration, std::vector<Registration> &registrations) {
+            if (registration.HasError())
                 return Result<void>::Failure(registration.ErrorValue());
-            }
             registrations.push_back(std::move(registration).Value());
             return Result<void>::Success();
+        }
+
+        template <typename Operation> [[nodiscard]] auto Configure(std::string subject, Operation &&operation) -> decltype(operation()) {
+            using OperationResult = decltype(operation());
+            std::scoped_lock lock{lifecycleMutex};
+            if (Result<void> configuring = RequireConfiguring(); configuring.HasError()) {
+                Record(HeadlessExtensionHostStage::Registration, std::move(subject), configuring.ErrorValue());
+                return OperationResult::Failure(configuring.ErrorValue());
+            }
+            OperationResult result = operation();
+            if (result.HasError())
+                Record(HeadlessExtensionHostStage::Registration, std::move(subject), result.ErrorValue());
+            return result;
         }
 
         template <typename T>
@@ -75,6 +85,14 @@ namespace Horo::Extensions {
                                            const Error &error) const {
             Record(stage, std::string{subject}, error);
             return Result<T>::Failure(error);
+        }
+
+        [[nodiscard]] Result<void> FailStartup(const HeadlessExtensionHostStage stage, std::string subject, Error error) {
+            Record(stage, std::move(subject), error);
+            manager->UnloadAll();
+            importers->Reset();
+            state.store(HeadlessExtensionHostState::Failed, std::memory_order_release);
+            return Result<void>::Failure(std::move(error));
         }
     };
 
@@ -109,81 +127,57 @@ namespace Horo::Extensions {
 
     /** @copydoc HeadlessExtensionHost::RegisterCapability */
     Result<void> HeadlessExtensionHost::RegisterCapability(ApplicationCapabilityProviderDescriptor descriptor) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, descriptor.capability.value, configuring.ErrorValue());
-            return configuring;
-        }
         const std::string subject = descriptor.capability.value;
-        return impl_->Retain(impl_->capabilities.Register(std::move(descriptor)), impl_->capabilityRegistrations, subject);
+        return impl_->Configure(subject, [&] {
+            return impl_->Retain(impl_->capabilities.Register(std::move(descriptor)), impl_->capabilityRegistrations);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::RegisterImporter */
     Result<void> HeadlessExtensionHost::RegisterImporter(Assets::AssetImporterContribution contribution) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, contribution.contributionId, configuring.ErrorValue());
-            return configuring;
-        }
         const std::string subject = contribution.contributionId;
-        Result<void> registration = impl_->importers->Register(std::move(contribution));
-        if (registration.HasError())
-            impl_->Record(HeadlessExtensionHostStage::Registration, subject, registration.ErrorValue());
-        return registration;
+        return impl_->Configure(subject, [&] {
+            return impl_->importers->Register(std::move(contribution));
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::RegisterCooker */
     Result<void> HeadlessExtensionHost::RegisterCooker(AssetCookerDescriptor descriptor, std::shared_ptr<const IAssetCooker> provider) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, descriptor.cookerId.value, configuring.ErrorValue());
-            return configuring;
-        }
         const std::string subject = descriptor.cookerId.value;
-        return impl_->Retain(impl_->cookers.Register(std::move(descriptor), std::move(provider)), impl_->cookerRegistrations, subject);
+        return impl_->Configure(subject, [&] {
+            return impl_->Retain(impl_->cookers.Register(std::move(descriptor), std::move(provider)), impl_->cookerRegistrations);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::RegisterValidator */
     Result<void> HeadlessExtensionHost::RegisterValidator(ProjectValidatorProviderDescriptor descriptor,
                                                           std::shared_ptr<const IProjectValidator> provider) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, descriptor.validatorId.value, configuring.ErrorValue());
-            return configuring;
-        }
         const std::string subject = descriptor.validatorId.value;
-        return impl_->Retain(impl_->validators.Register(std::move(descriptor), std::move(provider)), impl_->validatorRegistrations,
-                             subject);
+        return impl_->Configure(subject, [&] {
+            return impl_->Retain(impl_->validators.Register(std::move(descriptor), std::move(provider)), impl_->validatorRegistrations);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::RegisterPipelineStep */
     Result<void> HeadlessExtensionHost::RegisterPipelineStep(PipelineStepDescriptor descriptor,
                                                              std::shared_ptr<const IPipelineStep> provider) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, descriptor.stepId.value, configuring.ErrorValue());
-            return configuring;
-        }
         const std::string subject = descriptor.stepId.value;
-        return impl_->Retain(impl_->pipeline.Register(std::move(descriptor), std::move(provider)), impl_->pipelineRegistrations, subject);
+        return impl_->Configure(subject, [&] {
+            return impl_->Retain(impl_->pipeline.Register(std::move(descriptor), std::move(provider)), impl_->pipelineRegistrations);
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::RegisterToolchain */
     Result<ToolchainInvocationAuthority> HeadlessExtensionHost::RegisterToolchain(ToolchainProviderDescriptor descriptor) {
-        std::scoped_lock lock{impl_->lifecycleMutex};
-        if (Result<void> configuring = impl_->RequireConfiguring(); configuring.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, descriptor.contributionId, configuring.ErrorValue());
-            return Result<ToolchainInvocationAuthority>::Failure(configuring.ErrorValue());
-        }
         const std::string subject = descriptor.contributionId;
-        auto registered = impl_->toolchains.Register(std::move(descriptor));
-        if (registered.HasError()) {
-            impl_->Record(HeadlessExtensionHostStage::Registration, subject, registered.ErrorValue());
-            return Result<ToolchainInvocationAuthority>::Failure(registered.ErrorValue());
-        }
-        ToolchainInvocationAuthority authority = registered.Value().Authority();
-        impl_->toolchainRegistrations.push_back(std::move(registered).Value());
-        return Result<ToolchainInvocationAuthority>::Success(std::move(authority));
+        return impl_->Configure(subject, [&] {
+            auto registered = impl_->toolchains.Register(std::move(descriptor));
+            if (registered.HasError())
+                return Result<ToolchainInvocationAuthority>::Failure(registered.ErrorValue());
+            ToolchainInvocationAuthority authority = registered.Value().Authority();
+            impl_->toolchainRegistrations.push_back(std::move(registered).Value());
+            return Result<ToolchainInvocationAuthority>::Success(std::move(authority));
+        });
     }
 
     /** @copydoc HeadlessExtensionHost::Start */
@@ -197,9 +191,7 @@ namespace Horo::Extensions {
         auto discovered = Discovery::DiscoverDeclaredPackages(impl_->configuration.roots, locations, impl_->configuration.discoveryPolicy);
         if (discovered.HasError()) {
             Error failure = WrapError(ExtensionErrors::HeadlessHostDiscoveryFailed, discovered.ErrorValue());
-            impl_->Record(HeadlessExtensionHostStage::Discovery, "declared-packages", failure);
-            impl_->state.store(HeadlessExtensionHostState::Failed, std::memory_order_release);
-            return Result<void>::Failure(std::move(failure));
+            return impl_->FailStartup(HeadlessExtensionHostStage::Discovery, "declared-packages", std::move(failure));
         }
         Discovery::DiscoveryPlan plan = std::move(discovered).Value();
         impl_->rootDiagnostics = plan.rootDiagnostics;
@@ -210,11 +202,7 @@ namespace Horo::Extensions {
             if (activated.HasError()) {
                 Error failure = WrapError(ExtensionErrors::HeadlessHostActivationFailed, activated.ErrorValue(),
                                           "Headless package activation failed: " + package.packageId);
-                impl_->Record(HeadlessExtensionHostStage::Activation, package.packageId, failure);
-                impl_->manager->UnloadAll();
-                impl_->importers->Reset();
-                impl_->state.store(HeadlessExtensionHostState::Failed, std::memory_order_release);
-                return Result<void>::Failure(std::move(failure));
+                return impl_->FailStartup(HeadlessExtensionHostStage::Activation, package.packageId, std::move(failure));
             }
         }
 
@@ -222,11 +210,7 @@ namespace Horo::Extensions {
         if (published.HasError()) {
             Error failure = WrapError(ExtensionErrors::HeadlessHostActivationFailed, published.ErrorValue(),
                                       "Headless importer catalog publication failed.");
-            impl_->Record(HeadlessExtensionHostStage::Activation, "asset.importer", failure);
-            impl_->manager->UnloadAll();
-            impl_->importers->Reset();
-            impl_->state.store(HeadlessExtensionHostState::Failed, std::memory_order_release);
-            return Result<void>::Failure(std::move(failure));
+            return impl_->FailStartup(HeadlessExtensionHostStage::Activation, "asset.importer", std::move(failure));
         }
         impl_->importerSnapshot = std::move(published).Value();
         impl_->state.store(HeadlessExtensionHostState::Ready, std::memory_order_release);

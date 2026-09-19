@@ -203,6 +203,23 @@ namespace Horo::Extensions::Tests {
                 REQUIRE(toolchain.HasValue());
                 toolchainAuthority = std::move(toolchain).Value();
             }
+
+            void RequireCapabilityResolution(HeadlessExtensionHost &host) const {
+                const ExtensionAdmissionPolicy policy{.revision = 1U, .availableCapabilities = {{"horo.asset.pipeline"}}};
+                const ExtensionAdmissionRequest request{.extensionId = "com.example.consumer",
+                                                        .moduleId = "com.example.consumer.backend",
+                                                        .activationGeneration = 7U,
+                                                        .capabilities = {{{"horo.asset.pipeline"}, {}}}};
+                auto admission = ExtensionCapabilityAdmission::Evaluate(request, policy);
+                REQUIRE(admission.HasValue());
+                auto authority = admission.Value().Grant({"horo.asset.pipeline"});
+                REQUIRE(authority.HasValue());
+                const auto capability = host.ResolveCapability(authority.Value(), {{1U, 0U, 0U}, {1U, 0U, 0U}}, "com.example.consumer",
+                                                               "com.example.consumer.backend", 7U);
+                REQUIRE(capability.HasValue());
+                CHECK(capability.Value().Descriptor().provider.providerId == "com.example.pipeline-provider");
+                CHECK(capability.Value().IsUsable());
+            }
         };
 
         [[nodiscard]] AssetCookerRequest CookRequest() {
@@ -259,20 +276,7 @@ namespace Horo::Extensions::Tests {
         CHECK(processRunner.calls == 1U);
         CHECK(processRunner.executable == "/approved/tool");
 
-        const ExtensionAdmissionPolicy policy{.revision = 1U, .availableCapabilities = {{"horo.asset.pipeline"}}};
-        const ExtensionAdmissionRequest request{.extensionId = "com.example.consumer",
-                                                .moduleId = "com.example.consumer.backend",
-                                                .activationGeneration = 7U,
-                                                .capabilities = {{{"horo.asset.pipeline"}, {}}}};
-        auto admission = ExtensionCapabilityAdmission::Evaluate(request, policy);
-        REQUIRE(admission.HasValue());
-        auto capabilityAuthority = admission.Value().Grant({"horo.asset.pipeline"});
-        REQUIRE(capabilityAuthority.HasValue());
-        const auto capability = host->ResolveCapability(capabilityAuthority.Value(), {{1U, 0U, 0U}, {1U, 0U, 0U}}, "com.example.consumer",
-                                                        "com.example.consumer.backend", 7U);
-        REQUIRE(capability.HasValue());
-        CHECK(capability.Value().Descriptor().provider.providerId == "com.example.pipeline-provider");
-        CHECK(capability.Value().IsUsable());
+        RequireCapabilityResolution(*host);
 
         const HeadlessExtensionHostSnapshot snapshot = host->Inspect();
         CHECK(snapshot.state == HeadlessExtensionHostState::Ready);
@@ -331,5 +335,35 @@ namespace Horo::Extensions::Tests {
         const auto rejected = host->ExecutePipeline({}, {});
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == "headless_host_state_invalid");
+    }
+
+    TEST_CASE_METHOD(HeadlessHostFixture, "Headless host rejects invalid composition and discovery policy inputs",
+                     "[integration][extensions][headless]") {
+        HeadlessExtensionHostConfiguration invalidDiagnostics;
+        invalidDiagnostics.maximumDiagnostics = 0U;
+        const auto invalidRetention = HeadlessExtensionHost::Create(std::move(invalidDiagnostics), toolchainPolicy, processRunner);
+        REQUIRE(invalidRetention.HasError());
+        CHECK(invalidRetention.ErrorValue().code.Value() == "headless_host_configuration_invalid");
+
+        HeadlessExtensionHostConfiguration invalidValidation;
+        invalidValidation.validationLimits.maximumDiagnostics = 0U;
+        const auto invalidValidator = HeadlessExtensionHost::Create(std::move(invalidValidation), toolchainPolicy, processRunner);
+        REQUIRE(invalidValidator.HasError());
+        CHECK(invalidValidator.ErrorValue().code.Value() == "headless_host_configuration_invalid");
+        CHECK(static_cast<bool>(invalidValidator.ErrorValue().cause));
+
+        std::unique_ptr<HeadlessExtensionHost> host = CreateHost();
+        const Discovery::PackageLocation missing{.packageId = "com.example.missing",
+                                                 .rootId = "test-root",
+                                                 .relativePath = "missing-backend"};
+        const auto started = host->Start(std::span{&missing, 1U});
+        REQUIRE(started.HasError());
+        CHECK(started.ErrorValue().code.Value() == "headless_host_discovery_failed");
+        const HeadlessExtensionHostSnapshot snapshot = host->Inspect();
+        CHECK(snapshot.state == HeadlessExtensionHostState::Failed);
+        CHECK(snapshot.discoveredPackages.empty());
+        REQUIRE(snapshot.diagnostics.size() == 1U);
+        CHECK(snapshot.diagnostics.front().stage == HeadlessExtensionHostStage::Discovery);
+        CHECK(snapshot.diagnostics.front().subject == "declared-packages");
     }
 }  // namespace Horo::Extensions::Tests

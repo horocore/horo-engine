@@ -27,6 +27,17 @@ namespace {
         }
     };
 
+    [[nodiscard]] Horo::Application::HostObservabilityConfiguration ObservabilityConfiguration() {
+        return {.logging = {.logDirectory = "~/.horo/logs",
+                            .baseName = "horo-engine",
+                            .hostName = "horo-engine",
+                            .hostVersion = HORO_ENGINE_VERSION_STRING},
+                .identity = {.processRole = "cli",
+                             .engineVersion = HORO_ENGINE_VERSION_STRING,
+                             .buildConfiguration = HORO_BUILD_CONFIGURATION,
+                             .sourceRevision = HORO_SOURCE_REVISION}};
+    }
+
     [[nodiscard]] Options ParseOptions(const std::span<char *> arguments) {
         Options options;
         std::size_t index = 1;
@@ -64,15 +75,7 @@ int main(const int argc, char **argv) {
     }
     std::unique_ptr<Horo::ModuleHost> moduleHost = std::move(composedModules).Value();
 
-    Horo::Application::HostObservabilityConfiguration configuration{.logging = {.logDirectory = "~/.horo/logs",
-                                                                                .baseName = "horo-engine",
-                                                                                .hostName = "horo-engine",
-                                                                                .hostVersion = HORO_ENGINE_VERSION_STRING},
-                                                                    .identity = {.processRole = "cli",
-                                                                                 .engineVersion = HORO_ENGINE_VERSION_STRING,
-                                                                                 .buildConfiguration = HORO_BUILD_CONFIGURATION,
-                                                                                 .sourceRevision = HORO_SOURCE_REVISION}};
-    auto observability = Horo::Application::HostObservabilitySession::Start(std::move(configuration));
+    auto observability = Horo::Application::HostObservabilitySession::Start(ObservabilityConfiguration());
     if (observability == nullptr) {
         std::cerr << "horo-engine: observability initialization failed\n";
         return 2;
