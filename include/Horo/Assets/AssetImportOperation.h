@@ -70,6 +70,9 @@ namespace Horo::Assets {
         std::int64_t sourceLastWriteTime{};           /**< Native source write-time tick captured at import. */
         std::optional<AssetId> preservedAssetId;      /**< Existing identity retained by a reimport transaction. */
         std::vector<AssetImportReason> importReasons; /**< Durable reasons for this import transaction. */
+        std::uint64_t progressCompletedUnits{};       /**< Last provider-reported completed work units. */
+        std::uint64_t progressTotalUnits{};           /**< Last provider-reported non-zero total work units. */
+        std::string progressMessage;                  /**< Last bounded provider progress detail. */
 
         // Destination tab fields
         int namingConvention{0};            /**< 0=Preserve source name, 1=Lowercase+underscore, 2=AssetId prefix. */

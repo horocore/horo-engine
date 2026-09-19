@@ -17,6 +17,8 @@ namespace Horo::Extensions {
     namespace {
         constexpr std::uint32_t kMaxTextBytes = 4096;
         constexpr std::uint32_t kMaxListEntries = 256;
+        constexpr std::size_t kMaxImportDependencies = 16384;
+        constexpr std::size_t kMaxImportDiagnostics = 1024;
         constexpr std::uint64_t kMaxPayloadBytes = 1024ULL * 1024ULL * 1024ULL;
         constexpr std::uint32_t kMaxPreviewDimension = 4096;
 
@@ -98,6 +100,12 @@ namespace Horo::Extensions {
             return result;
         }
 
+        struct ExternalImportOutputState final {
+            Assets::PreparedAssetImport *prepared{};
+            const Assets::AssetImportProgressSink *progress{};
+            bool rejected{};
+        };
+
         // The opaque pointer type is fixed by the versioned C ABI callback signature.
         [[nodiscard]] uint8_t IsCancelled(const void *context) {  // NOSONAR(cpp:S5008)
             if (context == nullptr) {
@@ -123,6 +131,105 @@ namespace Horo::Extensions {
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             } catch (const std::exception &exception) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
                 LOG_WARN("extensions.importer", "ResizeVector failed: %s", exception.what());
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+        }
+
+        [[nodiscard]] HoroExtensionStatus ResizeImportPayload(void *context, const std::uint64_t byteCount,  // NOSONAR(cpp:S5008)
+                                                              std::uint8_t **outBytes) {                     // NOSONAR(cpp:S5008)
+            auto *state = static_cast<ExternalImportOutputState *>(context);
+            if (state == nullptr || state->prepared == nullptr || outBytes == nullptr || byteCount > kMaxPayloadBytes) {
+                if (state != nullptr)
+                    state->rejected = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+            const HoroExtensionStatus status = ResizeVector(&state->prepared->editorPayload, byteCount, outBytes);
+            state->rejected |= status != HORO_EXTENSION_SUCCESS;
+            return status;
+        }
+
+        [[nodiscard]] HoroExtensionStatus AppendImportDependency(void *context,  // NOSONAR(cpp:S5008) C ABI callback
+                                                                 const HoroExtensionStringView assetId) {
+            auto *state = static_cast<ExternalImportOutputState *>(context);
+            if (state == nullptr || state->prepared == nullptr || state->prepared->dependencies.size() >= kMaxImportDependencies) {
+                if (state != nullptr)
+                    state->rejected = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+            try {
+                std::string value;
+                if (!CopyText(assetId, value))
+                    throw std::invalid_argument{"invalid dependency"};
+                auto parsed = Assets::AssetId::Parse(value);
+                if (parsed.HasError() ||
+                    std::ranges::find(state->prepared->dependencies, parsed.Value()) != state->prepared->dependencies.end())
+                    throw std::invalid_argument{"invalid dependency"};
+                state->prepared->dependencies.push_back(std::move(parsed).Value());
+                return HORO_EXTENSION_SUCCESS;
+            } catch (...) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
+                state->rejected = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+        }
+
+        [[nodiscard]] bool ConvertDiagnosticSeverity(const HoroAssetImportDiagnosticSeverity source,
+                                                     Assets::ImportDiagnostic::Severity &destination) noexcept {
+            using enum Assets::ImportDiagnostic::Severity;
+            switch (source) {
+                case HORO_ASSET_IMPORT_DIAGNOSTIC_INFO:
+                    destination = Info;
+                    return true;
+                case HORO_ASSET_IMPORT_DIAGNOSTIC_WARNING:
+                    destination = Warning;
+                    return true;
+                case HORO_ASSET_IMPORT_DIAGNOSTIC_ERROR:
+                    destination = Error;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        [[nodiscard]] HoroExtensionStatus AppendImportDiagnostic(void *context,  // NOSONAR(cpp:S5008) C ABI callback
+                                                                 const HoroAssetImportDiagnostic *diagnostic) {
+            auto *state = static_cast<ExternalImportOutputState *>(context);
+            if (state == nullptr || state->prepared == nullptr || diagnostic == nullptr ||
+                state->prepared->diagnostics.size() >= kMaxImportDiagnostics) {
+                if (state != nullptr)
+                    state->rejected = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+            try {
+                Assets::ImportDiagnostic converted;
+                if (!ConvertDiagnosticSeverity(diagnostic->severity, converted.severity) || !CopyText(diagnostic->code, converted.code) ||
+                    !CopyText(diagnostic->message, converted.message) || (diagnostic->hasLine != 0 && diagnostic->line < 0))
+                    throw std::invalid_argument{"invalid diagnostic"};
+                if (diagnostic->hasLine != 0)
+                    converted.line = diagnostic->line;
+                state->prepared->diagnostics.push_back(std::move(converted));
+                return HORO_EXTENSION_SUCCESS;
+            } catch (...) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
+                state->rejected = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+        }
+
+        [[nodiscard]] HoroExtensionStatus ReportImportProgress(void *context, const std::uint64_t completedUnits,  // NOSONAR(cpp:S5008)
+                                                               const std::uint64_t totalUnits,                     // NOSONAR(cpp:S5008)
+                                                               const HoroExtensionStringView message) {
+            auto *state = static_cast<ExternalImportOutputState *>(context);
+            if (state == nullptr || state->progress == nullptr || totalUnits == 0 || completedUnits > totalUnits ||
+                message.length > kMaxTextBytes || (message.data == nullptr && message.length != 0)) {
+                if (state != nullptr)
+                    state->rejected = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+            try {
+                state->progress->Report(completedUnits, totalUnits,
+                                        std::string_view{message.data != nullptr ? message.data : "", message.length});
+                return HORO_EXTENSION_SUCCESS;
+            } catch (...) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
+                state->rejected = true;
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             }
         }
@@ -171,12 +278,20 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &input,
                                                                      const CancellationToken &cancellation) const override {
+                if (cancellation.IsCancellationRequested())
+                    return Result<Assets::PreparedAssetImport>::Failure(
+                        MakeError(ExtensionErrors::InvocationFailed, "External asset import was cancelled before provider entry."));
+                if (input.settings.size() > kMaxListEntries || input.sourceExtension.size() > kMaxTextBytes)
+                    return Result<Assets::PreparedAssetImport>::Failure(
+                        MakeError(ExtensionErrors::InvocationFailed, "External asset import input exceeded ABI bounds."));
+
                 std::vector<HoroAssetImportSettingValue> settings;
                 settings.reserve(input.settings.size());
                 for (const auto &setting : input.settings)
                     settings.push_back(ToAbiValue(setting));
 
                 Assets::PreparedAssetImport prepared;
+                ExternalImportOutputState output{.prepared = &prepared, .progress = &input.progress};
                 HoroAssetImportRequest request{
                     .structSize = sizeof(HoroAssetImportRequest),
                     .sourceBytes = input.sourceBytes.data(),
@@ -189,16 +304,22 @@ namespace Horo::Extensions {
                 HoroAssetImportResponse response{
                     .structSize = sizeof(HoroAssetImportResponse),
                     .assetType = {},
-                    .editorPayload = {&prepared.editorPayload, ResizeVector},
+                    .editorPayload = {&output, ResizeImportPayload},
+                    .dependencies = {&output, AppendImportDependency},
+                    .diagnostics = {&output, AppendImportDiagnostic},
+                    .progress = {&output, ReportImportProgress},
                 };
                 if (const HoroExtensionStatus status = SafeInvoke(
                         [&instance = instance_, &request, &response] {
                     return instance->importFn(instance->context, &request, &response);
                 }, "importer");
 
-                    status != HORO_EXTENSION_SUCCESS) {
+                    status != HORO_EXTENSION_SUCCESS || output.rejected || cancellation.IsCancellationRequested()) {
                     return Result<Assets::PreparedAssetImport>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External asset importer callback failed."));
+                        MakeError(ExtensionErrors::InvocationFailed,
+                                  cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED
+                                      ? "External asset importer callback was cancelled."
+                                      : "External asset importer callback failed or produced rejected output."));
                 }
 
                 std::string assetType;

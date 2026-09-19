@@ -2,12 +2,14 @@
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorModalHost.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Input.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -17,6 +19,30 @@ namespace {
     using namespace Horo;
     using namespace Horo::Editor;
     using namespace Horo::Assets;
+
+    class ScopedTempDirectory final {
+    public:
+        explicit ScopedTempDirectory(const std::string_view label)
+            : path_{std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443) Unique test-only directory; no untrusted input.
+                    std::format("{}-{}", label, std::chrono::steady_clock::now().time_since_epoch().count())} {
+            std::filesystem::create_directories(path_);
+        }
+
+        ~ScopedTempDirectory() {
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+
+        ScopedTempDirectory(const ScopedTempDirectory &) = delete;
+        ScopedTempDirectory &operator=(const ScopedTempDirectory &) = delete;
+
+        [[nodiscard]] const std::filesystem::path &Path() const noexcept {
+            return path_;
+        }
+
+    private:
+        std::filesystem::path path_;
+    };
 
     class TestImporter final : public IAssetImporter {
     public:
@@ -49,10 +75,17 @@ namespace {
 }  // namespace
 
 TEST_CASE("AssetImportModal lifecycle completes the visible operation before the modal closes", "[native]") {
+    const ScopedTempDirectory project{"horo-asset-import-modal-lifecycle"};
+    const auto sourceFile = project.Path() / "cube.obj";
+    {
+        std::ofstream source{sourceFile};
+        source << "o cube";
+    }
+
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
-    const auto &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+    const Theme::Fonts fonts{};
     JobSystem jobs;
     OperationStore operations{4, 4};
 
@@ -77,7 +110,7 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
     auto *modalPtr = modal.get();
 
     bool prepared = false;
-    modalPtr->m_prepareFn = [&]() {
+    modalPtr->m_prepareFn = [modalPtr, &prepared]() {
         CancellationToken cancellation;
         auto result = modalPtr->ImportSingleItem(0, cancellation);
         REQUIRE((result.HasValue()));
@@ -92,8 +125,7 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
 
     // Begin import
     CancellationToken cancellation;
-    auto beginResult =
-        modalPtr->BeginImport({std::filesystem::path("/tmp/test/cube.obj")}, std::filesystem::path("/tmp/test"), cancellation);
+    auto beginResult = modalPtr->BeginImport({sourceFile}, project.Path(), cancellation);
     REQUIRE((beginResult.HasValue()));
 
     auto &snap = modalPtr->Snapshot();
@@ -121,7 +153,7 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
 }
 
 TEST_CASE("AssetImportModal presets are scoped by importer contribution and extension", "[native]") {
-    const auto &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+    const Theme::Fonts fonts{};
     JobSystem jobs;
     AssetImporterCatalog catalog;
     REQUIRE((catalog
@@ -162,7 +194,7 @@ TEST_CASE("AssetImportModal presets are scoped by importer contribution and exte
     CancellationToken cancellation;
     REQUIRE((modal.BeginImport({"/tmp/test/cube.obj", "/tmp/test/character.fbx"}, "/tmp/test", cancellation).HasValue()));
 
-    auto &objItem = const_cast<AssetImportItem &>(modal.Snapshot().items[0]);
+    auto &objItem = modal.MutableSnapshot().items[0];
     objItem.displayName = "PresetIndependentName";
     objItem.destinationFolder = "assets/Characters";
     objItem.subfolderByType = 2;
@@ -201,7 +233,7 @@ TEST_CASE("AssetImportModal presets are scoped by importer contribution and exte
 }
 
 TEST_CASE("AssetImportModal applies an absolute Content Browser destination", "[native]") {
-    const auto &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+    const Theme::Fonts fonts{};
     JobSystem jobs;
     AssetImporterCatalog catalog;
     REQUIRE((catalog
@@ -219,9 +251,8 @@ TEST_CASE("AssetImportModal applies an absolute Content Browser destination", "[
     auto catalogSnapshot = catalog.Publish();
     REQUIRE((catalogSnapshot.HasValue()));
 
-    const std::filesystem::path projectRoot =
-        std::filesystem::temp_directory_path() /
-        ("horo-import-destination-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const ScopedTempDirectory project{"horo-import-destination"};
+    const auto &projectRoot = project.Path();
     const std::filesystem::path destination = projectRoot / "assets/Meshes";
     std::filesystem::create_directories(destination);
 
@@ -232,13 +263,10 @@ TEST_CASE("AssetImportModal applies an absolute Content Browser destination", "[
     REQUIRE((modal.BeginImport({projectRoot / "source/cube.obj"}, projectRoot, cancellation).HasValue()));
     REQUIRE((modal.Snapshot().items.size() == 1));
     REQUIRE((modal.Snapshot().items[0].destinationFolder == "assets/Meshes"));
-
-    std::error_code cleanupError;
-    std::filesystem::remove_all(projectRoot, cleanupError);
 }
 
 TEST_CASE("AssetImportModal does not duplicate an already selected type folder", "[native]") {
-    const auto &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+    const Theme::Fonts fonts{};
     JobSystem jobs;
     AssetImporterCatalog catalog;
     REQUIRE((catalog
@@ -257,9 +285,8 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
     auto catalogSnapshot = catalog.Publish();
     REQUIRE(catalogSnapshot.HasValue());
 
-    const std::filesystem::path projectRoot =
-        std::filesystem::temp_directory_path() /
-        ("horo-import-destination-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const ScopedTempDirectory project{"horo-import-destination"};
+    const auto &projectRoot = project.Path();
     const std::filesystem::path sourcePath = projectRoot / "source.fbx";
     std::filesystem::create_directories(projectRoot / "assets/Meshes");
     {
@@ -270,14 +297,11 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
     TestAssetImportModal modal{fonts, jobs, catalogSnapshot.Value()};
     CancellationToken cancellation;
     REQUIRE((modal.BeginImport({sourcePath}, projectRoot, cancellation).HasValue()));
-    auto &item = const_cast<AssetImportItem &>(modal.Snapshot().items[0]);
+    auto &item = modal.MutableSnapshot().items[0];
     item.destinationFolder = "assets/Meshes";
     item.subfolderByType = 0;
     REQUIRE((modal.ImportSingleItem(0, cancellation).HasValue()));
 
     REQUIRE((std::filesystem::exists(projectRoot / "assets/Meshes/source.horoasset")));
     REQUIRE((!std::filesystem::exists(projectRoot / "assets/Meshes/Meshes")));
-
-    std::error_code cleanupError;
-    std::filesystem::remove_all(projectRoot, cleanupError);
 }

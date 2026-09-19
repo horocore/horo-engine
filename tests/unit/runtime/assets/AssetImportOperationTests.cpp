@@ -4,7 +4,9 @@
 #include "Horo/Foundation/JobSystem.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -14,6 +16,30 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Assets;
+
+    class ScopedTempDirectory final {
+    public:
+        explicit ScopedTempDirectory(const std::string_view label)
+            : path_{std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443) Unique test-only directory; no untrusted input.
+                    std::format("{}-{}", label, std::chrono::steady_clock::now().time_since_epoch().count())} {
+            std::filesystem::create_directories(path_);
+        }
+
+        ~ScopedTempDirectory() {
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+
+        ScopedTempDirectory(const ScopedTempDirectory &) = delete;
+        ScopedTempDirectory &operator=(const ScopedTempDirectory &) = delete;
+
+        [[nodiscard]] const std::filesystem::path &Path() const noexcept {
+            return path_;
+        }
+
+    private:
+        std::filesystem::path path_;
+    };
 
     class TestImporter final : public IAssetImporter {
     public:
@@ -37,6 +63,23 @@ namespace {
         }
 
         mutable std::vector<ImportSettingValue> receivedSettings;
+    };
+
+    class ReportingImporter final : public IAssetImporter {
+    public:
+        [[nodiscard]] Result<PreparedAssetImport> Import(const AssetImportInput &input,
+                                                         const CancellationToken & /*cancellation*/) const override {
+            input.progress.Report(2, 3, "decode");
+            PreparedAssetImport result;
+            result.type = AssetTypeId::Parse("core.mesh").Value();
+            result.editorPayload.assign(input.sourceBytes.begin(), input.sourceBytes.end());
+            result.diagnostics.push_back({
+                .severity = ImportDiagnostic::Severity::Warning,
+                .code = "asset.import.warning",
+                .message = "source used a compatibility path",
+            });
+            return Result<PreparedAssetImport>::Success(std::move(result));
+        }
     };
 
 }  // namespace
@@ -63,15 +106,15 @@ TEST_CASE("AssetImportOperation Start enters Selecting phase", "[native]") {
     AssetImportOperation operation(jobs, catSnapshot.Value());
 
     AssetImportRequest request{
-        .projectRoot = "/tmp/test_project",
-        .sourceFiles = {"/tmp/test_project/assets/cube.obj"},
+        .projectRoot = "test_project",
+        .sourceFiles = {"test_project/assets/cube.obj"},
     };
 
     CancellationToken cancellation;
     auto result = operation.Start(request, cancellation);
     REQUIRE((result.HasValue()));
 
-    auto snap = result.Value();
+    const auto &snap = result.Value();
     REQUIRE((snap.phase == AssetImportPhase::Selecting));
     REQUIRE((snap.items.size() == 1));
     REQUIRE((snap.canCancel));
@@ -87,8 +130,8 @@ TEST_CASE("AssetImportOperation diagnostics for unsupported extension", "[native
     AssetImportOperation operation(jobs, catSnapshot.Value());
 
     AssetImportRequest request{
-        .projectRoot = "/tmp/test_project",
-        .sourceFiles = {"/tmp/test_project/assets/unknown.xyz"},
+        .projectRoot = "test_project",
+        .sourceFiles = {"test_project/assets/unknown.xyz"},
     };
 
     CancellationToken cancellation;
@@ -98,6 +141,12 @@ TEST_CASE("AssetImportOperation diagnostics for unsupported extension", "[native
     auto &item = result.Value().items[0];
     REQUIRE((!item.diagnostics.empty()));
     REQUIRE((item.diagnostics[0].code == "asset.import.no_importer"));
+
+    const auto importResult = operation.ImportSingleItem(0, cancellation);
+    REQUIRE(importResult.HasValue());
+    CHECK(importResult.Value().phase == AssetImportPhase::Failed);
+    CHECK_FALSE(importResult.Value().canCommit);
+    CHECK_FALSE(importResult.Value().canCancel);
 }
 
 TEST_CASE("AssetImportOperation honours cancellation", "[native]") {
@@ -125,8 +174,8 @@ TEST_CASE("AssetImportOperation honours cancellation", "[native]") {
     cancelSource.RequestCancellation();
 
     AssetImportRequest request{
-        .projectRoot = "/tmp/test_project",
-        .sourceFiles = {"/tmp/test_project/assets/cube.obj"},
+        .projectRoot = "test_project",
+        .sourceFiles = {"test_project/assets/cube.obj"},
     };
 
     auto result = operation.Start(request, cancelSource.Token());
@@ -134,7 +183,8 @@ TEST_CASE("AssetImportOperation honours cancellation", "[native]") {
 }
 
 TEST_CASE("AssetImportOperation resolves queued importer settings", "[native]") {
-    const auto sourceFile = std::filesystem::temp_directory_path() / "horo_asset_import_settings.obj";
+    const ScopedTempDirectory temp{"horo-asset-import-settings"};
+    const auto sourceFile = temp.Path() / "settings.obj";
     {
         std::ofstream source{sourceFile};
         source << "o settings";
@@ -194,6 +244,54 @@ TEST_CASE("AssetImportOperation resolves queued importer settings", "[native]") 
     REQUIRE((importer->receivedSettings.size() == 2));
     REQUIRE((std::get<bool>(importer->receivedSettings[0])));
     REQUIRE((std::get<std::int64_t>(importer->receivedSettings[1]) == 7));
+}
+
+TEST_CASE("AssetImportOperation projects importer progress diagnostics and terminal readiness", "[native][assets][importer]") {
+    const ScopedTempDirectory temp{"horo-asset-import-progress"};
+    const auto sourceFile = temp.Path() / "progress.raw";
+    {
+        std::ofstream source{sourceFile, std::ios::binary};
+        source << "source";
+    }
+
+    JobSystem jobs;
+    AssetImporterCatalog catalog;
+    REQUIRE((catalog
+                 .Register(AssetImporterContribution{
+                     .contributionId = "test.raw.reporting",
+                     .packageId = "test",
+                     .moduleId = "test",
+                     .moduleVersion = "1.0.0",
+                     .version = "1.0.0",
+                     .fileExtensions = {"raw"},
+                     .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
+                     .strategy = std::make_shared<const ReportingImporter>(),
+                 })
+                 .HasValue()));
+    auto published = catalog.Publish();
+    REQUIRE(published.HasValue());
+
+    AssetImportOperation operation{jobs, published.Value()};
+    CancellationToken cancellation;
+    REQUIRE(operation
+                .Start(
+                    AssetImportRequest{
+                        .projectRoot = sourceFile.parent_path(),
+                        .sourceFiles = {sourceFile},
+                    },
+                    cancellation)
+                .HasValue());
+    const auto imported = operation.ImportSingleItem(0, cancellation);
+    REQUIRE(imported.HasValue());
+    CHECK(imported.Value().phase == AssetImportPhase::ReadyToCommit);
+    CHECK(imported.Value().canCommit);
+    CHECK_FALSE(imported.Value().canCancel);
+    const AssetImportItem &item = imported.Value().items.front();
+    CHECK(item.progressCompletedUnits == 2);
+    CHECK(item.progressTotalUnits == 3);
+    CHECK(item.progressMessage == "decode");
+    REQUIRE(item.diagnostics.size() == 1);
+    CHECK(item.diagnostics.front().code == "asset.import.warning");
 
     std::error_code error;
     std::filesystem::remove(sourceFile, error);

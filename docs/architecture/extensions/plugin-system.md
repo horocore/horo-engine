@@ -675,9 +675,15 @@ provides `registerAssetImporter`. The module submits a bounded descriptor,
 declarative setting schema, import callback, optional RGBA8 preview callback,
 and a module-owned context/destroy callback. Descriptor text is copied
 immediately; import and preview output is written only through host-owned byte
-sinks. A successful registration transfers the importer context to the host
-adapter even if a later contribution causes the package transaction to fail.
-The host then invokes the module destroy callback exactly once.
+sinks. The import response appends host-owned dependency, structured-diagnostic,
+and progress sinks after the original v1 prefix. Legacy modules that use only the
+original response prefix remain valid; modules using the appended sinks must
+check `structSize`. Sink rejection is sticky for the invocation, cancellation is
+checked before and after provider entry, and no rejected or cancelled output is
+published. A successful registration transfers the importer context to the host
+adapter even if a later contribution causes the package transaction to fail. The
+host then invokes the module destroy callback exactly once after the last catalog
+snapshot or in-flight adapter lease releases it.
 
 The build publishes that header as a self-contained, versioned
 `HoroEngineExtensionSdk` CMake package. The package exposes only the

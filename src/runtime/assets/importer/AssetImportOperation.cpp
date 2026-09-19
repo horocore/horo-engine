@@ -80,6 +80,16 @@ namespace Horo::Assets {
                 item.settings.try_emplace("settings." + descriptor.id, SerializeDefaultSetting(descriptor));
             }
         }
+
+        void ProjectImportProgress(void *context,  // NOSONAR(cpp:S5008) The typed progress callback requires an opaque context.
+                                   const std::uint64_t completedUnits, const std::uint64_t totalUnits, const std::string_view message) {
+            auto *item = static_cast<AssetImportItem *>(context);
+            if (item == nullptr || totalUnits == 0 || completedUnits > totalUnits || message.size() > 4096)
+                return;
+            item->progressCompletedUnits = completedUnits;
+            item->progressTotalUnits = totalUnits;
+            item->progressMessage.assign(message);
+        }
     }  // namespace
 
     AssetImportOperation::AssetImportOperation(JobSystem &jobs, std::shared_ptr<const AssetImporterCatalogSnapshot> catalog)
@@ -224,8 +234,13 @@ namespace Horo::Assets {
     }
 
     Result<AssetImportSnapshot> AssetImportOperation::ImportSingleItem(std::size_t index, const CancellationToken &cancellation) {
-        if (cancelled_)
+        if (cancelled_ || cancellation.IsCancellationRequested()) {
+            snapshot_.phase = AssetImportPhase::Cancelled;
+            snapshot_.canCancel = false;
+            snapshot_.canCommit = false;
+            snapshot_.revision = ++revision_;
             return Result<AssetImportSnapshot>::Failure(Error{CookErrors::Cancelled.code});
+        }
 
         if (index >= snapshot_.items.size())
             return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
@@ -233,6 +248,9 @@ namespace Horo::Assets {
         auto &item = snapshot_.items[index];
         if (item.result.has_value())
             return Result<AssetImportSnapshot>::Success(snapshot_);
+
+        snapshot_.phase = AssetImportPhase::Preparing;
+        snapshot_.canCommit = false;
 
         const auto *contribution = catalog_->FindById(item.importerContributionId);
         if (contribution == nullptr || contribution->strategy == nullptr || !contribution->HandlesExtension(item.sourceExtension)) {
@@ -242,6 +260,8 @@ namespace Horo::Assets {
                 .message = "No importer for ." + item.sourceExtension,
             });
             LOG_ERROR("editor.asset_import", "No importer for .%s — %s", item.sourceExtension.c_str(), item.displayName.c_str());
+            snapshot_.phase = AssetImportPhase::Failed;
+            snapshot_.canCancel = false;
             snapshot_.revision = ++revision_;
             return Result<AssetImportSnapshot>::Success(snapshot_);
         }
@@ -253,6 +273,8 @@ namespace Horo::Assets {
                 .code = source.ErrorValue().code.Value(),
                 .message = source.ErrorValue().message,
             });
+            snapshot_.phase = AssetImportPhase::Failed;
+            snapshot_.canCancel = false;
             snapshot_.revision = ++revision_;
             return Result<AssetImportSnapshot>::Success(snapshot_);
         }
@@ -262,18 +284,31 @@ namespace Horo::Assets {
         item.sourceLastWriteTime = SourceLastWriteTime(item.absoluteSourcePath);
 
         auto resolved = ResolveImportSettings(*contribution, item.settings);
-        if (resolved.HasError())
+        if (resolved.HasError()) {
+            snapshot_.phase = AssetImportPhase::Failed;
+            snapshot_.canCancel = false;
+            snapshot_.revision = ++revision_;
             return Result<AssetImportSnapshot>::Failure(resolved.ErrorValue());
+        }
 
         AssetImportInput input{
             .sourceBytes = fileBytes,
             .sourceExtension = item.sourceExtension,
             .settings = std::move(resolved).Value(),
+            .progress = {.context = &item, .report = ProjectImportProgress},
         };
 
         if (auto result = contribution->strategy->Import(input, cancellation); result.HasValue()) {
-            item.resolvedType = result.Value().type;
-            item.result = std::move(result).Value();
+            PreparedAssetImport prepared = std::move(result).Value();
+            item.resolvedType = prepared.type;
+            item.diagnostics.insert(item.diagnostics.end(), prepared.diagnostics.begin(), prepared.diagnostics.end());
+            item.result = std::move(prepared);
+            const bool allImported = std::ranges::all_of(snapshot_.items, [](const AssetImportItem &candidate) {
+                return candidate.result.has_value();
+            });
+            snapshot_.phase = allImported ? AssetImportPhase::ReadyToCommit : AssetImportPhase::Preparing;
+            snapshot_.canCommit = allImported;
+            snapshot_.canCancel = !allImported;
         } else {
             const auto &err = result.ErrorValue();
             item.diagnostics.push_back(ImportDiagnostic{
@@ -282,6 +317,13 @@ namespace Horo::Assets {
                 .message = err.message,
             });
             LOG_ERROR("editor.asset_import", "Import failed for %s: %s", item.displayName.c_str(), err.message.c_str());
+            if (cancellation.IsCancellationRequested()) {
+                snapshot_.phase = AssetImportPhase::Cancelled;
+                snapshot_.canCancel = false;
+            } else {
+                snapshot_.phase = AssetImportPhase::Failed;
+                snapshot_.canCancel = false;
+            }
         }
 
         snapshot_.revision = ++revision_;
@@ -304,6 +346,8 @@ namespace Horo::Assets {
     void AssetImportOperation::Cancel() {
         cancelled_ = true;
         snapshot_.phase = AssetImportPhase::Cancelled;
+        snapshot_.canCancel = false;
+        snapshot_.canCommit = false;
         snapshot_.revision = ++revision_;
     }
 
