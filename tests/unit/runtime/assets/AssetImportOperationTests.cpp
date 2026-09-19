@@ -1,3 +1,4 @@
+#include "../../support/AssetImportTestSupport.h"
 #include "Horo/Assets/AssetImportOperation.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Foundation/CancellationToken.h"
@@ -21,40 +22,11 @@ namespace {
     using namespace Horo;
     using namespace Horo::Assets;
 
-    class ScopedTempDirectory final {
-    public:
-        explicit ScopedTempDirectory(const std::string_view label)
-            : path_{std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443) Unique test-only directory; no untrusted input.
-                    std::format("{}-{}", label, std::chrono::steady_clock::now().time_since_epoch().count())} {
-            std::filesystem::create_directories(path_);
-        }
+    using ScopedTempDirectory = Tests::ScopedAssetImportTempDirectory;
 
-        ~ScopedTempDirectory() {
-            std::error_code error;
-            std::filesystem::remove_all(path_, error);
-        }
-
-        ScopedTempDirectory(const ScopedTempDirectory &) = delete;
-        ScopedTempDirectory &operator=(const ScopedTempDirectory &) = delete;
-
-        [[nodiscard]] const std::filesystem::path &Path() const noexcept {
-            return path_;
-        }
-
-    private:
-        std::filesystem::path path_;
-    };
-
-    class TestImporter final : public IAssetImporter {
-    public:
-        [[nodiscard]] Result<PreparedAssetImport> Import(const AssetImportInput &input,
-                                                         const CancellationToken & /*cancellation*/) const override {
-            PreparedAssetImport result;
-            result.type = AssetTypeId::Parse("core.mesh").Value();
-            result.editorPayload.assign(input.sourceBytes.begin(), input.sourceBytes.end());
-            return Result<PreparedAssetImport>::Success(std::move(result));
-        }
-    };
+    [[nodiscard]] AssetImporterContribution BasicContribution() {
+        return Tests::BasicAssetImporterContribution();
+    }
 
     class SettingsCapturingImporter final : public IAssetImporter {
     public:
@@ -74,9 +46,7 @@ namespace {
         [[nodiscard]] Result<PreparedAssetImport> Import(const AssetImportInput &input,
                                                          const CancellationToken & /*cancellation*/) const override {
             input.progress.Report(2, 3, "decode");
-            PreparedAssetImport result;
-            result.type = AssetTypeId::Parse("core.mesh").Value();
-            result.editorPayload.assign(input.sourceBytes.begin(), input.sourceBytes.end());
+            auto result = Tests::MakeBasicPreparedAssetImport(input);
             result.diagnostics.push_back({
                 .severity = ImportDiagnostic::Severity::Warning,
                 .code = "asset.import.warning",
@@ -99,10 +69,7 @@ namespace {
                     return released_;
                 });
             }
-            PreparedAssetImport result;
-            result.type = AssetTypeId::Parse("core.mesh").Value();
-            result.editorPayload.assign(input.sourceBytes.begin(), input.sourceBytes.end());
-            return Result<PreparedAssetImport>::Success(std::move(result));
+            return Result<PreparedAssetImport>::Success(Tests::MakeBasicPreparedAssetImport(input));
         }
 
         void WaitUntilProviderEntered() const {
@@ -125,28 +92,40 @@ namespace {
         bool released_{};
     };
 
+    [[nodiscard]] AssetImporterContribution SettingsContribution(const std::shared_ptr<SettingsCapturingImporter> &importer) {
+        return AssetImporterContribution{
+            .contributionId = "test.obj.settings",
+            .packageId = "test",
+            .moduleId = "test",
+            .moduleVersion = "1.0.0",
+            .version = "1.0.0",
+            .fileExtensions = {"obj"},
+            .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
+            .settings =
+                {
+                    ImportSettingDescriptor{.id = "optimize",
+                                            .labelKey = "Optimize",
+                                            .descriptionKey = "",
+                                            .kind = ImportSettingKind::Boolean,
+                                            .defaultValue = false},
+                    ImportSettingDescriptor{.id = "quality",
+                                            .labelKey = "Quality",
+                                            .descriptionKey = "",
+                                            .kind = ImportSettingKind::Integer,
+                                            .defaultValue = std::int64_t{1}},
+                },
+            .strategy = importer,
+        };
+    }
+
 }  // namespace
 
 TEST_CASE("AssetImportOperation Start enters Selecting phase", "[native]") {
     JobSystem jobs;
 
-    AssetImporterCatalog catalog;
-    REQUIRE((catalog
-                 .Register(AssetImporterContribution{
-                     .contributionId = "test.obj",
-                     .packageId = "test",
-                     .moduleId = "test",
-                     .moduleVersion = "1.0.0",
-                     .version = "1.0.0",
-                     .fileExtensions = {"obj"},
-                     .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
-                     .strategy = std::make_shared<const TestImporter>(),
-                 })
-                 .HasValue()));
-    auto catSnapshot = catalog.Publish();
-    REQUIRE((catSnapshot.HasValue()));
-
-    AssetImportOperation operation(jobs, catSnapshot.Value());
+    const auto catSnapshot = Tests::PublishAssetImporterCatalog(BasicContribution());
+    REQUIRE(catSnapshot != nullptr);
+    AssetImportOperation operation(jobs, catSnapshot);
 
     AssetImportRequest request{
         .projectRoot = "test_project",
@@ -195,23 +174,9 @@ TEST_CASE("AssetImportOperation diagnostics for unsupported extension", "[native
 TEST_CASE("AssetImportOperation honours cancellation", "[native]") {
     JobSystem jobs;
 
-    AssetImporterCatalog catalog;
-    REQUIRE((catalog
-                 .Register(AssetImporterContribution{
-                     .contributionId = "test.obj",
-                     .packageId = "test",
-                     .moduleId = "test",
-                     .moduleVersion = "1.0.0",
-                     .version = "1.0.0",
-                     .fileExtensions = {"obj"},
-                     .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
-                     .strategy = std::make_shared<const TestImporter>(),
-                 })
-                 .HasValue()));
-    auto catSnapshot = catalog.Publish();
-    REQUIRE((catSnapshot.HasValue()));
-
-    AssetImportOperation operation(jobs, catSnapshot.Value());
+    const auto catSnapshot = Tests::PublishAssetImporterCatalog(BasicContribution());
+    REQUIRE(catSnapshot != nullptr);
+    AssetImportOperation operation(jobs, catSnapshot);
 
     CancellationSource cancelSource;
     cancelSource.RequestCancellation();
@@ -236,35 +201,7 @@ TEST_CASE("AssetImportOperation resolves queued importer settings", "[native]") 
     JobSystem jobs;
     auto importer = std::make_shared<SettingsCapturingImporter>();
     AssetImporterCatalog catalog;
-    REQUIRE((catalog
-                 .Register(AssetImporterContribution{
-                     .contributionId = "test.obj.settings",
-                     .packageId = "test",
-                     .moduleId = "test",
-                     .moduleVersion = "1.0.0",
-                     .version = "1.0.0",
-                     .fileExtensions = {"obj"},
-                     .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
-                     .settings =
-                         {
-                             ImportSettingDescriptor{
-                                 .id = "optimize",
-                                 .labelKey = "Optimize",
-                                 .descriptionKey = "",
-                                 .kind = ImportSettingKind::Boolean,
-                                 .defaultValue = false,
-                             },
-                             ImportSettingDescriptor{
-                                 .id = "quality",
-                                 .labelKey = "Quality",
-                                 .descriptionKey = "",
-                                 .kind = ImportSettingKind::Integer,
-                                 .defaultValue = std::int64_t{1},
-                             },
-                         },
-                     .strategy = importer,
-                 })
-                 .HasValue()));
+    REQUIRE(catalog.Register(SettingsContribution(importer)).HasValue());
     auto snapshot = catalog.Publish();
     REQUIRE((snapshot.HasValue()));
 

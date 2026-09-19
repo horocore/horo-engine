@@ -48,8 +48,9 @@ namespace Horo::Assets {
          * @param completedUnits Completed work units, not greater than @p totalUnits.
          * @param totalUnits Non-zero total work units.
          * @param message Optional human-readable phase detail.
+         * @throws Propagates exceptions from the installed host callback so an adapter boundary can translate them.
          */
-        void Report(std::uint64_t completedUnits, std::uint64_t totalUnits, std::string_view message = {}) const noexcept {
+        void Report(std::uint64_t completedUnits, std::uint64_t totalUnits, std::string_view message = {}) const {
             if (report != nullptr)
                 report(context, completedUnits, totalUnits, message);
         }

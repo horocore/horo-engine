@@ -218,6 +218,23 @@ namespace Horo::Assets {
         void Cancel();
 
     private:
+        /** @brief Borrowed callback context valid only while one provider import call is active. */
+        struct ProgressContext final {
+            AssetImportOperation *operation;
+            std::string_view operationId;
+            std::size_t itemIndex;
+        };
+
+        /**
+         * @brief Projects the type-erased provider callback into the owning operation.
+         * @param context Borrowed ProgressContext created for the active import call.
+         * @param completedUnits Completed provider work units.
+         * @param totalUnits Non-zero total provider work units.
+         * @param message Optional bounded provider phase detail.
+         */
+        static void ProjectProgress(void *context, std::uint64_t completedUnits, std::uint64_t totalUnits,  // NOSONAR(cpp:S5008) ABI sink.
+                                    std::string_view message);
+
         /**
          * @brief Projects one bounded provider progress update into the published snapshot.
          * @param operationId Operation identity captured before provider entry.
