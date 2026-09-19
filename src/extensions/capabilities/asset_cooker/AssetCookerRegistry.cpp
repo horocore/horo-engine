@@ -220,15 +220,18 @@ namespace Horo::Extensions {
     void AssetCookerRegistration::Reset() {
         if (provider_ == nullptr)
             return;
-        if (auto registry = registry_.lock(); registry != nullptr) {
+        const auto registry = registry_.lock();
+        if (registry != nullptr) {
             std::scoped_lock lock{registry->mutex};
             provider_->registered.store(false, std::memory_order_release);
-            std::erase(registry->providers, provider_);
+            std::erase_if(registry->providers, [retired = provider_](const auto &candidate) {
+                return candidate == retired;
+            });
         } else {
             provider_->registered.store(false, std::memory_order_release);
         }
-        registry_.reset();
-        provider_.reset();
+        registry_ = {};
+        provider_ = {};
     }
 
     /** @copydoc AssetCookerRegistration::IsRegistered */
@@ -332,13 +335,16 @@ namespace Horo::Extensions {
 
     /** @copydoc AssetCookerRegistry::BeginShutdown */
     void AssetCookerRegistry::BeginShutdown() {  // NOSONAR(cpp:S5817) Terminal admission mutation belongs to the owner facade.
-        if (state_ == nullptr)
+        const auto state = state_;
+        if (state == nullptr)
             return;
-        std::scoped_lock lock{state_->mutex};
-        state_->shutdown = true;
-        for (const auto &provider : state_->providers)
+        std::scoped_lock lock{state->mutex};
+        state->shutdown = true;
+        while (!state->providers.empty()) {
+            const auto provider = std::move(state->providers.back());
+            state->providers.pop_back();
             provider->registered.store(false, std::memory_order_release);
-        state_->providers.clear();
+        }
     }
 
     /** @copydoc AssetCookerRegistry::IsShutdown */

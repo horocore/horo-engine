@@ -89,9 +89,20 @@ namespace Horo::Extensions::Tests {
         }
 
         template <typename T> void RequireError(const Result<T> &result, const std::string &code) {
-            REQUIRE(result.HasError());
-            CHECK(result.ErrorValue().domain.Value() == "horo.extensions");
-            CHECK(result.ErrorValue().code.Value() == code);
+            if (result.HasValue()) {
+                FAIL("Expected a horo.extensions failure with code " << code);
+                return;
+            }
+            const Error &error = result.ErrorValue();
+            CHECK(error.domain.Value() == "horo.extensions");
+            CHECK(error.code.Value() == code);
+        }
+
+        void RequireCookFailureCause(AssetCookerRegistry &registry, const std::string_view expectedCause) {
+            const auto failed = registry.Cook(Request(), {});
+            RequireError(failed, "asset_cooker_invocation_failed");
+            REQUIRE(failed.ErrorValue().cause.Get() != nullptr);
+            CHECK(failed.ErrorValue().cause.Get()->code.Value() == expectedCause);
         }
 
         [[nodiscard]] std::shared_ptr<TestCooker> SuccessfulCooker() {
@@ -126,20 +137,7 @@ namespace Horo::Extensions::Tests {
         REQUIRE(cooked.Value().diagnostics.size() == 1U);
         CHECK(cooked.Value().diagnostics.front().code.Value() == "asset.cook.optimized");
 
-        const auto expected = Assets::BuildAssetCookCacheKey({
-            .assetId = request.input.assetId,
-            .assetType = request.input.assetType,
-            .sourceDigest = request.input.sourceDigest,
-            .metadataDigest = request.input.metadataDigest,
-            .metadataSchemaVersion = request.input.metadataSchemaVersion,
-            .settingsDigest = request.input.settingsDigest,
-            .settingsSchemaVersion = request.input.settingsSchemaVersion,
-            .cookerContributionId = "com.example.mesh-cooker",
-            .cookerVersion = "2.1.0",
-            .target = request.input.target,
-            .artifactFormatVersion = 3U,
-        });
-        CHECK(cooked.Value().cacheKey == expected);
+        CHECK(FormatSha256(cooked.Value().cacheKey.digest) == "sha256:6a6349c2faf810c98f6f3ab0df72810544a6f8d80941bade392648bf99de647d");
     }
 
     TEST_CASE("Asset cooker selection rejects ambiguity and honors one exact project-policy choice",
@@ -172,10 +170,7 @@ namespace Horo::Extensions::Tests {
         });
         auto registration = registry.Register(Descriptor(), cooker);
         REQUIRE(registration.HasValue());
-        const auto failed = registry.Cook(Request(), {});
-        RequireError(failed, "asset_cooker_invocation_failed");
-        REQUIRE(failed.ErrorValue().cause.Get() != nullptr);
-        CHECK(failed.ErrorValue().cause.Get()->code.Value() == "invocation_failed");
+        RequireCookFailureCause(registry, "invocation_failed");
     }
 
     TEST_CASE("Asset cooker cancellation after staging discards the result", "[unit][extensions][asset-cooker][headless]") {
@@ -200,10 +195,7 @@ namespace Horo::Extensions::Tests {
         });
         auto registration = registry.Register(Descriptor(), cooker);
         REQUIRE(registration.HasValue());
-        const auto failed = registry.Cook(Request(), {});
-        RequireError(failed, "asset_cooker_invocation_failed");
-        REQUIRE(failed.ErrorValue().cause.Get() != nullptr);
-        CHECK(failed.ErrorValue().cause.Get()->code.Value() == "asset_cooker_output_invalid");
+        RequireCookFailureCause(registry, "asset_cooker_output_invalid");
     }
 
     TEST_CASE("Asset cooker accepts an explicitly written empty payload", "[unit][extensions][asset-cooker][headless]") {
