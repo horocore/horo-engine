@@ -243,6 +243,37 @@ namespace Horo::Extensions::Tests {
         RequireError(boundedRegistry.Cook(request, {}), "asset_cooker_invocation_failed");
     }
 
+    TEST_CASE("Asset cooker sink rejects duplicate dependencies and returns unique dependencies in canonical order",
+              "[unit][extensions][asset-cooker][headless]") {
+        const auto first = Asset("11111111-1111-4111-8111-111111111111");
+        const auto second = Asset("22222222-2222-4222-8222-222222222222");
+
+        AssetCookerRegistry orderedRegistry;
+        const auto ordered = std::make_shared<TestCooker>(
+            [first, second](const AssetCookerInput &, AssetCookerOutputSink &output, const CancellationToken &) {
+            REQUIRE(output.WritePayload(std::span<const std::uint8_t>{}).HasValue());
+            REQUIRE(output.AddDependency(second).HasValue());
+            return output.AddDependency(first);
+        });
+        auto orderedRegistration = orderedRegistry.Register(Descriptor(), ordered);
+        REQUIRE(orderedRegistration.HasValue());
+        const auto cooked = orderedRegistry.Cook(Request(), {});
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value().dependencies == std::vector<Assets::AssetId>{first, second});
+
+        AssetCookerRegistry duplicateRegistry;
+        const auto duplicate =
+            std::make_shared<TestCooker>([first](const AssetCookerInput &, AssetCookerOutputSink &output, const CancellationToken &) {
+            REQUIRE(output.WritePayload(std::span<const std::uint8_t>{}).HasValue());
+            REQUIRE(output.AddDependency(first).HasValue());
+            CHECK(output.AddDependency(first).HasError());
+            return Result<void>::Success();
+        });
+        auto duplicateRegistration = duplicateRegistry.Register(Descriptor(), duplicate);
+        REQUIRE(duplicateRegistration.HasValue());
+        RequireCookFailureCause(duplicateRegistry, "asset_cooker_output_invalid");
+    }
+
     TEST_CASE("Asset cooker registration owns discovery and shutdown closes admission", "[unit][extensions][asset-cooker][headless]") {
         AssetCookerRegistry registry;
         auto registrationResult = registry.Register(Descriptor(), SuccessfulCooker());
