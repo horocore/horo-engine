@@ -3,14 +3,37 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <limits>
 #include <new>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace Horo::Runtime {
+#ifdef _WIN32
+    namespace {
+        void DebugRegisterStage(const char *stage) noexcept {
+            char buffer[96]{};
+            char *const end = buffer + sizeof(buffer);
+            char *cursor = buffer;
+            while (*stage != '\0' && cursor != end)
+                *cursor++ = *stage++;
+            if (cursor != end)
+                *cursor++ = '\n';
+            DWORD written{};
+            ::WriteFile(::GetStdHandle(STD_ERROR_HANDLE), buffer, static_cast<DWORD>(cursor - buffer), &written, nullptr);
+        }
+    }  // namespace
+#endif
+
     struct SaveParticipantRegistryDetail::SnapshotStorage final {
         std::vector<SaveParticipantBinding> bindings;
         std::vector<SaveParticipantBinding> captureBindings;
@@ -72,6 +95,19 @@ namespace Horo::Runtime {
                    HasValidRoles(descriptor.roles) && HasValidLimits(descriptor) && !descriptor.ownedRecords.empty();
         }
 
+        /** @brief Validates bounded participant-owned records without a temporary allocating container. */
+        [[nodiscard]] Result<void> ValidateOwnedRecords(const std::vector<SaveRecordId> &records) {
+            for (std::size_t index = 0; index < records.size(); ++index) {
+                if (!records[index].IsValid())
+                    return Result<void>::Failure(MakeError(SaveErrors::IdentityInvalid));
+                for (std::size_t previous = 0; previous < index; ++previous) {
+                    if (records[previous] == records[index])
+                        return Result<void>::Failure(MakeError(SaveErrors::IdentityDuplicate));
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Reports whether a dependency requirement is a supported closed value. */
         [[nodiscard]] bool IsKnown(const SaveParticipantDependencyRequirement requirement) noexcept {
             switch (requirement) {
@@ -115,6 +151,8 @@ namespace Horo::Runtime {
             using enum SaveParticipantRole;
             if (descriptor.dependencies.size() > MaximumSaveParticipantCount)
                 return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
+            if (descriptor.dependencies.empty())
+                return Result<void>::Success();
             std::unordered_map<SaveParticipantId, std::byte, SaveParticipantIdHash> coveredPhases;
             coveredPhases.reserve(descriptor.dependencies.size());
             for (const SaveParticipantDependency &dependency : descriptor.dependencies) {
@@ -143,8 +181,7 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
             if (const Result<void> dependencies = ValidateDependencyMetadata(descriptor); dependencies.HasError())
                 return dependencies;
-            if (const Result<void> records = ValidateUniqueSaveIdentities<SaveRecordIdentityTag>(descriptor.ownedRecords);
-                records.HasError())
+            if (const Result<void> records = ValidateOwnedRecords(descriptor.ownedRecords); records.HasError())
                 return Result<void>::Failure(MakeError(SaveErrors::ParticipantDescriptorInvalid));
             return Result<void>::Success();
         }
@@ -296,9 +333,9 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
-    SaveParticipantBinding::SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor,
-                                                   std::shared_ptr<const ICanonicalStateAdapter> adapter)
-        : descriptor_(std::move(descriptor)), adapter_(std::move(adapter)) {}
+    SaveParticipantBinding::SaveParticipantBinding(RegistryConstructionTag, const CanonicalStateParticipantDescriptor &descriptor,
+                                                   const std::shared_ptr<const ICanonicalStateAdapter> &adapter)
+        : descriptor_(descriptor), adapter_(adapter) {}
 
     /** @copydoc SaveParticipantBinding::Descriptor */
     const CanonicalStateParticipantDescriptor &SaveParticipantBinding::Descriptor() const noexcept {
@@ -351,6 +388,10 @@ namespace Horo::Runtime {
         return std::to_address(found);
     }
 
+    CanonicalStateParticipantRegistry::CanonicalStateParticipantRegistry() {
+        bindings_.reserve(MaximumSaveParticipantCount);
+    }
+
     CanonicalStateParticipantRegistry::~CanonicalStateParticipantRegistry() {
         Close();
     }
@@ -359,6 +400,9 @@ namespace Horo::Runtime {
     Result<SaveParticipantRegistration> CanonicalStateParticipantRegistry::Register(const CanonicalStateParticipantDescriptor &descriptor,
                                                                                     std::shared_ptr<const ICanonicalStateAdapter> adapter) {
         try {
+#ifdef _WIN32
+            DebugRegisterStage("production register entered");
+#endif
             if (closed_)
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryClosed));
             auto nextGeneration = NextGeneration(generation_);
@@ -368,6 +412,9 @@ namespace Horo::Runtime {
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantAdapterMissing));
             if (const Result<void> valid = ValidateDescriptor(descriptor); valid.HasError())
                 return Result<SaveParticipantRegistration>::Failure(valid.ErrorValue());
+#ifdef _WIN32
+            DebugRegisterStage("production register validated");
+#endif
             if (bindings_.size() >= MaximumSaveParticipantCount)
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryCapacityExceeded));
             if (std::ranges::find(bindings_, descriptor.participant, [](const SaveParticipantBinding &binding) {
@@ -380,13 +427,31 @@ namespace Horo::Runtime {
                         return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRecordOwnershipDuplicate));
                 }
             }
+#ifdef _WIN32
+            DebugRegisterStage("production register unique");
+#endif
             CanonicalStateParticipantDescriptor ownedDescriptor = descriptor;
+#ifdef _WIN32
+            DebugRegisterStage("production register copied");
+#endif
             SaveParticipantRegistration registration{ownedDescriptor.participant, nextGeneration.Value()};
+#ifdef _WIN32
+            DebugRegisterStage("production register result");
+#endif
             std::ranges::sort(ownedDescriptor.dependencies);
-            bindings_.push_back(SaveParticipantBinding{std::move(ownedDescriptor), std::move(adapter)});
+#ifdef _WIN32
+            DebugRegisterStage("production register sorted");
+#endif
+            bindings_.emplace_back(SaveParticipantBinding::RegistryConstructionTag{}, ownedDescriptor, adapter);
+#ifdef _WIN32
+            DebugRegisterStage("production register pushed");
+#endif
             generation_ = nextGeneration.Value();
             return Result<SaveParticipantRegistration>::Success(std::move(registration));
         } catch (const std::bad_alloc &) {
+#ifdef _WIN32
+            DebugRegisterStage("production register caught");
+#endif
             return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryAllocationFailed));
         }
     }

@@ -4,10 +4,17 @@
 #include "SaveCaptureSnapshotTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <charconv>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace Horo::Runtime {
     namespace {
@@ -40,6 +47,26 @@ namespace Horo::Runtime {
         std::shared_ptr<const ICanonicalStateAdapter> Adapter(const std::shared_ptr<int> &destructionCount) {
             return std::make_shared<CaptureTestSupport::CountingCaptureAdapter>(destructionCount);
         }
+
+#ifdef _WIN32
+        void DebugAllocationStage(const char *stage, const std::size_t budget) noexcept {
+            char buffer[96]{};
+            char *const end = buffer + sizeof(buffer);
+            char *cursor = buffer;
+            while (*stage != '\0' && cursor != end)
+                *cursor++ = *stage++;
+            if (cursor != end) {
+                *cursor++ = ' ';
+                const auto converted = std::to_chars(cursor, end, budget);
+                if (converted.ec == std::errc{})
+                    cursor = converted.ptr;
+            }
+            if (cursor != end)
+                *cursor++ = '\n';
+            DWORD written{};
+            ::WriteFile(::GetStdHandle(STD_ERROR_HANDLE), buffer, static_cast<DWORD>(cursor - buffer), &written, nullptr);
+        }
+#endif
 
         std::vector<std::string> ParticipantIds(const std::span<const SaveParticipantBinding> bindings) {
             std::vector<std::string> identities;
@@ -196,18 +223,35 @@ namespace Horo::Runtime {
         }
 
         TEST_CASE("Allocation failure preserves registry membership generation and leases", "[unit][save][registry]") {
+            auto destructionCount = std::make_shared<int>();
+            auto adapter = Adapter(destructionCount);
+            const auto descriptor = Descriptor("horo.test.allocation");
+            CanonicalStateParticipantRegistry registry;
+            // MSVC's checked vector performs its first mutation-time setup lazily. Warm it
+            // outside the injected-failure scope while preserving an empty registry baseline.
+#ifdef _WIN32
+            DebugAllocationStage("warmup begin", 0);
+#endif
+            REQUIRE(registry.Register(descriptor, adapter).HasValue());
+            REQUIRE(registry.Unregister(descriptor.participant).Value());
+#ifdef _WIN32
+            DebugAllocationStage("warmup end", 0);
+#endif
+
             bool reachedSuccessfulRegistration = false;
             for (std::size_t successfulAllocations = 0; successfulAllocations < 64 && !reachedSuccessfulRegistration;
                  ++successfulAllocations) {
-                auto destructionCount = std::make_shared<int>();
-                auto adapter = Adapter(destructionCount);
-                const auto descriptor = Descriptor("horo.test.allocation");
-                CanonicalStateParticipantRegistry registry;
+#ifdef _WIN32
+                DebugAllocationStage("register begin", successfulAllocations);
+#endif
                 const std::uint64_t generation = registry.Generation();
                 auto registration = [&] {
                     Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
                     return registry.Register(descriptor, adapter);
                 }();
+#ifdef _WIN32
+                DebugAllocationStage("register end", successfulAllocations);
+#endif
                 reachedSuccessfulRegistration = registration.HasValue();
                 if (!reachedSuccessfulRegistration) {
                     CHECK(registration.ErrorValue().code.Value() == SaveErrors::ParticipantRegistryAllocationFailed.code.Value());
@@ -218,17 +262,19 @@ namespace Horo::Runtime {
             }
             REQUIRE(reachedSuccessfulRegistration);
 
-            auto destructionCount = std::make_shared<int>();
-            auto adapter = Adapter(destructionCount);
-            CanonicalStateParticipantRegistry registry;
-            REQUIRE(registry.Register(Descriptor("horo.test.allocation"), adapter).HasValue());
             const std::uint64_t generation = registry.Generation();
             bool reachedSuccessfulSnapshot = false;
             for (std::size_t successfulAllocations = 0; successfulAllocations < 64 && !reachedSuccessfulSnapshot; ++successfulAllocations) {
+#ifdef _WIN32
+                DebugAllocationStage("snapshot begin", successfulAllocations);
+#endif
                 auto snapshot = [&] {
                     Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
                     return registry.Snapshot();
                 }();
+#ifdef _WIN32
+                DebugAllocationStage("snapshot end", successfulAllocations);
+#endif
                 reachedSuccessfulSnapshot = snapshot.HasValue();
                 if (!reachedSuccessfulSnapshot) {
                     CHECK(snapshot.ErrorValue().code.Value() == SaveErrors::ParticipantRegistryAllocationFailed.code.Value());

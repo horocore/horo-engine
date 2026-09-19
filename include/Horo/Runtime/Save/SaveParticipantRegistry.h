@@ -144,9 +144,14 @@ namespace Horo::Runtime {
         [[nodiscard]] const std::shared_ptr<const ICanonicalStateAdapter> &Adapter() const noexcept;
 
     private:
+        struct RegistryConstructionTag final {};
         friend class CanonicalStateParticipantRegistry;
-        SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor, std::shared_ptr<const ICanonicalStateAdapter> adapter);
 
+    public:
+        SaveParticipantBinding(RegistryConstructionTag, const CanonicalStateParticipantDescriptor &descriptor,
+                               const std::shared_ptr<const ICanonicalStateAdapter> &adapter);
+
+    private:
         CanonicalStateParticipantDescriptor descriptor_;
         std::shared_ptr<const ICanonicalStateAdapter> adapter_;
     };
@@ -193,7 +198,7 @@ namespace Horo::Runtime {
     /** @brief Host-owned explicit participant composition registry with bounded immutable snapshots. */
     class CanonicalStateParticipantRegistry final {
     public:
-        CanonicalStateParticipantRegistry() = default;
+        CanonicalStateParticipantRegistry();
         ~CanonicalStateParticipantRegistry();
         CanonicalStateParticipantRegistry(const CanonicalStateParticipantRegistry &) = delete;
         CanonicalStateParticipantRegistry &operator=(const CanonicalStateParticipantRegistry &) = delete;
