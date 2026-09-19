@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare a worktree and request C/C++ diagnostics from SonarQube for IDE.
+# Codacy profiles alternate between the mutually exclusive D212 and D213 layouts.
+# noqa: D212,D213
+"""
+Prepare a worktree and request C/C++ diagnostics from SonarQube for IDE.
 
 With no ``--port``, the script configures a compilation database, writes an
 ignored VS Code workspace, opens it in a dedicated window, discovers that
@@ -20,6 +23,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -38,11 +42,17 @@ GIT_REF_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,254}")
 
 
 class AnalysisError(RuntimeError):
+
+    # Codacy profiles alternate between the mutually exclusive D203 and D211 layouts.
+    # noqa: D203,D211
     """A prerequisite or the local IDE bridge prevented analysis."""
 
 
 @dataclass(frozen=True)
 class Selection:
+
+    # Codacy profiles alternate between the mutually exclusive D203 and D211 layouts.
+    # noqa: D203,D211
     """Files selected for one bridge request and paths intentionally omitted."""
 
     submitted: list[Path]
@@ -192,27 +202,41 @@ def prepare_compilation_database(root: Path, build_directory: Path) -> Path:
     return database
 
 
-def validate_compile_commands(root: Path, compilation_database: Path, files: Sequence[Path]) -> None:
-    """Require a command for every submitted translation unit; headers use IDE context."""
+def _load_compilation_database(compilation_database: Path) -> list[object]:
+    """Read and validate the top-level shape of a compilation database."""
     try:
         entries = json.loads(compilation_database.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise AnalysisError(f"Cannot read compilation database: {compilation_database}") from error
     if not isinstance(entries, list):
         raise AnalysisError(f"Compilation database is not an array: {compilation_database}")
+    return cast(list[object], entries)
 
+
+def _compiled_sources(root: Path, compilation_database: Path, entries: Sequence[object]) -> set[Path]:
+    """Collect the in-worktree source paths represented by a compilation database."""
     compiled_files: set[Path] = set()
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("file"), str):
             continue
-        directory = Path(entry["directory"]) if isinstance(entry.get("directory"), str) else compilation_database.parent
+        directory_value = entry.get("directory")
+        directory = Path(directory_value) if isinstance(directory_value, str) else compilation_database.parent
         source = Path(entry["file"])
         absolute_source = Path(os.path.abspath(source if source.is_absolute() else directory / source))
         if absolute_source.is_relative_to(root):
             compiled_files.add(absolute_source)
+    return compiled_files
 
-    required = [path for path in files if path.suffix.lower() in TRANSLATION_UNIT_SUFFIXES]
-    missing = [str(path) for path in required if path not in compiled_files]
+
+def validate_compile_commands(root: Path, compilation_database: Path, files: Sequence[Path]) -> None:
+    """Require a command for every submitted translation unit; headers use IDE context."""
+    entries = _load_compilation_database(compilation_database)
+    compiled_files = _compiled_sources(root, compilation_database, entries)
+    missing = [
+        str(path)
+        for path in files
+        if path.suffix.lower() in TRANSLATION_UNIT_SUFFIXES and path not in compiled_files
+    ]
     if missing:
         raise AnalysisError("Compilation database has no command for submitted file(s): " + ", ".join(missing))
 
@@ -417,40 +441,73 @@ def result_payload(
     }
 
 
+def _validate_arguments(args: argparse.Namespace) -> None:
+    """Reject combinations that cannot produce a deterministic analysis."""
+    if args.timeout <= 0:
+        raise AnalysisError("--timeout must be greater than zero")
+    if args.files and (args.base is not None or args.dirty):
+        raise AnalysisError("Explicit files cannot be combined with a change selector")
+
+
+def _analysis_database(root: Path, args: argparse.Namespace) -> Path:
+    """Prepare or locate the compilation database requested by the CLI."""
+    database = (
+        (root / args.build_directory / COMPILE_COMMANDS_FILENAME).resolve()
+        if args.no_prepare
+        else prepare_compilation_database(root, args.build_directory)
+    )
+    if not database.is_file():
+        raise AnalysisError(f"Compilation database is missing: {database}")
+    return database
+
+
+def _selected_files(root: Path, args: argparse.Namespace) -> Selection:
+    """Resolve the CLI file selector and require at least one analyzable file."""
+    requested, source = (list(args.files), "explicit") if args.files else changed_paths(root, args.base)
+    selection = select_files(root, requested, source)
+    if not selection.submitted:
+        raise AnalysisError("No analyzable C/C++ files were selected")
+    return selection
+
+
+def _analysis_bridge(root: Path, args: argparse.Namespace) -> int:
+    """Return the requested bridge or open a dedicated workspace to discover one."""
+    if args.port is not None:
+        return args.port
+    if args.no_prepare:
+        raise AnalysisError("--no-prepare requires --port")
+    workspace = write_workspace(root, args.build_directory, args.connection_id, args.project_key)
+    return open_workspace_and_find_bridge(workspace, args.startup_timeout)
+
+
+def _analyze_selection(
+    root: Path,
+    args: argparse.Namespace,
+    selection: Selection,
+    port: int,
+) -> tuple[list[dict[str, object]], int]:
+    """Run the bridge request and optionally retain only findings on changed lines."""
+    request_bridge(port, BRIDGE_STATUS_PATH, args.timeout)
+    findings = analyze_when_indexed(port, selection.submitted, args.timeout, args.startup_timeout)
+    if args.base is None:
+        return findings, 0
+    filtered, suppressed = filter_findings_to_ranges(
+        findings, changed_line_ranges(root, args.base, selection.submitted)
+    )
+    return filtered, suppressed
+
+
 def main(arguments: Sequence[str] | None = None) -> int:
     """Prepare the worktree, run one local IDE request, and print JSON."""
     args = parse_arguments(arguments)
     try:
-        if args.timeout <= 0:
-            raise AnalysisError("--timeout must be greater than zero")
-        if args.files and (args.base is not None or args.dirty):
-            raise AnalysisError("Explicit files cannot be combined with a change selector")
+        _validate_arguments(args)
         root = repository_root()
-        build_directory = args.build_directory
-        database = (
-            (root / build_directory / COMPILE_COMMANDS_FILENAME).resolve()
-            if args.no_prepare
-            else prepare_compilation_database(root, build_directory)
-        )
-        if not database.is_file():
-            raise AnalysisError(f"Compilation database is missing: {database}")
-        requested, source = (list(args.files), "explicit") if args.files else changed_paths(root, args.base)
-        selection = select_files(root, requested, source)
-        if not selection.submitted:
-            raise AnalysisError("No analyzable C/C++ files were selected")
+        database = _analysis_database(root, args)
+        selection = _selected_files(root, args)
         validate_compile_commands(root, database, selection.submitted)
-
-        port = args.port
-        if port is None:
-            if args.no_prepare:
-                raise AnalysisError("--no-prepare requires --port")
-            workspace = write_workspace(root, build_directory, args.connection_id, args.project_key)
-            port = open_workspace_and_find_bridge(workspace, args.startup_timeout)
-        request_bridge(port, BRIDGE_STATUS_PATH, args.timeout)
-        findings = analyze_when_indexed(port, selection.submitted, args.timeout, args.startup_timeout)
-        suppressed = 0
-        if args.base is not None:
-            findings, suppressed = filter_findings_to_ranges(findings, changed_line_ranges(root, args.base, selection.submitted))
+        port = _analysis_bridge(root, args)
+        findings, suppressed = _analyze_selection(root, args, selection, port)
         print(json.dumps(result_payload(selection, port, database, findings, suppressed), ensure_ascii=False, indent=2))
         return 1 if findings else 0
     except AnalysisError as error:

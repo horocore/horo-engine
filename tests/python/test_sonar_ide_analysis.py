@@ -47,6 +47,14 @@ def test_validate_compile_commands_requires_sources_but_allows_headers(tmp_path:
         sonar_ide_analysis.validate_compile_commands(tmp_path, database, [missing])
 
 
+def test_validate_compile_commands_resolves_entries_relative_to_database(tmp_path: Path) -> None:
+    source = tmp_path / "relative.cpp"
+    database = tmp_path / sonar_ide_analysis.COMPILE_COMMANDS_FILENAME
+    database.write_text(json.dumps([{"file": source.name, "command": "c++ -c relative.cpp"}]), encoding="utf-8")
+
+    sonar_ide_analysis.validate_compile_commands(tmp_path, database, [source])
+
+
 def test_validate_compile_commands_rejects_invalid_and_outside_entries(tmp_path: Path) -> None:
     source = tmp_path / "source.cpp"
     database = tmp_path / sonar_ide_analysis.COMPILE_COMMANDS_FILENAME
