@@ -3,6 +3,7 @@
 #include "../ExtensionAuthorityIdentityValidation.h"
 #include "Horo/Extensions/BackendOperationRegistry.h"
 #include "Horo/Extensions/ExtensionErrors.h"
+#include "Horo/Foundation/MathUtils.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -10,7 +11,6 @@
 #include <iterator>
 #include <ranges>
 #include <string_view>
-#include <tuple>
 
 namespace Horo::Extensions::BackendOperationValidation {
     inline constexpr std::size_t MaximumIdentityBytes = 256;
@@ -59,28 +59,9 @@ namespace Horo::Extensions::BackendOperationValidation {
         return progress.totalUnits != 0 && progress.completedUnits <= progress.totalUnits;
     }
 
-    struct WideProduct final {
-        std::uint64_t high{};
-        std::uint64_t low{};
-    };
-
-    [[nodiscard]] constexpr WideProduct MultiplyWide(const std::uint64_t left, const std::uint64_t right) noexcept {
-        constexpr std::uint64_t lowerMask = 0xffffffffULL;
-        const std::uint64_t leftLow = left & lowerMask;
-        const std::uint64_t leftHigh = left >> 32U;
-        const std::uint64_t rightLow = right & lowerMask;
-        const std::uint64_t rightHigh = right >> 32U;
-        const std::uint64_t lowProduct = leftLow * rightLow;
-        const std::uint64_t firstCross = leftHigh * rightLow + (lowProduct >> 32U);
-        const std::uint64_t secondCross = leftLow * rightHigh + (firstCross & lowerMask);
-        return {.high = leftHigh * rightHigh + (firstCross >> 32U) + (secondCross >> 32U),
-                .low = (secondCross << 32U) + (lowProduct & lowerMask)};
-    }
-
     [[nodiscard]] inline bool IsProgressRegression(const BackendOperationProgress current, const BackendOperationProgress next) noexcept {
-        const WideProduct nextProduct = MultiplyWide(next.completedUnits, current.totalUnits);
-        const WideProduct currentProduct = MultiplyWide(current.completedUnits, next.totalUnits);
-        return std::tie(nextProduct.high, nextProduct.low) < std::tie(currentProduct.high, currentProduct.low);
+        return Horo::Foundation::Math::IsProgressRegression(current.completedUnits, current.totalUnits, next.completedUnits,
+                                                            next.totalUnits);
     }
 
     [[nodiscard]] inline Error CancellationError() {

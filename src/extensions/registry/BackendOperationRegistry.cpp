@@ -1,175 +1,15 @@
 #include "Horo/Extensions/BackendOperationRegistry.h"
 
-#include "BackendOperationValidation.h"
+#include "BackendOperationRegistryInternal.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 
-#include <algorithm>
 #include <array>
-#include <atomic>
-#include <mutex>
 #include <new>
-#include <ranges>
 #include <utility>
 
 namespace Horo::Extensions {
-    struct BackendOperationProviderState final {
-        BackendOperationProviderDescriptor descriptor;
-        std::atomic_bool registered{true};
-    };
-
-    class BackendOperationStateSynchronization final {
-    public:
-        [[nodiscard]] std::mutex &Mutex() const noexcept {
-            return mutex_;
-        }
-
-    private:
-        mutable std::mutex mutex_;
-    };
-
-    struct BackendOperationStateData final {
-        BackendOperationStateSynchronization synchronization;
-        BackendOperationSnapshot snapshot;
-        std::weak_ptr<BackendOperationRegistryState> registry;
-        std::shared_ptr<BackendOperationProviderState> provider;
-        CancellationToken parentCancellation;
-        CancellationSource cancellation;
-        Error cancellationError;
-        Error abandonmentError;
-        std::size_t retainedDiagnosticBytes{};
-        bool terminal{};
-
-        BackendOperationStateData(std::weak_ptr<BackendOperationRegistryState> registryState,
-                                  std::shared_ptr<BackendOperationProviderState> providerState, BackendOperationSnapshot initialSnapshot,
-                                  CancellationToken parent)
-            : snapshot(std::move(initialSnapshot)), registry(std::move(registryState)), provider(std::move(providerState)),
-              parentCancellation(parent), cancellation(parent) {}
-    };
-
-    struct BackendOperationRegistryState final {
-        std::mutex mutex;
-        BackendOperationRegistryConfig config;
-        std::vector<std::shared_ptr<BackendOperationProviderState>> providers;
-        std::vector<std::shared_ptr<BackendOperationStateData>> operations;
-        std::uint64_t nextOperationId{1};
-        bool shutdown{};
-    };
-
-    namespace {
-        using namespace BackendOperationValidation;
-
-        [[nodiscard]] const BackendOperationTypeDescriptor *FindType(const BackendOperationProviderState &provider,
-                                                                     const BackendOperationTypeId &type) noexcept {
-            const auto found = std::ranges::find(provider.descriptor.operationTypes, type, &BackendOperationTypeDescriptor::type);
-            return found == provider.descriptor.operationTypes.end() ? nullptr : std::to_address(found);
-        }
-
-        [[nodiscard]] bool IsTerminal(const BackendOperationStateData &state) noexcept {
-            return state.terminal;
-        }
-
-        void RetireOperation(const std::shared_ptr<BackendOperationStateData> &operation) noexcept {
-            if (const auto registry = operation->registry.lock()) {
-                std::scoped_lock lock{registry->mutex};
-                std::erase(registry->operations, operation);
-            }
-        }
-
-        void SetCancellationRequested(BackendOperationStateData &state, const BackendOperationCancellationReason reason) noexcept {
-            if (!state.snapshot.cancellationRequested) {
-                state.snapshot.cancellationRequested = true;
-                state.snapshot.cancellationReason = reason;
-                ++state.snapshot.revision;
-            }
-            state.cancellation.RequestCancellation();
-        }
-
-        [[nodiscard]] std::optional<BackendOperationCancellationReason> PendingCancellation(
-            const BackendOperationStateData &state) noexcept {
-            if (state.snapshot.cancellationRequested)
-                return state.snapshot.cancellationReason;
-            if (state.parentCancellation.IsCancellationRequested())
-                return BackendOperationCancellationReason::Parent;
-            return std::nullopt;
-        }
-
-        void TerminalizeLocked(BackendOperationStateData &state, const BackendOperationState terminalState, std::optional<Error> error,
-                               const BackendOperationCancellationReason reason = BackendOperationCancellationReason::None) noexcept {
-            if (state.terminal)
-                return;
-            state.snapshot.state = terminalState;
-            state.snapshot.terminalError = std::move(error);
-            state.snapshot.cancellationReason = reason;
-            state.snapshot.cancellationRequested =
-                reason != BackendOperationCancellationReason::None || state.snapshot.cancellationRequested;
-            ++state.snapshot.revision;
-            state.terminal = true;
-        }
-
-        [[nodiscard]] bool TerminalizePendingCancellationLocked(BackendOperationStateData &state) noexcept {
-            const auto reason = PendingCancellation(state);
-            if (!reason.has_value())
-                return false;
-            TerminalizeLocked(state, BackendOperationState::Cancelled, std::move(state.cancellationError), *reason);
-            return true;
-        }
-
-        [[nodiscard]] BackendOperationCancellationObservation CancelIfRequested(
-            const std::shared_ptr<BackendOperationStateData> &operation) noexcept {
-            if (!operation)
-                return BackendOperationCancellationObservation::AlreadyTerminal;
-            bool cancelled = false;
-            {
-                std::scoped_lock lock{operation->synchronization.Mutex()};
-                if (IsTerminal(*operation))
-                    return BackendOperationCancellationObservation::AlreadyTerminal;
-                if (const auto reason = PendingCancellation(*operation); reason.has_value()) {
-                    TerminalizeLocked(*operation, BackendOperationState::Cancelled, std::move(operation->cancellationError), *reason);
-                    cancelled = true;
-                }
-            }
-            if (cancelled)
-                RetireOperation(operation);
-            return cancelled ? BackendOperationCancellationObservation::Cancelled : BackendOperationCancellationObservation::NotRequested;
-        }
-
-        void ForceCancel(const std::shared_ptr<BackendOperationStateData> &operation,
-                         const BackendOperationCancellationReason reason) noexcept {
-            if (!operation)
-                return;
-            bool terminalized = false;
-            {
-                std::scoped_lock lock{operation->synchronization.Mutex()};
-                if (!IsTerminal(*operation)) {
-                    // Cancellation source selection and terminalization share this mutex. The
-                    // winning request therefore remains observable even when teardown races a
-                    // caller or parent cancellation request.
-                    const auto winningReason = PendingCancellation(*operation).value_or(reason);
-                    SetCancellationRequested(*operation, winningReason);
-                    TerminalizeLocked(*operation, BackendOperationState::Cancelled, std::move(operation->cancellationError), winningReason);
-                    terminalized = true;
-                }
-            }
-            if (terminalized)
-                RetireOperation(operation);
-        }
-
-        [[nodiscard]] std::size_t CountProviderOperations(const BackendOperationRegistryState &registry,
-                                                          const std::shared_ptr<BackendOperationProviderState> &provider) noexcept {
-            return static_cast<std::size_t>(std::ranges::count_if(registry.operations, [&provider](const auto &operation) {
-                return operation->provider == provider;
-            }));
-        }
-
-        [[nodiscard]] std::optional<BackendOperationId> AllocateOperationId(BackendOperationRegistryState &registry) noexcept {
-            if (registry.nextOperationId == 0)
-                return std::nullopt;
-            const BackendOperationId id{registry.nextOperationId};
-            ++registry.nextOperationId;
-            return id;
-        }
-
-    }  // namespace
+    using namespace BackendOperationRegistryDetail;
+    using namespace BackendOperationValidation;
 
     /** @copydoc BackendOperationProgress::Fraction */
     double BackendOperationProgress::Fraction() const noexcept {
@@ -254,6 +94,14 @@ namespace Horo::Extensions {
         return state_->snapshot.operation;
     }
 
+    /** @copydoc BackendOperationHandle::Revision */
+    std::optional<std::uint64_t> BackendOperationHandle::Revision() const noexcept {
+        if (!state_)
+            return std::nullopt;
+        std::scoped_lock lock{state_->synchronization.Mutex()};
+        return state_->snapshot.revision;
+    }
+
     /** @copydoc BackendOperationHandle::Snapshot */
     std::optional<BackendOperationSnapshot> BackendOperationHandle::Snapshot() const {
         if (!state_)
@@ -312,8 +160,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc BackendOperationController::PublishProgress */
-    BackendOperationTransitionResult BackendOperationController::PublishProgress(const BackendOperationPhaseId phase,
-                                                                                 const BackendOperationProgress progress) {
+    BackendOperationTransitionResult BackendOperationController::PublishProgress(const BackendOperationPhaseId &phase,
+                                                                                 const BackendOperationProgress progress) const {
         using enum BackendOperationTransitionResult;
         if (!state_)
             return AlreadyTerminal;
@@ -343,7 +191,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc BackendOperationController::AddDiagnostic */
-    Result<void> BackendOperationController::AddDiagnostic(Diagnostic diagnostic) {
+    Result<void> BackendOperationController::AddDiagnostic(Diagnostic diagnostic) const {
         if (!state_)
             return Result<void>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryShutdown));
         bool terminalized = false;
@@ -388,65 +236,33 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc BackendOperationController::ObserveCancellation */
-    BackendOperationCancellationObservation BackendOperationController::ObserveCancellation() noexcept {
+    BackendOperationCancellationObservation BackendOperationController::ObserveCancellation() const noexcept {
         return CancelIfRequested(state_);
     }
 
     /** @copydoc BackendOperationController::Complete */
-    BackendOperationTransitionResult BackendOperationController::Complete(std::optional<BackendOperationResultPayload> result) {
+    BackendOperationTransitionResult BackendOperationController::Complete(std::optional<BackendOperationResultPayload> result) const {
         using enum BackendOperationTransitionResult;
-        if (!state_)
-            return AlreadyTerminal;
-        bool terminalized = false;
-        BackendOperationTransitionResult transition = InvalidTransition;
-        {
-            std::scoped_lock lock{state_->synchronization.Mutex()};
-            if (IsTerminal(*state_))
-                return AlreadyTerminal;
-            if (TerminalizePendingCancellationLocked(*state_)) {
-                terminalized = true;
-                transition = CancellationWon;
-            } else {
-                const auto &limits = state_->provider->descriptor;
-                if (const bool validResult = !result.has_value() || (result->id == state_->snapshot.result && !result->id.value.empty() &&
-                                                                     result->bytes.size() <= limits.maximumResultBytes);
-                    !validResult)
-                    return InvalidTransition;
-                state_->snapshot.resultPayload = std::move(result);
-                state_->snapshot.progress = {.completedUnits = 1, .totalUnits = 1};
-                TerminalizeLocked(*state_, BackendOperationState::Completed, std::nullopt);
-                terminalized = true;
-                transition = Applied;
-            }
-        }
-        if (terminalized)
-            RetireOperation(state_);
-        return transition;
+        return ApplyTerminalTransition(state_, [&result](BackendOperationStateData &state) {
+            const auto &limits = state.provider->descriptor;
+            if (const bool validResult = !result.has_value() || (result->id == state.snapshot.result && !result->id.value.empty() &&
+                                                                 result->bytes.size() <= limits.maximumResultBytes);
+                !validResult)
+                return InvalidTransition;
+            state.snapshot.resultPayload = std::move(result);
+            state.snapshot.progress = {.completedUnits = 1, .totalUnits = 1};
+            TerminalizeLocked(state, BackendOperationState::Completed, std::nullopt);
+            return Applied;
+        });
     }
 
     /** @copydoc BackendOperationController::Fail */
-    BackendOperationTransitionResult BackendOperationController::Fail(Error error) {
+    BackendOperationTransitionResult BackendOperationController::Fail(Error error) const {
         using enum BackendOperationTransitionResult;
-        if (!state_)
-            return AlreadyTerminal;
-        bool terminalized = false;
-        BackendOperationTransitionResult transition = InvalidTransition;
-        {
-            std::scoped_lock lock{state_->synchronization.Mutex()};
-            if (IsTerminal(*state_))
-                return AlreadyTerminal;
-            if (TerminalizePendingCancellationLocked(*state_)) {
-                terminalized = true;
-                transition = CancellationWon;
-            } else {
-                TerminalizeLocked(*state_, BackendOperationState::Failed, std::move(error));
-                terminalized = true;
-                transition = Applied;
-            }
-        }
-        if (terminalized)
-            RetireOperation(state_);
-        return transition;
+        return ApplyTerminalTransition(state_, [&error](BackendOperationStateData &state) {
+            TerminalizeLocked(state, BackendOperationState::Failed, std::move(error));
+            return Applied;
+        });
     }
 
     void BackendOperationController::Abandon() noexcept {
@@ -479,7 +295,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc BackendOperationRegistry::Register */
-    Result<BackendOperationRegistration> BackendOperationRegistry::Register(BackendOperationProviderDescriptor descriptor) {
+    Result<BackendOperationRegistration> BackendOperationRegistry::Register(BackendOperationProviderDescriptor descriptor) const {
         if (!ValidProviderDescriptor(descriptor))
             return Result<BackendOperationRegistration>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryInvalid));
         if (!state_)
@@ -520,7 +336,7 @@ namespace Horo::Extensions {
         if (selected == state_->providers.end())
             return Result<BackendOperationController>::Failure(MakeError(ExtensionErrors::BackendOperationProviderUnavailable));
         if (state_->operations.size() >= state_->config.maximumOperations ||
-            CountProviderOperations(*state_, *selected) >= (*selected)->descriptor.maximumOperations)
+            (*selected)->activeOperations.load(std::memory_order_relaxed) >= (*selected)->descriptor.maximumOperations)
             return Result<BackendOperationController>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryCapacityExceeded));
         const auto id = AllocateOperationId(*state_);
         if (!id.has_value())
@@ -541,6 +357,7 @@ namespace Horo::Extensions {
             operation->cancellationError = CancellationError();
             operation->abandonmentError = AbandonmentError();
             state_->operations.push_back(operation);
+            (*selected)->activeOperations.fetch_add(1U, std::memory_order_relaxed);
             return Result<BackendOperationController>::Success(BackendOperationController{std::move(operation)});
         } catch (const std::bad_alloc &) {
             return Result<BackendOperationController>::Failure(MakeError(ExtensionErrors::BackendOperationRegistryCapacityExceeded));
@@ -548,7 +365,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc BackendOperationRegistry::BeginShutdown */
-    void BackendOperationRegistry::BeginShutdown() noexcept {
+    void BackendOperationRegistry::BeginShutdown() const noexcept {
         if (!state_)
             return;
         std::array<std::shared_ptr<BackendOperationStateData>, MaximumOperations> operations{};

@@ -23,6 +23,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/Logging/LogLevel.h
     Horo/Foundation/Logging/Logger.h
     Horo/Foundation/Logging/StructuredLogStore.h
+    Horo/Foundation/MathUtils.h
     Horo/Foundation/ModuleDescriptor.h
     Horo/Foundation/ModuleHost.h
     Horo/Foundation/OperationStore.h

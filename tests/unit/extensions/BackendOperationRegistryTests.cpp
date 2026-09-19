@@ -141,6 +141,7 @@ namespace Horo::Extensions::Tests {
         CHECK(snapshot->result == BackendOperationResultId{"compile.result"});
         CHECK(snapshot->state == BackendOperationState::Queued);
         CHECK(snapshot->revision == 1);
+        CHECK(handle.Revision() == 1);
     }
 
     TEST_CASE("Backend operation progress is monotonic within a phase and resets on phase change", "[Extensions][BackendOperations]") {
@@ -252,7 +253,7 @@ namespace Horo::Extensions::Tests {
     }
 
     TEST_CASE("Backend operation teardown publishes its cancellation source", "[Extensions][BackendOperations]") {
-        {
+        SECTION("parent cancellation wins before registry shutdown") {
             BackendOperationRegistry registry;
             auto registration = RegisterProvider(registry);
             CancellationSource parent;
@@ -266,7 +267,7 @@ namespace Horo::Extensions::Tests {
             CHECK(snapshot->cancellationReason == BackendOperationCancellationReason::Parent);
         }
 
-        {
+        SECTION("provider reset wins before caller cancellation") {
             BackendOperationRegistry registry;
             auto registration = RegisterProvider(registry);
             auto controller = BeginOperation(registry);
@@ -276,7 +277,7 @@ namespace Horo::Extensions::Tests {
             CHECK(handle.Snapshot()->cancellationReason == BackendOperationCancellationReason::Provider);
         }
 
-        {
+        SECTION("registry shutdown wins before caller cancellation") {
             BackendOperationRegistry registry;
             auto registration = RegisterProvider(registry);
             auto controller = BeginOperation(registry);
