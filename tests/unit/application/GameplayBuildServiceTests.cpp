@@ -4,6 +4,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 
 #include <algorithm>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -93,6 +94,69 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
         FAIL("Gameplay build session did not become terminal.");
     }
 
+    std::optional<BuildOutputSessionId> AssertSuccessfulBuildOutput(const BuildOutputSnapshot &output,
+                                                                    const GameplayBuildSnapshot &success) {
+        REQUIRE(success.state == GameplayBuildState::Succeeded);
+        REQUIRE(success.operationId.has_value());
+        REQUIRE_FALSE(output.records.empty());
+        const auto session = output.records.front().sessionId;
+        REQUIRE(session.has_value());
+        REQUIRE(session->IsValid());
+        for (const BuildOutputRecord &record : output.records) {
+            REQUIRE(record.sessionId == session);
+            REQUIRE(record.operationId == success.operationId);
+        }
+        REQUIRE((std::ranges::count_if(output.records, [](const BuildOutputRecord &record) {
+            return record.result != BuildOutputResult::None;
+        }) == 1));
+        REQUIRE(output.records.back().result == BuildOutputResult::Succeeded);
+        REQUIRE(output.records.back().code.Value() == "gameplay.build.succeeded");
+        std::vector<std::string> stages;
+        for (const BuildOutputRecord &record : output.records) {
+            if (record.sessionId == session && record.result == BuildOutputResult::None &&
+                (record.code.Value() == "gameplay.build.started" || record.code.Value() == "gameplay.build.configure_started" ||
+                 record.code.Value() == "gameplay.build.build_started" || record.code.Value() == "gameplay.build.validation_started"))
+                stages.push_back(record.stage);
+        }
+        REQUIRE(stages == std::vector<std::string>{"started", "configure", "build", "validate"});
+        REQUIRE((std::ranges::none_of(output.records, [&](const BuildOutputRecord &record) {
+            return record.sessionId == session && record.stage == "lock";
+        })));
+        return session;
+    }
+
+    void AssertCachedBuildOutput(const BuildOutputSnapshot &output) {
+        REQUIRE_FALSE(output.records.empty());
+        const auto session = output.records.back().sessionId;
+        REQUIRE(session.has_value());
+        REQUIRE((std::ranges::count_if(output.records, [&](const BuildOutputRecord &record) {
+            return record.sessionId == session && record.result != BuildOutputResult::None;
+        }) == 1));
+        REQUIRE(output.records.back().result == BuildOutputResult::Cached);
+        REQUIRE(output.records.back().code.Value() == "gameplay.build.cached");
+        REQUIRE((std::ranges::any_of(output.records, [&](const BuildOutputRecord &record) {
+            return record.sessionId == session && record.code.Value() == "gameplay.build.cache_hit";
+        })));
+        REQUIRE((std::ranges::none_of(output.records, [&](const BuildOutputRecord &record) {
+            return record.sessionId == session && (record.stage == "configure" || record.stage == "build");
+        })));
+    }
+
+    void AssertFailedBuildOutput(const BuildOutputSnapshot &output, const BuildOutputSessionId &successfulSession,
+                                 const GameplayBuildSnapshot &failure) {
+        REQUIRE(failure.state == GameplayBuildState::Failed);
+        REQUIRE(failure.operationId.has_value());
+        const auto failedSession = output.records.back().sessionId;
+        REQUIRE(failedSession.has_value());
+        REQUIRE(failedSession != successfulSession);
+        REQUIRE((std::ranges::count_if(output.records, [&](const BuildOutputRecord &record) {
+            return record.sessionId == failedSession && record.result != BuildOutputResult::None;
+        }) == 1));
+        REQUIRE(output.records.back().result == BuildOutputResult::Failed);
+        REQUIRE(output.records.back().code.Value() == "gameplay.build.failed");
+        REQUIRE(output.records.back().operationId == failure.operationId);
+    }
+
     std::string Read(const std::filesystem::path &path) {
         std::ifstream stream{path, std::ios::binary};
         return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
@@ -109,6 +173,34 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
                 {ProcessOutputStream::StandardError, "source/gameplay/Movement.cpp:99999999999999999999:1: error: invalid coordinate"});
             return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Exited, 1});
         }
+    };
+
+    class CountingExternalProcessRunner final : public IExternalProcessRunner {
+    public:
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &request, const CancellationToken &cancellation) override {
+            calls.fetch_add(1, std::memory_order_relaxed);
+            return native.Run(request, cancellation);
+        }
+
+        std::atomic<std::size_t> calls{};
+
+    private:
+        NativeExternalProcessRunner native;
+    };
+
+    class TerminalProcessRunner final : public IExternalProcessRunner {
+    public:
+        explicit TerminalProcessRunner(const ProcessTerminationReason reason) : reason_(reason) {}
+
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &) override {
+            calls.fetch_add(1, std::memory_order_relaxed);
+            return Result<ExternalProcessResult>::Success({reason_, reason_ == ProcessTerminationReason::Exited ? 0 : 1});
+        }
+
+        std::atomic<std::size_t> calls{};
+
+    private:
+        ProcessTerminationReason reason_;
     };
 }  // namespace
 
@@ -190,7 +282,7 @@ TEST_CASE("Compiler diagnostic parser rejects malformed and oversized input safe
 TEST_CASE("Gameplay build service consumes exported SDK and preserves last success on failure", "[integration][gameplay][build]") {
     TemporaryProject project;
     project.WriteValid();
-    NativeExternalProcessRunner processes;
+    CountingExternalProcessRunner processes;
     JobSystem jobs{{2, 16}};
     NativeDurableFileSystem files;
     BuildOutputStore output{1024};
@@ -207,29 +299,21 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     const auto started = service.Start(request);
     REQUIRE(started.HasValue());
     const GameplayBuildSnapshot success = AwaitTerminal(service, started.Value());
-    const std::string terminalError = success.error.has_value() ? success.error->message : std::string{"no terminal error"};
-    INFO(terminalError);
     const std::optional<BuildOutputSnapshot> buildOutput = output.SnapshotIfChanged(0);
     REQUIRE(buildOutput.has_value());
-    for (const BuildOutputRecord &record : buildOutput->records)
-        INFO(record.stage + ": " + record.message);
-    REQUIRE(success.state == GameplayBuildState::Succeeded);
-    REQUIRE(success.operationId.has_value());
-    REQUIRE_FALSE(buildOutput->records.empty());
-    const auto successfulOutputSession = buildOutput->records.front().sessionId;
-    REQUIRE(successfulOutputSession.has_value());
-    REQUIRE(successfulOutputSession->IsValid());
-    for (const BuildOutputRecord &record : buildOutput->records) {
-        REQUIRE((record.sessionId == successfulOutputSession));
-        REQUIRE((record.operationId == success.operationId));
-    }
-    REQUIRE((std::ranges::count_if(buildOutput->records, [](const BuildOutputRecord &record) {
-        return record.result != BuildOutputResult::None;
-    }) == 1));
-    REQUIRE((buildOutput->records.back().result == BuildOutputResult::Succeeded));
-    REQUIRE((buildOutput->records.back().code.Value() == "gameplay.build.succeeded"));
+    const std::optional<BuildOutputSessionId> successfulOutputSession = AssertSuccessfulBuildOutput(*buildOutput, success);
     REQUIRE(service.IsUpToDate(request));
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
+
+    const std::size_t callsAfterBuild = processes.calls.load(std::memory_order_relaxed);
+    const auto cached = service.Start(request);
+    REQUIRE(cached.HasValue());
+    const GameplayBuildSnapshot cachedSession = AwaitTerminal(service, cached.Value());
+    REQUIRE(cachedSession.state == GameplayBuildState::Succeeded);
+    REQUIRE((processes.calls.load(std::memory_order_relaxed) == callsAfterBuild));
+    const std::optional<BuildOutputSnapshot> cachedOutput = output.SnapshotIfChanged(buildOutput->revision);
+    REQUIRE(cachedOutput.has_value());
+    AssertCachedBuildOutput(*cachedOutput);
     const std::filesystem::path successfulState = project.root / ".horo/local/gameplay_build_state.json";
     const std::string beforeFailure = Read(successfulState);
     REQUIRE_FALSE(beforeFailure.empty());
@@ -238,19 +322,10 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     const auto broken = service.Start(request);
     REQUIRE(broken.HasValue());
     const GameplayBuildSnapshot failure = AwaitTerminal(service, broken.Value());
-    REQUIRE(failure.state == GameplayBuildState::Failed);
-    REQUIRE(failure.operationId.has_value());
     const std::optional<BuildOutputSnapshot> failedOutput = output.SnapshotIfChanged(buildOutput->revision);
     REQUIRE(failedOutput.has_value());
-    const auto failedOutputSession = failedOutput->records.back().sessionId;
-    REQUIRE(failedOutputSession.has_value());
-    REQUIRE((failedOutputSession != successfulOutputSession));
-    REQUIRE((std::ranges::count_if(failedOutput->records, [&](const BuildOutputRecord &record) {
-        return record.sessionId == failedOutputSession && record.result != BuildOutputResult::None;
-    }) == 1));
-    REQUIRE((failedOutput->records.back().result == BuildOutputResult::Failed));
-    REQUIRE((failedOutput->records.back().code.Value() == "gameplay.build.failed"));
-    REQUIRE((failedOutput->records.back().operationId == failure.operationId));
+    REQUIRE(successfulOutputSession.has_value());
+    AssertFailedBuildOutput(*failedOutput, *successfulOutputSession, failure);
     REQUIRE(Read(successfulState) == beforeFailure);
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
     REQUIRE_FALSE(service.IsUpToDate(request));
@@ -307,6 +382,154 @@ TEST_CASE("Gameplay build output classifies bounded GCC and Clang diagnostics", 
     REQUIRE_FALSE(malformed->source.has_value());
     REQUIRE((malformed->severity == DiagnosticSeverity::Note));
     REQUIRE((malformed->code.Value() == "gameplay.build.output"));
+
+    service.Shutdown();
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+}
+
+TEST_CASE("Gameplay build service maps cancellation to one correlated terminal record", "[unit][gameplay][build][cancellation]") {
+    TemporaryProject project;
+    project.WriteValid();
+    TerminalProcessRunner processes{ProcessTerminationReason::Cancelled};
+    JobSystem jobs{{1, 4}};
+    NativeDurableFileSystem files;
+    BuildOutputStore output{32};
+    OperationStore operations{4, 4};
+    GameplayBuildService service{processes, jobs, files, &output, &operations};
+    const GameplayBuildRequest request{.projectRoot = project.root,
+                                       .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
+                                       .timeouts = {.configure = std::chrono::seconds{1}}};
+
+    const auto started = service.Start(request);
+    REQUIRE(started.HasValue());
+    for (std::size_t attempt = 0; attempt < 100 && processes.calls.load(std::memory_order_relaxed) == 0U; ++attempt)
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    REQUIRE((processes.calls.load(std::memory_order_relaxed) == 1U));
+    REQUIRE(service.RequestCancel(started.Value()));
+    const GameplayBuildSnapshot terminal = AwaitTerminal(service, started.Value());
+    REQUIRE(terminal.state == GameplayBuildState::Cancelled);
+    REQUIRE(terminal.operationId.has_value());
+    const auto snapshot = output.SnapshotIfChanged(0);
+    REQUIRE(snapshot.has_value());
+    REQUIRE((std::ranges::count_if(snapshot->records, [&](const BuildOutputRecord &record) {
+        return record.sessionId.has_value() && record.operationId == terminal.operationId && record.result != BuildOutputResult::None;
+    }) == 1));
+    REQUIRE((snapshot->records.back().result == BuildOutputResult::Cancelled));
+    REQUIRE((snapshot->records.back().code.Value() == "gameplay.build.cancelled"));
+
+    const auto operationSnapshot = operations.SnapshotIfChanged(0);
+    REQUIRE(operationSnapshot.has_value());
+    const auto operation = std::ranges::find_if(operationSnapshot->operations, [&](const OperationRecord &record) {
+        return record.id == *terminal.operationId;
+    });
+    REQUIRE((operation != operationSnapshot->operations.end()));
+    REQUIRE((operation->state == OperationState::Cancelled));
+    REQUIRE(operation->finishedAt.has_value());
+
+    service.Shutdown();
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+}
+
+TEST_CASE("Gameplay build service maps process timeout to one correlated terminal record", "[unit][gameplay][build][timeout]") {
+    TemporaryProject project;
+    project.WriteValid();
+    TerminalProcessRunner processes{ProcessTerminationReason::TimedOut};
+    JobSystem jobs{{1, 4}};
+    NativeDurableFileSystem files;
+    BuildOutputStore output{32};
+    OperationStore operations{4, 4};
+    GameplayBuildService service{processes, jobs, files, &output, &operations};
+    const GameplayBuildRequest request{.projectRoot = project.root,
+                                       .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
+                                       .timeouts = {.configure = std::chrono::milliseconds{20}}};
+
+    const auto started = service.Start(request);
+    REQUIRE(started.HasValue());
+    const GameplayBuildSnapshot terminal = AwaitTerminal(service, started.Value());
+    REQUIRE(terminal.state == GameplayBuildState::TimedOut);
+    REQUIRE(terminal.operationId.has_value());
+    const auto snapshot = output.SnapshotIfChanged(0);
+    REQUIRE(snapshot.has_value());
+    REQUIRE((std::ranges::count_if(snapshot->records, [&](const BuildOutputRecord &record) {
+        return record.operationId == terminal.operationId && record.result != BuildOutputResult::None;
+    }) == 1));
+    REQUIRE((snapshot->records.back().result == BuildOutputResult::TimedOut));
+    REQUIRE((snapshot->records.back().code.Value() == "gameplay.build.timed_out"));
+
+    const auto operationSnapshot = operations.SnapshotIfChanged(0);
+    REQUIRE(operationSnapshot.has_value());
+    const auto operation = std::ranges::find_if(operationSnapshot->operations, [&](const OperationRecord &record) {
+        return record.id == *terminal.operationId;
+    });
+    REQUIRE((operation != operationSnapshot->operations.end()));
+    REQUIRE((operation->state == OperationState::Failed));
+    REQUIRE(operation->finishedAt.has_value());
+
+    service.Shutdown();
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+}
+
+TEST_CASE("Gameplay build service exposes external lock waiting and bounded timeout", "[unit][gameplay][build][lock]") {
+    TemporaryProject project;
+    project.WriteValid();
+    TerminalProcessRunner processes{ProcessTerminationReason::Exited};
+    JobSystem jobs{{1, 4}};
+    NativeDurableFileSystem files;
+    const auto held = files.TryAcquireExclusive(project.root / ".horo/local/locks/gameplay-build.lock", "external-test-owner");
+    REQUIRE(held.HasValue());
+    BuildOutputStore output{32};
+    OperationStore operations{4, 4};
+    GameplayBuildService service{processes, jobs, files, &output, &operations};
+    const GameplayBuildRequest request{.projectRoot = project.root,
+                                       .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
+                                       .timeouts = {.externalWait = std::chrono::milliseconds{80}}};
+
+    const auto started = service.Start(request);
+    REQUIRE(started.HasValue());
+    bool observedWaiting = false;
+    for (std::size_t attempt = 0; attempt < 100 && !observedWaiting; ++attempt) {
+        if (const auto snapshot = operations.SnapshotIfChanged(0); snapshot.has_value())
+            observedWaiting = std::ranges::any_of(snapshot->operations, [](const OperationRecord &record) {
+                return record.state == OperationState::Waiting && record.phase == "waiting_external_build";
+            });
+        if (!observedWaiting)
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    REQUIRE(observedWaiting);
+    const GameplayBuildSnapshot terminal = AwaitTerminal(service, started.Value());
+    REQUIRE(terminal.state == GameplayBuildState::TimedOut);
+    REQUIRE(terminal.operationId.has_value());
+    REQUIRE((processes.calls.load(std::memory_order_relaxed) == 0U));
+
+    const auto snapshot = output.SnapshotIfChanged(0);
+    REQUIRE(snapshot.has_value());
+    REQUIRE((std::ranges::any_of(snapshot->records, [](const BuildOutputRecord &record) {
+        return record.code.Value() == "gameplay.build.waiting_for_external_lock";
+    })));
+    REQUIRE((snapshot->records.back().result == BuildOutputResult::TimedOut));
+
+    service.Shutdown();
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+}
+
+TEST_CASE("Gameplay build service rejects operation-store admission without uncorrelated output", "[unit][gameplay][build][admission]") {
+    TemporaryProject project;
+    project.WriteValid();
+    TerminalProcessRunner processes{ProcessTerminationReason::Exited};
+    JobSystem jobs{{1, 4}};
+    NativeDurableFileSystem files;
+    BuildOutputStore output{32};
+    OperationStore operations{1, 4};
+    const auto occupied = operations.Begin({.kind = OperationKind::Build, .title = "Existing build"});
+    REQUIRE(occupied.has_value());
+    GameplayBuildService service{processes, jobs, files, &output, &operations};
+    const GameplayBuildRequest request{.projectRoot = project.root, .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR}};
+
+    const auto rejected = service.Start(request);
+    REQUIRE(rejected.HasError());
+    REQUIRE((rejected.ErrorValue().code.Value() == "operation_admission_failed"));
+    REQUIRE_FALSE(output.SnapshotIfChanged(0).has_value());
+    REQUIRE((processes.calls.load(std::memory_order_relaxed) == 0U));
 
     service.Shutdown();
     jobs.Shutdown(ShutdownPolicy::Cancel);
