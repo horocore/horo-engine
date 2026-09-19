@@ -1373,6 +1373,8 @@ add_library(HoroExtensions STATIC
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
+        extensions/capabilities/asset_cooker/AssetCookerErrors.cpp
+        extensions/capabilities/asset_cooker/AssetCookerRegistry.cpp
         extensions/capabilities/project_validator/ProjectValidatorRegistry.cpp
         extensions/capabilities/pipeline_step/PipelineStepRegistry.cpp
         extensions/capabilities/toolchain_provider/ToolchainProviderRegistry.cpp

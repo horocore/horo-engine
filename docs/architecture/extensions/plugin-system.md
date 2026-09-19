@@ -302,6 +302,20 @@ Initial editor and tool extension points:
 | `project.browser_action` | Add project-browser actions. | Host owns selected project context and confirmation UI. |
 | `mcp.tool` | Add MCP tools subject to permission policy. | MCP host owns transport, schema, and authorization. |
 
+`AssetCookerRegistry` is the synchronous typed host boundary for `asset.cooker`.
+Each publication declares one stable contribution identity, an exact provider
+generation, one imported asset type, sorted target identities, and the cooker
+and artifact-format versions that enter the deterministic cache key. The host
+validates the source digest and all bounds before selection, rejects ambiguous
+type/target claims unless project policy names one exact contribution, and
+computes the cache key itself. Providers receive only immutable borrowed source
+bytes, typed identities, canonical digests, cooperative cancellation, and a
+bounded staging sink. Payload, dependencies, and structured diagnostics become
+visible only after a complete successful call; failure, cancellation, malformed
+output, unregistration, and shutdown discard staged output. Cache storage,
+dependency scheduling, output placement, and generation publication remain
+Assets host authorities rather than provider capabilities.
+
 `ProjectValidatorRegistry` is the synchronous typed host boundary for
 `project.validator`. Registration publishes inert provider metadata only. At
 validation admission, the registry takes strong provider leases in canonical

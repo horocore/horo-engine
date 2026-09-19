@@ -97,4 +97,22 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor ToolchainPolicyRejected;
     /** @brief An approved tool failed at the platform process boundary. */
     extern const ErrorCodeDescriptor ToolchainInvocationFailed;
+    /** @brief An asset-cooker descriptor, request, target, or bound is malformed. */
+    extern const ErrorCodeDescriptor AssetCookerRegistryInvalid;
+    /** @brief An asset-cooker contribution identity is already published. */
+    extern const ErrorCodeDescriptor AssetCookerRegistryDuplicate;
+    /** @brief The bounded asset-cooker provider registry is full. */
+    extern const ErrorCodeDescriptor AssetCookerRegistryCapacityExceeded;
+    /** @brief Asset-cooker registration and new cook admission are closed. */
+    extern const ErrorCodeDescriptor AssetCookerRegistryShutdown;
+    /** @brief No registered cooker handles the requested asset type and target. */
+    extern const ErrorCodeDescriptor AssetCookerUnavailable;
+    /** @brief Multiple cookers claim the request and no exact project-policy choice was supplied. */
+    extern const ErrorCodeDescriptor AssetCookerAmbiguous;
+    /** @brief A cooker produced malformed, duplicate, incomplete, or oversized staged output. */
+    extern const ErrorCodeDescriptor AssetCookerOutputInvalid;
+    /** @brief One attributed asset-cooker callback failed. */
+    extern const ErrorCodeDescriptor AssetCookerInvocationFailed;
+    /** @brief An asset cook was cooperatively cancelled and discarded staged output. */
+    extern const ErrorCodeDescriptor AssetCookCancelled;
 }  // namespace Horo::Extensions::ExtensionErrors

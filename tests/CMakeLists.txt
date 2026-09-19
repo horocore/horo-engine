@@ -1832,6 +1832,13 @@ target_compile_features(HoroPipelineStepRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPipelineStepRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
 add_test(NAME HoroPipelineStepRegistryTests COMMAND HoroPipelineStepRegistryTests)
 
+add_executable(HoroAssetCookerRegistryTests
+        unit/extensions/AssetCookerRegistryTests.cpp
+)
+target_compile_features(HoroAssetCookerRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAssetCookerRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroAssetCookerRegistryTests COMMAND HoroAssetCookerRegistryTests)
+
 add_library(HoroBackendServiceReference STATIC
         fixtures/extensions/BackendServiceReference.cpp
 )
