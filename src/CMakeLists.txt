@@ -1381,6 +1381,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionAbiConformance.cpp
         extensions/registry/ApplicationCapabilityRegistry.cpp
         extensions/registry/BackendServiceRegistry.cpp
+        extensions/registry/BackendOperationRegistry.cpp
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
