@@ -8,6 +8,8 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <string>
+#include <utility>
 
 namespace {
     [[nodiscard]] Horo::Prefab::PrefabAssetReference PrefabAsset(const std::uint8_t suffix = 1) {
@@ -60,6 +62,45 @@ namespace {
 
     [[nodiscard]] bool NearlyEqual(const float lhs, const float rhs) noexcept {
         return std::fabs(lhs - rhs) < 0.0001F;
+    }
+
+    [[nodiscard]] Horo::Prefab::PrefabLimitProfile ScenePrefabLimits(Horo::Prefab::PrefabProjectPolicy policy = {}) {
+        return Horo::Prefab::PrefabLimitProfile::Create(std::move(policy)).Value();
+    }
+
+    [[nodiscard]] Horo::Application::HoroVersion ScenePrefabVersion() {
+        return Horo::Application::ParseHoroVersion("1.2.3").Value();
+    }
+
+    [[nodiscard]] Horo::Prefab::PrefabSourceRevision ScenePrefabRevision(const std::uint8_t suffix = 1) {
+        Horo::Sha256Digest digest{};
+        digest.bytes.back() = suffix;
+        return {ScenePrefabVersion(), digest};
+    }
+
+    [[nodiscard]] Horo::Prefab::PrefabDocument ScenePrefabDocument(const Horo::Assets::AssetId asset,
+                                                                   std::vector<Horo::Prefab::PrefabObjectNode> objects) {
+        return Horo::Prefab::PrefabDocument::Create({.projectVersion = ScenePrefabVersion(),
+                                                     .assetId = asset,
+                                                     .objects = std::move(objects)},
+                                                    ScenePrefabLimits())
+            .Value();
+    }
+
+    [[nodiscard]] Horo::Assets::AssetRecord ScenePrefabRecord(const Horo::Assets::AssetId asset, const std::string &name) {
+        return {asset, Horo::Assets::AssetTypeId::Parse("core.prefab").Value(),
+                Horo::ProjectPath::Parse("assets/prefabs/" + name + ".prefab").Value(),
+                Horo::ProjectPath::Parse("assets/prefabs/" + name + ".prefab.horo").Value()};
+    }
+
+    [[nodiscard]] Horo::Prefab::PrefabSourceResolverSnapshot ScenePrefabResolver(const Horo::Assets::AssetId asset,
+                                                                                 std::vector<Horo::Prefab::PrefabObjectNode> objects) {
+        Horo::Assets::AssetRegistry registry;
+        REQUIRE(registry.Publish({ScenePrefabRecord(asset, "scene-test")}).status == Horo::Assets::AssetRegistryBuildStatus::Complete);
+        return Horo::Prefab::BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                               {{ScenePrefabDocument(asset, std::move(objects)), ScenePrefabRevision()}},
+                                                               ScenePrefabLimits())
+            .Value();
     }
 
     TEST_CASE("Viewport Scene State Advances Its Mesh Resource Generation Only For Resource Changes", "[unit][editor]") {
@@ -1198,5 +1239,150 @@ namespace {
                                {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(10).Value(), PrefabAsset(), SceneObjectId{999}, {}}})
                     .HasError());
         REQUIRE(document.Snapshot().prefabInstances == before.prefabInstances);
+    }
+
+    TEST_CASE("Runtime conversion expands prefab instances from one immutable snapshot transactionally",
+              "[unit][editor][prefab][runtime]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const Assets::AssetId prefab = PrefabAsset(12).Asset();
+        const auto resolver =
+            ScenePrefabResolver(prefab, {{.localId = {}, .name = "Prefab Root"},
+                                         {.localId = {4}, .parentLocalId = Prefab::LocalObjectId{}, .name = "Prefab Child"}});
+        const SceneDocumentSnapshot document{
+            .revision = DocumentRevision{2},
+            .state = DocumentStateId{3},
+            .objects = {SceneObjectSnapshot{.id = SceneObjectId{9}, .name = "Containing Parent"}},
+            .prefabInstances = {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(7).Value(), PrefabAsset(12), SceneObjectId{9}, {}}},
+        };
+
+        const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{4}, resolver, ScenePrefabLimits());
+        REQUIRE(converted.HasValue());
+        REQUIRE(converted.Value().Entities().size() == 3);
+        REQUIRE(converted.Value().Entities()[1].parent == std::optional{Runtime::SceneObjectId{9}});
+        REQUIRE(converted.Value().Entities()[2].parent == std::optional{converted.Value().Entities()[1].object});
+        REQUIRE(document.prefabInstances.front().sourcePrefab == PrefabAsset(12));
+    }
+
+    TEST_CASE("Runtime conversion rejects prefab payloads without a typed runtime projection", "[unit][editor][prefab][runtime]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const Assets::AssetId prefab = PrefabAsset(13).Asset();
+        const auto componentType = Gameplay::ComponentTypeId::Parse("game.tests.opaque_component").Value();
+        const auto resolver =
+            ScenePrefabResolver(prefab, {{.localId = {},
+                                          .name = "Opaque root",
+                                          .components = {{.instance = Prefab::PrefabComponentInstanceId::Create(1).Value(),
+                                                          .component = {.typeId = componentType}}}}});
+        const SceneDocumentSnapshot document{
+            .revision = {},
+            .state = DocumentStateId{1},
+            .prefabInstances = {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(10).Value(), PrefabAsset(13), std::nullopt, {}}},
+        };
+
+        const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{7}, resolver, ScenePrefabLimits());
+        REQUIRE(converted.HasError());
+        REQUIRE(converted.ErrorValue().code.Value() == "scene_conversion.prefab_component_projection_unsupported");
+    }
+
+    TEST_CASE("Runtime conversion rejects cyclic prefab dependency expansion", "[unit][editor][prefab][runtime][malformed]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const Assets::AssetId first = PrefabAsset(15).Asset();
+        const Assets::AssetId second = PrefabAsset(16).Asset();
+        const Prefab::PrefabSourceRevision firstRevision = ScenePrefabRevision(15);
+        const Prefab::PrefabSourceRevision secondRevision = ScenePrefabRevision(16);
+
+        Assets::AssetRegistry registry;
+        REQUIRE(registry.Publish({ScenePrefabRecord(first, "cycle-first"), ScenePrefabRecord(second, "cycle-second")}).status ==
+                Assets::AssetRegistryBuildStatus::Complete);
+
+        Prefab::PrefabComposition firstComposition{
+            .nestedPlacements = {{.placementLocalId = {1}, .sourcePrefab = PrefabAsset(16), .authoredAgainst = secondRevision}},
+        };
+        Prefab::PrefabComposition secondComposition{
+            .nestedPlacements = {{.placementLocalId = {2}, .sourcePrefab = PrefabAsset(15), .authoredAgainst = firstRevision}},
+        };
+        const auto resolver =
+            Prefab::BuildPrefabSourceResolverSnapshot(registry.Snapshot(),
+                                                      {{Prefab::PrefabDocument::Create({.projectVersion = ScenePrefabVersion(),
+                                                                                        .assetId = first,
+                                                                                        .objects = {{.localId = {}, .name = "First root"}},
+                                                                                        .composition = std::move(firstComposition),
+                                                                                        .referencedAssets = {second}},
+                                                                                       ScenePrefabLimits())
+                                                            .Value(),
+                                                        firstRevision},
+                                                       {Prefab::PrefabDocument::Create({.projectVersion = ScenePrefabVersion(),
+                                                                                        .assetId = second,
+                                                                                        .objects = {{.localId = {}, .name = "Second root"}},
+                                                                                        .composition = std::move(secondComposition),
+                                                                                        .referencedAssets = {first}},
+                                                                                       ScenePrefabLimits())
+                                                            .Value(),
+                                                        secondRevision}},
+                                                      ScenePrefabLimits())
+                .Value();
+        const SceneDocumentSnapshot document{
+            .revision = {},
+            .state = DocumentStateId{1},
+            .prefabInstances = {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(17).Value(), PrefabAsset(15), std::nullopt, {}}},
+        };
+
+        const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{8}, resolver, ScenePrefabLimits());
+        REQUIRE(converted.HasError());
+        REQUIRE(converted.ErrorValue().code.Value() == Prefab::PrefabErrors::DependencyGraphInvalid.code.Value());
+    }
+
+    TEST_CASE("Broken prefab projection retains repairable authored identity and complete failure context",
+              "[unit][editor][prefab][malformed]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        Assets::AssetId missing = Assets::AssetId::FromBytes({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13});
+        Assets::AssetRegistry registry;
+        const auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry.Snapshot(), {}, ScenePrefabLimits()).Value();
+        const ScenePrefabInstance authored{Prefab::PrefabInstanceId::Create(8).Value(),
+                                           Prefab::PrefabAssetReference::Create(missing).Value(),
+                                           std::nullopt,
+                                           {}};
+        const SceneDocumentSnapshot document{.revision = {}, .state = DocumentStateId{1}, .prefabInstances = {authored}};
+
+        const auto projection = BuildScenePrefabProjection(document, resolver, ScenePrefabLimits());
+        REQUIRE(projection.HasValue());
+        REQUIRE(projection.Value().HasBrokenInstances());
+        REQUIRE(projection.Value().instances.front().IsBroken());
+        REQUIRE(projection.Value().instances.front().authored == authored);
+        REQUIRE(projection.Value().instances.front().failure->message.find("prefab instance 8") != std::string::npos);
+        REQUIRE(projection.Value().instances.front().failure->message.find(missing.ToString()) != std::string::npos);
+
+        const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{5}, resolver, ScenePrefabLimits());
+        REQUIRE(converted.HasError());
+        REQUIRE(converted.ErrorValue().message.find("prefab instance 8") != std::string::npos);
+    }
+
+    TEST_CASE("Prefab runtime conversion rejects an over-budget required placement without a partial definition",
+              "[unit][editor][prefab][boundary]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const Assets::AssetId prefab = PrefabAsset(14).Asset();
+        const auto resolver = ScenePrefabResolver(prefab, {{.localId = {}, .name = "Root"},
+                                                           {.localId = {5}, .parentLocalId = Prefab::LocalObjectId{}, .name = "Child"}});
+        Prefab::PrefabProjectPolicy policy;
+        policy.maximumObjectCount = 1;
+        const auto limits = ScenePrefabLimits(policy);
+        const SceneDocumentSnapshot document{
+            .revision = {},
+            .state = DocumentStateId{1},
+            .objects = {SceneObjectSnapshot{.id = SceneObjectId{1}, .name = "Authored"}},
+            .prefabInstances = {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(9).Value(), PrefabAsset(14), std::nullopt, {}}},
+        };
+        const auto projection = BuildScenePrefabProjection(document, resolver, limits);
+        REQUIRE(projection.HasValue());
+        REQUIRE(projection.Value().HasBrokenInstances());
+        REQUIRE(projection.Value().instances.front().failure->code.Value() == Prefab::PrefabErrors::ObjectCountExceeded.code.Value());
+
+        const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{6}, resolver, limits);
+        REQUIRE(converted.HasError());
+        REQUIRE(converted.ErrorValue().code.Value() == Prefab::PrefabErrors::ObjectCountExceeded.code.Value());
     }
 }  // namespace
