@@ -13,16 +13,7 @@ namespace {
     class AllocationMeter final {
     public:
         [[nodiscard]] static void *Acquire(const std::size_t byteCount) {
-            count_.fetch_add(1, std::memory_order_relaxed);
-            std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
-            while (remaining != DisabledFailureCountdown) {
-                if (remaining == 0) {
-                    if (failureCountdown_.compare_exchange_weak(remaining, DisabledFailureCountdown, std::memory_order_relaxed))
-                        throw std::bad_alloc{};
-                } else if (failureCountdown_.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed)) {
-                    break;
-                }
-            }
+            ConsumeFailureBudget();
             void *const storage = std::malloc(std::max(byteCount, std::size_t{1}));
             if (storage == nullptr)
                 throw std::bad_alloc{};
@@ -34,16 +25,7 @@ namespace {
         }
 
         [[nodiscard]] static void *AcquireAligned(const std::size_t byteCount, const std::size_t alignment) {
-            count_.fetch_add(1, std::memory_order_relaxed);
-            std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
-            while (remaining != DisabledFailureCountdown) {
-                if (remaining == 0) {
-                    if (failureCountdown_.compare_exchange_weak(remaining, DisabledFailureCountdown, std::memory_order_relaxed))
-                        throw std::bad_alloc{};
-                } else if (failureCountdown_.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed)) {
-                    break;
-                }
-            }
+            ConsumeFailureBudget();
 #ifdef _WIN32
             void *const storage = _aligned_malloc(std::max(byteCount, std::size_t{1}), alignment);
 #else
@@ -69,17 +51,30 @@ namespace {
         }
 
         static void FailAfter(const std::size_t successfulAllocations) noexcept {
-            failureCountdown_.store(successfulAllocations, std::memory_order_relaxed);
+            failureCountdown_ = successfulAllocations;
         }
 
         static void DisableFailures() noexcept {
-            failureCountdown_.store(DisabledFailureCountdown, std::memory_order_relaxed);
+            failureCountdown_ = DisabledFailureCountdown;
         }
 
     private:
         static constexpr std::size_t DisabledFailureCountdown = std::numeric_limits<std::size_t>::max();
         static inline std::atomic<std::size_t> count_{};
-        static inline std::atomic<std::size_t> failureCountdown_{DisabledFailureCountdown};
+        // Failure injection is scoped to the calling test thread. Other runtime or
+        // CRT threads must continue allocating while a test exercises one operation.
+        static inline thread_local std::size_t failureCountdown_ = DisabledFailureCountdown;
+
+        static void ConsumeFailureBudget() {
+            count_.fetch_add(1, std::memory_order_relaxed);
+            if (failureCountdown_ == DisabledFailureCountdown)
+                return;
+            if (failureCountdown_ == 0) {
+                failureCountdown_ = DisabledFailureCountdown;
+                throw std::bad_alloc{};
+            }
+            --failureCountdown_;
+        }
     };
 }  // namespace
 
