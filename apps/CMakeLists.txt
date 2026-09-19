@@ -17,7 +17,7 @@ target_compile_definitions(horo-engine PRIVATE
     HORO_BUILD_CONFIGURATION="$<CONFIG>"
     HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
 )
-target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroHostModuleComposition)
+target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition)
 
 add_executable(horo-extension-validate
     horo-extension-validate/main.cpp

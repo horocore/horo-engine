@@ -1,4 +1,6 @@
 #include "Horo/Application/HostObservability.h"
+#include "Horo/Extensions/ExtensionErrors.h"
+#include "Horo/Extensions/HeadlessExtensionHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 #include "HostModuleComposition.h"
@@ -13,6 +15,16 @@ namespace {
         bool help{};
         bool emitSmoke{};
         std::filesystem::path diagnosticBundle;
+    };
+
+    class DenyToolchainPolicy final : public Horo::Extensions::IToolchainInvocationPolicy {
+    public:
+        [[nodiscard]] Horo::Result<Horo::ExternalProcessRequest> Resolve(
+            const Horo::Extensions::ToolchainProviderDescriptor &, const Horo::Extensions::ToolchainInvocationIntent &) const override {
+            return Horo::Result<Horo::ExternalProcessRequest>::Failure(
+                Horo::MakeError(Horo::Extensions::ExtensionErrors::ToolchainPolicyRejected,
+                                "No toolchain invocation policy is configured for this command."));
+        }
     };
 
     [[nodiscard]] Options ParseOptions(const std::span<char *> arguments) {
@@ -66,6 +78,14 @@ int main(const int argc, char **argv) {
         return 2;
     }
 
+    DenyToolchainPolicy toolchainPolicy;
+    Horo::NativeExternalProcessRunner externalProcesses;
+    auto extensionHost = Horo::Extensions::HeadlessExtensionHost::Create({}, toolchainPolicy, externalProcesses);
+    if (extensionHost.HasError() || extensionHost.Value()->Start({}).HasError()) {
+        std::cerr << "horo-engine: headless extension composition failed\n";
+        return 2;
+    }
+
     HORO_LOG_INFO("foundation.host", "Headless host initialized");
     if (options.emitSmoke) {
         const auto gameCounter =
@@ -86,6 +106,7 @@ int main(const int argc, char **argv) {
         }
         std::cout << result.Value().outputPath.string() << '\n';  // NOSONAR(cpp:S5145)
     }
+    extensionHost.Value()->Shutdown();
     moduleHost->DeactivateAll();
     return 0;
 }

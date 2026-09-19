@@ -356,6 +356,20 @@ their typed cause. Releasing a publication or beginning shutdown revokes future
 calls and requests cancellation of every admitted process for that exact
 generation.
 
+`HeadlessExtensionHost` is the CLI and automation composition owner for these
+backend extension points. Before startup it retains every application-capability,
+cooker, validator, pipeline-step, and toolchain-provider registration and the
+mutable importer candidate. `Start` discovers only package-graph-declared
+locations under approved roots, activates modules with the `Headless` profile,
+and publishes the importer catalog only after the complete activation set
+succeeds. Typed work is admitted only while the host is ready; failures retain
+their original error and cause chain in a bounded attributed diagnostic snapshot.
+Shutdown first closes registry admission and cancels registry-owned process work,
+then removes registrations, releases the manager lease, and finally releases
+importer snapshots that may still retain native code. The terminal host links
+Extensions, Assets, Platform, and Security but no GUI, ImGui, window, or renderer
+target.
+
 `editor.status_item` contributions are declarative bounded snapshots; they do
 not receive ImGui callbacks. The shell owns validation, active-panel visibility,
 width admission, overflow, localization, modal input exclusion, and typed
