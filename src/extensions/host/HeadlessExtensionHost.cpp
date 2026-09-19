@@ -8,16 +8,18 @@
 #include <utility>
 
 namespace Horo::Extensions {
-    struct HeadlessExtensionHost::Impl final {
+    class HeadlessExtensionHost::Impl final {
+        friend class HeadlessExtensionHost;
+
         HeadlessExtensionHostConfiguration configuration;
         mutable std::mutex lifecycleMutex;
         mutable std::mutex diagnosticMutex;
+        mutable std::vector<HeadlessExtensionHostDiagnostic> diagnostics;
         std::atomic<HeadlessExtensionHostState> state{HeadlessExtensionHostState::Configuring};
         std::vector<std::string> discoveredPackages;
         std::vector<Discovery::RootDiagnostic> rootDiagnostics;
-        mutable std::vector<HeadlessExtensionHostDiagnostic> diagnostics;
 
-        std::unique_ptr<Assets::AssetImporterCatalog> importers;
+        std::unique_ptr<Assets::AssetImporterCatalog> importers{std::make_unique<Assets::AssetImporterCatalog>()};
         std::unique_ptr<ExtensionManager> manager;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerSnapshot;
         ApplicationCapabilityRegistry capabilities;
@@ -32,9 +34,10 @@ namespace Horo::Extensions {
         std::vector<PipelineStepRegistration> pipelineRegistrations;
         std::vector<ToolchainProviderRegistration> toolchainRegistrations;
 
+    public:
         Impl(HeadlessExtensionHostConfiguration hostConfiguration, ProjectValidatorRegistry validatorRegistry,
              const IToolchainInvocationPolicy &toolchainPolicy, IExternalProcessRunner &processes)
-            : configuration(std::move(hostConfiguration)), importers(std::make_unique<Assets::AssetImporterCatalog>()),
+            : configuration(std::move(hostConfiguration)),
               manager(std::make_unique<ExtensionManager>(importers.get(), ExtensionHostProfile::Headless, configuration.capabilities,
                                                          configuration.artifactGate, configuration.libraryLoader)),
               validators(std::move(validatorRegistry)), toolchains(toolchainPolicy, processes) {}
@@ -43,24 +46,24 @@ namespace Horo::Extensions {
             std::scoped_lock lock{diagnosticMutex};
             if (diagnostics.size() >= configuration.maximumDiagnostics)
                 diagnostics.erase(diagnostics.begin());
-            diagnostics.push_back({stage, std::move(subject), error});
+            diagnostics.emplace_back(stage, std::move(subject), error);
         }
 
         [[nodiscard]] Result<void> RequireConfiguring() const {
-            if (state.load(std::memory_order_acquire) == HeadlessExtensionHostState::Configuring)
+            if (state.load() == HeadlessExtensionHostState::Configuring)
                 return Result<void>::Success();
             return Result<void>::Failure(
                 MakeError(ExtensionErrors::HeadlessHostStateInvalid, "Provider registration is closed after host startup begins."));
         }
 
         [[nodiscard]] std::optional<Error> ReadyFailure() const {
-            if (state.load(std::memory_order_acquire) == HeadlessExtensionHostState::Ready)
+            if (state.load() == HeadlessExtensionHostState::Ready)
                 return std::nullopt;
             return MakeError(ExtensionErrors::HeadlessHostStateInvalid, "Headless extension work requires a ready host.");
         }
 
         template <typename Registration>
-        [[nodiscard]] Result<void> Retain(Result<Registration> registration, std::vector<Registration> &registrations) {
+        [[nodiscard]] Result<void> Retain(Result<Registration> registration, std::vector<Registration> &registrations) const {
             if (registration.HasError())
                 return Result<void>::Failure(registration.ErrorValue());
             registrations.push_back(std::move(registration).Value());
@@ -91,7 +94,7 @@ namespace Horo::Extensions {
             Record(stage, std::move(subject), error);
             manager->UnloadAll();
             importers->Reset();
-            state.store(HeadlessExtensionHostState::Failed, std::memory_order_release);
+            state.store(HeadlessExtensionHostState::Failed);
             return Result<void>::Failure(std::move(error));
         }
     };
@@ -116,7 +119,7 @@ namespace Horo::Extensions {
         }
         auto impl = std::make_unique<Impl>(std::move(configuration), std::move(validatorRegistry).Value(), toolchainPolicy, processes);
         return Result<std::unique_ptr<HeadlessExtensionHost>>::Success(
-            std::unique_ptr<HeadlessExtensionHost>{new HeadlessExtensionHost(std::move(impl))});
+            std::unique_ptr<HeadlessExtensionHost>{new HeadlessExtensionHost(std::move(impl))});  // NOSONAR: constructor is private.
     }
 
     HeadlessExtensionHost::HeadlessExtensionHost(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -128,7 +131,7 @@ namespace Horo::Extensions {
     /** @copydoc HeadlessExtensionHost::RegisterCapability */
     Result<void> HeadlessExtensionHost::RegisterCapability(ApplicationCapabilityProviderDescriptor descriptor) {
         const std::string subject = descriptor.capability.value;
-        return impl_->Configure(subject, [&] {
+        return impl_->Configure(subject, [this, &descriptor] {
             return impl_->Retain(impl_->capabilities.Register(std::move(descriptor)), impl_->capabilityRegistrations);
         });
     }
@@ -136,7 +139,7 @@ namespace Horo::Extensions {
     /** @copydoc HeadlessExtensionHost::RegisterImporter */
     Result<void> HeadlessExtensionHost::RegisterImporter(Assets::AssetImporterContribution contribution) {
         const std::string subject = contribution.contributionId;
-        return impl_->Configure(subject, [&] {
+        return impl_->Configure(subject, [this, &contribution] {
             return impl_->importers->Register(std::move(contribution));
         });
     }
@@ -144,7 +147,7 @@ namespace Horo::Extensions {
     /** @copydoc HeadlessExtensionHost::RegisterCooker */
     Result<void> HeadlessExtensionHost::RegisterCooker(AssetCookerDescriptor descriptor, std::shared_ptr<const IAssetCooker> provider) {
         const std::string subject = descriptor.cookerId.value;
-        return impl_->Configure(subject, [&] {
+        return impl_->Configure(subject, [this, &descriptor, &provider] {
             return impl_->Retain(impl_->cookers.Register(std::move(descriptor), std::move(provider)), impl_->cookerRegistrations);
         });
     }
@@ -153,7 +156,7 @@ namespace Horo::Extensions {
     Result<void> HeadlessExtensionHost::RegisterValidator(ProjectValidatorProviderDescriptor descriptor,
                                                           std::shared_ptr<const IProjectValidator> provider) {
         const std::string subject = descriptor.validatorId.value;
-        return impl_->Configure(subject, [&] {
+        return impl_->Configure(subject, [this, &descriptor, &provider] {
             return impl_->Retain(impl_->validators.Register(std::move(descriptor), std::move(provider)), impl_->validatorRegistrations);
         });
     }
@@ -162,7 +165,7 @@ namespace Horo::Extensions {
     Result<void> HeadlessExtensionHost::RegisterPipelineStep(PipelineStepDescriptor descriptor,
                                                              std::shared_ptr<const IPipelineStep> provider) {
         const std::string subject = descriptor.stepId.value;
-        return impl_->Configure(subject, [&] {
+        return impl_->Configure(subject, [this, &descriptor, &provider] {
             return impl_->Retain(impl_->pipeline.Register(std::move(descriptor), std::move(provider)), impl_->pipelineRegistrations);
         });
     }
@@ -170,7 +173,7 @@ namespace Horo::Extensions {
     /** @copydoc HeadlessExtensionHost::RegisterToolchain */
     Result<ToolchainInvocationAuthority> HeadlessExtensionHost::RegisterToolchain(ToolchainProviderDescriptor descriptor) {
         const std::string subject = descriptor.contributionId;
-        return impl_->Configure(subject, [&] {
+        return impl_->Configure(subject, [this, &descriptor] {
             auto registered = impl_->toolchains.Register(std::move(descriptor));
             if (registered.HasError())
                 return Result<ToolchainInvocationAuthority>::Failure(registered.ErrorValue());
@@ -213,7 +216,7 @@ namespace Horo::Extensions {
             return impl_->FailStartup(HeadlessExtensionHostStage::Activation, "asset.importer", std::move(failure));
         }
         impl_->importerSnapshot = std::move(published).Value();
-        impl_->state.store(HeadlessExtensionHostState::Ready, std::memory_order_release);
+        impl_->state.store(HeadlessExtensionHostState::Ready);
         return Result<void>::Success();
     }
 
@@ -305,7 +308,7 @@ namespace Horo::Extensions {
     HeadlessExtensionHostSnapshot HeadlessExtensionHost::Inspect() const {
         HeadlessExtensionHostSnapshot snapshot;
         std::scoped_lock lock{impl_->lifecycleMutex, impl_->diagnosticMutex};
-        snapshot.state = impl_->state.load(std::memory_order_acquire);
+        snapshot.state = impl_->state.load();
         snapshot.discoveredPackages = impl_->discoveredPackages;
         snapshot.rootDiagnostics = impl_->rootDiagnostics;
         if (impl_->manager != nullptr)
@@ -319,10 +322,10 @@ namespace Horo::Extensions {
         if (impl_ == nullptr)
             return;
         std::scoped_lock lock{impl_->lifecycleMutex};
-        const HeadlessExtensionHostState current = impl_->state.load(std::memory_order_acquire);
-        if (current == HeadlessExtensionHostState::Shutdown || current == HeadlessExtensionHostState::ShuttingDown)
+        if (const HeadlessExtensionHostState current = impl_->state.load();
+            current == HeadlessExtensionHostState::Shutdown || current == HeadlessExtensionHostState::ShuttingDown)
             return;
-        impl_->state.store(HeadlessExtensionHostState::ShuttingDown, std::memory_order_release);
+        impl_->state.store(HeadlessExtensionHostState::ShuttingDown);
 
         impl_->toolchains.BeginShutdown();
         impl_->pipeline.BeginShutdown();
@@ -339,6 +342,6 @@ namespace Horo::Extensions {
         impl_->importerSnapshot.reset();
         impl_->importers.reset();
         impl_->manager.reset();
-        impl_->state.store(HeadlessExtensionHostState::Shutdown, std::memory_order_release);
+        impl_->state.store(HeadlessExtensionHostState::Shutdown);
     }
 }  // namespace Horo::Extensions
