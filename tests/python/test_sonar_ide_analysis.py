@@ -23,13 +23,14 @@ def test_select_files_keeps_only_existing_cpp_files_in_the_worktree(tmp_path: Pa
     note = tmp_path / "notes.txt"
     note.write_text("not source", encoding="utf-8")
 
-    selection = sonar_ide_analysis.select_files(tmp_path, [source, note, Path("missing.cpp"), Path("/tmp/outside.cpp")], "explicit")
+    outside = tmp_path.parent / "outside.cpp"
+    selection = sonar_ide_analysis.select_files(tmp_path, [source, note, Path("missing.cpp"), outside], "explicit")
 
     assert selection.submitted == [source]
     assert selection.skipped == [
         {"path": str(note), "reason": "unsupported_file_type"},
         {"path": "missing.cpp", "reason": "missing_or_not_regular_file"},
-        {"path": "/tmp/outside.cpp", "reason": "outside_worktree"},
+        {"path": str(outside), "reason": "outside_worktree"},
     ]
 
 

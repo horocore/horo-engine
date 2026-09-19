@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
+import shutil
+# Process execution is restricted to resolved, fixed tool names below.
+import subprocess  # nosec B404
 import sys
 import time
 from collections.abc import Sequence
@@ -60,12 +62,21 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     return parser.parse_args(arguments)
 
 
-def run_command(command: Sequence[str], error_message: str) -> subprocess.CompletedProcess[str]:
-    """Run a prerequisite command without contaminating JSON stdout."""
-    try:
-        result = subprocess.run(command, check=False, capture_output=True, text=True)
-    except FileNotFoundError as error:
-        raise AnalysisError(f"{command[0]} is required") from error
+def resolved_tool(name: str) -> str:
+    """Resolve one fixed prerequisite without delegating lookup to a child process."""
+    executable = shutil.which(name)
+    if executable is None:
+        raise AnalysisError(f"{name} is required")
+    return executable
+
+
+def run_command(tool: str, arguments: Sequence[str], error_message: str) -> subprocess.CompletedProcess[str]:
+    """Run a fixed prerequisite without contaminating JSON stdout."""
+    command = [resolved_tool(tool), *arguments]
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    result = subprocess.run(  # nosec B603
+        command, check=False, capture_output=True, text=True, shell=False
+    )
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         raise AnalysisError(f"{error_message}{': ' + detail if detail else ''}")
@@ -75,9 +86,11 @@ def run_command(command: Sequence[str], error_message: str) -> subprocess.Comple
 def run_git(root: Path, *arguments: str) -> bytes:
     """Run Git in *root* and return its NUL-safe stdout."""
     try:
-        return subprocess.run(["git", "-C", str(root), *arguments], check=True, capture_output=True).stdout
-    except FileNotFoundError as error:
-        raise AnalysisError("git is required to select worktree files") from error
+        command = [resolved_tool("git"), "-C", str(root), *arguments]
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        return subprocess.run(  # nosec B603
+            command, check=True, capture_output=True, shell=False
+        ).stdout
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", errors="replace").strip()
         raise AnalysisError(detail or "git could not select files for analysis") from error
@@ -146,8 +159,8 @@ def prepare_compilation_database(root: Path, build_directory: Path) -> Path:
     """Configure all first-party targets so changed tests also have commands."""
     build = (root / build_directory).resolve() if not build_directory.is_absolute() else build_directory.resolve()
     run_command(
+        "cmake",
         [
-            "cmake",
             "-S",
             str(root),
             "-B",
@@ -203,7 +216,8 @@ def request_bridge(url: str, timeout: float, body: bytes | None = None) -> objec
         headers["Content-Type"] = "application/json"
     request = Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
     try:
-        with urlopen(request, timeout=timeout) as response:  # nosec B310: URL is loopback and port-validated.
+        # URL is loopback-only and its port was validated by bridge_url.
+        with urlopen(request, timeout=timeout) as response:  # nosec B310
             return json.loads(response.read().decode("utf-8")) if body is not None else response.status
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace").strip()
@@ -258,7 +272,7 @@ def open_workspace_and_find_bridge(workspace: Path, startup_timeout: float) -> i
         pass
 
     existing = available_bridge_ports()
-    run_command(["code", "--new-window", str(workspace)], "VS Code could not open the Sonar workspace")
+    run_command("code", ["--new-window", str(workspace)], "VS Code could not open the Sonar workspace")
     if remembered_port in existing:
         return remembered_port
 
