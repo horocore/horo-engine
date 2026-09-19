@@ -72,7 +72,7 @@ horo_allow_target_dependencies(TARGET HoroRenderMetal)
 horo_allow_target_dependencies(TARGET HoroRenderVulkan)
 
 horo_allow_target_dependencies(TARGET HoroEditorModel
-    DEPENDENCIES HoroFoundation HoroPrefab HoroSceneModel HoroRuntimeScene)
+    DEPENDENCIES HoroFoundation HoroPrefab HoroPrefabAuthoring HoroSceneModel HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroEditorViewportScene DEPENDENCIES HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroEditorViewportResources
     DEPENDENCIES HoroEditorViewportScene HoroRenderFrontend)

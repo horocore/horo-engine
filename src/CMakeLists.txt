@@ -1058,6 +1058,7 @@ target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::Foundation
         HoroEngine::Prefab
+        HoroEngine::PrefabAuthoring
         HoroEngine::SceneModel
         HoroEngine::RuntimeScene
 )
