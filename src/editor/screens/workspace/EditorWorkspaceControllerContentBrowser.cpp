@@ -416,7 +416,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ScheduleContentBrowserPreviews() {
-        for (PendingContentBrowserPreview &pending : m_pendingContentBrowserPreviews)
+        for (const PendingContentBrowserPreview &pending : m_pendingContentBrowserPreviews)
             static_cast<void>(pending.handle.RequestCancel());
         m_pendingContentBrowserPreviews.clear();
         if (m_assetPreviews == nullptr || m_importerCatalog == nullptr)
@@ -441,7 +441,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
-        std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
+        std::erase_if(m_pendingContentBrowserPreviews, [this](const PendingContentBrowserPreview &pending) {
             if (const Assets::AssetPreviewState state = pending.handle.State();
                 state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
                 return false;
