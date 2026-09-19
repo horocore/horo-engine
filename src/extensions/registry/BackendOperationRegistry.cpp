@@ -114,6 +114,25 @@ namespace Horo::Extensions {
             return true;
         }
 
+        template <typename Finalize>
+        [[nodiscard]] BackendOperationTransitionResult ApplyTerminalTransition(const std::shared_ptr<BackendOperationStateData> &operation,
+                                                                               Finalize &&finalize) {
+            using enum BackendOperationTransitionResult;
+            if (!operation)
+                return AlreadyTerminal;
+            BackendOperationTransitionResult transition = InvalidTransition;
+            {
+                std::scoped_lock lock{operation->synchronization.Mutex()};
+                if (IsTerminal(*operation))
+                    return AlreadyTerminal;
+                transition =
+                    TerminalizePendingCancellationLocked(*operation) ? CancellationWon : std::forward<Finalize>(finalize)(*operation);
+            }
+            if (transition == Applied || transition == CancellationWon)
+                RetireOperation(operation);
+            return transition;
+        }
+
         [[nodiscard]] BackendOperationCancellationObservation CancelIfRequested(
             const std::shared_ptr<BackendOperationStateData> &operation) noexcept {
             if (!operation)
@@ -395,58 +414,26 @@ namespace Horo::Extensions {
     /** @copydoc BackendOperationController::Complete */
     BackendOperationTransitionResult BackendOperationController::Complete(std::optional<BackendOperationResultPayload> result) {
         using enum BackendOperationTransitionResult;
-        if (!state_)
-            return AlreadyTerminal;
-        bool terminalized = false;
-        BackendOperationTransitionResult transition = InvalidTransition;
-        {
-            std::scoped_lock lock{state_->synchronization.Mutex()};
-            if (IsTerminal(*state_))
-                return AlreadyTerminal;
-            if (TerminalizePendingCancellationLocked(*state_)) {
-                terminalized = true;
-                transition = CancellationWon;
-            } else {
-                const auto &limits = state_->provider->descriptor;
-                if (const bool validResult = !result.has_value() || (result->id == state_->snapshot.result && !result->id.value.empty() &&
-                                                                     result->bytes.size() <= limits.maximumResultBytes);
-                    !validResult)
-                    return InvalidTransition;
-                state_->snapshot.resultPayload = std::move(result);
-                state_->snapshot.progress = {.completedUnits = 1, .totalUnits = 1};
-                TerminalizeLocked(*state_, BackendOperationState::Completed, std::nullopt);
-                terminalized = true;
-                transition = Applied;
-            }
-        }
-        if (terminalized)
-            RetireOperation(state_);
-        return transition;
+        return ApplyTerminalTransition(state_, [&result](BackendOperationStateData &state) {
+            const auto &limits = state.provider->descriptor;
+            if (const bool validResult = !result.has_value() || (result->id == state.snapshot.result && !result->id.value.empty() &&
+                                                                 result->bytes.size() <= limits.maximumResultBytes);
+                !validResult)
+                return InvalidTransition;
+            state.snapshot.resultPayload = std::move(result);
+            state.snapshot.progress = {.completedUnits = 1, .totalUnits = 1};
+            TerminalizeLocked(state, BackendOperationState::Completed, std::nullopt);
+            return Applied;
+        });
     }
 
     /** @copydoc BackendOperationController::Fail */
     BackendOperationTransitionResult BackendOperationController::Fail(Error error) {
         using enum BackendOperationTransitionResult;
-        if (!state_)
-            return AlreadyTerminal;
-        bool terminalized = false;
-        BackendOperationTransitionResult transition = InvalidTransition;
-        {
-            std::scoped_lock lock{state_->synchronization.Mutex()};
-            if (IsTerminal(*state_))
-                return AlreadyTerminal;
-            if (TerminalizePendingCancellationLocked(*state_)) {
-                terminalized = true;
-                transition = CancellationWon;
-            } else {
-                TerminalizeLocked(*state_, BackendOperationState::Failed, std::move(error));
-                terminalized = true;
-                transition = Applied;
-            }
-        }
-        if (terminalized)
-            RetireOperation(state_);
-        return transition;
+        return ApplyTerminalTransition(state_, [&error](BackendOperationStateData &state) {
+            TerminalizeLocked(state, BackendOperationState::Failed, std::move(error));
+            return Applied;
+        });
     }
 
     void BackendOperationController::Abandon() noexcept {
