@@ -5,12 +5,16 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -80,6 +84,45 @@ namespace {
             });
             return Result<PreparedAssetImport>::Success(std::move(result));
         }
+    };
+
+    class BlockingReportingImporter final : public IAssetImporter {
+    public:
+        [[nodiscard]] Result<PreparedAssetImport> Import(const AssetImportInput &input,
+                                                         const CancellationToken & /*cancellation*/) const override {
+            input.progress.Report(1, 2, "blocked");
+            {
+                std::unique_lock lock{mutex_};
+                providerEntered_ = true;
+                changed_.notify_all();
+                changed_.wait(lock, [this] {
+                    return released_;
+                });
+            }
+            PreparedAssetImport result;
+            result.type = AssetTypeId::Parse("core.mesh").Value();
+            result.editorPayload.assign(input.sourceBytes.begin(), input.sourceBytes.end());
+            return Result<PreparedAssetImport>::Success(std::move(result));
+        }
+
+        void WaitUntilProviderEntered() const {
+            std::unique_lock lock{mutex_};
+            changed_.wait(lock, [this] {
+                return providerEntered_;
+            });
+        }
+
+        void Release() {
+            const std::scoped_lock lock{mutex_};
+            released_ = true;
+            changed_.notify_all();
+        }
+
+    private:
+        mutable std::mutex mutex_;
+        mutable std::condition_variable changed_;
+        mutable bool providerEntered_{};
+        bool released_{};
     };
 
 }  // namespace
@@ -295,4 +338,51 @@ TEST_CASE("AssetImportOperation projects importer progress diagnostics and termi
 
     std::error_code error;
     std::filesystem::remove(sourceFile, error);
+}
+
+TEST_CASE("AssetImportOperation publishes worker progress and cancellation without data races", "[native][assets][importer]") {
+    const ScopedTempDirectory temp{"horo-asset-import-concurrency"};
+    const auto sourceFile = temp.Path() / "concurrent.raw";
+    {
+        std::ofstream source{sourceFile, std::ios::binary};
+        source << "source";
+    }
+
+    JobSystem jobs;
+    auto importer = std::make_shared<BlockingReportingImporter>();
+    AssetImporterCatalog catalog;
+    REQUIRE(catalog
+                .Register(AssetImporterContribution{
+                    .contributionId = "test.raw.concurrent",
+                    .packageId = "test",
+                    .moduleId = "test",
+                    .moduleVersion = "1.0.0",
+                    .version = "1.0.0",
+                    .fileExtensions = {"raw"},
+                    .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
+                    .strategy = importer,
+                })
+                .HasValue());
+    auto published = catalog.Publish();
+    REQUIRE(published.HasValue());
+
+    AssetImportOperation operation{jobs, published.Value()};
+    CancellationToken cancellation;
+    REQUIRE(operation.Start({.projectRoot = temp.Path(), .sourceFiles = {sourceFile}}, cancellation).HasValue());
+    std::optional<Result<AssetImportSnapshot>> importResult;
+    std::thread worker{[&] {
+        importResult = operation.ImportSingleItem(0, cancellation);
+    }};
+
+    importer->WaitUntilProviderEntered();
+    const auto progress = operation.Snapshot();
+    CHECK(progress.items.front().progressCompletedUnits == 1);
+    CHECK(progress.items.front().progressTotalUnits == 2);
+    CHECK(progress.items.front().progressMessage == "blocked");
+    operation.Cancel();
+    CHECK(operation.Snapshot().phase == AssetImportPhase::Cancelled);
+    importer->Release();
+    worker.join();
+    REQUIRE(importResult.has_value());
+    CHECK(importResult->HasError());
 }

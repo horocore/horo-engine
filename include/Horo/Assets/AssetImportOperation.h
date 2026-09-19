@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -167,6 +168,11 @@ namespace Horo::Assets {
      *          The operation never writes to the project, assigns AssetIds, or
      *          publishes registry snapshots. Importers receive only borrowed
      *          source bytes and host-owned output sinks.
+     *
+     *          Mutation methods and provider progress callbacks may run on a
+     *          worker while Snapshot and Cancel run on the UI thread. State is
+     *          synchronized internally, and no operation lock is held while
+     *          invoking provider code. The operation must outlive that work.
      */
     class AssetImportOperation final {
     public:
@@ -202,8 +208,9 @@ namespace Horo::Assets {
 
         /**
          * @brief Returns the current snapshot for UI polling.
+         * @return A consistent copy protected from concurrent worker updates.
          */
-        [[nodiscard]] AssetImportSnapshot Snapshot() const noexcept;
+        [[nodiscard]] AssetImportSnapshot Snapshot() const;
 
         /**
          * @brief Cancels the operation.
@@ -211,8 +218,20 @@ namespace Horo::Assets {
         void Cancel();
 
     private:
+        /**
+         * @brief Projects one bounded provider progress update into the published snapshot.
+         * @param operationId Operation identity captured before provider entry.
+         * @param index Queue index being imported.
+         * @param completedUnits Completed provider work units.
+         * @param totalUnits Non-zero total provider work units.
+         * @param message Optional bounded provider phase detail.
+         */
+        void ReportProgress(std::string_view operationId, std::size_t index, std::uint64_t completedUnits, std::uint64_t totalUnits,
+                            std::string_view message);
+
         [[maybe_unused]] JobSystem &jobs_;  // NOSONAR(cpp:S1068) Retained for asynchronous job execution parity
         std::shared_ptr<const AssetImporterCatalogSnapshot> catalog_;
+        mutable std::mutex mutex_; /**< Protects snapshot_, revision_, and cancelled_ across worker/UI threads. */
         AssetImportSnapshot snapshot_;
         std::uint64_t revision_{0};
         bool cancelled_{false};

@@ -81,15 +81,6 @@ namespace Horo::Assets {
             }
         }
 
-        void ProjectImportProgress(void *context,  // NOSONAR(cpp:S5008) The typed progress callback requires an opaque context.
-                                   const std::uint64_t completedUnits, const std::uint64_t totalUnits, const std::string_view message) {
-            auto *item = static_cast<AssetImportItem *>(context);
-            if (item == nullptr || totalUnits == 0 || completedUnits > totalUnits || message.size() > 4096)
-                return;
-            item->progressCompletedUnits = completedUnits;
-            item->progressTotalUnits = totalUnits;
-            item->progressMessage.assign(message);
-        }
     }  // namespace
 
     AssetImportOperation::AssetImportOperation(JobSystem &jobs, std::shared_ptr<const AssetImporterCatalogSnapshot> catalog)
@@ -102,6 +93,8 @@ namespace Horo::Assets {
         if (!catalog_)
             return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
 
+        const std::scoped_lock lock{mutex_};
+        cancelled_ = false;
         snapshot_ = AssetImportSnapshot{
             .operationId = std::format("import-{}", ++revision_),
             .revision = revision_,
@@ -175,6 +168,7 @@ namespace Horo::Assets {
         if (!catalog_)
             return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
 
+        const std::scoped_lock lock{mutex_};
         for (const auto &sourceFile : sourceFiles) {
             const std::filesystem::path absoluteSource = NormalizeAbsolute(sourceFile);
             auto ext = LowerExtension(absoluteSource);
@@ -234,40 +228,58 @@ namespace Horo::Assets {
     }
 
     Result<AssetImportSnapshot> AssetImportOperation::ImportSingleItem(std::size_t index, const CancellationToken &cancellation) {
-        if (cancelled_ || cancellation.IsCancellationRequested()) {
-            snapshot_.phase = AssetImportPhase::Cancelled;
-            snapshot_.canCancel = false;
+        const AssetImporterContribution *contribution{};
+        std::filesystem::path absoluteSourcePath;
+        std::string sourceExtension;
+        std::string displayName;
+        std::string operationId;
+        TransparentStringMap<std::string> settings;
+        {
+            const std::scoped_lock lock{mutex_};
+            if (cancelled_ || cancellation.IsCancellationRequested()) {
+                snapshot_.phase = AssetImportPhase::Cancelled;
+                snapshot_.canCancel = false;
+                snapshot_.canCommit = false;
+                snapshot_.revision = ++revision_;
+                return Result<AssetImportSnapshot>::Failure(Error{CookErrors::Cancelled.code});
+            }
+            if (index >= snapshot_.items.size())
+                return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
+
+            auto &item = snapshot_.items[index];
+            if (item.result.has_value())
+                return Result<AssetImportSnapshot>::Success(snapshot_);
+
+            contribution = catalog_->FindById(item.importerContributionId);
+            if (contribution == nullptr || contribution->strategy == nullptr || !contribution->HandlesExtension(item.sourceExtension)) {
+                item.diagnostics.push_back(ImportDiagnostic{
+                    .severity = ImportDiagnostic::Severity::Error,
+                    .code = ImportErrors::NoImporter.code.Value(),
+                    .message = "No importer for ." + item.sourceExtension,
+                });
+                LOG_ERROR("editor.asset_import", "No importer for .%s — %s", item.sourceExtension.c_str(), item.displayName.c_str());
+                snapshot_.phase = AssetImportPhase::Failed;
+                snapshot_.canCancel = false;
+                snapshot_.revision = ++revision_;
+                return Result<AssetImportSnapshot>::Success(snapshot_);
+            }
+
+            absoluteSourcePath = item.absoluteSourcePath;
+            sourceExtension = item.sourceExtension;
+            displayName = item.displayName;
+            operationId = snapshot_.operationId;
+            settings = item.settings;
+            snapshot_.phase = AssetImportPhase::Preparing;
             snapshot_.canCommit = false;
             snapshot_.revision = ++revision_;
-            return Result<AssetImportSnapshot>::Failure(Error{CookErrors::Cancelled.code});
         }
 
-        if (index >= snapshot_.items.size())
-            return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        auto &item = snapshot_.items[index];
-        if (item.result.has_value())
-            return Result<AssetImportSnapshot>::Success(snapshot_);
-
-        snapshot_.phase = AssetImportPhase::Preparing;
-        snapshot_.canCommit = false;
-
-        const auto *contribution = catalog_->FindById(item.importerContributionId);
-        if (contribution == nullptr || contribution->strategy == nullptr || !contribution->HandlesExtension(item.sourceExtension)) {
-            item.diagnostics.push_back(ImportDiagnostic{
-                .severity = ImportDiagnostic::Severity::Error,
-                .code = ImportErrors::NoImporter.code.Value(),
-                .message = "No importer for ." + item.sourceExtension,
-            });
-            LOG_ERROR("editor.asset_import", "No importer for .%s — %s", item.sourceExtension.c_str(), item.displayName.c_str());
-            snapshot_.phase = AssetImportPhase::Failed;
-            snapshot_.canCancel = false;
-            snapshot_.revision = ++revision_;
-            return Result<AssetImportSnapshot>::Success(snapshot_);
-        }
-
-        auto source = ReadAssetImportSource(item.absoluteSourcePath);
+        auto source = ReadAssetImportSource(absoluteSourcePath);
         if (source.HasError()) {
+            const std::scoped_lock lock{mutex_};
+            if (snapshot_.operationId != operationId || index >= snapshot_.items.size())
+                return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
+            auto &item = snapshot_.items[index];
             item.diagnostics.push_back(ImportDiagnostic{
                 .severity = ImportDiagnostic::Severity::Error,
                 .code = source.ErrorValue().code.Value(),
@@ -279,26 +291,69 @@ namespace Horo::Assets {
             return Result<AssetImportSnapshot>::Success(snapshot_);
         }
         std::vector<std::uint8_t> fileBytes = std::move(source).Value();
-        item.sourceHash = HashAssetImportSource(fileBytes);
-        item.sourceByteSize = fileBytes.size();
-        item.sourceLastWriteTime = SourceLastWriteTime(item.absoluteSourcePath);
+        {
+            const std::scoped_lock lock{mutex_};
+            if (snapshot_.operationId != operationId || index >= snapshot_.items.size())
+                return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
+            if (cancelled_ || cancellation.IsCancellationRequested()) {
+                snapshot_.phase = AssetImportPhase::Cancelled;
+                snapshot_.canCancel = false;
+                snapshot_.canCommit = false;
+                snapshot_.revision = ++revision_;
+                return Result<AssetImportSnapshot>::Failure(Error{CookErrors::Cancelled.code});
+            }
+            auto &item = snapshot_.items[index];
+            item.sourceHash = HashAssetImportSource(fileBytes);
+            item.sourceByteSize = fileBytes.size();
+            item.sourceLastWriteTime = SourceLastWriteTime(absoluteSourcePath);
+            snapshot_.revision = ++revision_;
+        }
 
-        auto resolved = ResolveImportSettings(*contribution, item.settings);
+        auto resolved = ResolveImportSettings(*contribution, settings);
         if (resolved.HasError()) {
+            const std::scoped_lock lock{mutex_};
+            if (snapshot_.operationId != operationId || index >= snapshot_.items.size())
+                return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
             snapshot_.phase = AssetImportPhase::Failed;
             snapshot_.canCancel = false;
             snapshot_.revision = ++revision_;
             return Result<AssetImportSnapshot>::Failure(resolved.ErrorValue());
         }
 
+        struct ProgressContext final {
+            AssetImportOperation *operation;
+            std::string_view operationId;
+            std::size_t itemIndex;
+        } progressContext{.operation = this, .operationId = operationId, .itemIndex = index};
+
         AssetImportInput input{
             .sourceBytes = fileBytes,
-            .sourceExtension = item.sourceExtension,
+            .sourceExtension = sourceExtension,
             .settings = std::move(resolved).Value(),
-            .progress = {.context = &item, .report = ProjectImportProgress},
+        };
+        input.progress = {
+            .context = &progressContext,
+            .report =
+                [](void *context, const std::uint64_t completedUnits, const std::uint64_t totalUnits, const std::string_view message) {
+            auto &progress = *static_cast<ProgressContext *>(context);
+            progress.operation->ReportProgress(progress.operationId, progress.itemIndex, completedUnits, totalUnits, message);
+        },
         };
 
-        if (auto result = contribution->strategy->Import(input, cancellation); result.HasValue()) {
+        auto result = contribution->strategy->Import(input, cancellation);
+        const std::scoped_lock lock{mutex_};
+        if (snapshot_.operationId != operationId || index >= snapshot_.items.size())
+            return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
+        if (cancelled_ || cancellation.IsCancellationRequested()) {
+            snapshot_.phase = AssetImportPhase::Cancelled;
+            snapshot_.canCancel = false;
+            snapshot_.canCommit = false;
+            snapshot_.revision = ++revision_;
+            return Result<AssetImportSnapshot>::Failure(Error{CookErrors::Cancelled.code});
+        }
+
+        auto &item = snapshot_.items[index];
+        if (result.HasValue()) {
             PreparedAssetImport prepared = std::move(result).Value();
             item.resolvedType = prepared.type;
             item.diagnostics.insert(item.diagnostics.end(), prepared.diagnostics.begin(), prepared.diagnostics.end());
@@ -316,14 +371,9 @@ namespace Horo::Assets {
                 .code = err.code.Value(),
                 .message = err.message,
             });
-            LOG_ERROR("editor.asset_import", "Import failed for %s: %s", item.displayName.c_str(), err.message.c_str());
-            if (cancellation.IsCancellationRequested()) {
-                snapshot_.phase = AssetImportPhase::Cancelled;
-                snapshot_.canCancel = false;
-            } else {
-                snapshot_.phase = AssetImportPhase::Failed;
-                snapshot_.canCancel = false;
-            }
+            LOG_ERROR("editor.asset_import", "Import failed for %s: %s", displayName.c_str(), err.message.c_str());
+            snapshot_.phase = AssetImportPhase::Failed;
+            snapshot_.canCancel = false;
         }
 
         snapshot_.revision = ++revision_;
@@ -331,6 +381,7 @@ namespace Horo::Assets {
     }
 
     Result<AssetImportSnapshot> AssetImportOperation::SetItemSettings(const std::size_t index, TransparentStringMap<std::string> settings) {
+        const std::scoped_lock lock{mutex_};
         if (index >= snapshot_.items.size())
             return Result<AssetImportSnapshot>::Failure(Error{CookErrors::MalformedArtifact.code});
 
@@ -339,15 +390,34 @@ namespace Horo::Assets {
         return Result<AssetImportSnapshot>::Success(snapshot_);
     }
 
-    AssetImportSnapshot AssetImportOperation::Snapshot() const noexcept {
+    AssetImportSnapshot AssetImportOperation::Snapshot() const {
+        const std::scoped_lock lock{mutex_};
         return snapshot_;
     }
 
     void AssetImportOperation::Cancel() {
+        const std::scoped_lock lock{mutex_};
         cancelled_ = true;
         snapshot_.phase = AssetImportPhase::Cancelled;
         snapshot_.canCancel = false;
         snapshot_.canCommit = false;
+        snapshot_.revision = ++revision_;
+    }
+
+    /** @copydoc AssetImportOperation::ReportProgress */
+    void AssetImportOperation::ReportProgress(const std::string_view operationId, const std::size_t index,
+                                              const std::uint64_t completedUnits, const std::uint64_t totalUnits,
+                                              const std::string_view message) {
+        if (totalUnits == 0 || completedUnits > totalUnits || message.size() > 4096)
+            return;
+
+        const std::scoped_lock lock{mutex_};
+        if (cancelled_ || snapshot_.operationId != operationId || index >= snapshot_.items.size())
+            return;
+        auto &item = snapshot_.items[index];
+        item.progressCompletedUnits = completedUnits;
+        item.progressTotalUnits = totalUnits;
+        item.progressMessage.assign(message);
         snapshot_.revision = ++revision_;
     }
 

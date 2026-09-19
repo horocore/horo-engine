@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <span>
 
 namespace Horo::Extensions::Tests {
     namespace {
@@ -11,6 +12,7 @@ namespace Horo::Extensions::Tests {
             int destroyed{};
             bool invoked{};
             bool cancelDuringCall{};
+            bool rejectOutput{};
         };
 
         struct ProgressCapture final {
@@ -37,6 +39,8 @@ namespace Horo::Extensions::Tests {
                 return request->cancellation.isCancellationRequested(request->cancellation.context) != 0 ? HORO_EXTENSION_ERROR_CANCELLED
                                                                                                          : HORO_EXTENSION_ERROR_INIT_FAILED;
             }
+            if (state.rejectOutput)
+                static_cast<void>(response->progress.report(response->progress.context, 1, 0, {}));
 
             static constexpr char kType[] = "example.raw";
             static constexpr char kDependency[] = "12345678-1234-4234-8234-123456789abc";
@@ -82,6 +86,30 @@ namespace Horo::Extensions::Tests {
             CHECK(progress.completed == 3);
             CHECK(progress.total == 4);
             CHECK(progress.message == "decode");
+        }
+
+        void CheckStickyOutputRejection(const Assets::IAssetImporter &importer, ImportInvocationState &invocation) {
+            invocation.rejectOutput = true;
+            const std::array<std::uint8_t, 2> source{1U, 2U};
+            const CancellationToken cancellation;
+            const auto rejected = importer.Import(Assets::AssetImportInput{.sourceBytes = source, .sourceExtension = "raw"}, cancellation);
+            CHECK(rejected.HasError());
+            invocation.rejectOutput = false;
+        }
+
+        void CheckCancellationAndTeardown(AssetImporterRegistrationSession &session, ImportInvocationState &invocation,
+                                          CancellationSource &cancellation, const std::span<const std::uint8_t> source) {
+            invocation.cancelDuringCall = true;
+            invocation.invoked = false;
+            const auto cancelled =
+                session.contributions.front().strategy->Import(Assets::AssetImportInput{.sourceBytes = source, .sourceExtension = "raw"},
+                                                               cancellation.Token());
+            REQUIRE(cancelled.HasError());
+            CHECK(invocation.invoked);
+            CHECK(cancellation.Token().IsCancellationRequested());
+            CHECK(invocation.destroyed == 0);
+            session.contributions.clear();
+            CHECK(invocation.destroyed == 1);
         }
     }  // namespace
 
@@ -231,18 +259,7 @@ namespace Horo::Extensions::Tests {
             cancellation.Token());
         REQUIRE(imported.HasValue());
         CheckCompleteImport(imported.Value(), invocation, progress);
-
-        invocation.cancelDuringCall = true;
-        invocation.invoked = false;
-        const auto cancelled =
-            session.contributions.front().strategy->Import(Assets::AssetImportInput{.sourceBytes = source, .sourceExtension = "raw"},
-                                                           cancellation.Token());
-        REQUIRE(cancelled.HasError());
-        CHECK(invocation.invoked);
-        CHECK(cancellation.Token().IsCancellationRequested());
-
-        CHECK(invocation.destroyed == 0);
-        session.contributions.clear();
-        CHECK(invocation.destroyed == 1);
+        CheckStickyOutputRejection(*session.contributions.front().strategy, invocation);
+        CheckCancellationAndTeardown(session, invocation, cancellation, source);
     }
 }  // namespace Horo::Extensions::Tests
