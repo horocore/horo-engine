@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorSurfaceIdentity.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -142,5 +143,30 @@ namespace {
         const auto closeStale = registry.Close(opened.Value().identity.instance);
         REQUIRE(closeStale.HasError());
         REQUIRE(closeStale.ErrorValue().code.Value() == "editor.surface_identity.instance_unknown");
+    }
+
+    TEST_CASE("Document instance allocation reports exhaustion at the uint64 boundary", "[unit][editor][surface]") {
+        const auto sourceA = SourceDocumentId::Parse("assets/scenes/a.horo");
+        const auto sourceB = SourceDocumentId::Parse("assets/scenes/b.horo");
+        const auto sourceC = SourceDocumentId::Parse("assets/scenes/c.horo");
+        REQUIRE(sourceA.HasValue());
+        REQUIRE(sourceB.HasValue());
+        REQUIRE(sourceC.HasValue());
+
+        const auto firstInstance = DocumentInstanceId::Create(std::numeric_limits<std::uint64_t>::max() - std::uint64_t{1});
+        REQUIRE(firstInstance.HasValue());
+        DocumentIdentityRegistry registry{firstInstance.Value()};
+
+        const auto first = registry.Open({DocumentKind::Scene, sourceA.Value()});
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value().identity.instance.Value() == std::numeric_limits<std::uint64_t>::max() - std::uint64_t{1});
+
+        const auto last = registry.Open({DocumentKind::Scene, sourceB.Value()});
+        REQUIRE(last.HasValue());
+        REQUIRE(last.Value().identity.instance.Value() == std::numeric_limits<std::uint64_t>::max());
+
+        const auto exhausted = registry.Open({DocumentKind::Scene, sourceC.Value()});
+        REQUIRE(exhausted.HasError());
+        REQUIRE(exhausted.ErrorValue().code.Value() == "editor.surface_identity.instance_exhausted");
     }
 }  // namespace

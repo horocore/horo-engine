@@ -356,17 +356,22 @@ namespace Horo::Editor {
             });
         }
 
-        if (nextInstanceValue_ == 0 || nextInstanceValue_ == std::numeric_limits<std::uint64_t>::max()) {
+        if (nextInstanceValue_ == 0) {
             return Result<DocumentOpenResult>::Failure(MakeError(EditorSurfaceErrors::InstanceExhausted));
         }
 
-        const auto instance = DocumentInstanceId::Create(nextInstanceValue_++);
+        const auto instance = DocumentInstanceId::Create(nextInstanceValue_);
         if (instance.HasError()) {
             return Result<DocumentOpenResult>::Failure(instance.ErrorValue());
         }
 
         const DocumentIdentity identity{.key = key, .instance = instance.Value()};
         openDocuments_.push_back(identity);
+        if (nextInstanceValue_ == std::numeric_limits<std::uint64_t>::max()) {
+            nextInstanceValue_ = 0;
+        } else {
+            ++nextInstanceValue_;
+        }
         return Result<DocumentOpenResult>::Success(DocumentOpenResult{
             .identity = identity,
             .disposition = DocumentOpenDisposition::Opened,

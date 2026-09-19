@@ -224,6 +224,13 @@ namespace Horo::Editor {
         DocumentIdentityRegistry() = default;
 
         /**
+         * @brief Starts allocation at an explicit session-local instance value.
+         * @param nextInstance Next instance identity to issue; use the default constructor for the normal value of one.
+         * @note The explicit seed keeps the monotonic allocator deterministic for restored hosts and boundary tests.
+         */
+        explicit DocumentIdentityRegistry(DocumentInstanceId nextInstance) noexcept : nextInstanceValue_(nextInstance.Value()) {}
+
+        /**
          * @brief Opens one key or returns its existing instance for focus routing.
          * @param key Persistent document identity.
          * @return Opened or existing identity, or a typed validation/capacity error.
