@@ -34,6 +34,22 @@ namespace Horo::Extensions::Tests {
             return {.initialPhase = {"queued"}};
         }
 
+        [[nodiscard]] BackendOperationRegistration RegisterProvider(BackendOperationRegistry &registry,
+                                                                    BackendOperationProviderDescriptor descriptor = Provider()) {
+            auto result = registry.Register(std::move(descriptor));
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        }
+
+        [[nodiscard]] BackendOperationController BeginOperation(BackendOperationRegistry &registry,
+                                                                const ApplicationCapabilityProviderIdentity &provider = ProviderIdentity(),
+                                                                const BackendOperationTypeId &type = {"compile"},
+                                                                BackendOperationDescriptor descriptor = OperationDescriptor()) {
+            auto result = registry.Begin(provider, type, std::move(descriptor));
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        }
+
         void RequireErrorCode(const auto &result, const std::string_view code) {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == code);
@@ -113,11 +129,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation IDs and snapshots retain exact provider and operation contracts", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry);
+        auto controller = BeginOperation(registry);
         const auto handle = controller.Handle();
         const auto snapshot = handle.Snapshot();
         REQUIRE(snapshot.has_value());
@@ -132,11 +145,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation progress is monotonic within a phase and resets on phase change", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry);
+        auto controller = BeginOperation(registry);
         const auto handle = controller.Handle();
 
         CHECK(controller.PublishProgress({"decode"}, {.completedUnits = 4, .totalUnits = 10}) == BackendOperationTransitionResult::Applied);
@@ -155,11 +165,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation progress compares uint64 work ratios exactly at the maximum bound", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry);
+        auto controller = BeginOperation(registry);
         constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
         CHECK(controller.PublishProgress({"maximum"}, {.completedUnits = maximum - 1, .totalUnits = maximum}) ==
               BackendOperationTransitionResult::Applied);
@@ -171,11 +178,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation diagnostics and typed result payloads are host bounded", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider(ProviderIdentity(), 8, 1, 32, 2));
-        REQUIRE(registration.HasValue());
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry, Provider(ProviderIdentity(), 8, 1, 32, 2));
+        auto controller = BeginOperation(registry);
         auto validDiagnostic = Diagnostic{.code = DiagnosticCode{"backend.compile"},
                                           .severity = DiagnosticSeverity::Warning,
                                           .message = "ok",
@@ -201,11 +205,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation diagnostics enforce the aggregate byte bound", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider(ProviderIdentity(), 8, 4, 10, 128));
-        REQUIRE(registration.HasValue());
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry, Provider(ProviderIdentity(), 8, 4, 10, 128));
+        auto controller = BeginOperation(registry);
         const Diagnostic diagnostic{.code = DiagnosticCode{"a.b"},
                                     .severity = DiagnosticSeverity::Note,
                                     .message = "x",
@@ -218,11 +219,9 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation cancellation observes caller and parent tokens atomically", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
+        auto registration = RegisterProvider(registry);
 
-        auto callerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(callerResult.HasValue());
-        auto caller = std::move(callerResult).Value();
+        auto caller = BeginOperation(registry);
         const auto callerHandle = caller.Handle();
         CHECK(callerHandle.RequestCancellation() == BackendOperationCancellationRequestResult::Requested);
         CHECK(caller.ObserveCancellation() == BackendOperationCancellationObservation::Cancelled);
@@ -230,24 +229,18 @@ namespace Horo::Extensions::Tests {
         CHECK(caller.Complete() == BackendOperationTransitionResult::AlreadyTerminal);
 
         CancellationSource parent;
-        auto parentResult = registry.Begin(ProviderIdentity(), {"compile"}, {.parentCancellation = parent.Token()});
-        REQUIRE(parentResult.HasValue());
-        auto parentController = std::move(parentResult).Value();
+        auto parentController = BeginOperation(registry, ProviderIdentity(), {"compile"}, {.parentCancellation = parent.Token()});
         parent.RequestCancellation();
         CHECK(parentController.Cancellation().IsCancellationRequested());
         CHECK(parentController.ObserveCancellation() == BackendOperationCancellationObservation::Cancelled);
         CHECK(parentController.Handle().Snapshot()->cancellationReason == BackendOperationCancellationReason::Parent);
     }
 
-    TEST_CASE("Backend operation explicit cancellation sources survive teardown", "[Extensions][BackendOperations]") {
+    TEST_CASE("Backend operation caller cancellation source survives provider teardown", "[Extensions][BackendOperations]") {
         {
             BackendOperationRegistry registry;
-            auto registrationResult = registry.Register(Provider());
-            REQUIRE(registrationResult.HasValue());
-            auto registration = std::move(registrationResult).Value();
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto registration = RegisterProvider(registry);
+            auto controller = BeginOperation(registry);
             const auto handle = controller.Handle();
             CHECK(handle.RequestCancellation() == BackendOperationCancellationRequestResult::Requested);
             registration.Reset();
@@ -261,13 +254,9 @@ namespace Horo::Extensions::Tests {
     TEST_CASE("Backend operation teardown publishes its cancellation source", "[Extensions][BackendOperations]") {
         {
             BackendOperationRegistry registry;
-            auto registrationResult = registry.Register(Provider());
-            REQUIRE(registrationResult.HasValue());
-            auto registration = std::move(registrationResult).Value();
+            auto registration = RegisterProvider(registry);
             CancellationSource parent;
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, {.parentCancellation = parent.Token()});
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto controller = BeginOperation(registry, ProviderIdentity(), {"compile"}, {.parentCancellation = parent.Token()});
             const auto handle = controller.Handle();
             parent.RequestCancellation();
             registry.BeginShutdown();
@@ -279,12 +268,8 @@ namespace Horo::Extensions::Tests {
 
         {
             BackendOperationRegistry registry;
-            auto registrationResult = registry.Register(Provider());
-            REQUIRE(registrationResult.HasValue());
-            auto registration = std::move(registrationResult).Value();
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto registration = RegisterProvider(registry);
+            auto controller = BeginOperation(registry);
             const auto handle = controller.Handle();
             registration.Reset();
             CHECK(handle.RequestCancellation() == BackendOperationCancellationRequestResult::AlreadyTerminal);
@@ -293,12 +278,8 @@ namespace Horo::Extensions::Tests {
 
         {
             BackendOperationRegistry registry;
-            auto registrationResult = registry.Register(Provider());
-            REQUIRE(registrationResult.HasValue());
-            auto registration = std::move(registrationResult).Value();
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto registration = RegisterProvider(registry);
+            auto controller = BeginOperation(registry);
             const auto handle = controller.Handle();
             registry.BeginShutdown();
             CHECK(handle.RequestCancellation() == BackendOperationCancellationRequestResult::AlreadyTerminal);
@@ -308,11 +289,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation cancellation wins the next producer transition", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry);
+        auto controller = BeginOperation(registry);
         const auto handle = controller.Handle();
         CHECK(handle.RequestCancellation() == BackendOperationCancellationRequestResult::Requested);
         const auto diagnostic = Diagnostic{.code = DiagnosticCode{"backend.compile"}, .message = "cancelled"};
@@ -324,12 +302,8 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Provider reset and registry shutdown cancel active operations and invalidate admission", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registrationResult = registry.Register(Provider());
-        REQUIRE(registrationResult.HasValue());
-        auto registration = std::move(registrationResult).Value();
-        auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-        REQUIRE(controllerResult.HasValue());
-        auto controller = std::move(controllerResult).Value();
+        auto registration = RegisterProvider(registry);
+        auto controller = BeginOperation(registry);
         const auto handle = controller.Handle();
         registration.Reset();
         CHECK_FALSE(registration.IsRegistered());
@@ -340,12 +314,8 @@ namespace Horo::Extensions::Tests {
         CHECK(snapshot->cancellationReason == BackendOperationCancellationReason::Provider);
         CHECK(controller.PublishProgress({"late"}, {1, 1}) == BackendOperationTransitionResult::AlreadyTerminal);
 
-        auto secondRegistrationResult = registry.Register(Provider(ProviderIdentity("second", 2)));
-        REQUIRE(secondRegistrationResult.HasValue());
-        auto secondRegistration = std::move(secondRegistrationResult).Value();
-        auto secondResult = registry.Begin(ProviderIdentity("second", 2), {"compile"}, OperationDescriptor());
-        REQUIRE(secondResult.HasValue());
-        auto second = std::move(secondResult).Value();
+        auto secondRegistration = RegisterProvider(registry, Provider(ProviderIdentity("second", 2)));
+        auto second = BeginOperation(registry, ProviderIdentity("second", 2));
         const auto secondHandle = second.Handle();
         registry.BeginShutdown();
         CHECK(second.Cancellation().IsCancellationRequested());
@@ -357,13 +327,10 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation producer abandonment is terminal and stale transitions are harmless", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
+        auto registration = RegisterProvider(registry);
         BackendOperationHandle handle;
         {
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto controller = BeginOperation(registry);
             handle = controller.Handle();
             CHECK(controller.PublishProgress({"decode"}, {1, 2}) == BackendOperationTransitionResult::Applied);
         }
@@ -377,14 +344,11 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation abandonment honors pending caller and parent cancellation", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry;
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
+        auto registration = RegisterProvider(registry);
 
         BackendOperationHandle callerHandle;
         {
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto controller = BeginOperation(registry);
             callerHandle = controller.Handle();
             CHECK(callerHandle.RequestCancellation() == BackendOperationCancellationRequestResult::Requested);
         }
@@ -395,9 +359,7 @@ namespace Horo::Extensions::Tests {
         CancellationSource parent;
         BackendOperationHandle parentHandle;
         {
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, {.parentCancellation = parent.Token()});
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto controller = BeginOperation(registry, ProviderIdentity(), {"compile"}, {.parentCancellation = parent.Token()});
             parentHandle = controller.Handle();
             parent.RequestCancellation();
         }
@@ -410,12 +372,8 @@ namespace Horo::Extensions::Tests {
               "[Extensions][BackendOperations]") {
         for (std::size_t iteration = 0; iteration < 32; ++iteration) {
             BackendOperationRegistry registry({.maximumOperations = 1});
-            auto registrationResult = registry.Register(Provider());
-            REQUIRE(registrationResult.HasValue());
-            auto registration = std::move(registrationResult).Value();
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto registration = RegisterProvider(registry);
+            auto controller = BeginOperation(registry);
             const auto handle = controller.Handle();
             std::atomic_bool start{};
             auto produce = [controller = std::move(controller), &start, iteration]() mutable {
@@ -455,12 +413,9 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Backend operation completion and cancellation races publish exactly one terminal state", "[Extensions][BackendOperations]") {
         BackendOperationRegistry registry({.maximumOperations = 1});
-        auto registration = registry.Register(Provider());
-        REQUIRE(registration.HasValue());
+        auto registration = RegisterProvider(registry);
         for (std::size_t iteration = 0; iteration < 64; ++iteration) {
-            auto controllerResult = registry.Begin(ProviderIdentity(), {"compile"}, OperationDescriptor());
-            REQUIRE(controllerResult.HasValue());
-            auto controller = std::move(controllerResult).Value();
+            auto controller = BeginOperation(registry);
             const auto handle = controller.Handle();
             std::thread complete([&controller] {  // NOSONAR -- The supported Apple standard library lacks std::jthread.
                 static_cast<void>(controller.Complete());
