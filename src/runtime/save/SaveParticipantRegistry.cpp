@@ -4,11 +4,18 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <new>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace Horo::Runtime {
     struct SaveParticipantRegistryDetail::SnapshotStorage final {
@@ -19,6 +26,13 @@ namespace Horo::Runtime {
 
     namespace {
         using ParticipantIndices = std::unordered_map<SaveParticipantId, std::size_t, SaveParticipantIdHash>;
+
+#ifdef _WIN32
+        void DebugRegisterStage(const char *stage) noexcept {
+            DWORD written{};
+            ::WriteFile(::GetStdHandle(STD_ERROR_HANDLE), stage, static_cast<DWORD>(std::strlen(stage)), &written, nullptr);
+        }
+#endif
 
         struct PhasePlanGraph final {
             std::vector<std::vector<std::size_t>> dependents;
@@ -296,7 +310,8 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
-    SaveParticipantBinding::SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor,
+    SaveParticipantBinding::SaveParticipantBinding(SaveParticipantBinding::RegistryConstructionToken,
+                                                   CanonicalStateParticipantDescriptor descriptor,
                                                    std::shared_ptr<const ICanonicalStateAdapter> adapter)
         : descriptor_(std::move(descriptor)), adapter_(std::move(adapter)) {}
 
@@ -359,6 +374,9 @@ namespace Horo::Runtime {
     Result<SaveParticipantRegistration> CanonicalStateParticipantRegistry::Register(const CanonicalStateParticipantDescriptor &descriptor,
                                                                                     std::shared_ptr<const ICanonicalStateAdapter> adapter) {
         try {
+#ifdef _WIN32
+            DebugRegisterStage("[register] start\n");
+#endif
             if (closed_)
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryClosed));
             auto nextGeneration = NextGeneration(generation_);
@@ -374,6 +392,9 @@ namespace Horo::Runtime {
                 return binding.Descriptor().participant;
             }) != bindings_.end())
                 return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantDuplicate));
+#ifdef _WIN32
+            DebugRegisterStage("[register] before copy\n");
+#endif
             for (const SaveParticipantBinding &binding : bindings_) {
                 for (const SaveRecordId &record : descriptor.ownedRecords) {
                     if (std::ranges::find(binding.Descriptor().ownedRecords, record) != binding.Descriptor().ownedRecords.end())
@@ -381,12 +402,27 @@ namespace Horo::Runtime {
                 }
             }
             CanonicalStateParticipantDescriptor ownedDescriptor = descriptor;
+#ifdef _WIN32
+            DebugRegisterStage("[register] after copy\n");
+#endif
             SaveParticipantRegistration registration{ownedDescriptor.participant, nextGeneration.Value()};
+#ifdef _WIN32
+            DebugRegisterStage("[register] after registration\n");
+#endif
             std::ranges::sort(ownedDescriptor.dependencies);
-            bindings_.push_back(SaveParticipantBinding{std::move(ownedDescriptor), std::move(adapter)});
+#ifdef _WIN32
+            DebugRegisterStage("[register] before emplace\n");
+#endif
+            bindings_.emplace_back(SaveParticipantBinding::RegistryConstructionToken{}, std::move(ownedDescriptor), std::move(adapter));
+#ifdef _WIN32
+            DebugRegisterStage("[register] after emplace\n");
+#endif
             generation_ = nextGeneration.Value();
             return Result<SaveParticipantRegistration>::Success(std::move(registration));
         } catch (const std::bad_alloc &) {
+#ifdef _WIN32
+            DebugRegisterStage("[register] caught bad_alloc\n");
+#endif
             return Result<SaveParticipantRegistration>::Failure(MakeError(SaveErrors::ParticipantRegistryAllocationFailed));
         }
     }

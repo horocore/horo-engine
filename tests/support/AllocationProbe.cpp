@@ -13,7 +13,8 @@ namespace {
     class AllocationMeter final {
     public:
         [[nodiscard]] static void *Acquire(const std::size_t byteCount) {
-            ConsumeFailureBudget();
+            if (ConsumeFailureBudget())
+                throw std::bad_alloc{};
             void *const storage = std::malloc(std::max(byteCount, std::size_t{1}));
             if (storage == nullptr)
                 throw std::bad_alloc{};
@@ -25,7 +26,8 @@ namespace {
         }
 
         [[nodiscard]] static void *AcquireAligned(const std::size_t byteCount, const std::size_t alignment) {
-            ConsumeFailureBudget();
+            if (ConsumeFailureBudget())
+                throw std::bad_alloc{};
 #ifdef _WIN32
             void *const storage = _aligned_malloc(std::max(byteCount, std::size_t{1}), alignment);
 #else
@@ -38,20 +40,24 @@ namespace {
             return storage;
         }
 
+        // Nothrow forms must not enter the throwing path while MSVC exception/CRT code is active.
         [[nodiscard]] static void *TryAcquire(const std::size_t byteCount) noexcept {
-            try {
-                return Acquire(byteCount);
-            } catch (...) {
+            if (ConsumeFailureBudget())
                 return nullptr;
-            }
+            return std::malloc(std::max(byteCount, std::size_t{1}));
         }
 
         [[nodiscard]] static void *TryAcquireAligned(const std::size_t byteCount, const std::size_t alignment) noexcept {
-            try {
-                return AcquireAligned(byteCount, alignment);
-            } catch (...) {
+            if (ConsumeFailureBudget())
                 return nullptr;
-            }
+#ifdef _WIN32
+            return _aligned_malloc(std::max(byteCount, std::size_t{1}), alignment);
+#else
+            void *storage = nullptr;
+            if (posix_memalign(&storage, alignment, std::max(byteCount, std::size_t{1})) != 0)
+                return nullptr;
+            return storage;
+#endif
         }
 
         static void ReleaseAligned(void *const storage) noexcept {
@@ -81,15 +87,16 @@ namespace {
         // CRT threads must continue allocating while a test exercises one operation.
         static inline thread_local std::size_t failureCountdown_ = DisabledFailureCountdown;
 
-        static void ConsumeFailureBudget() {
+        [[nodiscard]] static bool ConsumeFailureBudget() noexcept {
             count_.fetch_add(1, std::memory_order_relaxed);
             if (failureCountdown_ == DisabledFailureCountdown)
-                return;
+                return false;
             if (failureCountdown_ == 0) {
                 failureCountdown_ = DisabledFailureCountdown;
-                throw std::bad_alloc{};
+                return true;
             }
             --failureCountdown_;
+            return false;
         }
     };
 }  // namespace

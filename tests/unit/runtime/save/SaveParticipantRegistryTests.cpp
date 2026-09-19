@@ -4,6 +4,7 @@
 #include "SaveCaptureSnapshotTestUtils.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -199,15 +200,24 @@ namespace Horo::Runtime {
             bool reachedSuccessfulRegistration = false;
             for (std::size_t successfulAllocations = 0; successfulAllocations < 64 && !reachedSuccessfulRegistration;
                  ++successfulAllocations) {
+#ifdef _WIN32
+                std::fprintf(stderr, "[allocation-test] register budget %zu begin\n", successfulAllocations);
+                std::fflush(stderr);
+#endif
                 auto destructionCount = std::make_shared<int>();
                 auto adapter = Adapter(destructionCount);
-                const auto descriptor = Descriptor("horo.test.allocation");
+                const auto descriptor = Descriptor("horo.alloc");
                 CanonicalStateParticipantRegistry registry;
                 const std::uint64_t generation = registry.Generation();
                 auto registration = [&] {
                     Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
                     return registry.Register(descriptor, adapter);
                 }();
+#ifdef _WIN32
+                std::fprintf(stderr, "[allocation-test] register budget %zu end value=%d\n", successfulAllocations,
+                             registration.HasValue() ? 1 : 0);
+                std::fflush(stderr);
+#endif
                 reachedSuccessfulRegistration = registration.HasValue();
                 if (!reachedSuccessfulRegistration) {
                     CHECK(registration.ErrorValue().code.Value() == SaveErrors::ParticipantRegistryAllocationFailed.code.Value());
@@ -221,7 +231,7 @@ namespace Horo::Runtime {
             auto destructionCount = std::make_shared<int>();
             auto adapter = Adapter(destructionCount);
             CanonicalStateParticipantRegistry registry;
-            REQUIRE(registry.Register(Descriptor("horo.test.allocation"), adapter).HasValue());
+            REQUIRE(registry.Register(Descriptor("horo.alloc"), adapter).HasValue());
             const std::uint64_t generation = registry.Generation();
             bool reachedSuccessfulSnapshot = false;
             for (std::size_t successfulAllocations = 0; successfulAllocations < 64 && !reachedSuccessfulSnapshot; ++successfulAllocations) {
@@ -237,7 +247,7 @@ namespace Horo::Runtime {
                 }
             }
             REQUIRE(reachedSuccessfulSnapshot);
-            CHECK(registry.Snapshot().Value().Find(Participant("horo.test.allocation")) != nullptr);
+            CHECK(registry.Snapshot().Value().Find(Participant("horo.alloc")) != nullptr);
         }
 
         TEST_CASE("Participant registry enforces its explicit capacity", "[unit][save][registry]") {

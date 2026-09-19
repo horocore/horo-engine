@@ -137,15 +137,22 @@ namespace Horo::Runtime {
 
     /** @brief One immutable descriptor and its owned adapter lease. */
     class SaveParticipantBinding final {
+        struct RegistryConstructionToken final {
+            RegistryConstructionToken() = default;
+            friend class CanonicalStateParticipantRegistry;
+        };
+
     public:
         /** @brief Returns inert participant metadata. @return Borrowed descriptor owned by this binding. */
         [[nodiscard]] const CanonicalStateParticipantDescriptor &Descriptor() const noexcept;
         /** @brief Returns the pinned adapter lease. @return Shared immutable adapter ownership. */
         [[nodiscard]] const std::shared_ptr<const ICanonicalStateAdapter> &Adapter() const noexcept;
 
+        SaveParticipantBinding(RegistryConstructionToken, CanonicalStateParticipantDescriptor descriptor,
+                               std::shared_ptr<const ICanonicalStateAdapter> adapter);
+
     private:
         friend class CanonicalStateParticipantRegistry;
-        SaveParticipantBinding(CanonicalStateParticipantDescriptor descriptor, std::shared_ptr<const ICanonicalStateAdapter> adapter);
 
         CanonicalStateParticipantDescriptor descriptor_;
         std::shared_ptr<const ICanonicalStateAdapter> adapter_;

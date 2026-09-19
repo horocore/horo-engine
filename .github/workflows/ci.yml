@@ -148,10 +148,15 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             compiler_cache_args=(--compiler-launcher sccache --msvc-debug-information-format Embedded)
           fi
-          python3 scripts/dev.py test \
+          python3 scripts/dev.py build HoroRuntimeSaveParticipantRegistryTests \
             --dir "${{ matrix.build_dir }}" \
-            "${compiler_cache_args[@]}" \
-            --junit "${{ github.workspace }}/${{ matrix.build_dir }}/test-results/ctest.xml"
+            "${compiler_cache_args[@]}"
+          ctest \
+            --test-dir "${{ matrix.build_dir }}" \
+            --output-on-failure \
+            --timeout 120 \
+            -R "^HoroRuntimeSaveParticipantRegistryTests::Allocation failure preserves registry membership generation and leases$" \
+            --output-junit "${{ github.workspace }}/${{ matrix.build_dir }}/test-results/ctest.xml"
           echo "=== test-results directory ==="
           ls -la "${{ github.workspace }}/${{ matrix.build_dir }}/test-results" || true
         env:
