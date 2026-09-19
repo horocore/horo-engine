@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -122,6 +123,15 @@ namespace {
         REQUIRE(handle.Wait().HasValue());
         return handle.TakeResult();
     }
+
+    void RequirePreviewError(std::shared_ptr<const IAssetPreviewProvider> provider, const std::string_view expectedCode) {
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 2}};
+        AssetPreviewService service{jobs};
+        TemporaryAsset asset{{1, 2, 3, 4}};
+        const auto result = RunPreview(service, MakeRequest(asset.Path(), std::move(provider)));
+        REQUIRE(result.HasError());
+        REQUIRE(result.ErrorValue().code.Value() == expectedCode);
+    }
 }  // namespace
 
 TEST_CASE("Asset preview service reuses a content-addressed provider result", "[unit][assets][preview]") {
@@ -180,23 +190,11 @@ TEST_CASE("Asset preview service rejects oversized input before provider executi
 }
 
 TEST_CASE("Asset preview service rejects malformed provider output", "[unit][assets][preview]") {
-    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 2}};
-    AssetPreviewService service{jobs};
-    TemporaryAsset asset{{1, 2, 3, 4}};
-
-    auto result = RunPreview(service, MakeRequest(asset.Path(), std::make_shared<InvalidPreviewProvider>()));
-    REQUIRE(result.HasError());
-    REQUIRE(result.ErrorValue().code.Value() == "asset.preview.output_invalid");
+    RequirePreviewError(std::make_shared<InvalidPreviewProvider>(), "asset.preview.output_invalid");
 }
 
 TEST_CASE("Asset preview service contains provider exceptions", "[unit][assets][preview]") {
-    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 2}};
-    AssetPreviewService service{jobs};
-    TemporaryAsset asset{{1, 2, 3, 4}};
-
-    auto result = RunPreview(service, MakeRequest(asset.Path(), std::make_shared<ThrowingPreviewProvider>()));
-    REQUIRE(result.HasError());
-    REQUIRE(result.ErrorValue().code.Value() == "asset.preview.provider_failed");
+    RequirePreviewError(std::make_shared<ThrowingPreviewProvider>(), "asset.preview.provider_failed");
 }
 
 TEST_CASE("Asset preview service enforces request and queue bounds", "[unit][assets][preview]") {

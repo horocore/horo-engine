@@ -1,9 +1,9 @@
 #include "Horo/Assets/AssetPreviewService.h"
 
 #include "../AssetErrors.h"
-#include "../runtime_provider/AssetProviderRead.h"
 #include "Horo/Foundation/Sha256.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <fstream>
@@ -17,6 +17,7 @@
 namespace Horo::Assets {
     namespace {
         constexpr std::size_t kMaximumIdentityBytes = 256;
+        constexpr std::size_t kReadChunkBytes = 64U * 1024U;
 
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
             return Result<T>::Failure(MakeError(descriptor, std::move(message)));
@@ -50,8 +51,18 @@ namespace Horo::Assets {
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return Failure<std::vector<std::uint8_t>>(AssetErrors::PreviewReadFailed);
-            return Internal::ReadExactBytes(input, std::move(payloadSize).Value(), cancellation, AssetErrors::PreviewCancelled,
-                                            AssetErrors::PreviewReadFailed);
+            std::vector<std::uint8_t> bytes(std::move(payloadSize).Value());
+            for (std::size_t remaining = bytes.size(); remaining != 0;) {
+                if (cancellation.IsCancellationRequested())
+                    return Failure<std::vector<std::uint8_t>>(AssetErrors::PreviewCancelled);
+                const std::size_t offset = bytes.size() - remaining;
+                const std::size_t requestedBytes = std::min(kReadChunkBytes, remaining);
+                input.read(reinterpret_cast<char *>(bytes.data() + offset), static_cast<std::streamsize>(requestedBytes));
+                if (input.gcount() != static_cast<std::streamsize>(requestedBytes))
+                    return Failure<std::vector<std::uint8_t>>(AssetErrors::PreviewReadFailed);
+                remaining -= requestedBytes;
+            }
+            return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
         }
 
         void AppendField(std::vector<std::byte> &bytes, const std::string_view value) {
@@ -339,13 +350,14 @@ namespace Horo::Assets {
             state_->accepting = false;
             requests = state_->requests;
         }
-        for (const auto &request : requests) {
+        std::ranges::for_each(requests, [](const auto &request) {
             AssetPreviewHandle handle{request};
             static_cast<void>(handle.RequestCancel());
-        }
-        for (const auto &request : requests)
+        });
+        std::ranges::for_each(requests, [](const auto &request) {
             if (request->job)
                 static_cast<void>(request->job->Wait());
+        });
         state_->control->jobs.store(nullptr);
         std::scoped_lock lock{state_->mutex};
         state_->requests.clear();
