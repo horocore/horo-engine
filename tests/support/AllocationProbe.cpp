@@ -150,6 +150,14 @@ void operator delete[](void *memory, const std::nothrow_t &) noexcept {
     AllocationMeter::Release(memory);
 }
 
+void operator delete(void *memory, std::size_t, const std::nothrow_t &) noexcept {
+    AllocationMeter::Release(memory);
+}
+
+void operator delete[](void *memory, std::size_t, const std::nothrow_t &) noexcept {
+    AllocationMeter::Release(memory);
+}
+
 void operator delete(void *memory, const std::align_val_t) noexcept {
     AllocationMeter::ReleaseAligned(memory);
 }
@@ -171,6 +179,14 @@ void operator delete(void *memory, const std::align_val_t, const std::nothrow_t 
 }
 
 void operator delete[](void *memory, const std::align_val_t, const std::nothrow_t &) noexcept {
+    AllocationMeter::ReleaseAligned(memory);
+}
+
+void operator delete(void *memory, std::size_t, const std::align_val_t, const std::nothrow_t &) noexcept {
+    AllocationMeter::ReleaseAligned(memory);
+}
+
+void operator delete[](void *memory, std::size_t, const std::align_val_t, const std::nothrow_t &) noexcept {
     AllocationMeter::ReleaseAligned(memory);
 }
 
