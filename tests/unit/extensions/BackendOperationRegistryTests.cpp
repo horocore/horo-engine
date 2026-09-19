@@ -239,7 +239,7 @@ namespace Horo::Extensions::Tests {
         CHECK(parentController.Handle().Snapshot()->cancellationReason == BackendOperationCancellationReason::Parent);
     }
 
-    TEST_CASE("Backend operation cancellation source is stable when teardown races a request", "[Extensions][BackendOperations]") {
+    TEST_CASE("Backend operation explicit cancellation sources survive teardown", "[Extensions][BackendOperations]") {
         {
             BackendOperationRegistry registry;
             auto registrationResult = registry.Register(Provider());
@@ -256,7 +256,9 @@ namespace Horo::Extensions::Tests {
             CHECK(snapshot->state == BackendOperationState::Cancelled);
             CHECK(snapshot->cancellationReason == BackendOperationCancellationReason::Caller);
         }
+    }
 
+    TEST_CASE("Backend operation teardown publishes its cancellation source", "[Extensions][BackendOperations]") {
         {
             BackendOperationRegistry registry;
             auto registrationResult = registry.Register(Provider());
