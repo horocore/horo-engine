@@ -106,6 +106,12 @@ own those delivery decisions:
   comprising an `AssetId` and explicit root transform/property overrides.
 - **Authoring Expansion**: The editor expands prefab instances during scene loading and viewport
   rendering. Scene cook flattens all static prefab instances into `RuntimeSceneDefinition`.
+  Expansion is a pure bounded transformation over one immutable scene-document and resolver
+  snapshot. Every required placement must resolve before the runtime candidate is published;
+  missing, corrupt, cyclic, conflicting, stale or over-budget content rejects the complete
+  candidate and retains the previous runtime definition. The authored `ScenePrefabInstance`
+  remains the repair authority, while the editor may retain a separate broken-instance
+  projection carrying its stable instance and source identities plus the typed failure chain.
 - **Cycle Detection**: Static validation traps recursive inclusion chains (`A -> B -> A`) before
   expansion or serialization.
 - **Component Preservation**: Unknown/plugin-owned component payloads are retained opaquely
@@ -345,6 +351,13 @@ override-path, conflict-or-orphan and binding-use maxima. An operation-local `Pr
 charges work before performing it. Invalid policy returns `LimitProfileInvalid`; exhausting
 an already valid captured budget returns `WorkBudgetExceeded` without consuming the failed
 charge or publishing a partial candidate.
+
+Required prefab expansion is transactional at the scene boundary. A failure in one placement
+does not skip that placement, publish the successfully expanded placements, or replace a prior
+runtime definition with a partial hierarchy. The failure retains the stable scene-local instance
+identity and the complete source-asset chain used by the resolver. Broken editor projections are
+repairable authoring views only; they are never runtime definitions and contain no mutable Prefab
+state or source paths.
 
 Limits apply to the fully expanded hierarchy as well as individual inputs: root depth is 1,
 object count includes all nested expansions, and component count includes built-in, opaque,

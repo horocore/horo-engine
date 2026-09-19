@@ -429,7 +429,20 @@ string property bags for built-in component behavior.
 
 Prefab references placed in the authoring document are expanded before the
 runtime scene is built. Runtime modules see only the expanded objects, never raw
-prefab paths. See [Prefab Architecture](./prefab-architecture.md).
+prefab paths or mutable Prefab state. Conversion is a pure bounded transformation
+over immutable scene-document and resolver snapshots. It stages every authored and
+expanded entity in one detached builder and publishes only after all required
+placements resolve; missing, corrupt, cyclic, conflicting, stale or over-budget
+content rejects the complete candidate and leaves the active definition unchanged.
+The editor may retain a repairable broken-instance projection keyed by the authored
+`ScenePrefabInstance`, but that projection is not runtime-valid. See [Prefab
+Architecture](./prefab-architecture.md).
+
+The current backend-neutral `RuntimeSceneDefinition` accepts the typed runtime component
+set and behavior data only. Expansion still preserves opaque prefab payloads in the
+authoring candidate, but conversion rejects a required instance containing a payload with
+no registered runtime projection; it must remain repairable in the editor rather than be
+silently dropped from the runtime definition.
 
 [ADR-096](../../adr/096-prefab-external-reference-and-binding-slot-contract.md)
 requires prefab-local references to resolve inside the complete expanded candidate
