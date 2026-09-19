@@ -1,8 +1,8 @@
 #include "ExternalAssetImporter.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
-#include <cstring>
 
 namespace Horo::Extensions::Tests {
     namespace {
@@ -48,7 +48,7 @@ namespace Horo::Extensions::Tests {
             if (response->editorPayload.resize(response->editorPayload.context, 3, &payload) != HORO_EXTENSION_SUCCESS)
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             const std::array<std::uint8_t, 3> expected{9U, 8U, 7U};
-            std::memcpy(payload, expected.data(), expected.size());
+            std::copy(expected.begin(), expected.end(), payload);
             if (response->dependencies.append(response->dependencies.context, {kDependency, sizeof(kDependency) - 1}) !=
                 HORO_EXTENSION_SUCCESS)
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
@@ -66,6 +66,22 @@ namespace Horo::Extensions::Tests {
 
         void DestroyCompleteImporter(void *context) {  // NOSONAR(cpp:S5008) The extension ABI requires an opaque importer context.
             ++static_cast<ImportInvocationState *>(context)->destroyed;
+        }
+
+        void CheckCompleteImport(const Assets::PreparedAssetImport &imported, const ImportInvocationState &invocation,
+                                 const ProgressCapture &progress) {
+            CHECK(invocation.invoked);
+            CHECK(imported.type.Value() == "example.raw");
+            CHECK(imported.editorPayload == std::vector<std::uint8_t>{9U, 8U, 7U});
+            REQUIRE(imported.dependencies.size() == 1);
+            CHECK(imported.dependencies.front().ToString() == "12345678-1234-4234-8234-123456789abc");
+            REQUIRE(imported.diagnostics.size() == 1);
+            CHECK(imported.diagnostics.front().severity == Assets::ImportDiagnostic::Severity::Warning);
+            CHECK(imported.diagnostics.front().code == "asset.import.note");
+            CHECK(imported.diagnostics.front().line == 12);
+            CHECK(progress.completed == 3);
+            CHECK(progress.total == 4);
+            CHECK(progress.message == "decode");
         }
     }  // namespace
 
@@ -214,18 +230,7 @@ namespace Horo::Extensions::Tests {
             },
             cancellation.Token());
         REQUIRE(imported.HasValue());
-        CHECK(invocation.invoked);
-        CHECK(imported.Value().type.Value() == "example.raw");
-        CHECK(imported.Value().editorPayload == std::vector<std::uint8_t>{9U, 8U, 7U});
-        REQUIRE(imported.Value().dependencies.size() == 1);
-        CHECK(imported.Value().dependencies.front().ToString() == "12345678-1234-4234-8234-123456789abc");
-        REQUIRE(imported.Value().diagnostics.size() == 1);
-        CHECK(imported.Value().diagnostics.front().severity == Assets::ImportDiagnostic::Severity::Warning);
-        CHECK(imported.Value().diagnostics.front().code == "asset.import.note");
-        CHECK(imported.Value().diagnostics.front().line == 12);
-        CHECK(progress.completed == 3);
-        CHECK(progress.total == 4);
-        CHECK(progress.message == "decode");
+        CheckCompleteImport(imported.Value(), invocation, progress);
 
         invocation.cancelDuringCall = true;
         invocation.invoked = false;
