@@ -4,6 +4,7 @@
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
 
 #include <algorithm>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstring>
@@ -104,6 +105,29 @@ namespace {
         NativeDurableFileSystem native_;
     };
 
+    class PreviewTestImporter final : public Assets::IAssetImporter {
+    public:
+        [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &,
+                                                                 const CancellationToken &) const override {
+            return Result<Assets::PreparedAssetImport>::Success({});
+        }
+    };
+
+    class PreviewTestProvider final : public Assets::IAssetPreviewProvider {
+    public:
+        [[nodiscard]] Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
+                                                                        const CancellationToken &) const override {
+            ++calls;
+            return Result<Assets::AssetPreviewImage>::Success({
+                .width = input.width,
+                .height = input.height,
+                .pixels = std::vector<std::uint8_t>(static_cast<std::size_t>(input.width) * input.height * 4U, 0x80),
+            });
+        }
+
+        mutable std::atomic<std::uint32_t> calls{};
+    };
+
     class TestWorkspaceController final {
     public:
         explicit TestWorkspaceController(std::string projectRoot = "test-project", DiagnosticSourceNavigator diagnosticNavigator = {})
@@ -160,6 +184,77 @@ namespace {
             const CreateGameplayBehaviorRequest request{.destination = destination, .baseName = "PlayerBehavior", .kind = kind};
             REQUIRE((ValidateCreateGameplayBehaviorRequest(request).HasValue()));
         }
+    }
+
+    TEST_CASE("Content browser schedules preview providers and reuses cached images", "[unit][editor][assets][preview]") {
+        const std::filesystem::path projectRoot =
+            std::filesystem::temp_directory_path() /
+            ("horo-workspace-preview-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const std::filesystem::path assetRoot = projectRoot / "assets";
+        const std::filesystem::path assetPath = assetRoot / "sample.horoasset";
+        std::filesystem::create_directories(assetRoot);
+        {
+            std::ofstream payload(assetPath, std::ios::binary);
+            payload << "preview-payload";
+            std::ofstream metadata(assetPath.string() + ".meta", std::ios::binary);
+            metadata << R"({"sourceFile":"sample.preview","type":"core.mesh"})";
+        }
+
+        auto type = Assets::AssetTypeId::Parse("core.mesh");
+        REQUIRE(type.HasValue());
+        const auto previewProvider = std::make_shared<PreviewTestProvider>();
+        Assets::AssetImporterCatalog catalog;
+        REQUIRE(catalog
+                    .Register(Assets::AssetImporterContribution{
+                        .contributionId = "test.preview",
+                        .packageId = "test.package",
+                        .moduleId = "test.module",
+                        .moduleVersion = "1.0.0",
+                        .version = "1.0.0",
+                        .fileExtensions = {"preview"},
+                        .assetTypes = {std::move(type).Value()},
+                        .strategy = std::make_shared<PreviewTestImporter>(),
+                        .previewProvider = previewProvider,
+                        .previewFallback = Assets::AssetPreviewFallback::Mesh,
+                    })
+                    .HasValue());
+        auto published = catalog.Publish();
+        REQUIRE(published.HasValue());
+
+        Runtime::RuntimeSceneService runtimeScene;
+        CancellationSource cancellation;
+        REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        EditorWorkspaceController controller{projectRoot,
+                                             runtimeScene,
+                                             {},
+                                             {
+                                                 .importerCatalog = published.Value().get(),
+                                                 .jobs = &jobs,
+                                             }};
+        for (std::size_t attempt = 0; attempt < 100'000 && (controller.ViewModel().contentBrowser.entries.empty() ||
+                                                            !controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+             ++attempt) {
+            controller.UpdateContentBrowser();
+            std::this_thread::yield();
+        }
+        REQUIRE(controller.ViewModel().contentBrowser.entries.size() == 1);
+        REQUIRE(controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+        REQUIRE(previewProvider->calls.load() == 1);
+
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::RefreshContentBrowser});
+        controller.UpdateContentBrowser();
+        controller.UpdateContentBrowser();
+        for (std::size_t attempt = 0; attempt < 100'000 && !controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid();
+             ++attempt) {
+            controller.UpdateContentBrowser();
+            std::this_thread::yield();
+        }
+        REQUIRE(controller.ViewModel().contentBrowser.entries.front().previewImage.IsValid());
+        REQUIRE(previewProvider->calls.load() == 1);
+
+        std::error_code cleanupError;
+        std::filesystem::remove_all(projectRoot, cleanupError);
     }
 
     TEST_CASE("Gameplay behavior creation requests reject invalid destinations and names", "[unit][editor][behavior]") {

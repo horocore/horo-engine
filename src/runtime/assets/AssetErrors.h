@@ -27,6 +27,16 @@ namespace Horo::Assets::AssetErrors {
     extern const ErrorCodeDescriptor LoadConsumed;
     extern const ErrorCodeDescriptor LoadQueueFull;
     extern const ErrorCodeDescriptor LoadShutdown;
+    extern const ErrorCodeDescriptor PreviewRequestInvalid;
+    extern const ErrorCodeDescriptor PreviewInputTooLarge;
+    extern const ErrorCodeDescriptor PreviewReadFailed;
+    extern const ErrorCodeDescriptor PreviewOutputInvalid;
+    extern const ErrorCodeDescriptor PreviewProviderFailed;
+    extern const ErrorCodeDescriptor PreviewCancelled;
+    extern const ErrorCodeDescriptor PreviewNotReady;
+    extern const ErrorCodeDescriptor PreviewConsumed;
+    extern const ErrorCodeDescriptor PreviewQueueFull;
+    extern const ErrorCodeDescriptor PreviewShutdown;
 }  // namespace Horo::Assets::AssetErrors
 
 namespace Horo::Assets::CookErrors {

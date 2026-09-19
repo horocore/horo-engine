@@ -374,7 +374,88 @@ namespace Horo::Editor {
             }
             return std::nullopt;
         }
+
+        [[nodiscard]] const Assets::AssetImporterContribution *ResolvePreviewContribution(
+            const ContentBrowserEntry &entry, const Assets::AssetImporterCatalogSnapshot &catalog) {
+            if (!entry.importerContributionId.empty()) {
+                if (const auto *contribution = catalog.FindById(entry.importerContributionId); contribution != nullptr)
+                    return contribution;
+            }
+            const auto assetType = Assets::AssetTypeId::Parse(entry.assetType);
+            return assetType.HasValue() ? catalog.FindPreviewContribution(assetType.Value()) : nullptr;
+        }
+
+        [[nodiscard]] std::optional<Assets::AssetPreviewRequest> BuildPreviewRequest(const ContentBrowserEntry &entry,
+                                                                                     const Assets::AssetImporterCatalogSnapshot &catalog) {
+            if (entry.kind != ContentBrowserEntryKind::Asset || entry.assetType.empty())
+                return std::nullopt;
+            const Assets::AssetImporterContribution *contribution = ResolvePreviewContribution(entry, catalog);
+            if (contribution == nullptr || contribution->previewProvider == nullptr)
+                return std::nullopt;
+            auto assetType = Assets::AssetTypeId::Parse(entry.assetType);
+            if (assetType.HasError())
+                return std::nullopt;
+            return Assets::AssetPreviewRequest{
+                .contributionId = contribution->contributionId,
+                .moduleId = contribution->moduleId,
+                .moduleVersion = contribution->moduleVersion,
+                .providerVersion = contribution->version,
+                .absoluteAssetPath = entry.absolutePath,
+                .assetType = std::move(assetType).Value(),
+                .width = 128,
+                .height = 128,
+                .provider = contribution->previewProvider,
+            };
+        }
     }  // namespace
+
+    void EditorWorkspaceController::RebuildContentBrowserProjection(const std::filesystem::path &projectRoot,
+                                                                    const std::filesystem::path &requestedDirectory) {
+        m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, m_importerCatalog);
+        ScheduleContentBrowserPreviews();
+    }
+
+    void EditorWorkspaceController::ScheduleContentBrowserPreviews() {
+        for (PendingContentBrowserPreview &pending : m_pendingContentBrowserPreviews)
+            static_cast<void>(pending.handle.RequestCancel());
+        m_pendingContentBrowserPreviews.clear();
+        if (m_assetPreviews == nullptr || m_importerCatalog == nullptr)
+            return;
+
+        for (const ContentBrowserEntry &entry : m_viewModel.contentBrowser.entries) {
+            auto request = BuildPreviewRequest(entry, *m_importerCatalog);
+            if (!request)
+                continue;
+            const std::string contributionId = request->contributionId;
+            const std::string providerVersion = request->providerVersion;
+            auto submitted = m_assetPreviews->Submit(std::move(*request));
+            if (submitted.HasError())
+                continue;
+            m_pendingContentBrowserPreviews.push_back(PendingContentBrowserPreview{
+                .absolutePath = entry.absolutePath,
+                .contributionId = contributionId,
+                .providerVersion = providerVersion,
+                .handle = std::move(submitted).Value(),
+            });
+        }
+    }
+
+    void EditorWorkspaceController::PollContentBrowserPreviews() {
+        std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
+            const Assets::AssetPreviewState state = pending.handle.State();
+            if (state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
+                return false;
+            auto completed = pending.handle.TakeResult();
+            if (completed.HasValue()) {
+                const auto entry =
+                    std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
+                if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&
+                    entry->activeImporterVersion == pending.providerVersion)
+                    entry->previewImage = std::move(completed).Value().image;
+            }
+            return true;
+        });
+    }
 
     void EditorWorkspaceController::RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry) {
         if (assetRegistry.Revision() == m_viewModel.assetRegistryRevision)
@@ -383,12 +464,12 @@ namespace Horo::Editor {
         m_viewModel.assetRegistryRevision = assetRegistry.Revision();
         m_contentBrowserRefreshPending = false;
         m_contentBrowserLoadingPresented = false;
-        m_viewModel.contentBrowser = BuildContentBrowserDirectory(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath,
-                                                                  m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         ReconcileContentBrowserNavigation();
     }
 
     void EditorWorkspaceController::UpdateContentBrowser() {
+        PollContentBrowserPreviews();
         if (!m_contentBrowserRefreshPending)
             return;
         if (!m_contentBrowserLoadingPresented) {
@@ -409,17 +490,14 @@ namespace Horo::Editor {
                     Assets::RebuildAssetRegistry(*m_mutableAssetRegistry, m_viewModel.projectRoot, Assets::AssetRegistryOpenMode::Edit);
                 rebuilt.HasError() || rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Failed) {
                 m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.registry_failed";
-                m_viewModel.contentBrowser =
-                    BuildContentBrowserDirectory(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath, m_assetRegistry,
-                                                 m_importerCatalog);
+                RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
                 ReconcileContentBrowserNavigation();
                 return;
             }
             m_assetRegistry = m_mutableAssetRegistry->Snapshot();
             m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
         }
-        m_viewModel.contentBrowser = BuildContentBrowserDirectory(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath,
-                                                                  m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         ReconcileContentBrowserNavigation();
     }
 
@@ -467,7 +545,7 @@ namespace Horo::Editor {
             m_contentBrowserBackHistory.push_back(current);
             m_contentBrowserForwardHistory.clear();
         }
-        m_viewModel.contentBrowser = BuildContentBrowserDirectory(m_viewModel.projectRoot, destination, m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(m_viewModel.projectRoot, destination);
         m_viewModel.contentBrowserOperationError.clear();
         m_viewModel.contentBrowserCanNavigateBack = !m_contentBrowserBackHistory.empty();
         m_viewModel.contentBrowserCanNavigateForward = !m_contentBrowserForwardHistory.empty();
@@ -986,8 +1064,7 @@ namespace Horo::Editor {
         }
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        m_viewModel.contentBrowser =
-            BuildContentBrowserDirectory(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath, m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         return true;
     }
 
@@ -1101,8 +1178,7 @@ namespace Horo::Editor {
         }
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        m_viewModel.contentBrowser =
-            BuildContentBrowserDirectory(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath, m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         return true;
     }
 
@@ -1157,9 +1233,7 @@ namespace Horo::Editor {
             }
             m_assetRegistry = m_mutableAssetRegistry->Snapshot();
             m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-            m_viewModel.contentBrowser =
-                BuildContentBrowserDirectory(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath, m_assetRegistry,
-                                             m_importerCatalog);
+            RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         }
     }
 
@@ -1310,8 +1384,7 @@ namespace Horo::Editor {
         }
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        m_viewModel.contentBrowser =
-            BuildContentBrowserDirectory(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath, m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         return true;
     }
 
@@ -1472,8 +1545,7 @@ namespace Horo::Editor {
         LOG_INFO("editor.content_browser", "Moved asset entry to recoverable project trash: %s", trashDirectory.string().c_str());
         m_assetRegistry = rebuiltSnapshot;
         m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
-        m_viewModel.contentBrowser = BuildContentBrowserDirectory(plan.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath,
-                                                                  m_assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(plan.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         return true;
     }
 }  // namespace Horo::Editor
