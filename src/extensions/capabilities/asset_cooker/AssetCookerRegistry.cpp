@@ -153,14 +153,22 @@ namespace Horo::Extensions {
 
     /** @copydoc AssetCookerOutputSink::AddDependency */
     Result<void> AssetCookerOutputSink::AddDependency(const Assets::AssetId dependency) {
-        if (!dependency.IsValid() || dependencies_.size() >= limits_.maximumDependencies ||
-            std::ranges::find(dependencies_, dependency) != dependencies_.end()) {
+        if (!dependency.IsValid() || dependencies_.size() >= limits_.maximumDependencies) {
             rejected_ = true;
             return Result<void>::Failure(MakeError(ExtensionErrors::AssetCookerOutputInvalid));
         }
+        bool recorded = false;
         try {
+            if (const auto [entry, inserted] = dependenciesSeen_.insert(dependency); !inserted) {
+                static_cast<void>(entry);
+                rejected_ = true;
+                return Result<void>::Failure(MakeError(ExtensionErrors::AssetCookerOutputInvalid));
+            }
+            recorded = true;
             dependencies_.push_back(dependency);
         } catch (...) {  // NOSONAR(cpp:S1181) Provider-facing allocation boundary.
+            if (recorded)
+                dependenciesSeen_.erase(dependency);
             rejected_ = true;
             return Result<void>::Failure(MakeError(ExtensionErrors::AssetCookerOutputInvalid));
         }
@@ -220,8 +228,7 @@ namespace Horo::Extensions {
     void AssetCookerRegistration::Reset() {
         if (provider_ == nullptr)
             return;
-        const auto registry = registry_.lock();
-        if (registry != nullptr) {
+        if (const auto registry = registry_.lock(); registry != nullptr) {
             std::scoped_lock lock{registry->mutex};
             provider_->registered.store(false, std::memory_order_release);
             std::erase_if(registry->providers, [retired = provider_](const auto &candidate) {

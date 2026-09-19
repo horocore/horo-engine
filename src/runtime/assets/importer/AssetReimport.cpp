@@ -5,6 +5,7 @@
 #include "Horo/Assets/AssetReimport.h"
 
 #include "../AssetErrors.h"
+#include "AssetImportFileFacts.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 
@@ -15,16 +16,6 @@
 namespace Horo::Assets {
     namespace {
         std::atomic_uint64_t g_reimportTemporarySequence{0};  // NOSONAR(cpp:S5421)
-
-        [[nodiscard]] std::filesystem::path NormalizeAbsolute(const std::filesystem::path &path) {
-            std::error_code error;
-            std::filesystem::path absolute = std::filesystem::absolute(path, error);
-            if (error)
-                return {};
-            absolute = absolute.lexically_normal();
-            const std::filesystem::path canonical = std::filesystem::weakly_canonical(absolute, error);
-            return error ? absolute : canonical;
-        }
 
         [[nodiscard]] bool HasPathPrefix(const std::filesystem::path &root, const std::filesystem::path &candidate) {
             return Horo::Foundation::Paths::HasPathPrefix(root, candidate);
@@ -61,12 +52,6 @@ namespace Horo::Assets {
             if (auto restored = files.AtomicReplace(payloadBackup, payload); restored.HasError())
                 return restored;
             return files.AtomicReplace(metadataBackup, metadata);
-        }
-
-        [[nodiscard]] std::int64_t SourceLastWriteTime(const std::filesystem::path &path) {
-            std::error_code error;
-            const auto value = std::filesystem::last_write_time(path, error);
-            return error ? 0 : static_cast<std::int64_t>(value.time_since_epoch().count());
         }
 
         [[nodiscard]] std::vector<AssetImportReason> ComputeReimportReasons(const AssetImportMetadata &metadata,
@@ -145,9 +130,9 @@ namespace Horo::Assets {
         if (request.importerCatalog == nullptr || request.registry == nullptr || request.files == nullptr)
             return Result<AssetReimportReport>::Failure(MakeError(AssetErrors::IndexIo, "Reimport services are unavailable."));
 
-        const std::filesystem::path projectRoot = NormalizeAbsolute(request.absoluteProjectRoot);
-        const std::filesystem::path assetRoot = NormalizeAbsolute(projectRoot / "assets");
-        const std::filesystem::path assetPath = NormalizeAbsolute(request.absoluteAssetPath);
+        const std::filesystem::path projectRoot = Detail::NormalizeAssetImportPath(request.absoluteProjectRoot);
+        const std::filesystem::path assetRoot = Detail::NormalizeAssetImportPath(projectRoot / "assets");
+        const std::filesystem::path assetPath = Detail::NormalizeAssetImportPath(request.absoluteAssetPath);
         if (projectRoot.empty() || assetRoot.empty() || assetPath.empty() || !request.absoluteAssetPath.is_absolute() ||
             !HasPathPrefix(assetRoot, assetPath)) {
             return Result<AssetReimportReport>::Failure(
@@ -206,7 +191,7 @@ namespace Horo::Assets {
         metadata.importerModuleVersion = contribution->moduleVersion;
         metadata.sourceHash = sourceHash;
         metadata.sourceByteSize = source.size();
-        metadata.sourceLastWriteTime = SourceLastWriteTime(metadata.absoluteSourcePath);
+        metadata.sourceLastWriteTime = Detail::AssetImportSourceLastWriteTime(metadata.absoluteSourcePath);
         metadata.dependencies = prepared.dependencies;
         metadata.lastImportReasons = reasons;
         metadata.importedAtUtc = CurrentImportTimestampUtc();

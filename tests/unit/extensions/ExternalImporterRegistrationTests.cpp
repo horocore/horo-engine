@@ -13,6 +13,8 @@ namespace Horo::Extensions::Tests {
             bool invoked{};
             bool cancelDuringCall{};
             bool rejectOutput{};
+            bool inputMatched{};
+            bool throwOnDestroy{};
         };
 
         struct ProgressCapture final {
@@ -29,11 +31,32 @@ namespace Horo::Extensions::Tests {
             capture.message.assign(message);
         }
 
+        void ThrowProgress(void *, std::uint64_t, std::uint64_t, std::string_view) {  // NOSONAR(cpp:S5008) Test ABI callback.
+            throw std::runtime_error{"progress projection failed"};
+        }
+
+        [[nodiscard]] bool MatchesCompleteSettings(const HoroAssetImportRequest &request) {
+            return request.settingCount == 3 && request.settings != nullptr &&
+                   request.settings[0].kind == HORO_ASSET_IMPORT_SETTING_BOOLEAN && request.settings[0].booleanValue != 0 &&
+                   request.settings[1].kind == HORO_ASSET_IMPORT_SETTING_INTEGER && request.settings[1].integerValue == 7 &&
+                   request.settings[2].kind == HORO_ASSET_IMPORT_SETTING_TEXT &&
+                   std::string_view{request.settings[2].textValue.data, request.settings[2].textValue.length} == "tag";
+        }
+
+        [[nodiscard]] bool MatchesCompleteRequest(const HoroAssetImportRequest &request) {
+            const std::array<std::uint8_t, 2> expectedSource{1U, 2U};
+            return request.structSize >= sizeof(HoroAssetImportRequest) && request.sourceByteCount == expectedSource.size() &&
+                   std::equal(expectedSource.begin(), expectedSource.end(), request.sourceBytes) && request.sourceExtension.length == 3 &&
+                   std::string_view{request.sourceExtension.data, request.sourceExtension.length} == "raw" &&
+                   MatchesCompleteSettings(request);
+        }
+
         HoroExtensionStatus InvokeCompleteImporter(
             void *context,  // NOSONAR(cpp:S5008) The extension ABI requires an opaque importer context.
             const HoroAssetImportRequest *request, HoroAssetImportResponse *response) {
             auto &state = *static_cast<ImportInvocationState *>(context);
             state.invoked = true;
+            state.inputMatched = request != nullptr && MatchesCompleteRequest(*request);
             if (state.cancelDuringCall) {
                 state.cancellation->RequestCancellation();
                 return request->cancellation.isCancellationRequested(request->cancellation.context) != 0 ? HORO_EXTENSION_ERROR_CANCELLED
@@ -56,6 +79,9 @@ namespace Horo::Extensions::Tests {
             if (response->dependencies.append(response->dependencies.context, {kDependency, sizeof(kDependency) - 1}) !=
                 HORO_EXTENSION_SUCCESS)
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            if (response->dependencies.append(response->dependencies.context, {kDependency, sizeof(kDependency) - 1}) !=
+                HORO_EXTENSION_SUCCESS)
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             if (const HoroAssetImportDiagnostic diagnostic{
                     .severity = HORO_ASSET_IMPORT_DIAGNOSTIC_WARNING,
                     .code = {kCode, sizeof(kCode) - 1},
@@ -69,12 +95,16 @@ namespace Horo::Extensions::Tests {
         }
 
         void DestroyCompleteImporter(void *context) {  // NOSONAR(cpp:S5008) The extension ABI requires an opaque importer context.
-            ++static_cast<ImportInvocationState *>(context)->destroyed;
+            auto &state = *static_cast<ImportInvocationState *>(context);
+            ++state.destroyed;
+            if (state.throwOnDestroy)
+                throw std::runtime_error{"destroy failed"};
         }
 
         void CheckCompleteImport(const Assets::PreparedAssetImport &imported, const ImportInvocationState &invocation,
                                  const ProgressCapture &progress) {
             CHECK(invocation.invoked);
+            CHECK(invocation.inputMatched);
             CHECK(imported.type.Value() == "example.raw");
             CHECK(imported.editorPayload == std::vector<std::uint8_t>{9U, 8U, 7U});
             REQUIRE(imported.dependencies.size() == 1);
@@ -111,6 +141,67 @@ namespace Horo::Extensions::Tests {
             session.contributions.clear();
             CHECK(invocation.destroyed == 1);
         }
+
+        void CheckPreEntryCancellation(const Assets::IAssetImporter &importer, ImportInvocationState &invocation,
+                                       const std::span<const std::uint8_t> source) {
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            invocation.invoked = false;
+            const auto result =
+                importer.Import(Assets::AssetImportInput{.sourceBytes = source, .sourceExtension = "raw"}, cancelled.Token());
+            CHECK(result.HasError());
+            CHECK_FALSE(invocation.invoked);
+        }
+
+        void CheckProgressExceptionContainment(const Assets::IAssetImporter &importer, const std::span<const std::uint8_t> source) {
+            const CancellationToken cancellation;
+            const auto result = importer.Import(
+                Assets::AssetImportInput{
+                    .sourceBytes = source,
+                    .sourceExtension = "raw",
+                    .settings = {true, std::int64_t{7}, std::string{"tag"}},
+                    .progress = {.context = nullptr, .report = ThrowProgress},
+                },
+                cancellation);
+            CHECK(result.HasError());
+        }
+
+        [[nodiscard]] HoroAssetImporterDescriptor CompleteDescriptor(ImportInvocationState &invocation,
+                                                                     const HoroExtensionStringView &extension,
+                                                                     const HoroExtensionStringView &assetType) {
+            return HoroAssetImporterDescriptor{
+                .structSize = sizeof(HoroAssetImporterDescriptor),
+                .abiVersion = HORO_ASSET_IMPORTER_ABI_VERSION,
+                .contributionId = {"com.example.complete", 20},
+                .contributionVersion = {"1.0.0", 5},
+                .fileExtensions = &extension,
+                .fileExtensionCount = 1,
+                .assetTypes = &assetType,
+                .assetTypeCount = 1,
+                .targetExtension = {".horoasset", 10},
+                .importerContext = &invocation,
+                .importAsset = InvokeCompleteImporter,
+                .destroyImporter = DestroyCompleteImporter,
+            };
+        }
+
+        struct CompleteImporterFixture final {
+            CompleteImporterFixture()
+                : invocation{.cancellation = &cancellation}, session{.manifest = &manifest, .extensionModule = &owner},
+                  descriptor{CompleteDescriptor(invocation, extension, assetType)} {
+                manifest.id = "com.example.package";
+                manifest.contributions.push_back({.type = "asset.importer", .id = "com.example.complete", .owningModule = owner.id});
+            }
+
+            ExtensionManifest manifest;
+            ExtensionModuleManifest owner{.id = "com.example.native", .version = "1.0.0"};
+            CancellationSource cancellation;
+            ImportInvocationState invocation;
+            HoroExtensionStringView extension{"raw", 3};
+            HoroExtensionStringView assetType{"example.raw", 11};
+            AssetImporterRegistrationSession session;
+            HoroAssetImporterDescriptor descriptor;
+        };
     }  // namespace
 
     struct RegistrationFixture {
@@ -221,45 +312,45 @@ namespace Horo::Extensions::Tests {
     }
 
     TEST_CASE("External importer projects bounded output progress diagnostics cancellation and teardown", "[Extensions][ABI][Assets]") {
-        ExtensionManifest manifest;
-        manifest.id = "com.example.package";
-        ExtensionModuleManifest owner{.id = "com.example.native", .version = "1.0.0"};
-        manifest.contributions.push_back({.type = "asset.importer", .id = "com.example.complete", .owningModule = owner.id});
-        CancellationSource cancellation;
-        ImportInvocationState invocation{.cancellation = &cancellation};
-        const HoroExtensionStringView extension{"raw", 3};
-        const HoroExtensionStringView assetType{"example.raw", 11};
-        AssetImporterRegistrationSession session{.manifest = &manifest, .extensionModule = &owner};
-        const HoroAssetImporterDescriptor descriptor{
-            .structSize = sizeof(HoroAssetImporterDescriptor),
-            .abiVersion = HORO_ASSET_IMPORTER_ABI_VERSION,
-            .contributionId = {"com.example.complete", 20},
-            .contributionVersion = {"1.0.0", 5},
-            .fileExtensions = &extension,
-            .fileExtensionCount = 1,
-            .assetTypes = &assetType,
-            .assetTypeCount = 1,
-            .targetExtension = {".horoasset", 10},
-            .importerContext = &invocation,
-            .importAsset = InvokeCompleteImporter,
-            .destroyImporter = DestroyCompleteImporter,
-        };
+        CompleteImporterFixture fixture;
 
-        REQUIRE(RegisterExternalAssetImporter(&session, &descriptor) == HORO_EXTENSION_SUCCESS);
-        REQUIRE(session.contributions.size() == 1);
+        REQUIRE(RegisterExternalAssetImporter(&fixture.session, &fixture.descriptor) == HORO_EXTENSION_SUCCESS);
+        REQUIRE(fixture.session.contributions.size() == 1);
         ProgressCapture progress;
         const std::array<std::uint8_t, 2> source{1U, 2U};
-        auto imported = session.contributions.front().strategy->Import(
+        auto imported = fixture.session.contributions.front().strategy->Import(
             Assets::AssetImportInput{
                 .sourceBytes = source,
                 .sourceExtension = "raw",
-                .settings = {},
+                .settings = {true, std::int64_t{7}, std::string{"tag"}},
                 .progress = {.context = &progress, .report = CaptureProgress},
             },
-            cancellation.Token());
+            fixture.cancellation.Token());
         REQUIRE(imported.HasValue());
-        CheckCompleteImport(imported.Value(), invocation, progress);
-        CheckStickyOutputRejection(*session.contributions.front().strategy, invocation);
-        CheckCancellationAndTeardown(session, invocation, cancellation, source);
+        CheckCompleteImport(imported.Value(), fixture.invocation, progress);
+        CheckPreEntryCancellation(*fixture.session.contributions.front().strategy, fixture.invocation, source);
+        CheckStickyOutputRejection(*fixture.session.contributions.front().strategy, fixture.invocation);
+        CheckProgressExceptionContainment(*fixture.session.contributions.front().strategy, source);
+        CheckCancellationAndTeardown(fixture.session, fixture.invocation, fixture.cancellation, source);
+    }
+
+    TEST_CASE("External importer lifetime follows catalog snapshots and contains destroy exceptions", "[Extensions][ABI][Assets]") {
+        CompleteImporterFixture fixture;
+        REQUIRE(RegisterExternalAssetImporter(&fixture.session, &fixture.descriptor) == HORO_EXTENSION_SUCCESS);
+
+        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> snapshot;
+        {
+            Assets::AssetImporterCatalog catalog;
+            REQUIRE(catalog.Register(std::move(fixture.session.contributions.front())).HasValue());
+            fixture.session.contributions.clear();
+            auto published = catalog.Publish();
+            REQUIRE(published.HasValue());
+            snapshot = std::move(published).Value();
+            CHECK(fixture.invocation.destroyed == 0);
+        }
+        CHECK(fixture.invocation.destroyed == 0);
+        fixture.invocation.throwOnDestroy = true;
+        snapshot.reset();
+        CHECK(fixture.invocation.destroyed == 1);
     }
 }  // namespace Horo::Extensions::Tests

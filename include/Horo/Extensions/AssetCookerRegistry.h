@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Horo::Extensions {
@@ -104,6 +105,7 @@ namespace Horo::Extensions {
         AssetCookerLimits limits_;
         std::vector<std::uint8_t> payload_;
         std::vector<Assets::AssetId> dependencies_;
+        std::unordered_set<Assets::AssetId, Assets::AssetIdHash> dependenciesSeen_;
         std::vector<AssetCookerDiagnostic> diagnostics_;
         bool payloadWritten_{};
         bool rejected_{};

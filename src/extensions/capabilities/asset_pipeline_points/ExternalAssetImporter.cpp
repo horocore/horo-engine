@@ -1,16 +1,17 @@
 #include "ExternalAssetImporter.h"
 
+#include "ExternalAssetImporterConversion.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Logging/Logger.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <limits>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace Horo::Extensions {
@@ -22,59 +23,13 @@ namespace Horo::Extensions {
         constexpr std::uint64_t kMaxPayloadBytes = 1024ULL * 1024ULL * 1024ULL;
         constexpr std::uint32_t kMaxPreviewDimension = 4096;
 
-        [[nodiscard]] bool CopyText(const HoroExtensionStringView view, std::string &output, const bool allowEmpty = false) {
-            if (view.length > kMaxTextBytes || (view.data == nullptr && view.length != 0) || (!allowEmpty && view.length == 0))
-                return false;
-            output.assign(view.data != nullptr ? view.data : "", view.length);
-            return true;
-        }
+        using Detail::ConvertExternalImportSetting;
+        using Detail::CopyExternalText;
 
         [[nodiscard]] bool IsLowerExtension(const std::string &value) {
             return !value.empty() && std::ranges::all_of(value, [](const unsigned char character) {
                 return std::isdigit(character) != 0 || std::islower(character) != 0 || character == '_' || character == '-';
             });
-        }
-
-        [[nodiscard]] bool ConvertValue(const HoroAssetImportSettingValue &source, Assets::ImportSettingValue &destination) {
-            using enum Assets::ImportSettingKind;
-            switch (source.kind) {
-                case HORO_ASSET_IMPORT_SETTING_BOOLEAN:
-                    destination = source.booleanValue != 0;
-                    return true;
-                case HORO_ASSET_IMPORT_SETTING_INTEGER:
-                    destination = source.integerValue;
-                    return true;
-                case HORO_ASSET_IMPORT_SETTING_FLOAT:
-                    destination = source.floatValue;
-                    return true;
-                case HORO_ASSET_IMPORT_SETTING_TEXT: {
-                    std::string value;
-                    if (!CopyText(source.textValue, value, true))
-                        return false;
-                    destination = std::move(value);
-                    return true;
-                }
-                case HORO_ASSET_IMPORT_SETTING_CHOICE:
-                    if (source.choiceIndex > std::numeric_limits<std::size_t>::max())
-                        return false;
-                    destination = static_cast<std::size_t>(source.choiceIndex);
-                    return true;
-                default:
-                    return false;
-            }
-        }
-
-        [[nodiscard]] bool ConvertKind(const HoroAssetImportSettingKind source, Assets::ImportSettingKind &destination) {
-            using enum Assets::ImportSettingKind;
-            constexpr std::array kinds{std::pair{HORO_ASSET_IMPORT_SETTING_BOOLEAN, Boolean},
-                                       std::pair{HORO_ASSET_IMPORT_SETTING_INTEGER, Integer},
-                                       std::pair{HORO_ASSET_IMPORT_SETTING_FLOAT, Float}, std::pair{HORO_ASSET_IMPORT_SETTING_TEXT, Text},
-                                       std::pair{HORO_ASSET_IMPORT_SETTING_CHOICE, Choice}};
-            const auto found = std::ranges::find(kinds, source, &decltype(kinds)::value_type::first);
-            if (found == kinds.end())
-                return false;
-            destination = found->second;
-            return true;
         }
 
         [[nodiscard]] HoroAssetImportSettingValue ToAbiValue(const Assets::ImportSettingValue &value) {
@@ -103,8 +58,26 @@ namespace Horo::Extensions {
         struct ExternalImportOutputState final {
             Assets::PreparedAssetImport *prepared{};
             const Assets::AssetImportProgressSink *progress{};
+            std::unordered_set<Assets::AssetId, Assets::AssetIdHash> dependencyIds;
             bool rejected{};
         };
+
+        void RejectOutput(ExternalImportOutputState *state) noexcept {
+            if (state != nullptr)
+                state->rejected = true;
+        }
+
+        [[nodiscard]] bool IsDiagnosticInputValid(const ExternalImportOutputState *state,
+                                                  const HoroAssetImportDiagnostic *diagnostic) noexcept {
+            return state != nullptr && state->prepared != nullptr && diagnostic != nullptr &&
+                   state->prepared->diagnostics.size() < kMaxImportDiagnostics;
+        }
+
+        [[nodiscard]] bool IsProgressInputValid(const ExternalImportOutputState *state, const std::uint64_t completedUnits,
+                                                const std::uint64_t totalUnits, const HoroExtensionStringView message) noexcept {
+            return state != nullptr && state->progress != nullptr && totalUnits != 0 && completedUnits <= totalUnits &&
+                   message.length <= kMaxTextBytes && (message.data != nullptr || message.length == 0);
+        }
 
         // The opaque pointer type is fixed by the versioned C ABI callback signature.
         [[nodiscard]] uint8_t IsCancelled(const void *context) {  // NOSONAR(cpp:S5008)
@@ -158,12 +131,13 @@ namespace Horo::Extensions {
             }
             try {
                 std::string value;
-                if (!CopyText(assetId, value))
+                if (!CopyExternalText(assetId, value))
                     throw std::invalid_argument{"invalid dependency"};
                 auto parsed = Assets::AssetId::Parse(value);
-                if (parsed.HasError() ||
-                    std::ranges::find(state->prepared->dependencies, parsed.Value()) != state->prepared->dependencies.end())
+                if (parsed.HasError())
                     throw std::invalid_argument{"invalid dependency"};
+                if (!state->dependencyIds.insert(parsed.Value()).second)
+                    return HORO_EXTENSION_SUCCESS;
                 state->prepared->dependencies.push_back(std::move(parsed).Value());
                 return HORO_EXTENSION_SUCCESS;
             } catch (...) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
@@ -193,23 +167,22 @@ namespace Horo::Extensions {
         [[nodiscard]] HoroExtensionStatus AppendImportDiagnostic(void *context,  // NOSONAR(cpp:S5008) C ABI callback
                                                                  const HoroAssetImportDiagnostic *diagnostic) {
             auto *state = static_cast<ExternalImportOutputState *>(context);
-            if (state == nullptr || state->prepared == nullptr || diagnostic == nullptr ||
-                state->prepared->diagnostics.size() >= kMaxImportDiagnostics) {
-                if (state != nullptr)
-                    state->rejected = true;
+            if (!IsDiagnosticInputValid(state, diagnostic)) {
+                RejectOutput(state);
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             }
             try {
                 Assets::ImportDiagnostic converted;
-                if (!ConvertDiagnosticSeverity(diagnostic->severity, converted.severity) || !CopyText(diagnostic->code, converted.code) ||
-                    !CopyText(diagnostic->message, converted.message) || (diagnostic->hasLine != 0 && diagnostic->line < 0))
+                if (!ConvertDiagnosticSeverity(diagnostic->severity, converted.severity) ||
+                    !CopyExternalText(diagnostic->code, converted.code) || !CopyExternalText(diagnostic->message, converted.message) ||
+                    (diagnostic->hasLine != 0 && diagnostic->line < 0))
                     throw std::invalid_argument{"invalid diagnostic"};
                 if (diagnostic->hasLine != 0)
                     converted.line = diagnostic->line;
                 state->prepared->diagnostics.push_back(std::move(converted));
                 return HORO_EXTENSION_SUCCESS;
             } catch (...) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
-                state->rejected = true;
+                RejectOutput(state);
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             }
         }
@@ -218,10 +191,8 @@ namespace Horo::Extensions {
                                                                const std::uint64_t totalUnits,                     // NOSONAR(cpp:S5008)
                                                                const HoroExtensionStringView message) {
             auto *state = static_cast<ExternalImportOutputState *>(context);
-            if (state == nullptr || state->progress == nullptr || totalUnits == 0 || completedUnits > totalUnits ||
-                message.length > kMaxTextBytes || (message.data == nullptr && message.length != 0)) {
-                if (state != nullptr)
-                    state->rejected = true;
+            if (!IsProgressInputValid(state, completedUnits, totalUnits, message)) {
+                RejectOutput(state);
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             }
             try {
@@ -229,8 +200,20 @@ namespace Horo::Extensions {
                                         std::string_view{message.data != nullptr ? message.data : "", message.length});
                 return HORO_EXTENSION_SUCCESS;
             } catch (...) {  // NOSONAR(cpp:S1181) C ABI exception barrier.
-                state->rejected = true;
+                RejectOutput(state);
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
+        }
+
+        void DestroyExternalImporter(const HoroAssetImporterDestroyFunc destroy, void *context) noexcept {
+            if (destroy == nullptr)
+                return;
+            try {
+                destroy(context);
+            } catch (const std::exception &exception) {  // NOSONAR(cpp:S1181) External destructor is an exception boundary.
+                LOG_WARN("extensions.importer", "External importer destroy callback threw: %s", exception.what());
+            } catch (...) {  // NOSONAR(cpp:S1181) External destructor is an exception boundary.
+                LOG_WARN("extensions.importer", "External importer destroy callback threw an unknown exception.");
             }
         }
 
@@ -238,8 +221,7 @@ namespace Horo::Extensions {
             ExternalImporterInstance() = default;
 
             ~ExternalImporterInstance() {
-                if (destroy != nullptr)
-                    destroy(context);
+                DestroyExternalImporter(destroy, context);
             }
 
             ExternalImporterInstance(const ExternalImporterInstance &) = delete;
@@ -272,6 +254,55 @@ namespace Horo::Extensions {
             return HORO_EXTENSION_ERROR_INIT_FAILED;
         }
 
+        [[nodiscard]] Result<Assets::PreparedAssetImport> ImportFailure(const std::string_view message) {
+            return Result<Assets::PreparedAssetImport>::Failure(MakeError(ExtensionErrors::InvocationFailed, std::string{message}));
+        }
+
+        [[nodiscard]] std::vector<HoroAssetImportSettingValue> BuildAbiSettings(const Assets::AssetImportInput &input) {
+            std::vector<HoroAssetImportSettingValue> settings;
+            settings.reserve(input.settings.size());
+            for (const auto &setting : input.settings)
+                settings.push_back(ToAbiValue(setting));
+            return settings;
+        }
+
+        [[nodiscard]] HoroExtensionStatus InvokeExternalImporter(const std::shared_ptr<ExternalImporterInstance> &instance,
+                                                                 const Assets::AssetImportInput &input,
+                                                                 const CancellationToken &cancellation,
+                                                                 Assets::PreparedAssetImport &prepared, bool &outputRejected) {
+            const auto settings = BuildAbiSettings(input);
+            ExternalImportOutputState output{.prepared = &prepared, .progress = &input.progress};
+            HoroAssetImportRequest request{
+                .structSize = sizeof(HoroAssetImportRequest),
+                .sourceBytes = input.sourceBytes.data(),
+                .sourceByteCount = input.sourceBytes.size(),
+                .sourceExtension = {input.sourceExtension.data(), static_cast<std::uint32_t>(input.sourceExtension.size())},
+                .settings = settings.data(),
+                .settingCount = static_cast<std::uint32_t>(settings.size()),
+                .cancellation = {&cancellation, IsCancelled},
+            };
+            HoroAssetImportResponse response{
+                .structSize = sizeof(HoroAssetImportResponse),
+                .assetType = {},
+                .editorPayload = {&output, ResizeImportPayload},
+                .dependencies = {&output, AppendImportDependency},
+                .diagnostics = {&output, AppendImportDiagnostic},
+                .progress = {&output, ReportImportProgress},
+            };
+            const HoroExtensionStatus status = SafeInvoke([&instance, &request, &response] {
+                return instance->importFn(instance->context, &request, &response);
+            }, "importer");
+            outputRejected = output.rejected;
+
+            std::string assetType;
+            if (status == HORO_EXTENSION_SUCCESS && !output.rejected && CopyExternalText(response.assetType, assetType)) {
+                auto parsedType = Assets::AssetTypeId::Parse(assetType);
+                if (parsedType.HasValue())
+                    prepared.type = std::move(parsedType).Value();
+            }
+            return status;
+        }
+
         class ExternalAssetImporter final : public Assets::IAssetImporter {
         public:
             explicit ExternalAssetImporter(std::shared_ptr<ExternalImporterInstance> instance) : instance_(std::move(instance)) {}
@@ -279,58 +310,19 @@ namespace Horo::Extensions {
             [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &input,
                                                                      const CancellationToken &cancellation) const override {
                 if (cancellation.IsCancellationRequested())
-                    return Result<Assets::PreparedAssetImport>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External asset import was cancelled before provider entry."));
+                    return ImportFailure("External asset import was cancelled before provider entry.");
                 if (input.settings.size() > kMaxListEntries || input.sourceExtension.size() > kMaxTextBytes)
-                    return Result<Assets::PreparedAssetImport>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External asset import input exceeded ABI bounds."));
-
-                std::vector<HoroAssetImportSettingValue> settings;
-                settings.reserve(input.settings.size());
-                for (const auto &setting : input.settings)
-                    settings.push_back(ToAbiValue(setting));
+                    return ImportFailure("External asset import input exceeded ABI bounds.");
 
                 Assets::PreparedAssetImport prepared;
-                ExternalImportOutputState output{.prepared = &prepared, .progress = &input.progress};
-                HoroAssetImportRequest request{
-                    .structSize = sizeof(HoroAssetImportRequest),
-                    .sourceBytes = input.sourceBytes.data(),
-                    .sourceByteCount = input.sourceBytes.size(),
-                    .sourceExtension = {input.sourceExtension.data(), static_cast<std::uint32_t>(input.sourceExtension.size())},
-                    .settings = settings.data(),
-                    .settingCount = static_cast<std::uint32_t>(settings.size()),
-                    .cancellation = {&cancellation, IsCancelled},
-                };
-                HoroAssetImportResponse response{
-                    .structSize = sizeof(HoroAssetImportResponse),
-                    .assetType = {},
-                    .editorPayload = {&output, ResizeImportPayload},
-                    .dependencies = {&output, AppendImportDependency},
-                    .diagnostics = {&output, AppendImportDiagnostic},
-                    .progress = {&output, ReportImportProgress},
-                };
-                if (const HoroExtensionStatus status = SafeInvoke(
-                        [&instance = instance_, &request, &response] {
-                    return instance->importFn(instance->context, &request, &response);
-                }, "importer");
-
-                    status != HORO_EXTENSION_SUCCESS || output.rejected || cancellation.IsCancellationRequested()) {
-                    return Result<Assets::PreparedAssetImport>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed,
-                                  cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED
-                                      ? "External asset importer callback was cancelled."
-                                      : "External asset importer callback failed or produced rejected output."));
-                }
-
-                std::string assetType;
-                if (!CopyText(response.assetType, assetType))
-                    return Result<Assets::PreparedAssetImport>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External importer returned an invalid asset type."));
-                auto parsedType = Assets::AssetTypeId::Parse(assetType);
-                if (parsedType.HasError() || prepared.editorPayload.empty())
-                    return Result<Assets::PreparedAssetImport>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External importer returned invalid or empty output."));
-                prepared.type = std::move(parsedType).Value();
+                bool outputRejected{};
+                const HoroExtensionStatus status = InvokeExternalImporter(instance_, input, cancellation, prepared, outputRejected);
+                if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
+                    return ImportFailure("External asset importer callback was cancelled.");
+                if (status != HORO_EXTENSION_SUCCESS || outputRejected)
+                    return ImportFailure("External asset importer callback failed or produced rejected output.");
+                if (prepared.type.Value().empty() || prepared.editorPayload.empty())
+                    return ImportFailure("External importer returned invalid or empty output.");
                 return Result<Assets::PreparedAssetImport>::Success(std::move(prepared));
             }
 
@@ -379,27 +371,6 @@ namespace Horo::Extensions {
             std::shared_ptr<ExternalImporterInstance> instance_;
         };
 
-        [[nodiscard]] bool ConvertSetting(const HoroAssetImportSettingDescriptor &source, Assets::ImportSettingDescriptor &output) {
-            if (!CopyText(source.id, output.id) || !CopyText(source.labelKey, output.labelKey) ||
-                !CopyText(source.descriptionKey, output.descriptionKey, true) || !ConvertKind(source.kind, output.kind) ||
-                !ConvertValue(source.defaultValue, output.defaultValue) || source.choiceCount > kMaxListEntries ||
-                (source.choices == nullptr && source.choiceCount != 0))
-                return false;
-            if (source.hasMinimum != 0)
-                output.minimum = source.minimum;
-            if (source.hasMaximum != 0)
-                output.maximum = source.maximum;
-            output.includeInPresets = source.includeInPresets != 0;
-            output.choices.reserve(source.choiceCount);
-            for (std::uint32_t index = 0; index < source.choiceCount; ++index) {
-                Assets::ImportSettingChoice choice;
-                if (!CopyText(source.choices[index].id, choice.id) || !CopyText(source.choices[index].labelKey, choice.labelKey) ||
-                    !ConvertValue(source.choices[index].value, choice.value))
-                    return false;
-                output.choices.push_back(std::move(choice));
-            }
-            return true;
-        }
     }  // namespace
 
     ExtensionModuleLifetime::~ExtensionModuleLifetime() {
@@ -453,10 +424,10 @@ namespace Horo::Extensions {
         /** @brief Copy identity and verify the declared owning module before accepting metadata. */
         void CopyContributionMetadata(const AssetImporterRegistrationSession &session, const HoroAssetImporterDescriptor &descriptor,
                                       Assets::AssetImporterContribution &contribution) {
-            if (!CopyText(descriptor.contributionId, contribution.contributionId) ||
-                !CopyText(descriptor.contributionVersion, contribution.version) ||
-                !CopyText(descriptor.subfolderCategory, contribution.subfolderCategory, true) ||
-                !CopyText(descriptor.targetExtension, contribution.targetExtension))
+            if (!CopyExternalText(descriptor.contributionId, contribution.contributionId) ||
+                !CopyExternalText(descriptor.contributionVersion, contribution.version) ||
+                !CopyExternalText(descriptor.subfolderCategory, contribution.subfolderCategory, true) ||
+                !CopyExternalText(descriptor.targetExtension, contribution.targetExtension))
                 throw std::invalid_argument{"invalid text"};
 
             if (const bool declared = std::ranges::any_of(session.manifest->contributions,
@@ -482,7 +453,7 @@ namespace Horo::Extensions {
             contribution.fileExtensions.reserve(descriptor.fileExtensionCount);
             for (std::uint32_t index = 0; index < descriptor.fileExtensionCount; ++index) {
                 std::string extension;
-                if (!CopyText(descriptor.fileExtensions[index], extension) || !IsLowerExtension(extension))
+                if (!CopyExternalText(descriptor.fileExtensions[index], extension) || !IsLowerExtension(extension))
                     throw std::invalid_argument{"invalid file extension"};
                 contribution.fileExtensions.push_back(std::move(extension));
             }
@@ -490,7 +461,7 @@ namespace Horo::Extensions {
             contribution.assetTypes.reserve(descriptor.assetTypeCount);
             for (std::uint32_t index = 0; index < descriptor.assetTypeCount; ++index) {
                 std::string assetType;
-                if (!CopyText(descriptor.assetTypes[index], assetType))
+                if (!CopyExternalText(descriptor.assetTypes[index], assetType))
                     throw std::invalid_argument{"invalid asset type"};
                 auto parsed = Assets::AssetTypeId::Parse(assetType);
                 if (parsed.HasError())
@@ -499,7 +470,7 @@ namespace Horo::Extensions {
             }
             contribution.settings.resize(descriptor.settingCount);
             for (std::uint32_t index = 0; index < descriptor.settingCount; ++index) {
-                if (!ConvertSetting(descriptor.settings[index], contribution.settings[index]))
+                if (!ConvertExternalImportSetting(descriptor.settings[index], contribution.settings[index]))
                     throw std::invalid_argument{"invalid setting"};
             }
         }
