@@ -1146,6 +1146,7 @@ endif ()
 
 add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
+        editor/EditorSurfaceIdentity.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneFileWatchService.cpp
