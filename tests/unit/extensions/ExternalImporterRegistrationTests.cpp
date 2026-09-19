@@ -13,6 +13,7 @@ namespace Horo::Extensions::Tests {
             bool invoked{};
             bool cancelDuringCall{};
             bool rejectOutput{};
+            bool emptyOutput{};
             bool inputMatched{};
             bool throwOnDestroy{};
         };
@@ -64,6 +65,8 @@ namespace Horo::Extensions::Tests {
             }
             if (state.rejectOutput)
                 static_cast<void>(response->progress.report(response->progress.context, 1, 0, {}));
+            if (state.emptyOutput)
+                return HORO_EXTENSION_SUCCESS;
 
             static constexpr char kType[] = "example.raw";
             static constexpr char kDependency[] = "12345678-1234-4234-8234-123456789abc";
@@ -164,6 +167,28 @@ namespace Horo::Extensions::Tests {
                 },
                 cancellation);
             CHECK(result.HasError());
+        }
+
+        void CheckBoundedInputAndEmptyOutput(const Assets::IAssetImporter &importer, ImportInvocationState &invocation,
+                                             const std::span<const std::uint8_t> source) {
+            const CancellationToken cancellation;
+            invocation.invoked = false;
+            const auto oversized =
+                importer.Import(Assets::AssetImportInput{.sourceBytes = source, .sourceExtension = std::string(4097, 'x')}, cancellation);
+            CHECK(oversized.HasError());
+            CHECK_FALSE(invocation.invoked);
+
+            invocation.emptyOutput = true;
+            const auto empty = importer.Import(
+                Assets::AssetImportInput{
+                    .sourceBytes = source,
+                    .sourceExtension = "raw",
+                    .settings = {true, std::int64_t{7}, std::string{"tag"}},
+                },
+                cancellation);
+            CHECK(empty.HasError());
+            CHECK(invocation.invoked);
+            invocation.emptyOutput = false;
         }
 
         [[nodiscard]] HoroAssetImporterDescriptor CompleteDescriptor(ImportInvocationState &invocation,
@@ -331,6 +356,7 @@ namespace Horo::Extensions::Tests {
         CheckPreEntryCancellation(*fixture.session.contributions.front().strategy, fixture.invocation, source);
         CheckStickyOutputRejection(*fixture.session.contributions.front().strategy, fixture.invocation);
         CheckProgressExceptionContainment(*fixture.session.contributions.front().strategy, source);
+        CheckBoundedInputAndEmptyOutput(*fixture.session.contributions.front().strategy, fixture.invocation, source);
         CheckCancellationAndTeardown(fixture.session, fixture.invocation, fixture.cancellation, source);
     }
 
