@@ -400,6 +400,7 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/AssetImporterCatalog.cpp
         runtime/assets/importer/AssetImportMetadata.cpp
         runtime/assets/importer/AssetImportOperation.cpp
+        runtime/assets/importer/AssetImportFileFacts.cpp
         runtime/assets/importer/AssetReimport.cpp
         runtime/assets/importer/ProjectAssetImportCommitter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.cpp
@@ -1373,6 +1374,7 @@ add_library(HoroExtensions STATIC
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
+        extensions/capabilities/asset_pipeline_points/ExternalAssetImporterConversion.cpp
         extensions/capabilities/asset_cooker/AssetCookerErrors.cpp
         extensions/capabilities/asset_cooker/AssetCookerRegistry.cpp
         extensions/capabilities/project_validator/ProjectValidatorRegistry.cpp

@@ -37,6 +37,25 @@ namespace Horo::Assets {
     /** @brief Typed value for one import setting. */
     using ImportSettingValue = std::variant<bool, std::int64_t, double, std::string, std::size_t>;
 
+    /** @brief Borrowed host progress callback for one synchronous import invocation. */
+    struct AssetImportProgressSink {
+        void *context{}; /**< Opaque host context valid only during the import call. */
+        void (*report)(void *context, std::uint64_t completedUnits, std::uint64_t totalUnits,
+                       std::string_view message){}; /**< Non-owning callback; providers must not retain it. */
+
+        /**
+         * @brief Reports bounded progress to the host when a callback is installed.
+         * @param completedUnits Completed work units, not greater than @p totalUnits.
+         * @param totalUnits Non-zero total work units.
+         * @param message Optional human-readable phase detail.
+         * @throws Propagates exceptions from the installed host callback so an adapter boundary can translate them.
+         */
+        void Report(std::uint64_t completedUnits, std::uint64_t totalUnits, std::string_view message = {}) const {
+            if (report != nullptr)
+                report(context, completedUnits, totalUnits, message);
+        }
+    };
+
     /** @brief One choice option in a Choice setting. */
     struct ImportSettingChoice {
         std::string id;           /**< Stable choice identifier. */
@@ -66,6 +85,7 @@ namespace Horo::Assets {
         std::span<const std::uint8_t> sourceBytes; /**< Borrowed source bytes. Valid for the invocation only. */
         std::string_view sourceExtension;          /**< Lowercase file extension without dot. */
         std::vector<ImportSettingValue> settings;  /**< Resolved setting values in descriptor order. */
+        AssetImportProgressSink progress;          /**< Optional host-owned progress projection. */
     };
 
     /** @brief Diagnostic produced during import. */
