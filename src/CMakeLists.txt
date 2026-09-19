@@ -1363,6 +1363,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/ExtensionActivationTransaction.cpp
         extensions/host/ExtensionModuleResolution.cpp
+        extensions/host/HeadlessExtensionHost.cpp
         extensions/host/ExtensionAbiValidation.cpp
         extensions/host/ExtensionAbiConformance.cpp
         extensions/registry/ApplicationCapabilityRegistry.cpp

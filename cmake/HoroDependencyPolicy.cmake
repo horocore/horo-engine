@@ -100,7 +100,7 @@ horo_allow_target_dependencies(TARGET HoroExtensions
 
 # Executables are composition roots and may select any production module.
 horo_allow_target_dependencies(TARGET HoroHostModuleComposition DEPENDENCIES HoroFoundation)
-horo_allow_target_dependencies(TARGET horo-engine DEPENDENCIES HoroApplication HoroHostModuleComposition)
+horo_allow_target_dependencies(TARGET horo-engine DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition)
 horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkValidatorStage DEPENDENCIES horo-extension-validate)
 horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES HoroExtensions)

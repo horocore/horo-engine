@@ -1757,6 +1757,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionAbiConformanceTests.cpp
         unit/extensions/ExtensionAbiIntegrationTests.cpp
         unit/extensions/ExternalImporterRegistrationTests.cpp
+        integration/extensions/HeadlessExtensionHostTests.cpp
 )
 foreach(abi_fixture_mode RANGE 0 8)
     set(abi_fixture_target HoroExtensionAbiFixture${abi_fixture_mode})

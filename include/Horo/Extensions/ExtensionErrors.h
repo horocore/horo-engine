@@ -115,4 +115,14 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor AssetCookerInvocationFailed;
     /** @brief An asset cook was cooperatively cancelled and discarded staged output. */
     extern const ErrorCodeDescriptor AssetCookCancelled;
+    /** @brief Headless extension-host construction policy is malformed or exceeds a hard bound. */
+    extern const ErrorCodeDescriptor HeadlessHostConfigurationInvalid;
+    /** @brief A headless host operation is not legal in the current lifecycle state. */
+    extern const ErrorCodeDescriptor HeadlessHostStateInvalid;
+    /** @brief Declared-package discovery failed before any native module activation. */
+    extern const ErrorCodeDescriptor HeadlessHostDiscoveryFailed;
+    /** @brief One declared package failed activation and the complete activation set was rolled back. */
+    extern const ErrorCodeDescriptor HeadlessHostActivationFailed;
+    /** @brief No published importer matches the exact requested contribution identity. */
+    extern const ErrorCodeDescriptor HeadlessImporterUnavailable;
 }  // namespace Horo::Extensions::ExtensionErrors
