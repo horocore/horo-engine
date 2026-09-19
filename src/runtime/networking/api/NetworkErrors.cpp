@@ -284,6 +284,69 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor ReplicationWorldInvalid{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The replication world activation or identity tuple is malformed.",
+        .remediationHint = "Use one valid Scene, active session, authority epoch, role, and declared runtime phase set.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor ReplicationWorldStale{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_stale"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Replication work belongs to a replaced Scene or session generation.",
+        .remediationHint = "Discard the stale work and reacquire the current world capability at its owner safe point.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor ReplicationWorldUnavailable{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_unavailable"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The requested replication world is not active for this operation.",
+        .remediationHint = "Wait for activation or use the exact active Scene/session generation.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor ReplicationWorldPhaseInvalid{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_phase_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Replication work was submitted outside its declared runtime phase.",
+        .remediationHint = "Submit the operation only through the phase admitted by the active world contract.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor ReplicationWorldCapacityExceeded{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_capacity_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Replication world retirement or object storage reached its finite bound.",
+        .remediationHint = "Drain old world capabilities or increase the explicitly qualified world limit.",
+        .retryable = true,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor ReplicationWorldCancelled{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_cancelled"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Replication world work was cancelled before publication.",
+        .remediationHint = "Discard the candidate and retry only under the current owner generation.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor ReplicationWorldShuttingDown{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.replication.world_shutting_down"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Replication world admission is closed for shutdown.",
+        .remediationHint = "Stop submitting replication work and wait for the host to compose a new generation.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor TransportCapabilityDescriptorInvalid{
         .domain = NetworkDomain,
         .code = ErrorCode{"network.transport.capability_descriptor_invalid"},
