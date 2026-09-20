@@ -116,4 +116,13 @@ namespace Horo::Render::NullBackendErrors {
                                                         .remediationHint = "Restart the backend after all resource work is retired.",
                                                         .retryable = false,
                                                         .userActionable = false};
+
+    const ErrorCodeDescriptor UnsupportedResourceOperation{.domain = Domain,
+                                                           .code = ErrorCode{"render.null.unsupported_resource_operation"},
+                                                           .defaultSeverity = ErrorSeverity::Error,
+                                                           .summary = "Null renderer does not support the requested resource contract.",
+                                                           .remediationHint =
+                                                               "Reduce the resource size or use a supported descriptor combination.",
+                                                           .retryable = false,
+                                                           .userActionable = false};
 }  // namespace Horo::Render::NullBackendErrors

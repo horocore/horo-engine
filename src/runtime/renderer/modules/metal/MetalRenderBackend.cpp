@@ -81,6 +81,9 @@ namespace Horo::Render {
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [this, &descriptor] {
+                    if (!capabilities_.support.Supports(descriptor))
+                        return UnsupportedResource<RenderMemoryCostPlan>(
+                            "Metal buffer descriptor exceeds the admitted capability contract.");
                     return runtime_->QueryBufferMemoryCost(descriptor);
                 });
             }
@@ -88,6 +91,9 @@ namespace Horo::Render {
             /** @copydoc IRenderBackend::QueryTextureMemoryCost */
             Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override {
                 return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [this, &descriptor] {
+                    if (!capabilities_.support.Supports(descriptor))
+                        return UnsupportedResource<RenderMemoryCostPlan>(
+                            "Metal texture descriptor exceeds the admitted capability contract.");
                     return runtime_->QueryTextureMemoryCost(descriptor);
                 });
             }
@@ -97,6 +103,8 @@ namespace Horo::Render {
                                                const RenderMemoryPlacement &placement) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal buffer creation requires an initialized backend.");
+                if (!capabilities_.support.Supports(descriptor))
+                    return UnsupportedResource<std::uint64_t>("Metal buffer descriptor exceeds the admitted capability contract.");
                 return runtime_->CreateBuffer(descriptor, initialData, placement);
             }
 
@@ -105,6 +113,8 @@ namespace Horo::Render {
                                              const std::uint64_t indexBuffer) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal mesh creation requires an initialized backend.");
+                if (!capabilities_.support.features.Supports(RenderCapability::MeshResources))
+                    return UnsupportedResource<std::uint64_t>("Metal mesh resources are not available on the admitted device.");
                 return runtime_->CreateMesh(descriptor, vertexBuffer, indexBuffer);
             }
 
@@ -112,6 +122,8 @@ namespace Horo::Render {
                                                 const RenderMemoryPlacement &placement) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal texture creation requires an initialized backend.");
+                if (!capabilities_.support.Supports(descriptor))
+                    return UnsupportedResource<std::uint64_t>("Metal texture descriptor exceeds the admitted capability contract.");
                 return runtime_->CreateTexture(descriptor, initialData, placement);
             }
 
@@ -258,6 +270,10 @@ namespace Horo::Render {
             }
 
         private:
+            template <typename T> [[nodiscard]] static Result<T> UnsupportedResource(std::string message) {
+                return Result<T>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedResourceOperation, std::move(message)));
+            }
+
             template <typename Query> [[nodiscard]] Result<RenderMemoryCostPlan> QueryMemoryCost(const char *message, Query &&query) const {
                 if (!initialized_)
                     return Result<RenderMemoryCostPlan>::Failure(MakeMetalError(MetalBackendErrors::NotInitialized, message));

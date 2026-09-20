@@ -46,6 +46,31 @@ namespace Horo::Render::Detail {
                    (facts.architecture == MetalHostArchitecture::X86_64 && facts.supportsMac2);
         }
 
+        [[nodiscard]] RenderCapabilitySnapshot MakeCapabilitySnapshot(const MetalDeviceFacts &facts) {
+            using enum RenderCapability;
+            RenderCapabilitySnapshot support{
+                .deviceIncarnation = 1,
+                .capabilityRevision = 1,
+                .synthetic = false,
+                .features = {},
+                .queues = {.graphics = true, .compute = false, .copy = false, .present = facts.adapter.supportsPresentation},
+                .limits = {.maxBufferBytes = facts.maxBufferLength,
+                           .maxTextureDimension2D = facts.maxTextureDimension2D,
+                           .maxColorAttachments = 8,
+                           .maxVertexAttributes = 31,
+                           .maxFramesInFlight = 3},
+                .formats = {},
+            };
+            for (const RenderCapability capability :
+                 {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources})
+                support.features.Enable(capability);
+            if (facts.adapter.supportsPresentation)
+                support.features.Enable(Presentation);
+            support.formats.usages = facts.formats.usages;
+            support.formats.sampleCountMask = facts.formats.sampleCountMask;
+            return support;
+        }
+
         [[nodiscard]] Result<void> ValidateDeviceFacts(const MetalDeviceFacts &facts) {
             if (!HasIdentityAndLimits(facts)) {
                 return Result<void>::Failure(
@@ -114,12 +139,11 @@ namespace Horo::Render::Detail {
     }
 
     bool MetalDeviceCapabilities::SupportsBuffer(const RenderBufferDescriptor &descriptor) const noexcept {
-        return IsValid() && descriptor.IsValid() && descriptor.byteSize <= maxBufferLength;
+        return IsValid() && implemented.support.Supports(descriptor);
     }
 
     bool MetalDeviceCapabilities::SupportsTexture(const RenderTextureDescriptor &descriptor) const noexcept {
-        return IsValid() && descriptor.extent.width <= maxTextureDimension2D && descriptor.extent.height <= maxTextureDimension2D &&
-               formats.Supports(descriptor);
+        return IsValid() && implemented.support.Supports(descriptor);
     }
 
     Result<MetalDeviceCapabilities> AdmitMetalDevice(const MetalDeviceFacts &facts, const MetalDeviceAdmissionRequest &request) {
@@ -156,6 +180,7 @@ namespace Horo::Render::Detail {
                     .supportsMeshResources = true,
                     .supportsTextureResources = true,
                     .supportsRenderTargetResources = true,
+                    .support = MakeCapabilitySnapshot(facts),
                 },
         };
         return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));
