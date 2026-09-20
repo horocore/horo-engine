@@ -53,8 +53,10 @@ namespace Horo::Release::ReleaseErrors {
         DistributionIdentityInvalid{.domain = Domain,
                                     .code = ErrorCode{"release.distribution.identity_invalid"},
                                     .defaultSeverity = ErrorSeverity::Error,
-                                    .summary = "A distribution identity is invalid or ambiguous.",
-                                    .remediationHint = "Provide bounded canonical product, build, package and installation identities.",
+                                    .summary = "A distribution product, version, build, package, or installation identity is invalid or "
+                                               "ambiguous.",
+                                    .remediationHint =
+                                        "Provide bounded canonical product, version, build, package and installation identities.",
                                     .retryable = false,
                                     .userActionable = true};
     const ErrorCodeDescriptor

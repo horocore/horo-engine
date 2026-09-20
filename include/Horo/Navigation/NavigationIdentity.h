@@ -59,6 +59,10 @@ namespace Horo::Navigation {
     struct NavigationRegionIdentityTag;
     struct NavigationModifierIdentityTag;
     struct NavigationLinkIdentityTag;
+    struct NavigationObstacleIdentityTag;
+    struct NavigationDynamicOwnerIdentityTag;
+    struct NavigationDynamicOwnerGenerationIdentityTag;
+    struct NavigationDynamicSourceRevisionIdentityTag;
 
     /** @brief Process-local world incarnation assigned once by the host and never serialized. */
     using NavigationWorldId = NavigationIdentity<NavigationWorldIdentityTag>;
@@ -78,6 +82,14 @@ namespace Horo::Navigation {
     using NavigationModifierId = NavigationIdentity<NavigationModifierIdentityTag>;
     /** @brief Stable authored grounded-link identity, independent from Scene object slots and provider-native references. */
     using NavigationLinkId = NavigationIdentity<NavigationLinkIdentityTag>;
+    /** @brief Stable logical identity of one dynamic obstacle contribution. */
+    using NavigationObstacleId = NavigationIdentity<NavigationObstacleIdentityTag>;
+    /** @brief Stable logical owner identity supplied by the Scene/gameplay composition boundary. */
+    using NavigationDynamicOwnerId = NavigationIdentity<NavigationDynamicOwnerIdentityTag>;
+    /** @brief Monotonic incarnation of one dynamic owner; prevents a destroyed entity from aliasing its replacement. */
+    using NavigationDynamicOwnerGeneration = NavigationIdentity<NavigationDynamicOwnerGenerationIdentityTag>;
+    /** @brief Monotonic source revision carried by one dynamic obstacle or modifier update. */
+    using NavigationDynamicSourceRevision = NavigationIdentity<NavigationDynamicSourceRevisionIdentityTag>;
 
     /** @brief Decodes a canonical network-byte-order surface identity. @param bytes Persistent bytes.
      * @return Typed identity or NavigationErrors::IdentityInvalid when the decoded value is reserved.
@@ -121,6 +133,7 @@ namespace Horo::Navigation {
     struct NavigationPolygonHandleTag;
     struct NavRequestHandleTag;
     struct NavigationObstacleHandleTag;
+    struct NavigationModifierHandleTag;
     struct CrowdAgentHandleTag;
 
     /** @brief Runtime handle to one surface realization in an exact published topology. */
@@ -133,6 +146,8 @@ namespace Horo::Navigation {
     using NavRequestHandle = NavigationHandle<NavRequestHandleTag>;
     /** @brief Generation-safe identity of one logical dynamic obstacle. */
     using NavigationObstacleHandle = NavigationHandle<NavigationObstacleHandleTag>;
+    /** @brief Generation-safe identity of one logical dynamic modifier. */
+    using NavigationModifierHandle = NavigationHandle<NavigationModifierHandleTag>;
     /** @brief Generation-safe identity of one logical crowd agent. */
     using CrowdAgentHandle = NavigationHandle<CrowdAgentHandleTag>;
 

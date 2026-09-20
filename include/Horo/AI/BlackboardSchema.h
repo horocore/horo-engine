@@ -38,30 +38,35 @@ namespace Horo::AI {
         EntityReference,
         AssetReference,
         WorldCoordinate,
+        Count, /**< Non-serializable upper bound for schema validation. */
     };
 
     /** @brief Whether a key stores one scalar or a bounded flat collection of scalars. */
     enum class BlackboardValueCardinality : std::uint8_t {
         Scalar,
         Collection,
+        Count, /**< Non-serializable upper bound for schema validation. */
     };
 
     /** @brief Access granted to decision and behavior consumers after schema admission. */
     enum class BlackboardKeyAccess : std::uint8_t {
         ReadOnly,
         ReadWrite,
+        Count, /**< Non-serializable upper bound for schema validation. */
     };
 
     /** @brief Presence policy applied when an instance is materialized from a schema. */
     enum class BlackboardKeyPresence : std::uint8_t {
         Required,
         Optional,
+        Count, /**< Non-serializable upper bound for schema validation. */
     };
 
     /** @brief Version policy for canonical bytes whose key or value type is unavailable locally. */
     enum class BlackboardUnknownValuePolicy : std::uint8_t {
         Reject,
         PreserveOpaque,
+        Count, /**< Non-serializable upper bound for schema validation. */
     };
 
     /**

@@ -331,6 +331,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/BehaviorTree.h
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
+    Horo/AI/DecisionAssetValidation.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
 )
@@ -400,6 +401,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationBakeJobs.h
+    Horo/Navigation/NavigationDynamicRegistry.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
@@ -478,6 +480,7 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h
+    Horo/Prefab/PrefabDiagnostics.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
     Horo/Prefab/PrefabSourceResolver.h

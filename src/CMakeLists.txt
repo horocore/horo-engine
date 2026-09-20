@@ -605,6 +605,8 @@ add_library(HoroAI STATIC
         runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
+        runtime/ai/api/DecisionAssetPlan.cpp
+        runtime/ai/api/DecisionAssetValidation.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
 )
@@ -706,6 +708,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationDataSerialization.cpp
         runtime/navigation/api/NavigationDataSerializationDecode.cpp
         runtime/navigation/api/NavigationDataSerializationMigration.cpp
+        runtime/navigation/api/NavigationDynamicErrors.cpp
         runtime/navigation/api/NavigationErrors.cpp
         runtime/navigation/api/NavigationIdentity.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
@@ -719,6 +722,9 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationBakeJobs.cpp
+        runtime/navigation/runtime/NavigationDynamicRegistry.cpp
+        runtime/navigation/runtime/NavigationDynamicRegistryCommit.cpp
+        runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
@@ -836,6 +842,7 @@ target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Asset
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
+        runtime/prefab/PrefabDiagnostics.cpp
         runtime/prefab/PrefabDocument.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp

@@ -115,7 +115,7 @@ namespace Horo::Release {
         bool operator==(const DistributionInstallationId &) const noexcept = default;
     };
 
-    /** @brief Exact artifact identity submitted for package-format admission. */
+    /** @brief Exact artifact identity submitted for package-format admission; its version must be canonical parsed SemVer data. */
     struct DistributionArtifactIdentity final {
         DistributionProductIdentity product;
         ReleaseProductVersion version;
@@ -168,7 +168,7 @@ namespace Horo::Release {
      * @brief Validates one explicit product/platform/format selection before external work begins.
      * @param artifact Complete typed artifact identity.
      * @param format Explicit format selected by policy or profile, never inferred from platform.
-     * @return Validated immutable selection or a typed identity/combination error.
+     * @return Validated immutable selection or a typed identity/combination error; malformed versions fail identity admission.
      */
     [[nodiscard]] Result<DistributionPackageSelection> ValidateDistributionPackageSelection(const DistributionArtifactIdentity &artifact,
                                                                                             DistributionPackageFormat format);

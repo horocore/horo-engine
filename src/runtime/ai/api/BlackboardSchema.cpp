@@ -24,42 +24,56 @@ namespace Horo::AI {
                 case AssetReference:
                 case WorldCoordinate:
                     return true;
+                case Count:
+                    return false;
             }
             return false;
         }
 
         [[nodiscard]] bool IsKnown(const BlackboardValueCardinality value) noexcept {
+            using enum BlackboardValueCardinality;
             switch (value) {
-                case BlackboardValueCardinality::Scalar:
-                case BlackboardValueCardinality::Collection:
+                case Scalar:
+                case Collection:
                     return true;
+                case Count:
+                    return false;
             }
             return false;
         }
 
         [[nodiscard]] bool IsKnown(const BlackboardKeyPresence value) noexcept {
+            using enum BlackboardKeyPresence;
             switch (value) {
-                case BlackboardKeyPresence::Required:
-                case BlackboardKeyPresence::Optional:
+                case Required:
+                case Optional:
                     return true;
+                case Count:
+                    return false;
             }
             return false;
         }
 
         [[nodiscard]] bool IsKnown(const BlackboardKeyAccess value) noexcept {
+            using enum BlackboardKeyAccess;
             switch (value) {
-                case BlackboardKeyAccess::ReadOnly:
-                case BlackboardKeyAccess::ReadWrite:
+                case ReadOnly:
+                case ReadWrite:
                     return true;
+                case Count:
+                    return false;
             }
             return false;
         }
 
         [[nodiscard]] bool IsKnown(const BlackboardUnknownValuePolicy value) noexcept {
+            using enum BlackboardUnknownValuePolicy;
             switch (value) {
-                case BlackboardUnknownValuePolicy::Reject:
-                case BlackboardUnknownValuePolicy::PreserveOpaque:
+                case Reject:
+                case PreserveOpaque:
                     return true;
+                case Count:
+                    return false;
             }
             return false;
         }

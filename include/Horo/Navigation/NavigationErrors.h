@@ -110,6 +110,18 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor SceneSurfaceMissing;
     /** @brief A grounded link selects a profile absent from one or both endpoint surfaces. */
     extern const ErrorCodeDescriptor SceneProfileMismatch;
+    /** @brief A dynamic obstacle or modifier registry payload or safe-point fence is malformed. */
+    extern const ErrorCodeDescriptor DynamicRegistryInvalid;
+    /** @brief A dynamic obstacle or modifier identity is already present in the staged or active publication. */
+    extern const ErrorCodeDescriptor DynamicRegistryConflict;
+    /** @brief A dynamic obstacle or modifier update targets an old owner, source, or registry generation. */
+    extern const ErrorCodeDescriptor DynamicRegistryStale;
+    /** @brief A dynamic registry count, command, or snapshot bound was exceeded. */
+    extern const ErrorCodeDescriptor DynamicRegistryCapacityExceeded;
+    /** @brief A dynamic obstacle or modifier was updated more often than its selected profile permits. */
+    extern const ErrorCodeDescriptor DynamicRegistryUpdateRateExceeded;
+    /** @brief Dynamic registry mutation or snapshot admission is closed during teardown. */
+    extern const ErrorCodeDescriptor DynamicRegistryShuttingDown;
     /** @brief The navigation source envelope has invalid framing or reserved fields. */
     extern const ErrorCodeDescriptor SourceEnvelopeInvalid;
     /** @brief A navigation source schema version is outside the explicitly supported range. */
