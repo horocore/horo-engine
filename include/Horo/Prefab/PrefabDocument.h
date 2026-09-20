@@ -20,6 +20,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -76,6 +77,15 @@ namespace Horo::Prefab {
         std::vector<Assets::AssetId> referencedAssets; /**< Unique explicit Asset Registry dependencies. */
 
         [[nodiscard]] bool operator==(const PrefabDocumentData &) const noexcept = default;
+    };
+
+    /** @brief Bounded parser controls for one canonical JSON prefab source document. */
+    struct PrefabSourceParseLimits final {
+        std::size_t maximumSourceBytes{PrefabHardLimits::SourceDocumentBytes}; /**< Encoded UTF-8 source bytes admitted before parsing. */
+        std::size_t maximumJsonDepth{PrefabHardLimits::SourceJsonDepth};       /**< Maximum nested JSON container depth. */
+        std::optional<Application::HoroVersion> expectedProjectVersion;        /**< Optional exact unified project version to require. */
+
+        [[nodiscard]] bool operator==(const PrefabSourceParseLimits &) const noexcept = default;
     };
 
     /** @brief Compatibility of preserved project-owned data with the currently available provider snapshot. */
@@ -136,8 +146,24 @@ namespace Horo::Prefab {
          */
         [[nodiscard]] static Result<PrefabDocument> Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits);
 
+        /**
+         * @brief Parses, validates and transactionally publishes one complete canonical source candidate.
+         * @param source UTF-8 canonical JSON source bytes.
+         * @param limits Immutable project policy captured before parsing begins.
+         * @param parseLimits Parser byte/depth bounds and optional project-version expectation.
+         * @return Immutable document, or a stable parse, version, identity, hierarchy or bounds error.
+         */
+        [[nodiscard]] static Result<PrefabDocument> Parse(std::string_view source, const PrefabLimitProfile &limits,
+                                                          const PrefabSourceParseLimits &parseLimits = {});
+
         /** @brief Returns the immutable validated source data. @return Borrowed document data. */
         [[nodiscard]] const PrefabDocumentData &Data() const noexcept;
+
+        /**
+         * @brief Serializes the complete document into deterministic canonical UTF-8 JSON.
+         * @return Canonical source bytes, or a document validation error if the immutable candidate is not serializable.
+         */
+        [[nodiscard]] Result<std::string> SerializeCanonical() const;
 
         /**
          * @brief Inspects preserved project payloads against one explicit provider snapshot without changing the document.
@@ -158,4 +184,5 @@ namespace Horo::Prefab {
 
         PrefabDocumentData data_;
     };
+
 }  // namespace Horo::Prefab

@@ -1,8 +1,10 @@
 #include "Horo/Prefab/PrefabDocument.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "PrefabDocumentSerializationInternal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -14,12 +16,6 @@
 
 namespace Horo::Prefab {
     namespace {
-        /** @brief Checks that a public HoroVersion value is a canonical parser-produced project version. */
-        [[nodiscard]] bool IsCanonicalProjectVersion(const Application::HoroVersion &version) {
-            const auto parsed = Application::ParseHoroVersion(Application::FormatHoroVersion(version));
-            return parsed.HasValue() && parsed.Value() == version;
-        }
-
         /** @brief Adds bytes without exceeding the document payload limit. */
         [[nodiscard]] bool AddPayloadBytes(std::size_t &total, const std::size_t bytes, const std::size_t maximumPayloadBytes) noexcept {
             if (bytes > maximumPayloadBytes - total)
@@ -37,9 +33,26 @@ namespace Horo::Prefab {
             }, value);
         }
 
+        /** @brief Checks finite numeric values in a portable behavior field. */
+        [[nodiscard]] bool IsFiniteBehaviorValue(const Gameplay::BehaviorFieldValue &value) noexcept {
+            return std::visit([]<typename Value>(const Value &typed) {
+                if constexpr (std::is_same_v<Value, double>)
+                    return std::isfinite(typed);
+                if constexpr (std::is_same_v<Value, Math::Vec2> || std::is_same_v<Value, Math::Vec3> ||
+                              std::is_same_v<Value, Math::Quaternion>)
+                    return Math::IsFinite(typed);
+                return true;
+            }, value);
+        }
+
+        /** @brief Checks that one transform contains only finite values before matrix validation. */
+        [[nodiscard]] bool IsFiniteTransform(const Math::Transform &transform) noexcept {
+            return Math::IsFinite(transform.translation) && Math::IsFinite(transform.rotation) && Math::IsFinite(transform.scale);
+        }
+
         /** @brief Validates one exact source revision without introducing a parallel schema counter. */
         [[nodiscard]] bool IsValidRevision(const PrefabSourceRevision &revision) {
-            return IsCanonicalProjectVersion(revision.projectVersion);
+            return Detail::IsCanonicalProjectVersion(revision.projectVersion);
         }
 
         /** @brief Checks whether an AssetId occurs in a validated unique dependency list. */
@@ -214,6 +227,10 @@ namespace Horo::Prefab {
                 if (!AddPayloadBytes(payloadBytes, behavior.typeId.Value().size(), maximumPayloadBytes))
                     return Result<void>::Failure(MakeError(PrefabErrors::PayloadTooLarge));
                 for (const Gameplay::BehaviorField &field : behavior.fields) {
+                    if (const auto *text = std::get_if<std::string>(&field.value); !IsValidUtf8ScalarSequence(field.name) ||
+                                                                                   !IsFiniteBehaviorValue(field.value) ||
+                                                                                   (text != nullptr && !IsValidUtf8ScalarSequence(*text)))
+                        return Result<void>::Failure(MakeError(PrefabErrors::DocumentInvalid));
                     if (!AddPayloadBytes(payloadBytes, field.name.size(), maximumPayloadBytes) ||
                         !AddPayloadBytes(payloadBytes, DynamicValueBytes(field.value), maximumPayloadBytes))
                         return Result<void>::Failure(MakeError(PrefabErrors::PayloadTooLarge));
@@ -226,7 +243,7 @@ namespace Horo::Prefab {
         [[nodiscard]] Result<void> ValidateObject(const PrefabObjectNode &object, std::size_t &payloadBytes,
                                                   const PrefabProjectPolicy &limits) {
             if (object.name.size() > MaximumPrefabObjectNameBytes || !IsValidUtf8ScalarSequence(object.name) ||
-                !object.localTransform.TryToMatrix().HasValue())
+                !IsFiniteTransform(object.localTransform) || !object.localTransform.TryToMatrix().HasValue())
                 return Result<void>::Failure(MakeError(PrefabErrors::DocumentInvalid));
             if (object.components.size() > limits.maximumComponentsPerObject ||
                 object.behaviors.size() > limits.maximumComponentsPerObject - object.components.size())
@@ -292,7 +309,7 @@ namespace Horo::Prefab {
             const LocalObjectId parent = placement.parentLocalId.value_or(LocalObjectId{});
             return !placement.placementLocalId.IsRoot() && objectDepths.contains(parent.value) && placement.sourcePrefab.IsValid() &&
                    placement.sourcePrefab.Asset() != candidate.assetId && IsValidRevision(placement.authoredAgainst) &&
-                   placement.localRootTransform.TryToMatrix().HasValue() &&
+                   IsFiniteTransform(placement.localRootTransform) && placement.localRootTransform.TryToMatrix().HasValue() &&
                    ContainsAsset(candidate.referencedAssets, placement.sourcePrefab.Asset());
         }
 
@@ -349,7 +366,7 @@ namespace Horo::Prefab {
     /** @copydoc PrefabDocument::Create */
     Result<PrefabDocument> PrefabDocument::Create(PrefabDocumentData candidate, const PrefabLimitProfile &limits) {
         const PrefabProjectPolicy &policy = limits.Policy();
-        if (!candidate.assetId.IsValid() || !IsCanonicalProjectVersion(candidate.projectVersion))
+        if (!candidate.assetId.IsValid() || !Detail::IsCanonicalProjectVersion(candidate.projectVersion))
             return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::DocumentInvalid));
         if (candidate.objects.size() > policy.maximumObjectCount)
             return Result<PrefabDocument>::Failure(MakeError(PrefabErrors::ObjectCountExceeded));

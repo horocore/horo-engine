@@ -173,7 +173,7 @@ namespace Horo::Prefab {
     /**
      * @brief Validates an opaque component envelope without interpreting its payload.
      * @param payload Candidate identity, schema and canonical bytes.
-     * @return Success, a prefab identity error, or the owning Gameplay validation error.
+     * @return Success, a prefab identity/document error, or the owning Gameplay validation error.
      */
     [[nodiscard]] Result<void> ValidateRawComponentPayload(const RawComponentPayload &payload);
 }  // namespace Horo::Prefab
