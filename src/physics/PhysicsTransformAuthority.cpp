@@ -165,6 +165,60 @@ namespace Horo::Physics {
                                                        "The transform command does not match the registered body's transform authority."));
             return Result<void>::Success();
         }
+
+        /** @brief Validates the shared admission frame before checking one command payload. */
+        template <typename Command, typename PayloadValidator>
+        Result<void> ValidateTransformCommand(const Command &command, const PhysicsWorldId expectedWorld,
+                                              const std::uint64_t expectedSceneGeneration, const std::uint64_t expectedSimulationTick,
+                                              PayloadValidator &&validatePayload) {
+            if (const Result<void> identity =
+                    ValidateCommandIdentity(command.identity, expectedWorld, expectedSceneGeneration, expectedSimulationTick);
+                identity.HasError())
+                return identity;
+            return std::forward<PayloadValidator>(validatePayload)(command);
+        }
+
+        /** @brief Validates a static pose and its explicit broadphase/rebuild policy. */
+        Result<void> ValidateStaticTransformPayload(const PhysicsStaticTransformCommand &command) {
+            if (const Result<void> pose = ValidatePhysicsPose(command.authoredPose); pose.HasError())
+                return pose;
+            if (!IsKnownStaticPolicy(command.updatePolicy))
+                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown static transform update policy."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates a kinematic target pose. */
+        Result<void> ValidateKinematicTransformPayload(const PhysicsKinematicTargetCommand &command) {
+            return ValidatePhysicsPose(command.targetPose);
+        }
+
+        /** @brief Validates a dynamic target pose and its explicit operation policies. */
+        Result<void> ValidateDynamicTransformPayload(const PhysicsDynamicTransformCommand &command) {
+            if (const Result<void> pose = ValidatePhysicsPose(command.targetPose); pose.HasError())
+                return pose;
+            if (!IsKnownDynamicOperation(command.operation) || !IsKnownVelocityPolicy(command.velocityPolicy))
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::OperationUnsupported, "Unknown dynamic transform operation or velocity policy."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires the owner thread and the pre-activation lifecycle state. */
+        [[nodiscard]] Result<void> RequirePrepared(auto &impl) {
+            if (const Result<void> owner = RequireOwner(impl.ownerThread); owner.HasError())
+                return owner;
+            if (impl.state != PhysicsTransformAuthorityState::Prepared)
+                return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+            return Result<void>::Success();
+        }
+
+        /** @brief Requires the owner thread and an idle active lifecycle state. */
+        [[nodiscard]] Result<void> RequireActive(auto &impl) {
+            if (const Result<void> owner = RequireOwner(impl.ownerThread); owner.HasError())
+                return owner;
+            if (impl.state != PhysicsTransformAuthorityState::Active || impl.applying)
+                return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ResolvePhysicsTransformAuthority */
@@ -192,42 +246,24 @@ namespace Horo::Physics {
     Result<void> ValidatePhysicsStaticTransformCommand(const PhysicsStaticTransformCommand &command, const PhysicsWorldId expectedWorld,
                                                        const std::uint64_t expectedSceneGeneration,
                                                        const std::uint64_t expectedSimulationTick) {
-        if (const Result<void> identity =
-                ValidateCommandIdentity(command.identity, expectedWorld, expectedSceneGeneration, expectedSimulationTick);
-            identity.HasError())
-            return identity;
-        if (const Result<void> pose = ValidatePhysicsPose(command.authoredPose); pose.HasError())
-            return pose;
-        if (!IsKnownStaticPolicy(command.updatePolicy))
-            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown static transform update policy."));
-        return Result<void>::Success();
+        return ValidateTransformCommand(command, expectedWorld, expectedSceneGeneration, expectedSimulationTick,
+                                        ValidateStaticTransformPayload);
     }
 
     /** @copydoc ValidatePhysicsKinematicTargetCommand */
     Result<void> ValidatePhysicsKinematicTargetCommand(const PhysicsKinematicTargetCommand &command, const PhysicsWorldId expectedWorld,
                                                        const std::uint64_t expectedSceneGeneration,
                                                        const std::uint64_t expectedSimulationTick) {
-        if (const Result<void> identity =
-                ValidateCommandIdentity(command.identity, expectedWorld, expectedSceneGeneration, expectedSimulationTick);
-            identity.HasError())
-            return identity;
-        return ValidatePhysicsPose(command.targetPose);
+        return ValidateTransformCommand(command, expectedWorld, expectedSceneGeneration, expectedSimulationTick,
+                                        ValidateKinematicTransformPayload);
     }
 
     /** @copydoc ValidatePhysicsDynamicTransformCommand */
     Result<void> ValidatePhysicsDynamicTransformCommand(const PhysicsDynamicTransformCommand &command, const PhysicsWorldId expectedWorld,
                                                         const std::uint64_t expectedSceneGeneration,
                                                         const std::uint64_t expectedSimulationTick) {
-        if (const Result<void> identity =
-                ValidateCommandIdentity(command.identity, expectedWorld, expectedSceneGeneration, expectedSimulationTick);
-            identity.HasError())
-            return identity;
-        if (const Result<void> pose = ValidatePhysicsPose(command.targetPose); pose.HasError())
-            return pose;
-        if (!IsKnownDynamicOperation(command.operation) || !IsKnownVelocityPolicy(command.velocityPolicy))
-            return Result<void>::Failure(
-                MakeError(PhysicsErrors::OperationUnsupported, "Unknown dynamic transform operation or velocity policy."));
-        return Result<void>::Success();
+        return ValidateTransformCommand(command, expectedWorld, expectedSceneGeneration, expectedSimulationTick,
+                                        ValidateDynamicTransformPayload);
     }
 
     /** @copydoc ValidatePhysicsDynamicTransformSnapshot */
@@ -303,20 +339,16 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::Activate */
     Result<void> PhysicsBodyTransformAuthority::Activate() {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return owner;
-        if (impl_->state != PhysicsTransformAuthorityState::Prepared)
-            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> prepared = RequirePrepared(*impl_); prepared.HasError())
+            return prepared;
         impl_->state = PhysicsTransformAuthorityState::Active;
         return Result<void>::Success();
     }
 
     /** @copydoc PhysicsBodyTransformAuthority::RegisterBody */
     Result<void> PhysicsBodyTransformAuthority::RegisterBody(const PhysicsBodyTransformRegistration &registration) {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return owner;
-        if (impl_->state != PhysicsTransformAuthorityState::Prepared)
-            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> prepared = RequirePrepared(*impl_); prepared.HasError())
+            return prepared;
         if (const Result<void> handle = ValidatePhysicsHandleOwner(registration.body, impl_->descriptor.world); handle.HasError())
             return handle;
         if (const Result<void> pose = ValidatePhysicsPose(registration.authoredPose); pose.HasError())
@@ -341,10 +373,8 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::UnregisterBody */
     Result<void> PhysicsBodyTransformAuthority::UnregisterBody(const BodyHandle &body) {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return owner;
-        if (impl_->state != PhysicsTransformAuthorityState::Prepared)
-            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> prepared = RequirePrepared(*impl_); prepared.HasError())
+            return prepared;
         if (const Result<void> handle = ValidatePhysicsHandleOwner(body, impl_->descriptor.world); handle.HasError())
             return handle;
         const auto found = FindBody(impl_->bodies, body);
@@ -356,12 +386,8 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::QueueTransformCommand */
     Result<PhysicsTransformCommandAdmission> PhysicsBodyTransformAuthority::QueueTransformCommand(const PhysicsTransformCommand &command) {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return Result<PhysicsTransformCommandAdmission>::Failure(owner.ErrorValue());
-        if (impl_->state == PhysicsTransformAuthorityState::Destroyed || impl_->state == PhysicsTransformAuthorityState::Prepared)
-            return Result<PhysicsTransformCommandAdmission>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (impl_->applying)
-            return Result<PhysicsTransformCommandAdmission>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> active = RequireActive(*impl_); active.HasError())
+            return Result<PhysicsTransformCommandAdmission>::Failure(active.ErrorValue());
 
         const auto &identity = CommandIdentity(command);
         const Result<void> valid = std::visit([this, &identity](const auto &value) -> Result<void> {
@@ -402,10 +428,8 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::ApplyPreStep */
     Result<PhysicsTransformTickResult> PhysicsBodyTransformAuthority::ApplyPreStep(const std::uint64_t simulationTick) {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return Result<PhysicsTransformTickResult>::Failure(owner.ErrorValue());
-        if (impl_->state != PhysicsTransformAuthorityState::Active || impl_->applying)
-            return Result<PhysicsTransformTickResult>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> active = RequireActive(*impl_); active.HasError())
+            return Result<PhysicsTransformTickResult>::Failure(active.ErrorValue());
         if (simulationTick == 0 || simulationTick != impl_->lastAppliedTick + 1)
             return Result<PhysicsTransformTickResult>::Failure(
                 MakeError(PhysicsErrors::CommandOrderInvalid, "Transform pre-step requires the next one-based tick."));
@@ -445,10 +469,8 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::PublishDynamicSnapshot */
     Result<void> PhysicsBodyTransformAuthority::PublishDynamicSnapshot(const PhysicsDynamicTransformSnapshot &snapshot) {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return owner;
-        if (impl_->state != PhysicsTransformAuthorityState::Active || impl_->applying)
-            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> active = RequireActive(*impl_); active.HasError())
+            return active;
         if (const Result<void> valid = ValidatePhysicsDynamicTransformSnapshot(snapshot, impl_->descriptor.world,
                                                                                impl_->descriptor.sceneGeneration, impl_->lastAppliedTick);
             valid.HasError())
@@ -471,10 +493,8 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::WriteHostTransform */
     Result<void> PhysicsBodyTransformAuthority::WriteHostTransform(const PhysicsDirectTransformWrite &write) {
-        if (const Result<void> owner = RequireOwner(impl_->ownerThread); owner.HasError())
-            return owner;
-        if (impl_->state != PhysicsTransformAuthorityState::Active || impl_->applying)
-            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> active = RequireActive(*impl_); active.HasError())
+            return active;
         if (const Result<void> valid =
                 ValidatePhysicsDirectTransformWrite(write, impl_->descriptor.world, impl_->descriptor.sceneGeneration);
             valid.HasError())
