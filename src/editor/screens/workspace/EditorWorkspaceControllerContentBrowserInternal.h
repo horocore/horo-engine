@@ -22,7 +22,8 @@
 #include <vector>
 
 namespace Horo::Editor {
-    namespace {
+    namespace {  // NOSONAR(cpp:S1000) Header-local helpers intentionally keep internal linkage per translation unit.
+
         [[nodiscard]] bool HasPathPrefix(const std::filesystem::path &root, const std::filesystem::path &candidate) {
             return Horo::Foundation::Paths::HasPathPrefix(root, candidate);
         }

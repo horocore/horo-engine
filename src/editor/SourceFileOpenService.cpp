@@ -64,8 +64,8 @@ namespace Horo::Editor {
                 return {};
 
             error.clear();
-            const std::filesystem::file_status status = std::filesystem::status(canonical, error);
-            if (error || !std::filesystem::is_directory(status))
+            if (const std::filesystem::file_status status = std::filesystem::status(canonical, error);
+                error || !std::filesystem::is_directory(status))
                 return {};
 
             valid = true;
@@ -174,7 +174,7 @@ namespace Horo::Editor {
         };
     }
 
-    SourceFileOpenService::SourceFileOpenService(std::filesystem::path projectRoot, SourceFilePolicy policy)
+    SourceFileOpenService::SourceFileOpenService(const std::filesystem::path &projectRoot, SourceFilePolicy policy)
         : projectRootValid_(false), projectRoot_(ResolveRoot(projectRoot, projectRootValid_)), policy_(std::move(policy)) {
         policy_.nativeSourceExtensions = NormalizeValues(policy_.nativeSourceExtensions, true);
         policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
@@ -183,15 +183,16 @@ namespace Horo::Editor {
     }
 
     SourceFileClassification SourceFileOpenService::Classify(const std::filesystem::path &path) const {
+        using enum SourceFileKind;
         const std::string extension = NormalizeExtension(path.extension().string());
         const std::string fileName = LowercaseAscii(path.filename().string());
         if (Contains(policy_.nativeSourceExtensions, extension))
-            return SourceFileClassification{SourceFileKind::NativeSource, extension};
+            return SourceFileClassification{NativeSource, extension};
         if (Contains(policy_.horoScriptExtensions, extension))
-            return SourceFileClassification{SourceFileKind::HoroScript, extension};
+            return SourceFileClassification{HoroScript, extension};
         if (Contains(policy_.projectTextExtensions, extension) || Contains(policy_.projectTextFileNames, fileName))
-            return SourceFileClassification{SourceFileKind::ProjectText, extension};
-        return SourceFileClassification{SourceFileKind::Unsupported, extension};
+            return SourceFileClassification{ProjectText, extension};
+        return SourceFileClassification{Unsupported, extension};
     }
 
     std::filesystem::path SourceFileOpenService::NormalizeInputPath(const std::filesystem::path &path) const {

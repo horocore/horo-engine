@@ -2,14 +2,15 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
+#include <algorithm>
+
 namespace Horo::Editor {
 
     void EditorWorkspaceController::OpenSourceFile(const SourceOpenRequest &request) {
         m_viewModel.contentBrowserOperationError.clear();
         const Result<SourceOpenResult> opened = m_sourceOpenService.Open(request);
         if (opened.HasError()) {
-            const std::string_view code = opened.ErrorValue().code.Value();
-            if (code == SourceOpenErrors::Missing.code.Value())
+            if (const std::string_view code = opened.ErrorValue().code.Value(); code == SourceOpenErrors::Missing.code.Value())
                 m_viewModel.contentBrowserOperationError = "workspace.source_open.missing";
             else if (code == SourceOpenErrors::Unsupported.code.Value())
                 m_viewModel.contentBrowserOperationError = "workspace.source_open.unsupported";
@@ -84,12 +85,14 @@ namespace Horo::Editor {
             return false;
         }
         plan.sources = *companions;
-        for (const std::filesystem::path &item : plan.sources) {
+        if (const bool destinationsAvailable = std::ranges::all_of(plan.sources,
+                                                                   [&](const std::filesystem::path &item) {
             const std::filesystem::path target = CompanionDestination(item, plan.source, plan.destination);
-            if (DirectoryContainsPortableName(target.parent_path(), target.filename().string(), item)) {
-                m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
-                return false;
-            }
+            return !DirectoryContainsPortableName(target.parent_path(), target.filename().string(), item);
+        });
+            !destinationsAvailable) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
+            return false;
         }
         return true;
     }

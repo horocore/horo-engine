@@ -369,8 +369,8 @@ namespace Horo::Editor {
         void DrawAssetBrowserViewport(const AssetBrowserViewportContext &viewport) {
             const ContentBrowserDirectory &directory = viewport.viewModel.contentBrowser;
             const std::vector<std::size_t> visibleEntries = viewport.interactionSession.ProjectEntries(directory);
-            AssetBrowserInteractionState &state = viewport.interactionSession.State();
-            if (!state.selectedAbsolutePath.empty() &&
+            if (AssetBrowserInteractionState &state = viewport.interactionSession.State();
+                !state.selectedAbsolutePath.empty() &&
                 std::ranges::none_of(visibleEntries, [&directory, &state](const std::size_t entryIndex) {
                 return directory.entries[entryIndex].absolutePath == state.selectedAbsolutePath;
             })) {

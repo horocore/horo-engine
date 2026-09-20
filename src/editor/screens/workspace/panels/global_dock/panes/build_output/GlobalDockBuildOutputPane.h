@@ -95,18 +95,18 @@ namespace Horo::Editor {
                                               const EditorGuiContext &context, std::size_t errorCount, std::size_t warningCount,
                                               float controlY);
         [[nodiscard]] ToolbarStatusChipLayout ResolveToolbarStatusChipLayout(const EditorGuiContext &context, std::size_t errorCount,
-                                                                             std::size_t warningCount, float scale, float gap);
+                                                                             std::size_t warningCount, float scale, float gap) const;
         float DrawToolbarStatusChips(const ToolbarStatusChipLayout &layout);
         void DrawToolbarTargets(const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float x, float controlY);
         void DrawTable(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                        EditorWorkspaceViewCommandData &command, bool snapshotChanged);
         void DrawTableHeader(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
-                             float scale);
+                             float scale) const;
         void DrawTableRows(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                            EditorWorkspaceViewCommandData &command, bool snapshotChanged);
         void DrawTableRow(const BuildOutputRecord &record, std::size_t visibleIndex, const GlobalDockPaneRegions &regions,
                           const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
-                          ImDrawList &drawList);
+                          ImDrawList &drawList) const;
         void DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                         std::size_t errorCount, std::size_t warningCount);
 

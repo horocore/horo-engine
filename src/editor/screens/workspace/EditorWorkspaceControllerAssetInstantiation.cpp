@@ -95,7 +95,7 @@ namespace Horo::Editor {
         HandleInstantiatedAssetCommand(result);
     }
 
-    const Assets::AssetRecord *EditorWorkspaceController::ResolveAssetDropRecord(const AssetSceneDropRequest &request) {
+    const Assets::AssetRecord *EditorWorkspaceController::ResolveAssetDropRecord(const AssetSceneDropRequest &request) const {
         const auto parsedId = Assets::AssetId::Parse(request.assetId);
         if (parsedId.HasError() || request.documentRevision != m_document.Revision()) {
             m_notifications.Publish("asset", NotificationSeverity::Warning,
@@ -128,7 +128,7 @@ namespace Horo::Editor {
         return record;
     }
 
-    void EditorWorkspaceController::HandleInstantiatedAssetCommand(Result<SceneCommandResult> &result) {
+    void EditorWorkspaceController::HandleInstantiatedAssetCommand(const Result<SceneCommandResult> &result) {
         if (result.HasError()) {
             const std::string message = result.ErrorValue().message;
             HandleDocumentCommandResult(result, "Instantiate asset");

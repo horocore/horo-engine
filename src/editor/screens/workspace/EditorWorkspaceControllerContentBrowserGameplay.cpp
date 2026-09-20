@@ -1,5 +1,13 @@
+#include "Horo/Editor/ProjectIntegrityValidatorService.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
+#include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+
+#include <filesystem>
+#include <format>
+#include <memory>
+#include <string>
 
 namespace Horo::Editor {
 

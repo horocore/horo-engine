@@ -126,7 +126,7 @@ namespace Horo::Editor {
          * @param projectRoot Project root containing the source files.
          * @param policy Extension, symlink, and editor-capability policy.
          */
-        explicit SourceFileOpenService(std::filesystem::path projectRoot, SourceFilePolicy policy = SourceFilePolicy::Default());
+        explicit SourceFileOpenService(const std::filesystem::path &projectRoot, SourceFilePolicy policy = SourceFilePolicy::Default());
 
         /** @brief Returns the normalized project root captured by this service. */
         [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {

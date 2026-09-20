@@ -239,7 +239,8 @@ namespace Horo::Editor {
     }
 
     GlobalDockBuildOutputPane::ToolbarStatusChipLayout GlobalDockBuildOutputPane::ResolveToolbarStatusChipLayout(
-        const EditorGuiContext &context, const std::size_t errorCount, const std::size_t warningCount, const float scale, const float gap) {
+        const EditorGuiContext &context, const std::size_t errorCount, const std::size_t warningCount, const float scale,
+        const float gap) const {
         const Theme::Fonts &fonts = context.theme.fonts;
         const GlobalDockToolbarChipProps allProps{
             .id = "BuildAll",
@@ -365,7 +366,7 @@ namespace Horo::Editor {
     }
 
     void GlobalDockBuildOutputPane::DrawTableHeader(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
-                                                    const EditorGuiContext &context, const float scale) {
+                                                    const EditorGuiContext &context, const float scale) const {
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const ImVec2 headerMin = regions.contentOrigin;
         DrawGlobalDockTableHeaderSurface(headerMin, regions.contentWidth, metrics.tableHeaderHeight);
@@ -412,7 +413,7 @@ namespace Horo::Editor {
     void GlobalDockBuildOutputPane::DrawTableRow(const BuildOutputRecord &record, const std::size_t visibleIndex,
                                                  const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
                                                  const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
-                                                 ImDrawList &drawList) {
+                                                 ImDrawList &drawList) const {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const float levelX = regions.contentOrigin.x + metrics.contentPadding;
         const float lineX = levelX + 68.0F * scale + metrics.columnGap;

@@ -322,8 +322,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform) const;
         void HandleInstantiateAsset(const AssetSceneDropRequest &request);
-        [[nodiscard]] const Assets::AssetRecord *ResolveAssetDropRecord(const AssetSceneDropRequest &request);
-        void HandleInstantiatedAssetCommand(Result<SceneCommandResult> &result);
+        [[nodiscard]] const Assets::AssetRecord *ResolveAssetDropRecord(const AssetSceneDropRequest &request) const;
+        void HandleInstantiatedAssetCommand(const Result<SceneCommandResult> &result);
         void LoadDocumentAssetMeshes();
         [[nodiscard]] std::string Localized(std::string_view key, std::string_view fallback) const;
         void HandleDuplicateObject(SceneObjectId object);

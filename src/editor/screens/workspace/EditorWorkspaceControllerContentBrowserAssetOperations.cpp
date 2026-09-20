@@ -1,3 +1,4 @@
+#include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
@@ -189,7 +190,6 @@ namespace Horo::Editor {
     std::optional<EditorWorkspaceController::ContentBrowserPathMoves> EditorWorkspaceController::MoveContentBrowserCompanions(
         const std::filesystem::path &source, const std::filesystem::path &destination, const std::vector<std::filesystem::path> &companions,
         const std::string_view failureKey) {
-        std::error_code error;
         ContentBrowserPathMoves moved;
         moved.reserve(companions.size());
         for (const std::filesystem::path &item : companions) {
@@ -199,8 +199,7 @@ namespace Horo::Editor {
                 SetContentBrowserRollbackError(rollbackComplete, "workspace.content_browser.operation.name_exists");
                 return std::nullopt;
             }
-            std::filesystem::rename(item, target, error);
-            if (error) {
+            if (const Result<void> renamed = m_durableFiles->AtomicReplace(item, target); renamed.HasError()) {
                 const bool rollbackComplete = RollbackPathMoves(moved);
                 SetContentBrowserRollbackError(rollbackComplete, failureKey);
                 return std::nullopt;

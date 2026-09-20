@@ -24,28 +24,29 @@ namespace Horo::Editor {
                                                        "Ctrl+V", context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.paste");
             ImGui::EndDisabled();
             if (activated)
-                command = AssetBrowserInteractionSession::Paste(destination);
+                command = AssetBrowserInteractionSession::Paste(destination.string());
         }
 
         void DrawAssetClipboardActions(const ContentBrowserEntry &entry, const EditorGuiContext &context,
                                        EditorWorkspaceViewCommandData &command) {
+            using enum Ui::ContextMenuItemTone;
             const ILocalizationService &localization = context.localization;
             if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.duplicate").c_str(), "Ctrl+D",
-                                    context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.duplicate"))
+                                    context.theme.fonts, Normal, "action.duplicate"))
                 command = AssetBrowserInteractionSession::Duplicate(entry.absolutePath);
             if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.copy").c_str(), "Ctrl+C",
-                                    context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.copy"))
+                                    context.theme.fonts, Normal, "action.copy"))
                 command = AssetBrowserInteractionSession::Copy(entry.absolutePath);
             if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.cut").c_str(), "Ctrl+X",
-                                    context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.cut"))
+                                    context.theme.fonts, Normal, "action.cut"))
                 command = AssetBrowserInteractionSession::Cut(entry.absolutePath);
         }
 
         void DrawDirectoryActions(const ContentBrowserEntry &entry, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
             DrawPasteAction(entry.absolutePath, viewModel.contentBrowserClipboard.mode, context, command);
-            const ILocalizationService &localization = context.localization;
-            if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.import_here").c_str(), nullptr,
+            if (const ILocalizationService &localization = context.localization;
+                Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.import_here").c_str(), nullptr,
                                     context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.import"))
                 command = AssetBrowserInteractionSession::ImportHere(entry.absolutePath);
             Ui::ContextMenuSeparator();

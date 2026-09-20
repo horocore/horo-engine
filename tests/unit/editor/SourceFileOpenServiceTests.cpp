@@ -103,7 +103,7 @@ TEST_CASE("Relative absolute and internal symlink paths focus one canonical sour
     REQUIRE(symlink.HasValue());
     REQUIRE(symlink.Value().document.has_value());
     REQUIRE(symlink.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
-    REQUIRE(symlink.Value().location.absolutePath == source);
+    REQUIRE(symlink.Value().location.absolutePath == relative.Value().location.absolutePath);
     REQUIRE(symlink.Value().location.document == relative.Value().location.document);
 }
 
@@ -207,4 +207,61 @@ TEST_CASE("Source opening reports unavailable editor capabilities explicitly", "
     });
     REQUIRE(result.HasError());
     REQUIRE(ErrorCodeText(result.ErrorValue()) == "editor.source_open.editor_unavailable");
+}
+
+TEST_CASE("Source opening rejects invalid roots and uses the explicit capability fallback", "[unit][editor][source][routing]") {
+    TemporaryProject project;
+    project.Write("source/gameplay/Player.cpp");
+
+    SourceFileOpenService invalidRoot{project.Root() / "missing-project-root"};
+    const auto invalidRootResult = invalidRoot.Open(SourceOpenRequest{
+        .path = "source/gameplay/Player.cpp",
+        .origin = SourceOpenOrigin::Command,
+    });
+    REQUIRE(invalidRootResult.HasError());
+    REQUIRE(ErrorCodeText(invalidRootResult.ErrorValue()) == "editor.source_open.request_invalid");
+
+    SourceFileOpenService service{project.Root()};
+    const auto emptyRequest = service.Open(SourceOpenRequest{});
+    REQUIRE(emptyRequest.HasError());
+    REQUIRE(ErrorCodeText(emptyRequest.ErrorValue()) == "editor.source_open.request_invalid");
+
+    const auto directory = service.Open(SourceOpenRequest{
+        .path = "assets",
+        .origin = SourceOpenOrigin::Command,
+    });
+    REQUIRE(directory.HasError());
+    REQUIRE(ErrorCodeText(directory.ErrorValue()) == "editor.source_open.unsupported");
+
+    SourceFilePolicy fallbackPolicy = SourceFilePolicy::Default();
+    fallbackPolicy.embeddedEditorAvailable = false;
+    SourceFileOpenService fallbackService{project.Root(), std::move(fallbackPolicy)};
+    const auto fallback = fallbackService.Open(SourceOpenRequest{
+        .path = "source/gameplay/Player.cpp",
+        .origin = SourceOpenOrigin::DiagnosticNavigation,
+        .mode = SourceOpenMode::AllowExternalFallback,
+    });
+    REQUIRE(fallback.HasValue());
+    REQUIRE(fallback.Value().route == SourceOpenRoute::ExternalEditorFallback);
+    REQUIRE_FALSE(fallback.Value().document.has_value());
+}
+
+TEST_CASE("Source policy can reject project-contained symlinks", "[unit][editor][source][security]") {
+    TemporaryProject project;
+    project.Write("source/gameplay/Player.cpp");
+    const std::filesystem::path link = project.Root() / "assets/scripts/player-link.cpp";
+    std::error_code symlinkError;
+    std::filesystem::create_symlink(project.Root() / "source/gameplay/Player.cpp", link, symlinkError);
+    if (symlinkError)
+        SKIP("This host does not permit source-file symlink creation: " << symlinkError.message());
+
+    SourceFilePolicy policy = SourceFilePolicy::Default();
+    policy.allowSymlinkedFiles = false;
+    SourceFileOpenService service{project.Root(), std::move(policy)};
+    const auto result = service.Open(SourceOpenRequest{
+        .path = link,
+        .origin = SourceOpenOrigin::Command,
+    });
+    REQUIRE(result.HasError());
+    REQUIRE(ErrorCodeText(result.ErrorValue()) == "editor.source_open.unsafe");
 }
