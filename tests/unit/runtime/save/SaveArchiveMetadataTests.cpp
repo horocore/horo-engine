@@ -109,6 +109,9 @@ namespace {
         header = Header();
         header.engineVersion.assign(Limits().maximumTextBytes + 1, 'x');
         CHECK(ValidateSaveArchiveHeader(header, Limits()).HasError());
+        header = Header();
+        header.engineVersion.clear();
+        CHECK(ValidateSaveArchiveHeader(header, Limits()).HasError());
 
         const std::string encoded = EncodeSaveArchiveHeader(Header(), Limits()).Value();
         auto tiny = Limits();

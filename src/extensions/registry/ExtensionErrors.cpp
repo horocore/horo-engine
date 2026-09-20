@@ -43,6 +43,16 @@ namespace Horo::Extensions::ExtensionErrors {
         .userActionable = true,
     };
 
+    const ErrorCodeDescriptor EditorSurfaceDescriptorInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"editor_surface_descriptor_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The editor-surface descriptor is malformed or inconsistent.",
+        .remediationHint = "Use a canonical identity, compatible placement, bounded policy, and active provider generation.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
     const ErrorCodeDescriptor InvocationFailed{
         .domain = Domain,
         .code = ErrorCode{"invocation_failed"},
@@ -518,5 +528,78 @@ namespace Horo::Extensions::ExtensionErrors {
         .remediationHint = "Select a contribution published by the active headless composition.",
         .retryable = false,
         .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor BackendOperationRegistryInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_registry_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The backend-operation provider, request, or transition is invalid.",
+        .remediationHint = "Provide canonical provider identities and bounded operation payloads.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationRegistryDuplicate{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_registry_duplicate"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The backend-operation provider generation is already registered.",
+        .remediationHint = "Publish one operation provider for each exact module, provider, and generation identity.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationRegistryCapacityExceeded{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_registry_capacity_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The bounded backend-operation capacity was exceeded.",
+        .remediationHint = "Retire an existing provider or operation before admitting more work.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationRegistryShutdown{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_registry_shutdown"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The backend-operation registry is shutting down.",
+        .remediationHint = "Do not register providers or begin operations after host shutdown starts.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationProviderUnavailable{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_provider_unavailable"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The requested backend-operation provider generation is unavailable.",
+        .remediationHint = "Resolve an active provider registration before beginning the operation.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationPayloadInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_payload_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A backend-operation diagnostic or result payload is invalid or exceeds its bound.",
+        .remediationHint = "Use declared typed identities and keep payloads within the provider limits.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationAbandoned{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_abandoned"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "A backend operation producer was abandoned before completion.",
+        .remediationHint = "Keep the move-only producer alive until the provider publishes a terminal result.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor BackendOperationCancelled{
+        .domain = Domain,
+        .code = ErrorCode{"backend_operation_cancelled"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The backend operation was cancelled.",
+        .remediationHint = "Retry the operation after its caller, provider, and host lifecycle are active.",
+        .retryable = true,
+        .userActionable = false,
     };
 }  // namespace Horo::Extensions::ExtensionErrors

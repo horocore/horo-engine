@@ -17,4 +17,5 @@ namespace Horo::Render::NullBackendErrors {
     extern const ErrorCodeDescriptor UnsupportedPassKind;
     extern const ErrorCodeDescriptor PresentationUnsupported;
     extern const ErrorCodeDescriptor ResourceInstanceExhausted;
+    extern const ErrorCodeDescriptor UnsupportedResourceOperation;
 }  // namespace Horo::Render::NullBackendErrors

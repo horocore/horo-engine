@@ -396,6 +396,10 @@ namespace Horo::Render::OpenGLResourceTests {
         Check(backend->Capabilities().supportsMeshResources);
         Check(backend->Capabilities().supportsTextureResources);
         Check(backend->Capabilities().supportsRenderTargetResources);
+        Check(backend->Capabilities().support.IsValid());
+        Check(backend->Capabilities().support.features.Supports(RenderCapability::TextureResources));
+        Check(backend->Capabilities().support.queues.Supports(RenderQueueKind::Graphics));
+        Check(!backend->Capabilities().support.queues.Supports(RenderQueueKind::Copy));
         const RenderTextureDescriptor oversizedTexture{.extent = {16385, 1},
                                                        .format = RenderTextureFormat::Rgba8Unorm,
                                                        .usage = RenderTextureUsage::Sampled};
