@@ -21,6 +21,7 @@ namespace Horo::Character {
         Physics::PhysicsWorldId physicsWorld;      /**< Exact paired Physics-world generation. */
         std::uint64_t collisionFilterGeneration{}; /**< Exact project collision-filter generation. */
         std::uint64_t originGeneration{};          /**< Exact local-origin generation. */
+        std::uint64_t physicsSnapshotRevision{1};  /**< Exact Physics query snapshot revision. */
 
         [[nodiscard]] constexpr auto operator<=>(const CharacterWorldPreparationDescriptor &) const noexcept = default;
     };
@@ -32,6 +33,7 @@ namespace Horo::Character {
         Physics::PhysicsWorldId physicsWorld;      /**< Exact paired Physics-world generation. */
         std::uint64_t collisionFilterGeneration{}; /**< Exact project collision-filter generation. */
         std::uint64_t originGeneration{};          /**< Exact local-origin generation. */
+        std::uint64_t physicsSnapshotRevision{1};  /**< Exact Physics query snapshot revision. */
 
         [[nodiscard]] constexpr auto operator<=>(const CharacterWorldDescriptor &) const noexcept = default;
     };
@@ -84,6 +86,16 @@ namespace Horo::Character {
         [[nodiscard]] Result<CharacterControllerHandle> CreateController(const CharacterControllerDescriptor &descriptor);
 
         /**
+         * @brief Spawns one structural controller through bounded overlap recovery.
+         * @param handle Prepared controller handle.
+         * @param query Read-only Physics overlap adapter for this operation.
+         * @return One coherent publication, or a typed failure with no state mutation.
+         * @pre The controller is not already spawned and the call runs on the world owner thread.
+         */
+        [[nodiscard]] Result<CharacterPlacementResult> SpawnController(const CharacterControllerHandle &handle,
+                                                                       const CharacterPhysicsQueryContext &query);
+
+        /**
          * @brief Removes one exact live controller generation and releases its owned record.
          * @param handle Handle issued by this world for a currently resident controller.
          * @return Success, or a typed malformed/foreign/stale/lifecycle error without mutation.
@@ -92,11 +104,28 @@ namespace Horo::Character {
         [[nodiscard]] Result<void> DestroyController(const CharacterControllerHandle &handle);
 
         /**
+         * @brief Publishes an explicit teleport independently of movement resolution.
+         * @param request Tick-addressed target root and heading.
+         * @param query Current read-only Physics overlap snapshot for the target tick.
+         * @return One coherent publication, or a typed failure that preserves the prior publication.
+         * @pre The controller is spawned, the world is not resolving a tick, and the call runs on the owner thread.
+         */
+        [[nodiscard]] Result<CharacterPlacementResult> TeleportController(const CharacterTeleportRequest &request,
+                                                                          const CharacterPhysicsQueryContext &query);
+
+        /**
          * @brief Copies the inert descriptor for one exact live controller generation.
          * @param handle Handle issued by this world for a currently resident controller.
          * @return Owned descriptor copy, or a typed malformed/foreign/stale/lifecycle error.
          */
         [[nodiscard]] Result<CharacterControllerDescriptor> ControllerDescriptor(const CharacterControllerHandle &handle) const;
+
+        /**
+         * @brief Returns the last coherent spawn or teleport root publication.
+         * @param handle Live spawned controller handle.
+         * @return Owned snapshot or a typed lifecycle/handle error.
+         */
+        [[nodiscard]] Result<CharacterTransformPublication> ControllerTransform(const CharacterControllerHandle &handle) const;
 
         /**
          * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.

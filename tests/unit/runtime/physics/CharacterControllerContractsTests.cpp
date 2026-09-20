@@ -67,6 +67,32 @@ namespace Horo::Character {
             REQUIRE(result.ErrorValue().code.Value() == expected.code.Value());
         }
 
+        Result<CharacterOverlapProbeResult> NoopOverlap(void *, const CharacterOverlapProbeRequest &) noexcept {
+            return Result<CharacterOverlapProbeResult>::Success({});
+        }
+
+        TEST_CASE("Character Physics query contexts require the complete current snapshot identity",
+                  "[physics][character][query][validation]") {
+            const auto descriptor = Descriptor();
+            CharacterPhysicsQueryContext context{
+                descriptor.sceneGeneration, descriptor.characterWorld, descriptor.physicsWorld, nullptr, NoopOverlap, 41, 42, 7, 8,
+            };
+            const CharacterPhysicsQueryExpectations
+                expected{descriptor.sceneGeneration, descriptor.characterWorld, descriptor.physicsWorld, 41, 42, 7, 8};
+            REQUIRE(ValidateCharacterPhysicsQueryContext(context, expected).HasValue());
+            context.tick = 6;
+            RequireError(ValidateCharacterPhysicsQueryContext(context, expected), CharacterErrors::QuerySnapshotStale);
+            context.tick = 7;
+            context.collisionFilterGeneration = 40;
+            RequireError(ValidateCharacterPhysicsQueryContext(context, expected), CharacterErrors::QuerySnapshotStale);
+            context.collisionFilterGeneration = 41;
+            context.originGeneration = 43;
+            RequireError(ValidateCharacterPhysicsQueryContext(context, expected), CharacterErrors::QuerySnapshotStale);
+            context.originGeneration = 42;
+            context.physicsSnapshotRevision = 9;
+            RequireError(ValidateCharacterPhysicsQueryContext(context, expected), CharacterErrors::QuerySnapshotStale);
+        }
+
         TEST_CASE("Character identities retain scene world slot and generation", "[physics][character][identity]") {
             REQUIRE_FALSE(CharacterWorldId{}.IsValid());
             RequireError(Result<void>::Failure(CharacterWorldId::Create(0).ErrorValue()), CharacterErrors::WorldInvalid);
@@ -223,7 +249,7 @@ namespace Horo::Character {
         }
 
         TEST_CASE("Character errors expose stable actionable identities", "[physics][character][errors]") {
-            REQUIRE(CharacterErrors::Descriptors().size() == 11);
+            REQUIRE(CharacterErrors::Descriptors().size() == 15);
             std::set<std::string_view> unique;
             for (const auto *descriptor : CharacterErrors::Descriptors()) {
                 REQUIRE(descriptor->domain.Value() == "horo.character");
@@ -233,6 +259,8 @@ namespace Horo::Character {
             }
             REQUIRE(CharacterErrors::CapacityExceeded.userActionable);
             REQUIRE(CharacterErrors::HandleStale.code.Value() == "character.handle.stale");
+            REQUIRE(CharacterErrors::GenerationExhausted.code.Value() == "character.generation.exhausted");
+            REQUIRE(CharacterErrors::PublicationRevisionExhausted.code.Value() == "character.publication_revision.exhausted");
         }
     }  // namespace
 }  // namespace Horo::Character

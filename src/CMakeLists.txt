@@ -209,6 +209,10 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
         runtime/save/SaveArchiveFraming.cpp
+        runtime/save/SaveArchiveFinalization.cpp
+        runtime/save/SaveArchiveFraming.cpp
+        runtime/save/SaveArchiveReader.cpp
+        runtime/save/SaveArchiveReaderValidation.cpp
         runtime/save/SaveCanonicalCodec.cpp
         runtime/save/SaveCanonicalScalarCodec.cpp
         runtime/save/SaveCanonicalCompositeWriter.cpp
@@ -538,6 +542,10 @@ add_library(HoroPhysics STATIC
         physics/CharacterErrors.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterWorld.cpp
+        physics/CharacterWorldCommandPipeline.cpp
+        physics/CharacterWorldCommandInternal.h
+        physics/CharacterWorldInternal.h
+        physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldSettings.cpp
         physics/GenerationalSlotStorage.h
         physics/PhysicsBodyDescriptor.cpp
@@ -694,6 +702,9 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationBakeInput.cpp
         runtime/navigation/api/NavigationBakeInputSnapshot.cpp
         runtime/navigation/api/NavigationCapabilities.cpp
+        runtime/navigation/api/NavigationDataSerialization.cpp
+        runtime/navigation/api/NavigationDataSerializationDecode.cpp
+        runtime/navigation/api/NavigationDataSerializationMigration.cpp
         runtime/navigation/api/NavigationErrors.cpp
         runtime/navigation/api/NavigationIdentity.cpp
         runtime/navigation/api/NavigationOutcomes.cpp

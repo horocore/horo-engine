@@ -1,5 +1,6 @@
 #include "Horo/Physics/CharacterControllerContracts.h"
 
+#include <algorithm>
 #include <cmath>
 #include <type_traits>
 
@@ -181,6 +182,72 @@ namespace Horo::Character {
         if (const auto bindings = ValidateDescriptorBindings(descriptor); bindings.HasError())
             return bindings;
         return ValidateDescriptorPolicy(descriptor);
+    }
+
+    /** @copydoc ValidateCharacterPhysicsQueryContext */
+    Result<void> ValidateCharacterPhysicsQueryContext(const CharacterPhysicsQueryContext &context,
+                                                      const CharacterPhysicsQueryExpectations &expected) {
+        if (const std::array expectedValid{expected.sceneGeneration != 0, expected.characterWorld.IsValid(),
+                                           expected.physicsWorld.IsValid(), expected.collisionFilterGeneration != 0,
+                                           expected.originGeneration != 0, expected.physicsSnapshotRevision != 0};
+            !std::ranges::all_of(expectedValid, std::identity{}))
+            return Result<void>::Failure(MakeError(CharacterErrors::WorldInvalid));
+        if (const std::array ownerMatches{context.sceneGeneration == expected.sceneGeneration,
+                                          context.characterWorld == expected.characterWorld, context.physicsWorld == expected.physicsWorld};
+            !std::ranges::all_of(ownerMatches, std::identity{}))
+            return Result<void>::Failure(MakeError(CharacterErrors::HandleWorldMismatch));
+        if (const std::array snapshotMatches{context.collisionFilterGeneration == expected.collisionFilterGeneration,
+                                             context.originGeneration == expected.originGeneration, context.tick == expected.tick,
+                                             context.physicsSnapshotRevision == expected.physicsSnapshotRevision};
+            !std::ranges::all_of(snapshotMatches, std::identity{}))
+            return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
+        if (context.overlap == nullptr)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::OperationUnsupported, "Character placement requires a Physics overlap probe."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCharacterOverlapProbeResult */
+    Result<void> ValidateCharacterOverlapProbeResult(const CharacterOverlapProbeResult &result) {
+        if (!Math::IsFinite(result.recoveryDisplacement))
+            return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Overlap recovery displacement must be finite."));
+        if (result.overlapCount == 0) {
+            if (Math::LengthSquared(result.recoveryDisplacement) > Math::DefaultEpsilon * Math::DefaultEpsilon)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::PlacementInvalid, "A clear overlap probe cannot provide a recovery displacement."));
+            return Result<void>::Success();
+        }
+        if (Math::LengthSquared(result.recoveryDisplacement) <= Math::DefaultEpsilon * Math::DefaultEpsilon)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::OverlapRecoveryFailed, "Overlapping geometry did not provide a depenetration displacement."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCharacterTransformPublication */
+    Result<void> ValidateCharacterTransformPublication(const CharacterTransformPublication &publication,
+                                                       const std::uint64_t expectedSceneGeneration,
+                                                       const CharacterWorldId expectedCharacterWorld) {
+        if (const auto owner =
+                ValidateCharacterControllerHandleOwner(publication.controller, expectedSceneGeneration, expectedCharacterWorld);
+            owner.HasError())
+            return owner;
+        if (publication.publicationRevision == 0 || !Math::IsFinite(publication.position) || !IsUnit(publication.heading) ||
+            !IsUnit(publication.up) ||
+            (publication.groundingRevalidationRequired && (publication.grounded || publication.platformAttached)))
+            return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Character transform publication is incoherent."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCharacterTeleportRequest */
+    Result<void> ValidateCharacterTeleportRequest(const CharacterTeleportRequest &request, const std::uint64_t expectedSceneGeneration,
+                                                  const CharacterWorldId expectedWorld) {
+        if (const auto owner = ValidateCharacterControllerHandleOwner(request.controller, expectedSceneGeneration, expectedWorld);
+            owner.HasError())
+            return owner;
+        if (request.tick == 0 || !Math::IsFinite(request.targetPosition) || !IsUnit(request.targetHeading))
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::RequestInvalid, "Teleport requires a positive tick, finite position and unit heading."));
+        return Result<void>::Success();
     }
 
     /** @copydoc ValidateCharacterMovementRequest */
