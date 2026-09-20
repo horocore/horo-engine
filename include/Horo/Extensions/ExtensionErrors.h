@@ -7,6 +7,8 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor LoadFailed;
     extern const ErrorCodeDescriptor MissingEntryPoint;
     extern const ErrorCodeDescriptor ContributionRejected;
+    /** @brief An editor-surface descriptor is malformed or violates its host contract. */
+    extern const ErrorCodeDescriptor EditorSurfaceDescriptorInvalid;
     extern const ErrorCodeDescriptor InvocationFailed;
     extern const ErrorCodeDescriptor ModuleResolutionFailed;
     /** @brief A lifecycle transition used the wrong owner, ordering, or state evidence. */
