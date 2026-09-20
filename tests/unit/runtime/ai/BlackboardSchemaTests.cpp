@@ -86,9 +86,23 @@ namespace Horo::AI {
             std::array duplicates{validKey, validKey};
             ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, duplicates}),
                         AIErrors::DescriptorConflict);
+            CHECK(keys[0] == validKey);
+        }
 
+        TEST_CASE("Blackboard schema rejects enum sentinels and unknown values transactionally", "[unit][ai][blackboard]") {
+            const auto validKey = Key(1, BlackboardValueKind::Boolean);
+            std::array keys{validKey};
+            const BlackboardSchemaDescriptor valid{MakeIdentity<BlackboardSchemaId>(1), 1, BlackboardUnknownValuePolicy::Reject, keys};
             auto invalid = validKey;
+            invalid.kind = BlackboardValueKind::Count;
+            ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
+                        AIErrors::BlackboardSchemaInvalid);
+            invalid = validKey;
             invalid.kind = static_cast<BlackboardValueKind>(255);
+            ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
+                        AIErrors::BlackboardSchemaInvalid);
+            invalid = validKey;
+            invalid.cardinality = BlackboardValueCardinality::Count;
             ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
                         AIErrors::BlackboardSchemaInvalid);
             invalid = validKey;
@@ -96,12 +110,22 @@ namespace Horo::AI {
             ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
                         AIErrors::BlackboardSchemaInvalid);
             invalid = validKey;
+            invalid.access = BlackboardKeyAccess::Count;
+            ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
+                        AIErrors::BlackboardSchemaInvalid);
+            invalid = validKey;
             invalid.access = static_cast<BlackboardKeyAccess>(255);
+            ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
+                        AIErrors::BlackboardSchemaInvalid);
+            invalid = validKey;
+            invalid.presence = BlackboardKeyPresence::Count;
             ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
                         AIErrors::BlackboardSchemaInvalid);
             invalid = validKey;
             invalid.presence = static_cast<BlackboardKeyPresence>(255);
             ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Reject, std::span{&invalid, 1}}),
+                        AIErrors::BlackboardSchemaInvalid);
+            ExpectError(BlackboardSchema::Capture({valid.identity, 1, BlackboardUnknownValuePolicy::Count, keys}),
                         AIErrors::BlackboardSchemaInvalid);
             ExpectError(BlackboardSchema::Capture({valid.identity, 1, static_cast<BlackboardUnknownValuePolicy>(255), keys}),
                         AIErrors::BlackboardSchemaInvalid);

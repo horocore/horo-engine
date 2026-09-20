@@ -604,6 +604,8 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
+        runtime/ai/api/DecisionAssetPlan.cpp
+        runtime/ai/api/DecisionAssetValidation.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
 )
@@ -839,6 +841,7 @@ target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Asset
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
+        runtime/prefab/PrefabDiagnostics.cpp
         runtime/prefab/PrefabDocument.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
