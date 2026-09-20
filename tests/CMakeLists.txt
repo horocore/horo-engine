@@ -548,6 +548,7 @@ horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;he
 
 add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
+        unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
