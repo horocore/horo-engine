@@ -477,6 +477,7 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderAdapter.h
     Horo/Runtime/Render/RenderAdapterErrors.h
     Horo/Runtime/Render/RenderBackend.h
+    Horo/Runtime/Render/RenderCapabilities.h
     Horo/Runtime/Render/RenderDisplay.h
     Horo/Runtime/Render/RenderDisplayErrors.h
     Horo/Runtime/Render/PresentMode.h

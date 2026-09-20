@@ -148,6 +148,37 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] RenderCapabilitySnapshot MakeOpenGLCapabilitySnapshot(const OpenGLContextFacts &facts,
+                                                                            const bool resourcesAvailable) noexcept {
+            RenderCapabilitySnapshot snapshot{
+                .deviceIncarnation = 1,
+                .capabilityRevision = 1,
+                .synthetic = false,
+                .features = {},
+                .queues = {.graphics = true, .compute = false, .copy = false, .present = true},
+                .limits = {.maxBufferBytes = resourcesAvailable ? 4ULL * 1024ULL * 1024ULL * 1024ULL : 0,
+                           .maxTextureDimension2D = resourcesAvailable ? facts.maxTexture2DSize : 0,
+                           .maxColorAttachments = resourcesAvailable ? facts.maxColorAttachments : 0,
+                           .maxVertexAttributes = resourcesAvailable ? facts.maxVertexAttributes : 0,
+                           .maxFramesInFlight = 8},
+                .formats = {},
+            };
+            snapshot.features.Enable(RenderCapability::Presentation);
+            if (resourcesAvailable) {
+                for (const RenderCapability capability :
+                     {RenderCapability::OffscreenTargets, RenderCapability::BufferResources, RenderCapability::MeshResources,
+                      RenderCapability::TextureResources, RenderCapability::RenderTargetResources})
+                    snapshot.features.Enable(capability);
+                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba8Unorm)] =
+                    RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
+                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth24Stencil8)] =
+                    RenderTextureUsage::RenderAttachment;
+                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = RenderTextureUsage::RenderAttachment;
+                snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
+            }
+            return snapshot;
+        }
+
         /** @brief OpenGL backend owning one presentation-port context lifecycle. */
         class OpenGLRenderBackend final : public IRenderBackend {  // NOSONAR(cpp:S1448)
         public:
@@ -359,6 +390,7 @@ namespace Horo::Render {
 
                 contextFacts_ = facts.Value();
                 const bool resourcesAvailable = functions_.HasResourceFunctions();
+                capabilities_.support = MakeOpenGLCapabilitySnapshot(contextFacts_, resourcesAvailable);
                 capabilities_.supportsOffscreenTargets = resourcesAvailable && contextFacts_.maxColorAttachments > 0;
                 capabilities_.supportsBufferResources = resourcesAvailable;
                 capabilities_.supportsMeshResources = resourcesAvailable && contextFacts_.maxVertexAttributes > 0;
@@ -501,6 +533,7 @@ namespace Horo::Render {
                 capabilities_.supportsMeshResources = false;
                 capabilities_.supportsTextureResources = false;
                 capabilities_.supportsRenderTargetResources = false;
+                capabilities_.support = {};
             }
 
             void ReleaseContextLease() noexcept {
@@ -530,6 +563,7 @@ namespace Horo::Render {
                 .supportsCompute = false,
                 .supportsBindlessResources = false,
                 .supportsRayTracing = false,
+                .support = {},
             };
             OpenGLContextFacts contextFacts_{};
             std::thread::id ownerThread_{};

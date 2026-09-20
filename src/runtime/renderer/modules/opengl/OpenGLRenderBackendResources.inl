@@ -5,6 +5,9 @@ Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor 
     if (!initialized_ || !functions_.HasResourceFunctions() || !descriptor.IsValid() || !required.has_value())
         return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
                                                                "OpenGL buffer memory requirements are unavailable for this descriptor."));
+    if (!capabilities_.support.Supports(descriptor))
+        return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                                               "OpenGL buffer request exceeds the advertised capability limit."));
     return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(1, descriptor.byteSize, *required));
 }
 
@@ -13,7 +16,7 @@ Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescripto
     const auto payload = RenderTextureBaseLevelByteSize(descriptor);
     const auto required = payload.has_value() ? ConservativeRequirement(*payload) : std::nullopt;
     if (!initialized_ || !functions_.HasResourceFunctions() || !payload.has_value() || !required.has_value() ||
-        !IsSupportedTextureDescriptor(descriptor))
+        !IsSupportedTextureDescriptor(descriptor) || !capabilities_.support.formats.Supports(descriptor))
         return Result<RenderMemoryCostPlan>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
                                                                "OpenGL texture memory requirements are unavailable for this descriptor."));
     return Result<RenderMemoryCostPlan>::Success(MemoryCostPlan(2, *payload, *required));
@@ -24,10 +27,11 @@ Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, con
                                    const RenderMemoryPlacement &placement) override {
     if (auto failure = ResourceCreationFailure(); failure.has_value())
         return std::move(*failure);
-    if (const auto cost = QueryBufferMemoryCost(descriptor);
-        !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
-        !MatchesPlacement(cost.Value(), placement) ||
-        descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
+    const auto cost = QueryBufferMemoryCost(descriptor);
+    if (cost.HasError())
+        return Result<std::uint64_t>::Failure(cost.ErrorValue());
+    if (!descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) ||
+        !MatchesPlacement(cost.Value(), placement) || descriptor.byteSize > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()))
         return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig, "OpenGL buffer creation request is invalid."));
     std::uint32_t buffer = 0;
     functions_.buffers.generateBuffers(1, &buffer);
@@ -109,9 +113,11 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
         return std::move(*failure);
     const auto bytes = RenderTextureBaseLevelByteSize(textureDescriptor);
     const auto cost = QueryTextureMemoryCost(textureDescriptor);
+    if (cost.HasError())
+        return Result<std::uint64_t>::Failure(cost.ErrorValue());
     if (constexpr auto maximumExtent = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
-        !bytes.has_value() || (!textureData.empty() && textureData.size() != *bytes) || cost.HasError() ||
-        !MatchesPlacement(cost.Value(), placement) || textureDescriptor.extent.width > maximumExtent ||
+        !bytes.has_value() || (!textureData.empty() && textureData.size() != *bytes) || !MatchesPlacement(cost.Value(), placement) ||
+        textureDescriptor.extent.width > maximumExtent ||
         textureDescriptor.extent.height > maximumExtent || textureDescriptor.extent.width > contextFacts_.maxTexture2DSize ||
         textureDescriptor.extent.height > contextFacts_.maxTexture2DSize)
         return Result<std::uint64_t>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig, "OpenGL texture creation request is invalid."));
