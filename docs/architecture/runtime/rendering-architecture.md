@@ -1693,8 +1693,10 @@ summary, backends classify failure as:
 - device/context recreation required
 - fatal unsupported or corrupted state
 
-The host accepts the first current generation-bound loss fact at a render safe
-point, aborts the active frame exactly once, freezes ADR-048 evidence, closes
+A recoverable frame failure aborts only that frame and returns the backend to
+`Ready`. Surface-only loss follows ADR-033 and does not close the device
+generation. For an accepted device/context loss, the host aborts the active
+frame exactly once at a render safe point, freezes ADR-048 evidence, closes
 old-generation admission, and replaces the native owner. Recovery reruns
 adapter/capability/profile admission and rebuilds snapshots, plans, surface
 state and resources. The replacement receives a new ADR-027 resource owner;
@@ -1705,8 +1707,7 @@ retained CPU data, or owner rebuild). Resources without a source are
 `NonRecoverable` and their owners are notified. If required admission,
 realization or reconstruction fails, the host publishes typed `TerminalFailure`
 without changing project state or silently switching an interactive host to
-Null/another backend. Surface-only loss follows ADR-033 and does not close the
-device generation.
+Null/another backend.
 
 ## Null Renderer
 
