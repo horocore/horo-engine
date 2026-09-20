@@ -149,6 +149,15 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PlaybackRequestInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.playback_request.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The transient audio playback request is invalid.",
+        .remediationHint = "Submit an assigned sound, active scene context and finite playback/concurrency values.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor FormatRegistryInvalid{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.format_registry.invalid"},
