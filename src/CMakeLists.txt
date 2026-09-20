@@ -604,6 +604,8 @@ add_library(HoroAI STATIC
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
+        runtime/ai/api/DecisionAssetPlan.cpp
+        runtime/ai/api/DecisionAssetValidation.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
 )

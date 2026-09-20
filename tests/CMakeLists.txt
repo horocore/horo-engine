@@ -351,6 +351,7 @@ add_executable(HoroAITests
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
         unit/runtime/ai/BlackboardSchemaTests.cpp
+        unit/runtime/ai/DecisionAssetValidationTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
 )

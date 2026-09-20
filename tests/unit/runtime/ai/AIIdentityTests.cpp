@@ -133,8 +133,8 @@ namespace Horo::AI {
             CHECK(exhausted.ErrorValue().code.Value() == AIErrors::GenerationExhausted.code.Value());
         }
 
-        TEST_CASE("AI identity errors expose stable unique descriptors", "[unit][ai][errors]") {
-            const std::array descriptors{
+        [[nodiscard]] auto MakeCoreAiErrorDescriptors() {
+            return std::array{
                 &AIErrors::IdentityInvalid,
                 &AIErrors::DescriptorConflict,
                 &AIErrors::DescriptorLimitExceeded,
@@ -166,13 +166,35 @@ namespace Horo::AI {
                 &AIErrors::PerceptionCapabilityUnavailable,
                 &AIErrors::PerceptionRegistryStorageUnavailable,
             };
+        }
+
+        [[nodiscard]] auto MakeDecisionAssetErrorDescriptors() {
+            return std::array{
+                &AIErrors::DecisionAssetSchemaInvalid,           &AIErrors::DecisionAssetLimitExceeded,
+                &AIErrors::DecisionAssetDescriptorMissing,       &AIErrors::DecisionAssetDescriptorAmbiguous,
+                &AIErrors::DecisionAssetDescriptorIncompatible,  &AIErrors::DecisionAssetSchemaMissing,
+                &AIErrors::DecisionAssetSchemaAmbiguous,         &AIErrors::DecisionAssetSchemaIncompatible,
+                &AIErrors::DecisionAssetBindingMissing,          &AIErrors::DecisionAssetBindingAmbiguous,
+                &AIErrors::DecisionAssetBindingTypeMismatch,     &AIErrors::DecisionAssetBindingAccessMismatch,
+                &AIErrors::DecisionAssetBindingPresenceMismatch, &AIErrors::DecisionAssetBindingDefaultMissing,
+                &AIErrors::DecisionAssetSubtreeMissing,          &AIErrors::DecisionAssetSubtreeAmbiguous,
+                &AIErrors::DecisionAssetSubtreeIncompatible,     &AIErrors::DecisionAssetDependencyCycle,
+                &AIErrors::DecisionAssetStorageUnavailable,      &AIErrors::DecisionAssetActivationInvalid,
+            };
+        }
+
+        TEST_CASE("AI identity errors expose stable unique descriptors", "[unit][ai][errors]") {
             std::set<std::string_view> uniqueCodes;
-            for (const ErrorCodeDescriptor *descriptor : descriptors) {
-                CHECK(descriptor->domain.Value() == "horo.ai");
-                CHECK(uniqueCodes.insert(descriptor->code.Value()).second);
-                CHECK_FALSE(descriptor->summary.empty());
-                CHECK_FALSE(descriptor->remediationHint.empty());
-            }
+            const auto validate = [&uniqueCodes](const auto &descriptors) {
+                for (const ErrorCodeDescriptor *descriptor : descriptors) {
+                    CHECK(descriptor->domain.Value() == "horo.ai");
+                    CHECK(uniqueCodes.insert(descriptor->code.Value()).second);
+                    CHECK_FALSE(descriptor->summary.empty());
+                    CHECK_FALSE(descriptor->remediationHint.empty());
+                }
+            };
+            validate(MakeCoreAiErrorDescriptors());
+            validate(MakeDecisionAssetErrorDescriptors());
             CHECK(AIErrors::GenerationExhausted.defaultSeverity == ErrorSeverity::Critical);
         }
     }  // namespace
