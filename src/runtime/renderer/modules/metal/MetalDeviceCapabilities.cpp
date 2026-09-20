@@ -46,6 +46,31 @@ namespace Horo::Render::Detail {
                    (facts.architecture == MetalHostArchitecture::X86_64 && facts.supportsMac2);
         }
 
+        [[nodiscard]] RenderCapabilitySnapshot MakeCapabilitySnapshot(const MetalDeviceFacts &facts) {
+            RenderCapabilitySnapshot support{
+                .deviceIncarnation = 1,
+                .capabilityRevision = 1,
+                .synthetic = false,
+                .features = {},
+                .queues = {.graphics = true, .compute = false, .copy = false, .present = facts.adapter.supportsPresentation},
+                .limits = {.maxBufferBytes = facts.maxBufferLength,
+                           .maxTextureDimension2D = facts.maxTextureDimension2D,
+                           .maxColorAttachments = 8,
+                           .maxVertexAttributes = 31,
+                           .maxFramesInFlight = 3},
+                .formats = {},
+            };
+            for (const RenderCapability capability :
+                 {RenderCapability::OffscreenTargets, RenderCapability::BufferResources, RenderCapability::MeshResources,
+                  RenderCapability::TextureResources, RenderCapability::RenderTargetResources})
+                support.features.Enable(capability);
+            if (facts.adapter.supportsPresentation)
+                support.features.Enable(RenderCapability::Presentation);
+            support.formats.usages = facts.formats.usages;
+            support.formats.sampleCountMask = facts.formats.sampleCountMask;
+            return support;
+        }
+
         [[nodiscard]] Result<void> ValidateDeviceFacts(const MetalDeviceFacts &facts) {
             if (!HasIdentityAndLimits(facts)) {
                 return Result<void>::Failure(
@@ -134,28 +159,6 @@ namespace Horo::Render::Detail {
                                "The selected Metal adapter cannot present to the host display."));
         }
 
-        RenderCapabilitySnapshot support{
-            .deviceIncarnation = 1,
-            .capabilityRevision = 1,
-            .synthetic = false,
-            .features = {},
-            .queues = {.graphics = true, .compute = false, .copy = false, .present = facts.adapter.supportsPresentation},
-            .limits = {.maxBufferBytes = facts.maxBufferLength,
-                       .maxTextureDimension2D = facts.maxTextureDimension2D,
-                       .maxColorAttachments = 8,
-                       .maxVertexAttributes = 31,
-                       .maxFramesInFlight = 3},
-            .formats = {},
-        };
-        for (const RenderCapability capability :
-             {RenderCapability::OffscreenTargets, RenderCapability::BufferResources, RenderCapability::MeshResources,
-              RenderCapability::TextureResources, RenderCapability::RenderTargetResources})
-            support.features.Enable(capability);
-        if (facts.adapter.supportsPresentation)
-            support.features.Enable(RenderCapability::Presentation);
-        support.formats.usages = facts.formats.usages;
-        support.formats.sampleCountMask = facts.formats.sampleCountMask;
-
         MetalDeviceCapabilities capabilities{
             .adapter = facts.adapter,
             .discoveryRevision = facts.discoveryRevision,
@@ -177,7 +180,7 @@ namespace Horo::Render::Detail {
                     .supportsMeshResources = true,
                     .supportsTextureResources = true,
                     .supportsRenderTargetResources = true,
-                    .support = std::move(support),
+                    .support = MakeCapabilitySnapshot(facts),
                 },
         };
         return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));

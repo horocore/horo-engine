@@ -163,25 +163,36 @@ namespace Horo::Render {
 
     /** @brief Immutable capability snapshot used for resource and plan admission. */
     struct RenderCapabilitySnapshot final {
-        std::uint64_t deviceIncarnation{0};
-        std::uint64_t capabilityRevision{0};
-        bool synthetic{false};
-        RenderCapabilitySet features;
-        RenderQueueCapabilities queues;
-        RenderResourceLimits limits;
-        RenderFormatCapabilities formats;
+        std::uint64_t deviceIncarnation{0};  /**< Non-zero identity for the admitted device instance. */
+        std::uint64_t capabilityRevision{0}; /**< Non-zero revision for this capability snapshot. */
+        bool synthetic{false};               /**< Whether the snapshot represents a non-native test or null device. */
+        RenderCapabilitySet features;        /**< Feature support advertised by the backend. */
+        RenderQueueCapabilities queues;      /**< Queue families available to the backend. */
+        RenderResourceLimits limits;         /**< Bounded resource and frame limits. */
+        RenderFormatCapabilities formats;    /**< Format, usage, and sample-count support. */
 
-        /** @brief Reports whether identity and capability data are bounded and coherent. */
+        /**
+         * @brief Reports whether identity and capability data are bounded and coherent.
+         * @return `true` when the snapshot can be used for admission decisions.
+         */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return deviceIncarnation != 0 && capabilityRevision != 0 && features.IsValid() && limits.IsValid();
         }
 
-        /** @brief Reports whether the snapshot admits one buffer request. */
+        /**
+         * @brief Reports whether the snapshot admits one buffer request.
+         * @param descriptor Buffer request to validate.
+         * @return `true` when the feature and size limits admit the request.
+         */
         [[nodiscard]] constexpr bool Supports(const RenderBufferDescriptor &descriptor) const noexcept {
             return features.Supports(RenderCapability::BufferResources) && limits.Supports(descriptor);
         }
 
-        /** @brief Reports whether the snapshot admits one texture request. */
+        /**
+         * @brief Reports whether the snapshot admits one texture request.
+         * @param descriptor Texture request to validate.
+         * @return `true` when feature, extent, format, usage, and sample limits admit the request.
+         */
         [[nodiscard]] constexpr bool Supports(const RenderTextureDescriptor &descriptor) const noexcept {
             return features.Supports(RenderCapability::TextureResources) && limits.Supports(descriptor) && formats.Supports(descriptor);
         }
