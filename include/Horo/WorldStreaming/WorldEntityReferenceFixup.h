@@ -72,7 +72,7 @@ namespace Horo::WorldStreaming {
         WorldRuntimeEntityId runtime{};     /**< Opaque runtime token owned by the Scene authority. */
 
         /** @brief Checks the complete mapping representation. @return True when endpoint and runtime token are valid. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
+        [[nodiscard]] bool IsValid() const noexcept {
             return endpoint.IsValid() && runtime.IsValid();
         }
 
