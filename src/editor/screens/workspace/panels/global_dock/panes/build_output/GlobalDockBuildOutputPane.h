@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Foundation/BuildOutputStore.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 
 #include <array>
@@ -70,6 +71,21 @@ namespace Horo::Editor {
         [[nodiscard]] static BuildStatusPresentation ProjectStatusPresentation(const BuildOutputRecord &record) noexcept;
 
     private:
+        struct ToolbarStatusChipLayout {
+            float x;
+            float controlY;
+            float scale;
+            float gap;
+            const EditorGuiContext *context;
+            GlobalDockToolbarChipProps allProps;
+            GlobalDockToolbarChipProps errorProps;
+            GlobalDockToolbarChipProps warningProps;
+            float allWidth;
+            float errorWidth;
+            float warningWidth;
+            float fixedWidth;
+        };
+
         [[nodiscard]] bool RefreshSnapshot();
         void RebuildFilter();
         [[nodiscard]] static bool PassesStatusFilter(const BuildOutputRecord &record, StatusFilter filter) noexcept;
@@ -78,20 +94,19 @@ namespace Horo::Editor {
         [[nodiscard]] float DrawToolbarStatus(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
                                               const EditorGuiContext &context, std::size_t errorCount, std::size_t warningCount,
                                               float controlY);
-        float DrawToolbarStatusChips(float x, float controlY, float scale, float gap, const Theme::Fonts &fonts,
-                                     const GlobalDockToolbarChipProps &allProps, const GlobalDockToolbarChipProps &errorProps,
-                                     const GlobalDockToolbarChipProps &warningProps, float allWidth, float errorWidth, float warningWidth);
+        [[nodiscard]] ToolbarStatusChipLayout ResolveToolbarStatusChipLayout(const EditorGuiContext &context, std::size_t errorCount,
+                                                                             std::size_t warningCount, float scale, float gap);
+        float DrawToolbarStatusChips(const ToolbarStatusChipLayout &layout);
         void DrawToolbarTargets(const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float x, float controlY);
         void DrawTable(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                        EditorWorkspaceViewCommandData &command, bool snapshotChanged);
         void DrawTableHeader(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                              float scale);
         void DrawTableRows(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
-                           EditorWorkspaceViewCommandData &command, bool snapshotChanged, float levelX, float lineX, float fileX,
-                           float messageX);
+                           EditorWorkspaceViewCommandData &command, bool snapshotChanged);
         void DrawTableRow(const BuildOutputRecord &record, std::size_t visibleIndex, const GlobalDockPaneRegions &regions,
                           const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
-                          float levelX, float lineX, float fileX, float messageX, ImDrawList &drawList);
+                          ImDrawList &drawList);
         void DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                         std::size_t errorCount, std::size_t warningCount);
 
