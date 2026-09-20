@@ -100,10 +100,14 @@ namespace Horo::Application::Internal {
                     "The current headless host does not link an interactive renderer or OpenTelemetry module.");
             }
             std::vector<ModuleDescriptor> modules;
-            modules.reserve(3);
+            modules.reserve(7);
             modules.push_back(Describe("horo.foundation"));
+            modules.push_back(Describe("horo.security", {"horo.foundation"}));
+            modules.push_back(Describe("horo.platform", {"horo.foundation", "horo.security"}));
+            modules.push_back(Describe("horo.assets", {"horo.foundation"}));
             modules.push_back(Describe("horo.application", {"horo.foundation"}));
-            modules.push_back(Describe("horo.host.cli", {"horo.application"}));
+            modules.push_back(Describe("horo.extensions", {"horo.foundation", "horo.platform", "horo.assets", "horo.security"}));
+            modules.push_back(Describe("horo.host.cli", {"horo.application", "horo.extensions"}));
             return Result<std::vector<ModuleDescriptor>>::Success(std::move(modules));
         }
 

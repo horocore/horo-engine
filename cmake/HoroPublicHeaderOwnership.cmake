@@ -174,6 +174,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/HandshakeNegotiation.h
     Horo/Network/NetworkObjectMapping.h
     Horo/Network/PeerSessionLifecycle.h
+    Horo/Network/ReplicationWorldLifecycle.h
 )
 horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
     Horo/Network/DeterministicTransport.h
@@ -229,6 +230,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetImportOperation.h
     Horo/Assets/AssetImporter.h
     Horo/Assets/AssetPreview.h
+    Horo/Assets/AssetPreviewService.h
     Horo/Assets/AssetProvider.h
     Horo/Assets/AssetRegistry.h
     Horo/Assets/AssetReimport.h
@@ -547,6 +549,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/EditorMenuModel.h
     Horo/Editor/EditorModalHost.h
     Horo/Editor/EditorServiceRegistry.h
+    Horo/Editor/EditorSurfaceIdentity.h
     Horo/Editor/EditorSettingsEvents.h
     Horo/Editor/EditorSettingsService.h
     Horo/Editor/EditorSettingsStore.h
@@ -599,6 +602,7 @@ horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ApplicationCapabilityRegistry.h
+    Horo/Extensions/AssetCookerRegistry.h
     Horo/Extensions/BackendServiceRegistry.h
     Horo/Extensions/ExtensionAbi.h
     Horo/Extensions/ExtensionAbiConformance.h
@@ -612,6 +616,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionManifest.h
     Horo/Extensions/ExtensionModuleResolution.h
     Horo/Extensions/ExtensionMarketplace.h
+    Horo/Extensions/HeadlessExtensionHost.h
     Horo/Extensions/PipelineStepRegistry.h
     Horo/Extensions/ProjectValidatorRegistry.h
     Horo/Extensions/ToolchainProviderRegistry.h

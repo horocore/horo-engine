@@ -64,6 +64,33 @@ namespace Horo::Assets::AssetErrors {
                                             "Retry after existing loads complete."};
     const ErrorCodeDescriptor LoadShutdown{kDomain, ErrorCode{"asset.load.shutdown"}, kError, "The asset load service is shutting down.",
                                            "Do not submit new work."};
+    const ErrorCodeDescriptor PreviewRequestInvalid{kDomain, ErrorCode{"asset.preview.request_invalid"}, kError,
+                                                    "The asset preview request is invalid.",
+                                                    "Provide a bounded absolute asset request and a valid provider identity."};
+    const ErrorCodeDescriptor PreviewInputTooLarge{kDomain, ErrorCode{"asset.preview.input_too_large"}, kError,
+                                                   "The asset preview input exceeds its configured bound.",
+                                                   "Reduce the imported payload or increase the explicit host limit."};
+    const ErrorCodeDescriptor PreviewReadFailed{kDomain, ErrorCode{"asset.preview.read_failed"}, kError,
+                                                "The imported asset payload could not be read safely.",
+                                                "Verify that the asset is a regular readable file."};
+    const ErrorCodeDescriptor PreviewOutputInvalid{kDomain, ErrorCode{"asset.preview.output_invalid"}, kError,
+                                                   "The preview provider returned an invalid or oversized image.",
+                                                   "Return a bounded tightly packed RGBA8 image."};
+    const ErrorCodeDescriptor PreviewProviderFailed{kDomain, ErrorCode{"asset.preview.provider_failed"}, kError,
+                                                    "The preview provider failed across the host exception boundary.",
+                                                    "Fix or disable the failing preview contribution."};
+    const ErrorCodeDescriptor PreviewCancelled{kDomain, ErrorCode{"asset.preview.cancelled"}, kError,
+                                               "The asset preview request was cancelled.",
+                                               "Retry while the owning editor view remains active."};
+    const ErrorCodeDescriptor PreviewNotReady{kDomain, ErrorCode{"asset.preview.not_ready"}, kError,
+                                              "The asset preview request has not completed.", "Poll or wait before taking its result."};
+    const ErrorCodeDescriptor PreviewConsumed{kDomain, ErrorCode{"asset.preview.consumed"}, kError,
+                                              "The asset preview result was already consumed.", "Retain the consumed preview image."};
+    const ErrorCodeDescriptor PreviewQueueFull{kDomain, ErrorCode{"asset.preview.queue_full"}, kError,
+                                               "The asset preview queue is at capacity.",
+                                               "Retry after current preview work reaches a terminal state."};
+    const ErrorCodeDescriptor PreviewShutdown{kDomain, ErrorCode{"asset.preview.shutdown"}, kError,
+                                              "The asset preview service is shutting down.", "Do not submit new preview work."};
 }  // namespace Horo::Assets::AssetErrors
 
 namespace Horo::Assets::CookErrors {

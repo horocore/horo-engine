@@ -129,6 +129,21 @@ the selected GUI renderer, and destroys the texture when the directory or panel
 lifetime ends. Missing or failed providers select host-owned mesh, image, audio,
 or generic fallbacks by declared asset type.
 
+`AssetPreviewService` is the host-owned execution boundary. It admits a bounded
+number of requests to the process `JobSystem`, reads regular files in cancellable
+chunks under an explicit byte limit, and rejects invalid dimensions or RGBA8
+output before publication. Every accepted request retains a shared provider
+lease until its job reaches one terminal state, so package/catalog replacement
+cannot unload code underneath an invocation. Shutdown stops admission, requests
+cancellation, joins all accepted work, and only then releases provider leases.
+
+Successful images are cached in a bounded in-memory LRU using a host-computed
+key over the owning module identity/version, contribution identity/version,
+asset type, requested dimensions, and exact payload digest. Absolute paths are
+diagnostic only and do not affect reuse. Editor navigation cancels obsolete handles; a late completion is applied
+only when the current card still has the same absolute path, contribution, and
+provider version. GPU texture caching remains a separate renderer-owned layer.
+
 Identity sidecars retain the importer contribution ID so asset types shared by
 multiple importers resolve the provider that authored the payload. This field is
 advisory for editor presentation; runtime identity and dependency resolution

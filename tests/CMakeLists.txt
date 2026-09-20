@@ -219,6 +219,7 @@ add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/HandshakeNegotiationTests.cpp
         unit/runtime/networking/NetworkObjectMappingTests.cpp
         unit/runtime/networking/PeerSessionLifecycleTests.cpp
+        unit/runtime/networking/ReplicationWorldLifecycleTests.cpp
 )
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime)
@@ -865,6 +866,11 @@ add_executable(HoroWorkspacePanelHostTests
         unit/editor/WorkspacePanelHostTests.cpp
 )
 target_link_libraries(HoroWorkspacePanelHostTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroEditorSurfaceIdentityTests
+        unit/editor/EditorSurfaceIdentityTests.cpp
+)
+target_compile_features(HoroEditorSurfaceIdentityTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -1596,6 +1602,12 @@ target_include_directories(HoroAssetProviderTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/runtime_provider
 )
 target_link_libraries(HoroAssetProviderTests PRIVATE HoroEngine::Assets)
+add_executable(HoroAssetPreviewServiceTests
+        unit/runtime/assets/AssetPreviewServiceTests.cpp
+)
+target_compile_features(HoroAssetPreviewServiceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAssetPreviewServiceTests PRIVATE HoroEngine::Assets)
+horo_register_catch_test(HoroAssetPreviewServiceTests LABELS "assets;preview;headless")
 add_executable(HoroAssetCookTests
         unit/runtime/assets/AssetCookContractTests.cpp
 )
@@ -1758,6 +1770,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionAbiConformanceTests.cpp
         unit/extensions/ExtensionAbiIntegrationTests.cpp
         unit/extensions/ExternalImporterRegistrationTests.cpp
+        integration/extensions/HeadlessExtensionHostTests.cpp
 )
 foreach(abi_fixture_mode RANGE 0 8)
     set(abi_fixture_target HoroExtensionAbiFixture${abi_fixture_mode})
@@ -1832,6 +1845,13 @@ add_executable(HoroPipelineStepRegistryTests
 target_compile_features(HoroPipelineStepRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPipelineStepRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
 add_test(NAME HoroPipelineStepRegistryTests COMMAND HoroPipelineStepRegistryTests)
+
+add_executable(HoroAssetCookerRegistryTests
+        unit/extensions/AssetCookerRegistryTests.cpp
+)
+target_compile_features(HoroAssetCookerRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAssetCookerRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroAssetCookerRegistryTests COMMAND HoroAssetCookerRegistryTests)
 
 add_library(HoroBackendServiceReference STATIC
         fixtures/extensions/BackendServiceReference.cpp
@@ -2063,6 +2083,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroEditorSettingsStoreTests
         HoroWorkspaceLayoutTests
         HoroWorkspacePanelHostTests
+        HoroEditorSurfaceIdentityTests
         HoroWorkspaceLayoutPersistenceTests
         HoroActivityBarLayoutTests
         HoroWorkspaceSplitterInteractionTests

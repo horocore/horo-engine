@@ -120,7 +120,7 @@ device backend.
 | `HoroEditorViewportMetal` (`HoroEngine::EditorViewportMetal`) | Apple, GUI, and Metal | Owns the Metal ImGui/viewport/presentation bridge. Objective-C++ and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderMetal (public) |
 | `HoroGui` (`HoroEngine::Gui`) | Editor GUI only | Owns ImGui screens, modals, panels, workspace controllers, and design-system implementation. ImGui is private, while all of `include/` and `src/` are exported as public include roots. | EditorServices, Foundation (public); EditorRenderExtraction and Extensions (private) |
 | `HoroHostModuleComposition` | Always | Non-installed application-host composition contract under `apps/common/`. It describes and activates the real linked module profiles for supported hosts without exposing an SDK header. | Foundation (public) |
-| `horo-engine` | Always | Terminal/headless composition root. It currently composes only Application and does not yet compose CLI command or MCP targets. | Application (private) |
+| `horo-engine` | Always | Terminal/headless composition root. It owns the backend-extension composition without linking GUI or renderer targets; CLI command and MCP target composition remain follow-up work. | Application, Extensions (private) |
 | `HoroEditor` | Editor GUI only | Graphical composition root. It selects GUI, editor services/extraction, runtime, extensions, platform, input, migrations, frontend, and enabled concrete viewport backends. | Composition-only private links |
 
 ## Public Header Inventory And Boundary
@@ -202,7 +202,8 @@ The normative policy and current exception inventory live in
 
 The two supported executable roots now register and activate explicit descriptor
 graphs through the shared, non-installed `HoroHostModuleComposition` target. The
-headless profile contains only Foundation, Application, and the CLI host. The
+headless profile contains Foundation, Security, Platform, Assets, Application,
+Extensions, and the CLI host. The
 editor profile mirrors the real linked first-party module closure and selects
 exactly one concrete renderer and viewport adapter before window or presentation
 creation. Optional OpenTelemetry participation is derived from the same build

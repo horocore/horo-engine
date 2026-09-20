@@ -329,6 +329,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp
         runtime/networking/PeerSessionLifecycle.cpp
+        runtime/networking/ReplicationWorldLifecycle.cpp
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
@@ -391,6 +392,7 @@ add_library(HoroAssets STATIC
         runtime/assets/registry/AssetRegistry.cpp
         runtime/assets/runtime_provider/AssetProviderRead.h
         runtime/assets/runtime_provider/AssetProvider.cpp
+        runtime/assets/preview/AssetPreviewService.cpp
         runtime/assets/cooker/AssetCookTypes.cpp
         runtime/assets/cooker/CookCatalog.cpp
         runtime/assets/cooker/builtin/HeadlessMeshCooker.cpp
@@ -400,6 +402,7 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/AssetImporterCatalog.cpp
         runtime/assets/importer/AssetImportMetadata.cpp
         runtime/assets/importer/AssetImportOperation.cpp
+        runtime/assets/importer/AssetImportFileFacts.cpp
         runtime/assets/importer/AssetReimport.cpp
         runtime/assets/importer/ProjectAssetImportCommitter.cpp
         runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.cpp
@@ -1056,6 +1059,7 @@ target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::Foundation
         HoroEngine::Prefab
+        HoroEngine::PrefabAuthoring
         HoroEngine::SceneModel
         HoroEngine::RuntimeScene
 )
@@ -1145,6 +1149,7 @@ endif ()
 
 add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
+        editor/EditorSurfaceIdentity.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneFileWatchService.cpp
@@ -1362,6 +1367,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/ExtensionActivationTransaction.cpp
         extensions/host/ExtensionModuleResolution.cpp
+        extensions/host/HeadlessExtensionHost.cpp
         extensions/host/ExtensionAbiValidation.cpp
         extensions/host/ExtensionAbiConformance.cpp
         extensions/registry/ApplicationCapabilityRegistry.cpp
@@ -1374,6 +1380,9 @@ add_library(HoroExtensions STATIC
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
+        extensions/capabilities/asset_pipeline_points/ExternalAssetImporterConversion.cpp
+        extensions/capabilities/asset_cooker/AssetCookerErrors.cpp
+        extensions/capabilities/asset_cooker/AssetCookerRegistry.cpp
         extensions/capabilities/project_validator/ProjectValidatorRegistry.cpp
         extensions/capabilities/pipeline_step/PipelineStepRegistry.cpp
         extensions/capabilities/toolchain_provider/ToolchainProviderRegistry.cpp

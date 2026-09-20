@@ -302,6 +302,20 @@ Initial editor and tool extension points:
 | `project.browser_action` | Add project-browser actions. | Host owns selected project context and confirmation UI. |
 | `mcp.tool` | Add MCP tools subject to permission policy. | MCP host owns transport, schema, and authorization. |
 
+`AssetCookerRegistry` is the synchronous typed host boundary for `asset.cooker`.
+Each publication declares one stable contribution identity, an exact provider
+generation, one imported asset type, sorted target identities, and the cooker
+and artifact-format versions that enter the deterministic cache key. The host
+validates the source digest and all bounds before selection, rejects ambiguous
+type/target claims unless project policy names one exact contribution, and
+computes the cache key itself. Providers receive only immutable borrowed source
+bytes, typed identities, canonical digests, cooperative cancellation, and a
+bounded staging sink. Payload, dependencies, and structured diagnostics become
+visible only after a complete successful call; failure, cancellation, malformed
+output, unregistration, and shutdown discard staged output. Cache storage,
+dependency scheduling, output placement, and generation publication remain
+Assets host authorities rather than provider capabilities.
+
 `ProjectValidatorRegistry` is the synchronous typed host boundary for
 `project.validator`. Registration publishes inert provider metadata only. At
 validation admission, the registry takes strong provider leases in canonical
@@ -341,6 +355,20 @@ preserves provider/tool attribution, and wraps policy or platform failures with
 their typed cause. Releasing a publication or beginning shutdown revokes future
 calls and requests cancellation of every admitted process for that exact
 generation.
+
+`HeadlessExtensionHost` is the CLI and automation composition owner for these
+backend extension points. Before startup it retains every application-capability,
+cooker, validator, pipeline-step, and toolchain-provider registration and the
+mutable importer candidate. `Start` discovers only package-graph-declared
+locations under approved roots, activates modules with the `Headless` profile,
+and publishes the importer catalog only after the complete activation set
+succeeds. Typed work is admitted only while the host is ready; failures retain
+their original error and cause chain in a bounded attributed diagnostic snapshot.
+Shutdown first closes registry admission and cancels registry-owned process work,
+then removes registrations, releases the manager lease, and finally releases
+importer snapshots that may still retain native code. The terminal host links
+Extensions, Assets, Platform, and Security but no GUI, ImGui, window, or renderer
+target.
 
 `editor.status_item` contributions are declarative bounded snapshots; they do
 not receive ImGui callbacks. The shell owns validation, active-panel visibility,
@@ -661,9 +689,15 @@ provides `registerAssetImporter`. The module submits a bounded descriptor,
 declarative setting schema, import callback, optional RGBA8 preview callback,
 and a module-owned context/destroy callback. Descriptor text is copied
 immediately; import and preview output is written only through host-owned byte
-sinks. A successful registration transfers the importer context to the host
-adapter even if a later contribution causes the package transaction to fail.
-The host then invokes the module destroy callback exactly once.
+sinks. The import response appends host-owned dependency, structured-diagnostic,
+and progress sinks after the original v1 prefix. Legacy modules that use only the
+original response prefix remain valid; modules using the appended sinks must
+check `structSize`. Sink rejection is sticky for the invocation, cancellation is
+checked before and after provider entry, and no rejected or cancelled output is
+published. A successful registration transfers the importer context to the host
+adapter even if a later contribution causes the package transaction to fail. The
+host then invokes the module destroy callback exactly once after the last catalog
+snapshot or in-flight adapter lease releases it.
 
 The build publishes that header as a self-contained, versioned
 `HoroEngineExtensionSdk` CMake package. The package exposes only the

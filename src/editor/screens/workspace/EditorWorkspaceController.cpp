@@ -85,6 +85,7 @@ namespace Horo::Editor {
                                                          const EditorWorkspaceDependencies &dependencies)
         : m_runtimeScene(runtimeScene), m_assetRegistry(assetRegistry), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
           m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles), m_importerCatalog(dependencies.importerCatalog),
+          m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator), m_gameplayBuilds(dependencies.gameplayBuilds),
           m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment), m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr) {
@@ -97,7 +98,7 @@ namespace Horo::Editor {
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);
         m_viewModel.projectRoot = absoluteProjectRoot.string();
         m_viewModel.assetRegistryRevision = assetRegistry.Revision();
-        m_viewModel.contentBrowser = BuildContentBrowserDirectory(m_viewModel.projectRoot, {}, assetRegistry, m_importerCatalog);
+        RebuildContentBrowserProjection(m_viewModel.projectRoot, {});
         if (m_durableFiles != nullptr) {
             ProjectIntegrityValidatorService validator{*m_durableFiles};
             const Result<void> repaired = validator.Repair(absoluteProjectRoot);

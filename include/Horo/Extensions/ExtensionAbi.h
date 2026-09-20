@@ -63,6 +63,45 @@ struct HoroExtensionCancellation {
 };
 typedef struct HoroExtensionCancellation HoroExtensionCancellation;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
+/** @brief Host-owned progress callback valid only during one importer invocation. */
+struct HoroAssetImportProgressSink {
+    void *context;
+    HoroExtensionStatus (*report)(void *context, uint64_t completedUnits, uint64_t totalUnits, HoroExtensionStringView message);
+};
+typedef struct HoroAssetImportProgressSink HoroAssetImportProgressSink;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
+/** @brief Host-owned dependency callback valid only during one importer invocation. */
+struct HoroAssetImportDependencySink {
+    void *context;
+    HoroExtensionStatus (*append)(void *context, HoroExtensionStringView assetId);
+};
+typedef struct HoroAssetImportDependencySink HoroAssetImportDependencySink;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
+enum HoroAssetImportDiagnosticSeverityCode {  // NOSONAR(cpp:S3642) C ABI constants; wire values use uint32_t.
+    HORO_ASSET_IMPORT_DIAGNOSTIC_INFO = 0,
+    HORO_ASSET_IMPORT_DIAGNOSTIC_WARNING = 1,
+    HORO_ASSET_IMPORT_DIAGNOSTIC_ERROR = 2,
+};
+
+typedef uint32_t HoroAssetImportDiagnosticSeverity;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
+/** @brief One borrowed structured diagnostic emitted by an importer. */
+struct HoroAssetImportDiagnostic {
+    HoroAssetImportDiagnosticSeverity severity;
+    HoroExtensionStringView code;
+    HoroExtensionStringView message;
+    int32_t line;
+    uint8_t hasLine;
+};
+typedef struct HoroAssetImportDiagnostic HoroAssetImportDiagnostic;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
+/** @brief Host-owned structured diagnostic callback valid only during one importer invocation. */
+struct HoroAssetImportDiagnosticSink {
+    void *context;
+    HoroExtensionStatus (*append)(void *context, const HoroAssetImportDiagnostic *diagnostic);
+};
+typedef struct HoroAssetImportDiagnosticSink HoroAssetImportDiagnosticSink;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
 // Unscoped enumerators are part of the source-compatible C ABI surface.
 enum HoroAssetImportSettingKindCode {  // NOSONAR(cpp:S3642) C ABI constants; wire values use uint32_t.
     HORO_ASSET_IMPORT_SETTING_BOOLEAN = 0,
@@ -127,6 +166,10 @@ struct HoroAssetImportResponse {
     uint32_t structSize;
     HoroExtensionStringView assetType;
     HoroExtensionByteSink editorPayload;
+    /** @brief Append-only v1 output surfaces; modules must check structSize before using them. */
+    HoroAssetImportDependencySink dependencies;
+    HoroAssetImportDiagnosticSink diagnostics;
+    HoroAssetImportProgressSink progress;
 };
 typedef struct HoroAssetImportResponse HoroAssetImportResponse;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 

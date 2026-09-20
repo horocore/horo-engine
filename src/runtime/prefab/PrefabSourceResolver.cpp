@@ -3,7 +3,10 @@
 #include "Horo/Prefab/PrefabErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace Horo::Prefab {
@@ -38,51 +41,101 @@ namespace Horo::Prefab {
             std::vector<LocalObjectId> &scope;
             std::vector<Assets::AssetId> &active;
             std::vector<ResolvedPrefabObject> &objects;
+            std::vector<Assets::AssetId> &failureChain;
             PrefabExpansionBudget &budget;
             const PrefabLimitProfile &limits;
         };
 
-        [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
-                                                std::size_t variantDepth);
-
-        [[nodiscard]] Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source,
-                                                            const std::size_t nestedDepth, const std::size_t variantDepth) {
-            if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
-                return Result<void>::Failure(MakeError(PrefabErrors::HierarchyDepthExceeded));
-            const PrefabDocumentData &document = source.document.Data();
-            const PrefabDependencySource *parent = FindSource(state.sources, document.composition->variantParent->Asset());
-            if (parent == nullptr)
-                return Result<void>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
-            return ExpandSource(state, *parent, nestedDepth, variantDepth + 1);
+        /** @brief Records the complete source path that made a required expansion fail. */
+        [[nodiscard]] Result<void> Fail(ExpansionState &state, Error error, const std::optional<Assets::AssetId> next = std::nullopt) {
+            state.failureChain = state.active;
+            if (next)
+                state.failureChain.push_back(*next);
+            return Result<void>::Failure(std::move(error));
         }
 
-        [[nodiscard]] Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document) {
+        /** @brief Adds immutable operation context without changing the underlying typed failure. */
+        void AddFailureContext(Error &error, const PrefabInstanceId instance, const std::span<const Assets::AssetId> sourceChain) {
+            std::string context = std::format("Prefab instance {} source chain", instance.Value());
+            for (const Assets::AssetId source : sourceChain)
+                context += " -> " + source.ToString();
+            error.message = context + ": " + error.message;
+        }
+
+        [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, std::size_t nestedDepth,
+                                                std::size_t variantDepth,
+                                                const std::optional<ExpandedPrefabObjectKey> &mountParent = std::nullopt,
+                                                const Math::Transform &mountTransform = {});
+
+        [[nodiscard]] Result<void> MaterializeVariantParent(ExpansionState &state, const PrefabDependencySource &source,
+                                                            const std::size_t nestedDepth, const std::size_t variantDepth,
+                                                            const std::optional<ExpandedPrefabObjectKey> &mountParent,
+                                                            const Math::Transform &mountTransform) {
+            if (variantDepth >= state.limits.Policy().maximumVariantInheritanceDepth)
+                return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
+            const PrefabDocumentData &document = source.document.Data();
+            const Assets::AssetId parentAsset = document.composition->variantParent->Asset();
+            const PrefabDependencySource *parent = FindSource(state.sources, parentAsset);
+            if (parent == nullptr)
+                return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), parentAsset);
+            return ExpandSource(state, *parent, nestedDepth, variantDepth + 1, mountParent, mountTransform);
+        }
+
+        [[nodiscard]] Result<void> MaterializeLocalObjects(ExpansionState &state, const PrefabDocumentData &document,
+                                                           const std::optional<ExpandedPrefabObjectKey> &mountParent,
+                                                           const Math::Transform &mountTransform) {
             for (const PrefabObjectNode &object : document.objects) {
                 if (state.objects.size() >= state.limits.Policy().maximumObjectCount)
-                    return Result<void>::Failure(MakeError(PrefabErrors::ObjectCountExceeded));
+                    return Fail(state, MakeError(PrefabErrors::ObjectCountExceeded));
                 if (const auto charged = state.budget.Consume(1); charged.HasError())
-                    return charged;
+                    return Fail(state, charged.ErrorValue());
                 auto address = PrefabObjectAddress::Create(state.scope, object.localId);
                 if (address.HasError())
-                    return Result<void>::Failure(address.ErrorValue());
-                state.objects.emplace_back(document.assetId, ExpandedPrefabObjectKey{state.instance, std::move(address).Value()}, object);
+                    return Fail(state, address.ErrorValue());
+                const ExpandedPrefabObjectKey key{state.instance, std::move(address).Value()};
+                std::optional<ExpandedPrefabObjectKey> parent = mountParent;
+                Math::Transform localTransform = object.localTransform;
+                if (object.parentLocalId) {
+                    auto parentAddress = PrefabObjectAddress::Create(state.scope, *object.parentLocalId);
+                    if (parentAddress.HasError())
+                        return Fail(state, parentAddress.ErrorValue());
+                    parent = ExpandedPrefabObjectKey{state.instance, std::move(parentAddress).Value()};
+                }
+                if (mountParent && !object.parentLocalId) {
+                    const auto composed =
+                        Math::TryDecomposeAffineTRS(Math::Multiply(mountTransform.ToMatrix(), object.localTransform.ToMatrix()));
+                    if (composed.HasError())
+                        return Fail(state, composed.ErrorValue());
+                    localTransform = composed.Value();
+                }
+                state.objects.emplace_back(document.assetId, key, parent, object, localTransform);
             }
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> MaterializeNestedPlacements(ExpansionState &state, const PrefabDocumentData &document,
-                                                               const std::size_t nestedDepth, const std::size_t variantDepth) {
+                                                               const std::size_t nestedDepth, const std::size_t variantDepth,
+                                                               const std::optional<ExpandedPrefabObjectKey> &sourceRoot) {
             if (!document.composition)
                 return Result<void>::Success();
             for (const NestedPrefabPlacement &placement : document.composition->nestedPlacements) {
                 if (nestedDepth >= state.limits.Policy().maximumNestedPrefabDepth)
-                    return Result<void>::Failure(MakeError(PrefabErrors::HierarchyDepthExceeded));
-                const PrefabDependencySource *nested = FindSource(state.sources, placement.sourcePrefab.Asset());
+                    return Fail(state, MakeError(PrefabErrors::HierarchyDepthExceeded));
+                const Assets::AssetId nestedAsset = placement.sourcePrefab.Asset();
+                const PrefabDependencySource *nested = FindSource(state.sources, nestedAsset);
                 if (nested == nullptr)
-                    return Result<void>::Failure(MakeError(PrefabErrors::DependencyUnavailable));
+                    return Fail(state, MakeError(PrefabErrors::DependencyUnavailable), nestedAsset);
+                std::optional<ExpandedPrefabObjectKey> mountParent = sourceRoot;
+                if (placement.parentLocalId) {
+                    auto parentAddress = PrefabObjectAddress::Create(state.scope, *placement.parentLocalId);
+                    if (parentAddress.HasError())
+                        return Fail(state, parentAddress.ErrorValue());
+                    mountParent = ExpandedPrefabObjectKey{state.instance, std::move(parentAddress).Value()};
+                }
                 state.scope.push_back(placement.placementLocalId);
                 const PopBackGuard scopeGuard{state.scope};
-                if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth); expanded.HasError())
+                if (auto expanded = ExpandSource(state, *nested, nestedDepth + 1, variantDepth, mountParent, placement.localRootTransform);
+                    expanded.HasError())
                     return expanded;
             }
             return Result<void>::Success();
@@ -90,18 +143,24 @@ namespace Horo::Prefab {
 
         /** @brief Recursively materializes one source using only immutable resolver-owned documents. */
         [[nodiscard]] Result<void> ExpandSource(ExpansionState &state, const PrefabDependencySource &source, const std::size_t nestedDepth,
-                                                const std::size_t variantDepth) {
-            if (std::ranges::find(state.active, source.document.Data().assetId) != state.active.end())
-                return Result<void>::Failure(MakeError(PrefabErrors::DependencyGraphInvalid));
+                                                const std::size_t variantDepth, const std::optional<ExpandedPrefabObjectKey> &mountParent,
+                                                const Math::Transform &mountTransform) {
+            if (const Assets::AssetId sourceAsset = source.document.Data().assetId;
+                std::ranges::find(state.active, sourceAsset) != state.active.end())
+                return Fail(state, MakeError(PrefabErrors::DependencyGraphInvalid), sourceAsset);
             state.active.push_back(source.document.Data().assetId);
             const PopBackGuard activeGuard{state.active};
 
             const PrefabDocumentData &document = source.document.Data();
             if (document.composition && document.composition->variantParent)
-                return MaterializeVariantParent(state, source, nestedDepth, variantDepth);
-            if (auto local = MaterializeLocalObjects(state, document); local.HasError())
+                return MaterializeVariantParent(state, source, nestedDepth, variantDepth, mountParent, mountTransform);
+            if (auto local = MaterializeLocalObjects(state, document, mountParent, mountTransform); local.HasError())
                 return local;
-            return MaterializeNestedPlacements(state, document, nestedDepth, variantDepth);
+            const auto rootAddress = PrefabObjectAddress::Create(state.scope, LocalObjectId{});
+            if (rootAddress.HasError())
+                return Fail(state, rootAddress.ErrorValue());
+            return MaterializeNestedPlacements(state, document, nestedDepth, variantDepth,
+                                               ExpandedPrefabObjectKey{state.instance, rootAddress.Value()});
         }
     }  // namespace
 
@@ -152,11 +211,17 @@ namespace Horo::Prefab {
         PrefabExpansionBudget budget{limits};
         std::vector<LocalObjectId> scope;
         std::vector<Assets::AssetId> active;
+        std::vector<Assets::AssetId> failureChain;
         std::vector<ResolvedPrefabObject> objects;
         objects.reserve(std::min<std::size_t>(sources_.size(), limits.Policy().maximumObjectCount));
-        ExpansionState state{sources_, instance, scope, active, objects, budget, limits};
-        if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError())
-            return Result<EffectivePrefabCandidate>::Failure(expanded.ErrorValue());
+        ExpansionState state{sources_, instance, scope, active, objects, failureChain, budget, limits};
+        if (auto expanded = ExpandSource(state, *root, 1, 1); expanded.HasError()) {
+            Error error = expanded.ErrorValue();
+            if (failureChain.empty())
+                failureChain.push_back(rootAsset);
+            AddFailureContext(error, instance, failureChain);
+            return Result<EffectivePrefabCandidate>::Failure(std::move(error));
+        }
 
         return Result<EffectivePrefabCandidate>::Success(
             EffectivePrefabCandidate{rootAsset, PrefabResolutionRevision{graph_.RegistryRevision(), root->sourceRevision},

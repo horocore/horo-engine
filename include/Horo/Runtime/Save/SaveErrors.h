@@ -88,6 +88,14 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor ArchivePayloadTruncated;
     /** @brief A selected decoded chunk does not match its manifest checksum. */
     extern const ErrorCodeDescriptor ArchiveChunkHashMismatch;
+    /** @brief The archive uses an integrity algorithm or domain version this reader does not support. */
+    extern const ErrorCodeDescriptor ArchiveIntegrityAlgorithmUnsupported;
+    /** @brief Archive integrity coverage, lengths, or explicit trailer exclusion are contradictory. */
+    extern const ErrorCodeDescriptor ArchiveIntegrityCoverageInvalid;
+    /** @brief Finalized preamble and stored payload bytes do not match ArchiveContentHash. */
+    extern const ErrorCodeDescriptor ArchiveContentHashMismatch;
+    /** @brief Canonical logical record bytes do not match CanonicalStateHash. */
+    extern const ErrorCodeDescriptor CanonicalStateHashMismatch;
     /** @brief A caller supplied an invalid value or schema argument to the canonical encoder. */
     extern const ErrorCodeDescriptor CanonicalCodecInvalid;
     /** @brief Untrusted canonical wire bytes are malformed, noncanonical, truncated, or contain trailing data. */

@@ -35,6 +35,13 @@ namespace Horo {
     [[nodiscard]] Sha256Digest ComputeSha256(std::span<const std::byte> input) noexcept;
 
     /**
+     * @brief Computes SHA-256 over an ordered sequence of byte spans without concatenating them.
+     * @param inputs Ordered message fragments.
+     * @return SHA-256 digest of the fragments concatenated in order.
+     */
+    [[nodiscard]] Sha256Digest ComputeSha256Fragments(std::span<const std::span<const std::byte>> inputs) noexcept;
+
+    /**
      * @brief Formats a digest as canonical lowercase SHA-256 text.
      * @param digest Digest to format.
      * @return Text containing `sha256:` followed by 64 lowercase hexadecimal digits.

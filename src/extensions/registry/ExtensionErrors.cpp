@@ -483,4 +483,50 @@ namespace Horo::Extensions::ExtensionErrors {
         .retryable = false,
         .userActionable = false,
     };
+
+    const ErrorCodeDescriptor HeadlessHostConfigurationInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"headless_host_configuration_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The headless extension host configuration is invalid.",
+        .remediationHint = "Provide valid bounded host policies and service authorities.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor HeadlessHostStateInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"headless_host_state_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The headless extension host operation is invalid in its current state.",
+        .remediationHint = "Register providers before startup and submit work only while the host is ready.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor HeadlessHostDiscoveryFailed{
+        .domain = Domain,
+        .code = ErrorCode{"headless_host_discovery_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Headless extension discovery failed.",
+        .remediationHint = "Inspect root policy and declared package locations.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor HeadlessHostActivationFailed{
+        .domain = Domain,
+        .code = ErrorCode{"headless_host_activation_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Headless extension activation failed.",
+        .remediationHint = "Inspect package trust, compatibility, ABI, and registration diagnostics.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor HeadlessImporterUnavailable{
+        .domain = Domain,
+        .code = ErrorCode{"headless_importer_unavailable"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The requested headless asset importer is unavailable.",
+        .remediationHint = "Select a contribution published by the active headless composition.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::Extensions::ExtensionErrors

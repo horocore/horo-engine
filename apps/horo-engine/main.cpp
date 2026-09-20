@@ -1,4 +1,6 @@
 #include "Horo/Application/HostObservability.h"
+#include "Horo/Extensions/ExtensionErrors.h"
+#include "Horo/Extensions/HeadlessExtensionHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 #include "HostModuleComposition.h"
@@ -14,6 +16,27 @@ namespace {
         bool emitSmoke{};
         std::filesystem::path diagnosticBundle;
     };
+
+    class DenyToolchainPolicy final : public Horo::Extensions::IToolchainInvocationPolicy {
+    public:
+        [[nodiscard]] Horo::Result<Horo::ExternalProcessRequest> Resolve(
+            const Horo::Extensions::ToolchainProviderDescriptor &, const Horo::Extensions::ToolchainInvocationIntent &) const override {
+            return Horo::Result<Horo::ExternalProcessRequest>::Failure(
+                Horo::MakeError(Horo::Extensions::ExtensionErrors::ToolchainPolicyRejected,
+                                "No toolchain invocation policy is configured for this command."));
+        }
+    };
+
+    [[nodiscard]] Horo::Application::HostObservabilityConfiguration ObservabilityConfiguration() {
+        return {.logging = {.logDirectory = "~/.horo/logs",
+                            .baseName = "horo-engine",
+                            .hostName = "horo-engine",
+                            .hostVersion = HORO_ENGINE_VERSION_STRING},
+                .identity = {.processRole = "cli",
+                             .engineVersion = HORO_ENGINE_VERSION_STRING,
+                             .buildConfiguration = HORO_BUILD_CONFIGURATION,
+                             .sourceRevision = HORO_SOURCE_REVISION}};
+    }
 
     [[nodiscard]] Options ParseOptions(const std::span<char *> arguments) {
         Options options;
@@ -52,17 +75,17 @@ int main(const int argc, char **argv) {
     }
     std::unique_ptr<Horo::ModuleHost> moduleHost = std::move(composedModules).Value();
 
-    Horo::Application::HostObservabilityConfiguration configuration{.logging = {.logDirectory = "~/.horo/logs",
-                                                                                .baseName = "horo-engine",
-                                                                                .hostName = "horo-engine",
-                                                                                .hostVersion = HORO_ENGINE_VERSION_STRING},
-                                                                    .identity = {.processRole = "cli",
-                                                                                 .engineVersion = HORO_ENGINE_VERSION_STRING,
-                                                                                 .buildConfiguration = HORO_BUILD_CONFIGURATION,
-                                                                                 .sourceRevision = HORO_SOURCE_REVISION}};
-    auto observability = Horo::Application::HostObservabilitySession::Start(std::move(configuration));
+    auto observability = Horo::Application::HostObservabilitySession::Start(ObservabilityConfiguration());
     if (observability == nullptr) {
         std::cerr << "horo-engine: observability initialization failed\n";
+        return 2;
+    }
+
+    DenyToolchainPolicy toolchainPolicy;
+    Horo::NativeExternalProcessRunner externalProcesses;
+    auto extensionHost = Horo::Extensions::HeadlessExtensionHost::Create({}, toolchainPolicy, externalProcesses);
+    if (extensionHost.HasError() || extensionHost.Value()->Start({}).HasError()) {
+        std::cerr << "horo-engine: headless extension composition failed\n";
         return 2;
     }
 
@@ -86,6 +109,7 @@ int main(const int argc, char **argv) {
         }
         std::cout << result.Value().outputPath.string() << '\n';  // NOSONAR(cpp:S5145)
     }
+    extensionHost.Value()->Shutdown();
     moduleHost->DeactivateAll();
     return 0;
 }
