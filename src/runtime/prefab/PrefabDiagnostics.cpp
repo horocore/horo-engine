@@ -10,9 +10,8 @@
 
 namespace Horo::Prefab {
     namespace {
-        using enum PrefabDiagnosticOrigin;
-
         [[nodiscard]] std::optional<PrefabDiagnosticOrigin> OriginForDomain(const std::string_view domain) noexcept {
+            using enum PrefabDiagnosticOrigin;
             if (domain == "horo.prefab")
                 return Prefab;
             if (domain == "horo.asset")
@@ -33,6 +32,7 @@ namespace Horo::Prefab {
         }
 
         [[nodiscard]] bool HasExpectedForeignPrefix(const PrefabDiagnosticOrigin origin, const std::string_view code) noexcept {
+            using enum PrefabDiagnosticOrigin;
             switch (origin) {
                 case Asset:
                     return code.starts_with("asset.");
@@ -55,7 +55,7 @@ namespace Horo::Prefab {
             if (domain.empty() || code.empty() || domain.size() > MaximumPrefabDiagnosticIdentityBytes ||
                 code.size() > MaximumPrefabDiagnosticIdentityBytes)
                 return false;
-            if (origin == Prefab)
+            if (origin == PrefabDiagnosticOrigin::Prefab)
                 return IsKnownPrefabCode(code);
             return HasExpectedForeignPrefix(origin, code);
         }
@@ -91,36 +91,33 @@ namespace Horo::Prefab {
                 return false;
             if (context.localMember.has_value() && !IsValidObjectAddress(*context.localMember))
                 return false;
-            if (context.property.has_value()) {
-                if (!context.localMember.has_value() || context.property->Object() != *context.localMember ||
-                    !context.property->ComponentType().IsValid() || !context.property->ComponentInstance().IsValid() ||
-                    !context.property->Property().IsValid())
-                    return false;
-            }
+            if (context.property.has_value() &&
+                (!context.localMember.has_value() || context.property->Object() != *context.localMember ||
+                 !context.property->ComponentType().IsValid() || !context.property->ComponentInstance().IsValid() ||
+                 !context.property->Property().IsValid()))
+                return false;
             if (context.operationId.has_value() && *context.operationId == 0)
                 return false;
             return IsValidSourceLocation(context.source);
         }
 
         [[nodiscard]] bool IsValidDependencyKind(const PrefabDependencyKind kind) noexcept {
+            using enum PrefabDependencyKind;
             switch (kind) {
-                case PrefabDependencyKind::Resource:
-                case PrefabDependencyKind::NestedPrefab:
-                case PrefabDependencyKind::VariantParent:
+                case Resource:
+                case NestedPrefab:
+                case VariantParent:
                     return true;
             }
             return false;
         }
 
         [[nodiscard]] bool IsValidDependencyChain(const std::span<const PrefabDiagnosticDependency> chain) noexcept {
-            if (chain.size() > MaximumPrefabDiagnosticDependencyDepth)
-                return false;
-            for (const PrefabDiagnosticDependency &dependency : chain) {
-                if (!dependency.asset.IsValid() || !IsValidDependencyKind(dependency.kind) ||
-                    (dependency.revision.has_value() && !IsValidSourceRevision(*dependency.revision)))
-                    return false;
-            }
-            return true;
+            return chain.size() <= MaximumPrefabDiagnosticDependencyDepth &&
+                   std::ranges::all_of(chain, [](const PrefabDiagnosticDependency &dependency) {
+                return dependency.asset.IsValid() && IsValidDependencyKind(dependency.kind) &&
+                       (!dependency.revision.has_value() || IsValidSourceRevision(*dependency.revision));
+            });
         }
 
         [[nodiscard]] Result<PrefabDiagnosticRecord> InvalidDiagnostic(const ErrorCodeDescriptor &descriptor, const char *message) {
