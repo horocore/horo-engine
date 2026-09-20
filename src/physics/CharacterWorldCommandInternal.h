@@ -62,11 +62,7 @@ namespace Horo::Character::Detail {
 
         ~TickGuard() noexcept {
             impl_.ticking.store(previous_);
-            if (impl_.shutdownRequested) {
-                const auto registryLock = impl_.synchronization.LockRegistry();
-                impl_.controllers.Drain();
-                impl_.shutdownRequested = false;
-            }
+            DrainDeferredShutdown(impl_);
         }
 
         TickGuard(const TickGuard &) = delete;

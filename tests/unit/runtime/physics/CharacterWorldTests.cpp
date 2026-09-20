@@ -277,6 +277,10 @@ namespace Horo::Character {
             probe = OverlapProbe{.overlappingCalls = 1};
             const CharacterTeleportRequest overlapping{controller, 1, {1, 0, 0}, Math::Quaternion::Identity()};
             RequireError(world->TeleportController(overlapping, probe.Context(world->Descriptor(), 1)), CharacterErrors::PlacementInvalid);
+            OverlapProbe nonFinite{.overlappingCalls = 1, .recoveryDisplacement = {std::numeric_limits<float>::quiet_NaN(), 0, 0}};
+            const auto nonFiniteResult = world->TeleportController(overlapping, nonFinite.Context(world->Descriptor(), overlapping.tick));
+            RequireError(nonFiniteResult, CharacterErrors::PlacementInvalid);
+            REQUIRE(nonFiniteResult.ErrorValue().message == "Overlap recovery displacement must be finite.");
             REQUIRE(world->ControllerTransform(controller).Value().position == Math::Vec3{});
         }
 

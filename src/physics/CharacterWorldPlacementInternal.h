@@ -16,11 +16,7 @@ namespace Horo::Character::Detail {
 
         ~PlacementOperationGuard() noexcept {
             impl.placementActive = previous;
-            if (impl.shutdownRequested) {
-                const auto registryLock = impl.synchronization.LockRegistry();
-                impl.controllers.Drain();
-                impl.shutdownRequested = false;
-            }
+            DrainDeferredShutdown(impl);
         }
 
         PlacementOperationGuard(const PlacementOperationGuard &) = delete;
@@ -55,6 +51,16 @@ namespace Horo::Character::Detail {
         return Result<void>::Success();
     }
 
+    /** @brief Maps one placement operation to the exact world and Physics snapshot query contract. */
+    [[nodiscard]] Result<void> ValidateQueryContext(const auto &impl, const CharacterPhysicsQueryContext &query,
+                                                    const std::uint64_t expectedTick) {
+        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
+                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
+                                                         impl.descriptor.originGeneration,       expectedTick,
+                                                         impl.descriptor.physicsSnapshotRevision};
+        return ValidateCharacterPhysicsQueryContext(query, expected);
+    }
+
     /** @brief Revalidates owner state and exact controller liveness after an adapter callback. */
     [[nodiscard]] Result<void> ValidatePlacementContinuation(auto &impl, const CharacterControllerHandle &handle) {
         if (impl.state.load() != CharacterWorldState::Active || !impl.placementActive || impl.shutdownRequested)
@@ -70,11 +76,7 @@ namespace Horo::Character::Detail {
                                                              const CharacterControllerDescriptor &descriptor,
                                                              const CharacterPhysicsQueryContext &query, const std::uint64_t expectedTick,
                                                              const Math::Vec3 initialPosition) {
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       expectedTick,
-                                                         impl.descriptor.physicsSnapshotRevision};
-        if (const auto valid = ValidateCharacterPhysicsQueryContext(query, expected); valid.HasError())
+        if (const auto valid = ValidateQueryContext(impl, query, expectedTick); valid.HasError())
             return Result<SpawnRecovery>::Failure(valid.ErrorValue());
 
         if (const auto valid = ValidatePlacementPosition(initialPosition); valid.HasError())
@@ -118,11 +120,7 @@ namespace Horo::Character::Detail {
                                                          const CharacterControllerDescriptor &descriptor,
                                                          const CharacterPhysicsQueryContext &query, const std::uint64_t expectedTick,
                                                          const Math::Vec3 position) {
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       expectedTick,
-                                                         impl.descriptor.physicsSnapshotRevision};
-        if (const auto valid = ValidateCharacterPhysicsQueryContext(query, expected); valid.HasError())
+        if (const auto valid = ValidateQueryContext(impl, query, expectedTick); valid.HasError())
             return valid;
         if (const auto valid = ValidatePlacementPosition(position); valid.HasError())
             return valid;
@@ -143,8 +141,8 @@ namespace Horo::Character::Detail {
             return continuation;
         if (probe.HasError())
             return Result<void>::Failure(probe.ErrorValue());
-        if (!Math::IsFinite(probe.Value().recoveryDisplacement))
-            return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid));
+        if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
+            return valid;
         if (probe.Value().overlapCount != 0)
             return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Teleport target overlaps Physics geometry."));
         return Result<void>::Success();

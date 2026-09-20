@@ -134,4 +134,15 @@ namespace Horo::Character {
         bool placementActive{};
         bool shutdownRequested{};
     };
+
+    namespace Detail {
+        /** @brief Drains controller storage after an owner-thread shutdown deferred by a guarded operation. */
+        template <typename Impl> void DrainDeferredShutdown(Impl &impl) noexcept {
+            if (!impl.shutdownRequested)
+                return;
+            const auto registryLock = impl.synchronization.LockRegistry();
+            impl.controllers.Drain();
+            impl.shutdownRequested = false;
+        }
+    }  // namespace Detail
 }  // namespace Horo::Character
