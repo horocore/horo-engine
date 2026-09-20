@@ -1750,6 +1750,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationTransactionTests.cpp
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
+        unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ExtensionModuleResolutionTests.cpp

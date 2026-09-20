@@ -604,6 +604,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
+    Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h

@@ -43,6 +43,16 @@ namespace Horo::Extensions::ExtensionErrors {
         .userActionable = true,
     };
 
+    const ErrorCodeDescriptor EditorSurfaceDescriptorInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"editor_surface_descriptor_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The editor-surface descriptor is malformed or inconsistent.",
+        .remediationHint = "Use a canonical identity, compatible placement, bounded policy, and active provider generation.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
     const ErrorCodeDescriptor InvocationFailed{
         .domain = Domain,
         .code = ErrorCode{"invocation_failed"},
