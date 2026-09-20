@@ -173,7 +173,8 @@ namespace Horo::Render {
                     RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
                 snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth24Stencil8)] =
                     RenderTextureUsage::RenderAttachment;
-                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] = RenderTextureUsage::RenderAttachment;
+                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] =
+                    RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
             }
             return snapshot;

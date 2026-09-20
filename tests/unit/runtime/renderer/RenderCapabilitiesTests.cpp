@@ -25,6 +25,8 @@ namespace {
         snapshot.features.Enable(RenderCapability::TextureResources);
         snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba8Unorm)] =
             RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
+        snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] =
+            RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
         snapshot.formats.sampleCountMask = (std::uint64_t{1} << 1U) | (std::uint64_t{1} << 2U);
         return snapshot;
     }
@@ -51,6 +53,10 @@ TEST_CASE("Render capability snapshots keep feature, queue, limit, and format pr
                                                           .usage = RenderTextureUsage::Sampled}));
     CHECK_FALSE(snapshot.Supports(
         RenderTextureDescriptor{.extent = {129, 128}, .format = RenderTextureFormat::Rgba8Unorm, .usage = RenderTextureUsage::Sampled}));
+    CHECK(snapshot.Supports(RenderTextureDescriptor{.extent = {128, 128},
+                                                    .format = RenderTextureFormat::Depth32Float,
+                                                    .sampleCount = 1,
+                                                    .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment}));
 }
 
 TEST_CASE("Null backend publishes a synthetic bounded capability snapshot", "[unit][runtime][renderer][capabilities]") {
