@@ -140,6 +140,19 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor ArchiveChunkHashMismatch{kDomain, ErrorCode{"save.archive.chunk_hash_mismatch"}, kError,
                                                        "Decoded save chunk bytes do not match their declared digest.",
                                                        "Reject the archive and retain it for corruption diagnostics."};
+    const ErrorCodeDescriptor
+        ArchiveIntegrityAlgorithmUnsupported{kDomain, ErrorCode{"save.archive.integrity_algorithm_unsupported"}, kError,
+                                             "The save archive uses an unsupported integrity algorithm or version.",
+                                             "Use a reader that supports the declared integrity algorithm and version."};
+    const ErrorCodeDescriptor ArchiveIntegrityCoverageInvalid{kDomain, ErrorCode{"save.archive.integrity_coverage_invalid"}, kError,
+                                                              "Save archive integrity coverage or framing evidence is contradictory.",
+                                                              "Reject the archive before decoding or applying any save state."};
+    const ErrorCodeDescriptor ArchiveContentHashMismatch{kDomain, ErrorCode{"save.archive.content_hash_mismatch"}, kError,
+                                                         "Finalized save archive bytes do not match their declared content digest.",
+                                                         "Reject the archive and retain the last-known-good publication."};
+    const ErrorCodeDescriptor CanonicalStateHashMismatch{kDomain, ErrorCode{"save.canonical_state_hash_mismatch"}, kError,
+                                                         "Canonical save records do not match their declared logical-state digest.",
+                                                         "Reject the decoded candidate before migration or world mutation."};
     const ErrorCodeDescriptor CanonicalCodecInvalid{kDomain, ErrorCode{"save.canonical_codec.invalid"}, kError,
                                                     "A canonical save codec argument is invalid.",
                                                     "Supply a valid schema argument or caller-owned value."};
