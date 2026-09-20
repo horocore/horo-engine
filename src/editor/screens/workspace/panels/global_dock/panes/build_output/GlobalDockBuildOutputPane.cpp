@@ -372,10 +372,14 @@ namespace Horo::Editor {
                                       {rowMin.x + regions.contentWidth - metrics.contentPadding, rowMin.y + metrics.tableRowHeight},
                                       Theme::Text(), record.message);
             if (activated && record.source.has_value()) {
-                command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
-                command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = record.source->absolutePath,
-                                                                   .line = record.source->line,
-                                                                   .column = record.source->column};
+                command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+                command.sourceOpenRequest = SourceOpenRequest{
+                    .path = record.source->absolutePath,
+                    .origin = SourceOpenOrigin::DiagnosticNavigation,
+                    .mode = SourceOpenMode::AllowExternalFallback,
+                    .line = record.source->line,
+                    .column = record.source->column,
+                };
             }
         }
         if (snapshotChanged && (wasAtBottom || m_initialFollowTail))

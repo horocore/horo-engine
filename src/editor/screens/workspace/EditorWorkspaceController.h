@@ -30,6 +30,8 @@
 namespace Horo::Editor {
     class ILocalizationService;
     struct EditorViewportPickResult;
+    /** @brief Host presentation adapter for one already-validated source-open result. */
+    using SourceOpenNavigator = std::function<bool(const SourceOpenResult &)>;
     /** @brief Platform navigation capability for one validated diagnostic source location. */
     using DiagnosticSourceNavigator = std::function<bool(const DiagnosticSourceRequest &)>;
 
@@ -40,6 +42,7 @@ namespace Horo::Editor {
         DurableFileSystem *durableFiles{};
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
         JobSystem *jobs{};
+        SourceOpenNavigator sourceOpenNavigator{};
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
         Application::GameplayBuildService *gameplayBuilds{};
         Application::GameplayBuildEnvironment gameplayBuildEnvironment{};
@@ -138,11 +141,13 @@ namespace Horo::Editor {
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
         Assets::AssetRegistrySnapshot m_assetRegistry;
+        SourceFileOpenService m_sourceOpenService;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         ProjectMutationCoordinator *m_mutations{};
         DurableFileSystem *m_durableFiles{};
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
         std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
+        SourceOpenNavigator m_sourceOpenNavigator;
         DiagnosticSourceNavigator m_diagnosticSourceNavigator;
         Application::GameplayBuildService *m_gameplayBuilds{};
         Application::GameplayBuildEnvironment m_gameplayBuildEnvironment;
@@ -349,6 +354,7 @@ namespace Horo::Editor {
         void DegradeNativeGameplayReload(NativeGameplayReloadTransaction &transaction, Error error);
         void ReimportContentBrowserAsset(const std::filesystem::path &absolutePath);
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
+        void OpenSourceFile(const SourceOpenRequest &request);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);

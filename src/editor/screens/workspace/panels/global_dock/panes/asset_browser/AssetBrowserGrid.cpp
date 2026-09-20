@@ -277,8 +277,18 @@ namespace Horo::Editor {
                                        .selected = context.interactionSession.State().selectedAbsolutePath == entry.absolutePath,
                                        .dimmed = cut || dragging},
                                       entry);
-            if (entry.kind == ContentBrowserEntryKind::Directory && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                context.command = AssetBrowserInteractionSession::Navigate(entry.absolutePath);
+            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                if (entry.kind == ContentBrowserEntryKind::Directory) {
+                    context.command = AssetBrowserInteractionSession::Navigate(entry.absolutePath);
+                } else if (entry.kind == ContentBrowserEntryKind::Asset) {
+                    context.command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+                    context.command.sourceOpenRequest = SourceOpenRequest{
+                        .path = entry.absolutePath,
+                        .origin = SourceOpenOrigin::AssetActivation,
+                        .mode = SourceOpenMode::AllowExternalFallback,
+                    };
+                }
+            }
             HandleAssetDragDropSource(entry, context.gui.localization);
             HandleDirectoryDragDropTarget(entry, interactionMin, metrics.cardWidth, metrics.cardHeight, &context.drawList, context.command);
             DrawAssetBrowserEntryActions(entry, context.viewModel, context.interactionSession, context.command, context.gui);

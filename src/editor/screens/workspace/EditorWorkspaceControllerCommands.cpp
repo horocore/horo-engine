@@ -683,6 +683,10 @@ namespace Horo::Editor {
                 if (cmd.stringPayload.has_value())
                     RevealContentBrowserEntry(*cmd.stringPayload);
                 break;
+            case EditorWorkspaceViewCommand::OpenSourceFile:
+                if (cmd.sourceOpenRequest.has_value())
+                    OpenSourceFile(*cmd.sourceOpenRequest);
+                break;
             case EditorWorkspaceViewCommand::OpenDiagnosticSource:
                 if (cmd.diagnosticSource.has_value())
                     OpenDiagnosticSource(*cmd.diagnosticSource);

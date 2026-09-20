@@ -83,11 +83,13 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_runtimeScene(runtimeScene), m_assetRegistry(assetRegistry), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
-          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles), m_importerCatalog(dependencies.importerCatalog),
+        : m_runtimeScene(runtimeScene), m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot),
+          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_mutations(dependencies.mutations),
+          m_durableFiles(dependencies.durableFiles), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
-          m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator), m_gameplayBuilds(dependencies.gameplayBuilds),
-          m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment), m_localization(dependencies.localization),
+          m_sourceOpenNavigator(dependencies.sourceOpenNavigator), m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator),
+          m_gameplayBuilds(dependencies.gameplayBuilds), m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment),
+          m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr) {
         if (!m_diagnosticSourceNavigator) {
             m_diagnosticSourceNavigator = [](const DiagnosticSourceRequest &source) {

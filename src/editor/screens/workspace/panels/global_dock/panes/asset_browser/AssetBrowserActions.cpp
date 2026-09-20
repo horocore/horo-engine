@@ -20,8 +20,12 @@ namespace Horo::Editor {
             if (std::filesystem::path{entry.absolutePath}.extension() == ".horo_script" &&
                 Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.open_external_ide").c_str(), nullptr,
                                     context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.open")) {
-                command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
-                command.diagnosticSource = DiagnosticSourceRequest{entry.absolutePath, 0, 0};
+                command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+                command.sourceOpenRequest = SourceOpenRequest{
+                    .path = entry.absolutePath,
+                    .origin = SourceOpenOrigin::AssetActivation,
+                    .mode = SourceOpenMode::AllowExternalFallback,
+                };
             }
             ImGui::BeginDisabled(!entry.canReimport);
             if (Ui::ContextMenuItem(localization.Get("editor", "workspace.content_browser.action.reimport").c_str(), nullptr,

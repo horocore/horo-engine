@@ -1260,26 +1260,45 @@ namespace Horo::Editor {
         }
     }
 
-    void EditorWorkspaceController::OpenDiagnosticSource(const DiagnosticSourceRequest &source) {
+    void EditorWorkspaceController::OpenSourceFile(const SourceOpenRequest &request) {
         m_viewModel.contentBrowserOperationError.clear();
-        if (!std::filesystem::path{source.absolutePath}.is_absolute()) {
-            m_viewModel.contentBrowserOperationError = "workspace.global_dock.build_output.source.invalid";
+        const Result<SourceOpenResult> opened = m_sourceOpenService.Open(request);
+        if (opened.HasError()) {
+            const std::string_view code = opened.ErrorValue().code.Value();
+            if (code == SourceOpenErrors::Missing.code.Value())
+                m_viewModel.contentBrowserOperationError = "workspace.source_open.missing";
+            else if (code == SourceOpenErrors::Unsupported.code.Value())
+                m_viewModel.contentBrowserOperationError = "workspace.source_open.unsupported";
+            else if (code == SourceOpenErrors::EditorUnavailable.code.Value())
+                m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+            else
+                m_viewModel.contentBrowserOperationError = "workspace.source_open.unsafe";
             return;
         }
 
-        const std::filesystem::path target = NormalizeAbsolute(source.absolutePath);
-        const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
-        std::error_code error;
-        if (const auto status = std::filesystem::symlink_status(target, error); error || std::filesystem::is_symlink(status) ||
-                                                                                !std::filesystem::is_regular_file(status) ||
-                                                                                !HasPathPrefix(projectRoot, target)) {
-            m_viewModel.contentBrowserOperationError = "workspace.global_dock.build_output.source.invalid";
-            return;
+        const SourceOpenResult &result = opened.Value();
+        bool navigated = false;
+        if (m_sourceOpenNavigator) {
+            navigated = m_sourceOpenNavigator(result);
+        } else {
+            navigated = m_diagnosticSourceNavigator(DiagnosticSourceRequest{
+                .absolutePath = result.location.absolutePath.string(),
+                .line = result.line,
+                .column = result.column,
+            });
         }
-        DiagnosticSourceRequest validatedSource = source;
-        validatedSource.absolutePath = target.string();
-        if (!m_diagnosticSourceNavigator(validatedSource))
-            m_viewModel.contentBrowserOperationError = "workspace.global_dock.build_output.source.unavailable";
+        if (!navigated)
+            m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+    }
+
+    void EditorWorkspaceController::OpenDiagnosticSource(const DiagnosticSourceRequest &source) {
+        OpenSourceFile(SourceOpenRequest{
+            .path = source.absolutePath,
+            .origin = SourceOpenOrigin::DiagnosticNavigation,
+            .mode = SourceOpenMode::AllowExternalFallback,
+            .line = source.line,
+            .column = source.column,
+        });
     }
 
     void EditorWorkspaceController::RenameContentBrowserEntry(const std::filesystem::path &absolutePath, const std::string_view newName) {

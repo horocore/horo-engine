@@ -3,6 +3,7 @@
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -124,6 +125,7 @@ namespace Horo::Editor {
         CreateNativeBehavior,
         ReimportContentBrowserAsset,
         RevealContentBrowserEntry,
+        OpenSourceFile,
         OpenDiagnosticSource,
         ChangeActivePanel,
         ReorderActivityBarItem,
@@ -231,6 +233,7 @@ namespace Horo::Editor {
         std::optional<SideDockSlot> sideDockSlot = std::nullopt;
         std::optional<WorkspacePanelDropTarget> workspaceDropTarget = std::nullopt;
         std::optional<ContentBrowserAssetTransferRequest> contentBrowserTransfer = std::nullopt;
+        std::optional<SourceOpenRequest> sourceOpenRequest = std::nullopt;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
