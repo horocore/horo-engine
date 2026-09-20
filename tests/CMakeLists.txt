@@ -272,6 +272,7 @@ if(HORO_BUILD_AUDIO_SDL3)
             PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
 endif()
 add_executable(HoroAudioDspTests
+    unit/runtime/audio/AudioDSPNodeTests.cpp
     unit/runtime/audio/ResamplerKernelTests.cpp
     unit/runtime/audio/AudioResamplerTests.cpp
 )
@@ -1763,6 +1764,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationTransactionTests.cpp
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
+        unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ExtensionModuleResolutionTests.cpp
