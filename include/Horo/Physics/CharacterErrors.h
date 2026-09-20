@@ -27,10 +27,18 @@ namespace Horo::Character::CharacterErrors {
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief Every controller slot retired at the non-wrapping generation ceiling. */
     extern const ErrorCodeDescriptor GenerationExhausted;
+    /** @brief A transform publication revision reached its non-wrapping ceiling. */
+    extern const ErrorCodeDescriptor PublicationRevisionExhausted;
     /** @brief The Character-world lifecycle phase cannot admit the operation. */
     extern const ErrorCodeDescriptor InvalidState;
     /** @brief An enum or operation is unknown to the active Character contract. */
     extern const ErrorCodeDescriptor OperationUnsupported;
+    /** @brief A placement or transform candidate is malformed. */
+    extern const ErrorCodeDescriptor PlacementInvalid;
+    /** @brief Bounded overlap recovery could not produce a clear placement. */
+    extern const ErrorCodeDescriptor OverlapRecoveryFailed;
+    /** @brief A borrowed Physics query context targets a stale filter, origin or snapshot. */
+    extern const ErrorCodeDescriptor QuerySnapshotStale;
 
     /** @brief Returns the complete canonical Character error descriptor set. @return Stable process-lifetime descriptor view. */
     [[nodiscard]] std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept;

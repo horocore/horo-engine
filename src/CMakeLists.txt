@@ -526,6 +526,10 @@ add_library(HoroPhysics STATIC
         physics/CharacterErrors.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterWorld.cpp
+        physics/CharacterWorldCommandPipeline.cpp
+        physics/CharacterWorldCommandInternal.h
+        physics/CharacterWorldInternal.h
+        physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldSettings.cpp
         physics/GenerationalSlotStorage.h
         physics/PhysicsBodyDescriptor.cpp

@@ -83,13 +83,15 @@ namespace Horo::Character {
                 CountField{&CharacterWorldWorkBudgets::maximumQueriesPerTick},
                 CountField{&CharacterWorldWorkBudgets::maximumContactsPerMovement},
                 CountField{&CharacterWorldWorkBudgets::maximumMovementIterations},
-                CountField{&CharacterWorldWorkBudgets::maximumRecoveryIterations},
             };
             for (const auto field : countFields) {
                 CharacterWorldSettingsDescriptor descriptor;
                 descriptor.work.*field.member = 0;
                 ExpectError(CharacterWorldSettings::Capture(descriptor), CharacterErrors::DescriptorInvalid);
             }
+            CharacterWorldSettingsDescriptor zeroRecovery;
+            zeroRecovery.work.maximumRecoveryIterations = 0;
+            REQUIRE(CharacterWorldSettings::Capture(zeroRecovery).HasValue());
 
             CharacterWorldSettingsDescriptor descriptor;
             descriptor.work.scratchBytes = 0;
