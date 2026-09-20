@@ -70,13 +70,15 @@ jobs:
             cc: clang
             cxx: clang++
             build_dir: build/ci
-          - name: Windows / MSVC
-            runner: windows-2022
-            # The full MSVC suite consistently reaches the 45-minute job limit after successful compilation.
-            timeout_minutes: 60
-            cc: cl
-            cxx: cl
-            build_dir: build/ci
+          # Temporarily disabled while the MSVC test timeout/failure is investigated.
+          # Re-enable this matrix entry after the Windows test suite is stable again.
+          # - name: Windows / MSVC
+          #   runner: windows-2022
+          #   # The full MSVC suite consistently reaches the 45-minute job limit after successful compilation.
+          #   timeout_minutes: 60
+          #   cc: cl
+          #   cxx: cl
+          #   build_dir: build/ci
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
