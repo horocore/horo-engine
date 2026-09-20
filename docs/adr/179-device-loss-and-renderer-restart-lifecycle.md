@@ -221,7 +221,10 @@ Terminal failure:
 - returns a typed result containing the original loss and recovery cause chain;
 - stops frame/resource admission for the failed generation;
 - leaves project files, authored scene state and renderer selection untouched;
-- exposes diagnostics/repair/restart actions through the host surface;
+- exposes diagnostics/repair/restart actions through the host surface when it is
+  available; if surface realization itself failed, the host/platform delivers
+  the typed terminal result through an independent platform-native notification
+  or structured logging path;
 - never silently falls back to `RenderNull` in an interactive editor;
 - never silently selects another backend unless the host's explicit fallback
   policy named that candidate before the failure.
