@@ -304,6 +304,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsDeterminismPolicy.h
     Horo/Physics/PhysicsIdentity.h
     Horo/Physics/PhysicsMetrics.h
+    Horo/Physics/PhysicsMaterialAsset.h
     Horo/Physics/PhysicsPose.h
     Horo/Physics/PhysicsQuery.h
     Horo/Physics/PhysicsShapeDescriptor.h
