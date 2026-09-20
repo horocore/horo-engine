@@ -124,6 +124,7 @@ namespace Horo::Physics {
             commandHead = 0;
             commandCount = 0;
             activeTick = 0;
+            querySceneGeneration = 0;
             commandOrderDirty = false;
             stepping = false;
             {
@@ -190,6 +191,7 @@ namespace Horo::Physics {
         std::uint32_t commandHead{};
         std::uint32_t commandCount{};
         std::uint64_t activeTick{};
+        std::uint64_t querySceneGeneration{};
         bool commandOrderDirty{};
         bool stepping{};
         // The owner thread alone writes publication state; any live-world thread may take a coherent snapshot.
@@ -482,10 +484,11 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsRuntime::Capability */
     PhysicsCapabilitySupport PhysicsRuntime::Capability(const PhysicsCapability capability) const noexcept {
-        if (capability >= PhysicsCapability::Count)
+        using enum PhysicsCapability;
+        if (capability >= Count)
             return PhysicsCapabilitySupport::Unknown;
         const auto canonicalWorld = static_cast<std::uint8_t>(impl_->mode == PhysicsRuntimeMode::Canonical) *
-                                    static_cast<std::uint8_t>(capability == PhysicsCapability::WorldCreation);
+                                    static_cast<std::uint8_t>(capability == WorldCreation || capability == ImmediateQueries);
         const auto ready = static_cast<std::uint8_t>(impl_->state == PhysicsRuntimeState::Ready);
         return static_cast<PhysicsCapabilitySupport>(static_cast<std::uint8_t>(PhysicsCapabilitySupport::Unsupported) +
                                                      canonicalWorld * (1U + ready));
@@ -613,6 +616,50 @@ namespace Horo::Physics {
         return Result<PhysicsCommandAdmission>::Success({PhysicsCommandAdmissionStatus::Deferred, impl_->commandCount});
     }
 
+    /** @copydoc PhysicsWorld::CreateQueryFixture */
+    Result<PhysicsQueryFixture> PhysicsWorld::CreateQueryFixture(const PhysicsQueryFixtureDescriptor &fixture) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsQueryFixtureDescriptor(fixture, impl_->identity); valid.HasError())
+            return Result<PhysicsQueryFixture>::Failure(valid.ErrorValue());
+        return Detail::CreateCanonicalQueryFixture(impl_->native, impl_->identity, fixture);
+    }
+
+    /** @copydoc PhysicsWorld::DestroyQueryFixture */
+    Result<void> PhysicsWorld::DestroyQueryFixture(const PhysicsQueryFixture &fixture) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const auto body = ValidatePhysicsHandleOwner(fixture.body, impl_->identity); body.HasError())
+            return body;
+        if (const auto shape = ValidatePhysicsHandleOwner(fixture.shape, impl_->identity); shape.HasError())
+            return shape;
+        return Detail::DestroyCanonicalQueryFixture(impl_->native, fixture);
+    }
+
+    /** @copydoc PhysicsWorld::Query */
+    Result<PhysicsQueryResult> PhysicsWorld::Query(const PhysicsQueryDescriptor &descriptor, const std::span<PhysicsQueryHit> hits) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsQueryDescriptor(descriptor, impl_->identity, impl_->querySceneGeneration);
+            valid.HasError())
+            return Result<PhysicsQueryResult>::Failure(valid.ErrorValue());
+        if (hits.size() > MaximumPhysicsQueryHits)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+        return Detail::ExecuteCanonicalQuery(impl_->native, descriptor, hits);
+    }
+
     /** @copydoc PhysicsWorld::AdvanceFixedTick */
     Result<void> PhysicsWorld::AdvanceFixedTick(const PhysicsFixedTickInput &input) {
         using enum PhysicsTickPhase;
@@ -665,6 +712,7 @@ namespace Horo::Physics {
         ObserveCommands(*impl_, input, eligible, PhysicsStructuralCommandKind::Destroy, PhysicsCommandSafePoint::PostStep, applied);
 
         impl_->DiscardCommands(eligible);
+        impl_->querySceneGeneration = input.sceneGeneration;
         CommitPublishedTick(*impl_, input.simulationTick, applied);
         impl_->statistics.completedTicks = input.simulationTick;
         ObservePhase(input, PublishCompletedTick);
