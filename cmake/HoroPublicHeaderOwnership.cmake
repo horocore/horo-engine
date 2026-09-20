@@ -23,6 +23,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/Logging/LogLevel.h
     Horo/Foundation/Logging/Logger.h
     Horo/Foundation/Logging/StructuredLogStore.h
+    Horo/Foundation/MathUtils.h
     Horo/Foundation/ModuleDescriptor.h
     Horo/Foundation/ModuleHost.h
     Horo/Foundation/OperationStore.h
@@ -102,6 +103,10 @@ horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageCache.h
     Horo/Packages/PackageFileManifest.h
 )
+horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
+    Horo/Packages/PackagePublisherVerification.h
+    Horo/Packages/PackagePublisherVerificationErrors.h
+)
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/FrameScheduler.h
@@ -119,6 +124,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveRestoreTransaction.h
     Horo/Runtime/Save/SaveArchiveMetadata.h
     Horo/Runtime/Save/SaveArchiveFraming.h
+    Horo/Runtime/Save/SaveArchiveFinalization.h
+    Horo/Runtime/Save/SaveArchiveReader.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h
     Horo/Runtime/Save/SaveSlotMetadata.h
@@ -249,13 +256,16 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioPlanarBlock.h
     Horo/Audio/AudioErrors.h
     Horo/Audio/AudioIdentity.h
+    Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
+    Horo/Audio/AudioSoundReference.h
 )
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
     Horo/Audio/AudioSourceImporter.h
 )
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
+    Horo/Audio/AudioDSPNode.h
     Horo/Audio/AudioResampler.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
@@ -297,6 +307,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsDeterminismPolicy.h
     Horo/Physics/PhysicsIdentity.h
     Horo/Physics/PhysicsMetrics.h
+    Horo/Physics/PhysicsMaterialAsset.h
     Horo/Physics/PhysicsPose.h
     Horo/Physics/PhysicsQuery.h
     Horo/Physics/PhysicsShapeDescriptor.h
@@ -417,6 +428,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/OriginRebaseTransaction.h
     Horo/WorldStreaming/OriginShiftPolicy.h
     Horo/WorldStreaming/RuntimeEntityCellExitOperation.h
+    Horo/WorldStreaming/WorldEntityReferenceFixup.h
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
@@ -604,11 +616,13 @@ horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ApplicationCapabilityRegistry.h
     Horo/Extensions/AssetCookerRegistry.h
+    Horo/Extensions/BackendOperationRegistry.h
     Horo/Extensions/BackendServiceRegistry.h
     Horo/Extensions/ExtensionAbi.h
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
+    Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h

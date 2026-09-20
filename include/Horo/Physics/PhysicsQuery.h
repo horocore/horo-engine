@@ -10,8 +10,10 @@
 #include "Horo/Physics/PhysicsFilterIdentity.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsPose.h"
+#include "Horo/Physics/PhysicsShapeDescriptor.h"
 
 #include <optional>
+#include <span>
 #include <variant>
 
 namespace Horo::Physics {
@@ -27,6 +29,7 @@ namespace Horo::Physics {
     /** @brief Result collection semantics applied after deterministic ordering. */
     enum class PhysicsQueryCollection : std::uint8_t {
         Closest,
+        Any,
         All,
         ThroughFirstBlock,
     };
@@ -82,6 +85,13 @@ namespace Horo::Physics {
         Math::Vec3 point;
     };
 
+    /** @brief Query participation stored on one admitted fixture. */
+    enum class PhysicsQueryFixtureResponse : std::uint8_t {
+        Ignore,
+        Overlap,
+        Block,
+    };
+
     using PhysicsQueryGeometry = std::variant<PhysicsRayQuery, PhysicsSweepQuery, PhysicsOverlapQuery, PhysicsPointQuery>;
 
     /**
@@ -105,6 +115,33 @@ namespace Horo::Physics {
         Assets::AssetId asset;
         std::uint64_t assetGeneration{};
         PhysicsMaterialSlotId slot;
+    };
+
+    /**
+     * @brief Complete owner-thread fixture input used to admit a queryable native body.
+     *
+     * This is deliberately a narrow runtime admission value, not a replacement for authored
+     * scene conversion. It lets hosts and canonical fixtures install one explicit analytic
+     * collider while the scene activation path is being assembled. The fixture owns no native
+     * resource; the receiving world retains that resource until destruction or unload.
+     */
+    struct PhysicsQueryFixtureDescriptor final {
+        PhysicsShapeDescriptor shape;
+        PhysicsPose pose;
+        CollisionLayerId layer;
+        CollisionProfileId profile;
+        PhysicsQueryChannelId channel;
+        PhysicsQueryFixtureResponse response{PhysicsQueryFixtureResponse::Block};
+        bool trigger{};
+        std::optional<PhysicsShapeSubresourceId> subshape;
+        std::optional<PhysicsQueryMaterial> material;
+    };
+
+    /** @brief Non-owning body/shape identities returned for one admitted query fixture. */
+    struct PhysicsQueryFixture final {
+        BodyHandle body;
+        ShapeHandle shape;
+        [[nodiscard]] constexpr bool operator==(const PhysicsQueryFixture &) const noexcept = default;
     };
 
     /**
@@ -136,6 +173,15 @@ namespace Horo::Physics {
         std::uint64_t filterSchemaGeneration{};
         std::uint64_t broadphaseSnapshotGeneration{};
     };
+
+    /**
+     * @brief Validates one owner-thread query fixture before native admission.
+     * @param fixture Complete analytic geometry, pose and stable filter evidence.
+     * @param expectedWorld Exact active world generation receiving the fixture.
+     * @return Success or a stable malformed, foreign-world, unsupported or capacity error.
+     */
+    [[nodiscard]] Result<void> ValidatePhysicsQueryFixtureDescriptor(const PhysicsQueryFixtureDescriptor &fixture,
+                                                                     PhysicsWorldId expectedWorld);
 
     /**
      * @brief Validates inert request shape, bounds, typed selectors and captured owner generations.

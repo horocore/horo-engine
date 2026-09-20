@@ -958,6 +958,7 @@
     "workspace.inspector.audio_source_kind_native_clip": {"text": "Yerel Klip"},
     "workspace.inspector.audio_source_kind_middleware_event": {"text": "Ara Katman Olayı"},
     "workspace.inspector.audio_source_gain": {"text": "Kazanç"},
+    "workspace.inspector.audio_source_pitch": {"text": "Perde"},
     "workspace.inspector.audio_source_spatial": {"text": "Uzamsal"},
     "workspace.inspector.audio_source_invalid": {"text": "Ses kaynağı kazancı sonlu ve negatif olmayan bir değer olmalıdır."},
     "workspace.inspector.name_invalid": {"text": "Nesne adı 1 ile 128 bayt arasında olmalıdır."},
