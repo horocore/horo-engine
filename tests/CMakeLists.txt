@@ -447,6 +447,7 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationProjectProfileTests.cpp
         unit/runtime/navigation/NavigationProviderTests.cpp
         unit/runtime/navigation/NavigationSourceGeometryTests.cpp
+        unit/runtime/navigation/NavigationDataSerializationTests.cpp
 )
 target_compile_features(HoroNavigationApiTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
