@@ -12,8 +12,20 @@
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/Memory.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyFilter.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollidePointResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/PlaneShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 #include <algorithm>
@@ -25,7 +37,9 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <ranges>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace Horo::Physics::Detail {
@@ -263,16 +277,63 @@ namespace Horo::Physics::Detail {
             }
         };
 
+        /** @brief Native fixture plus copied Horo identity/filter evidence for query projection. */
+        struct CanonicalQueryFixtureRecord final {
+            PhysicsQueryFixture fixture;
+            PhysicsQueryFixtureDescriptor descriptor;
+            JPH::BodyID nativeBody;
+            JPH::Ref<JPH::Shape> shape;
+        };
+
+        /** @brief Fixed-capacity native collector; callbacks cannot allocate or mutate world structure. */
+        template <typename Collector> class FixedQueryCollector final : public Collector {
+        public:
+            using ResultType = typename Collector::ResultType;
+
+            FixedQueryCollector(ResultType *storage, const PhysicsQueryCollection collection) : values(storage), collection_(collection) {}
+
+            void AddHit(const ResultType &hit) override {
+                if (collection_ == PhysicsQueryCollection::Any) {
+                    if (count == 0)
+                        values[count++] = hit;
+                    this->ForceEarlyOut();
+                    return;
+                }
+                if (count < MaximumPhysicsQueryHits)
+                    values[count++] = hit;
+                else
+                    overflow = true;
+            }
+
+            ResultType *values{};
+            std::size_t count{};
+            bool overflow{};
+
+            PhysicsQueryCollection collection_;
+        };
+
         /** @brief Per-world native ownership in dependency order; reverse member destruction releases the system first. */
         struct CanonicalWorld final {
-            explicit CanonicalWorld(CanonicalRuntime &runtime) : owner(runtime) {
+            static constexpr std::size_t InvalidFixtureIndex = std::numeric_limits<std::size_t>::max();
+
+            CanonicalWorld(CanonicalRuntime &runtime, const std::uint32_t maximumBodies, const std::uint32_t maximumFixtures)
+                : owner(runtime), maximumFixtures(maximumFixtures), nativeFixtureIndices(maximumBodies, InvalidFixtureIndex) {
                 ++owner.resources.worlds;
+                fixtures.reserve(maximumFixtures);
             }
 
             CanonicalWorld(const CanonicalWorld &) = delete;
             CanonicalWorld &operator=(const CanonicalWorld &) = delete;
 
             ~CanonicalWorld() {
+                if (system != nullptr) {
+                    auto &bodyInterface = system->GetBodyInterface();
+                    for (const CanonicalQueryFixtureRecord &fixture : fixtures) {
+                        bodyInterface.RemoveBody(fixture.nativeBody);
+                        bodyInterface.DestroyBody(fixture.nativeBody);
+                    }
+                }
+                fixtures.clear();
                 const auto hadSystem = static_cast<std::uint32_t>(system != nullptr);
                 const auto hadJobs = static_cast<std::uint32_t>(jobs != nullptr);
                 const auto hadScratch = static_cast<std::uint32_t>(scratch != nullptr);
@@ -293,6 +354,29 @@ namespace Horo::Physics::Detail {
             std::unique_ptr<JPH::JobSystemSingleThreaded> jobs;
             std::unique_ptr<JPH::PhysicsSystem> system;
             DiagnosticInbox diagnostics;
+            std::uint32_t maximumFixtures{};
+            std::vector<CanonicalQueryFixtureRecord> fixtures;
+            std::vector<std::size_t> nativeFixtureIndices;
+            std::uint32_t nextFixtureSlot{};
+            std::uint32_t nextFixtureGeneration{1};
+            std::uint64_t querySchemaGeneration{1};
+            std::array<JPH::CastRayCollector::ResultType, MaximumPhysicsQueryHits> rayQueryResults{};
+            std::array<JPH::CollidePointCollector::ResultType, MaximumPhysicsQueryHits> pointQueryResults{};
+            std::array<JPH::CollideShapeCollector::ResultType, MaximumPhysicsQueryHits> overlapQueryResults{};
+            std::array<JPH::CastShapeCollector::ResultType, MaximumPhysicsQueryHits> sweepQueryResults{};
+            std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> queryCandidates{};
+        };
+
+        /** @brief Reusable fixed-capacity collectors for one owner-thread query execution. */
+        struct CanonicalQueryCollectors final {
+            CanonicalQueryCollectors(CanonicalWorld &world, const PhysicsQueryCollection collection)
+                : ray(world.rayQueryResults.data(), collection), point(world.pointQueryResults.data(), collection),
+                  overlap(world.overlapQueryResults.data(), collection), sweep(world.sweepQueryResults.data(), collection) {}
+
+            FixedQueryCollector<JPH::CastRayCollector> ray;
+            FixedQueryCollector<JPH::CollidePointCollector> point;
+            FixedQueryCollector<JPH::CollideShapeCollector> overlap;
+            FixedQueryCollector<JPH::CastShapeCollector> sweep;
         };
 
         /** @brief Restricts process-global callback routing to one joined native step. */
@@ -329,6 +413,317 @@ namespace Horo::Physics::Detail {
                 JPH::AlignedAllocate == nullptr,    JPH::AlignedFree == nullptr,
             };
             return std::ranges::all_of(globalsUnowned, std::identity{});
+        }
+
+        [[nodiscard]] JPH::Vec3 ToNative(const Math::Vec3 value) noexcept {
+            return {value.x, value.y, value.z};
+        }
+
+        [[nodiscard]] JPH::Quat ToNative(const Math::Quaternion value) noexcept {
+            return {value.x, value.y, value.z, value.w};
+        }
+
+        [[nodiscard]] Result<JPH::Ref<JPH::Shape>> CreateNativeShape(const PhysicsShapeDescriptor &descriptor) {
+            JPH::ShapeSettings::ShapeResult created;
+            std::visit([&created]<typename Shape>(const Shape &shape) {
+                using ShapeType = std::decay_t<Shape>;
+                if constexpr (std::is_same_v<ShapeType, PhysicsBoxShape>)
+                    created = JPH::BoxShapeSettings(ToNative(shape.halfExtentsMeters)).Create();
+                else if constexpr (std::is_same_v<ShapeType, PhysicsSphereShape>)
+                    created = JPH::SphereShapeSettings(shape.radiusMeters).Create();
+                else if constexpr (std::is_same_v<ShapeType, PhysicsCapsuleShape>)
+                    created = JPH::CapsuleShapeSettings(shape.cylindricalHalfHeightMeters, shape.radiusMeters).Create();
+                else {
+                    static_assert(std::is_same_v<ShapeType, PhysicsStaticPlaneShape>);
+                    created = JPH::PlaneShapeSettings(JPH::Plane(ToNative(shape.normal), shape.signedDistanceMeters)).Create();
+                }
+            }, descriptor);
+            if (created.HasError())
+                return Result<JPH::Ref<JPH::Shape>>::Failure(
+                    MakeError(PhysicsErrors::ShapeArtifactInvalid, "Canonical solver rejected the admitted analytic query shape."));
+            return Result<JPH::Ref<JPH::Shape>>::Success(created.Get());
+        }
+
+        [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const BodyHandle body) {
+            const auto found = std::ranges::find_if(world.fixtures, [body](const auto &fixture) {
+                return fixture.fixture.body == body;
+            });
+            return found == world.fixtures.end() ? nullptr : std::to_address(found);
+        }
+
+        [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const ShapeHandle shape) {
+            const auto found = std::ranges::find_if(world.fixtures, [shape](const auto &fixture) {
+                return fixture.fixture.shape == shape;
+            });
+            return found == world.fixtures.end() ? nullptr : std::to_address(found);
+        }
+
+        [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const JPH::BodyID body) {
+            const std::size_t nativeIndex = body.GetIndex();
+            if (nativeIndex >= world.nativeFixtureIndices.size())
+                return nullptr;
+            const std::size_t fixtureIndex = world.nativeFixtureIndices[nativeIndex];
+            if (fixtureIndex == CanonicalWorld::InvalidFixtureIndex || fixtureIndex >= world.fixtures.size() ||
+                world.fixtures[fixtureIndex].nativeBody != body)
+                return nullptr;
+            return &world.fixtures[fixtureIndex];
+        }
+
+        [[nodiscard]] bool Admits(const CanonicalQueryFixtureRecord &fixture, const PhysicsQueryDescriptor &descriptor) noexcept {
+            if (fixture.descriptor.channel != descriptor.filter.channel ||
+                fixture.descriptor.response == PhysicsQueryFixtureResponse::Ignore ||
+                (fixture.descriptor.trigger && descriptor.filter.triggers == PhysicsQueryTriggerPolicy::Exclude))
+                return false;
+            if (descriptor.filter.requiredLayer.has_value() && fixture.descriptor.layer != *descriptor.filter.requiredLayer)
+                return false;
+            if (descriptor.filter.requiredProfile.has_value() && fixture.descriptor.profile != *descriptor.filter.requiredProfile)
+                return false;
+            if (descriptor.filter.excludedBody.has_value() && fixture.fixture.body == *descriptor.filter.excludedBody)
+                return false;
+            return true;
+        }
+
+        /** @brief Applies the stable Horo query filter before native collectors can short-circuit. */
+        class QueryBodyFilter final : public JPH::BodyFilter {
+        public:
+            QueryBodyFilter(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor)
+                : world_(world), descriptor_(descriptor) {}
+
+            [[nodiscard]] bool ShouldCollide(const JPH::BodyID &body) const override {
+                const auto *fixture = FindFixture(world_, body);
+                return fixture != nullptr && Admits(*fixture, descriptor_);
+            }
+
+        private:
+            const CanonicalWorld &world_;
+            const PhysicsQueryDescriptor &descriptor_;
+        };
+
+        [[nodiscard]] const CanonicalQueryFixtureRecord *FindSourceShape(const CanonicalWorld &world,
+                                                                         const PhysicsQueryGeometry &geometry) {
+            if (const auto *sweep = std::get_if<PhysicsSweepQuery>(&geometry))
+                return FindFixture(world, sweep->shape);
+            if (const auto *overlap = std::get_if<PhysicsOverlapQuery>(&geometry))
+                return FindFixture(world, overlap->shape);
+            return nullptr;
+        }
+
+        [[nodiscard]] PhysicsQueryResponse ToResponse(const PhysicsQueryFixtureResponse response) noexcept {
+            return response == PhysicsQueryFixtureResponse::Overlap ? PhysicsQueryResponse::Overlap : PhysicsQueryResponse::Block;
+        }
+
+        [[nodiscard]] std::optional<Math::Vec3> RayNormal(const CanonicalWorld &world, const JPH::BodyID body,
+                                                          const JPH::SubShapeID &subshape, const Math::Vec3 position) {
+            JPH::BodyLockRead lock(world.system->GetBodyLockInterface(), body);
+            if (!lock.Succeeded())
+                return std::nullopt;
+            const JPH::Vec3 normal = lock.GetBody().GetWorldSpaceSurfaceNormal(subshape, {position.x, position.y, position.z});
+            const Math::Vec3 result{normal.GetX(), normal.GetY(), normal.GetZ()};
+            return Math::IsFinite(result) ? std::optional<Math::Vec3>{result} : std::nullopt;
+        }
+
+        void CollectRayQuery(const CanonicalWorld &world, const PhysicsRayQuery &query, CanonicalQueryCollectors &collectors,
+                             const QueryBodyFilter &bodyFilter) {
+            world.system->GetNarrowPhaseQuery().CastRay({JPH::RVec3(query.origin.x, query.origin.y, query.origin.z),
+                                                         ToNative(query.direction * query.maximumDistanceMeters)},
+                                                        JPH::RayCastSettings{}, collectors.ray, {}, {}, bodyFilter);
+        }
+
+        void CollectPointQuery(const CanonicalWorld &world, const PhysicsPointQuery &query, CanonicalQueryCollectors &collectors,
+                               const QueryBodyFilter &bodyFilter) {
+            world.system->GetNarrowPhaseQuery().CollidePoint({query.point.x, query.point.y, query.point.z}, collectors.point, {}, {},
+                                                             bodyFilter);
+        }
+
+        [[nodiscard]] JPH::RMat44 ToNativeTransform(const PhysicsPose &pose) {
+            return JPH::RMat44::sRotationTranslation(ToNative(pose.rotation),
+                                                     JPH::RVec3(pose.translation.x, pose.translation.y, pose.translation.z));
+        }
+
+        void CollectOverlapQuery(const CanonicalWorld &world, const PhysicsOverlapQuery &query, const CanonicalQueryFixtureRecord &source,
+                                 CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            const JPH::RMat44 transform = ToNativeTransform(query.pose);
+            world.system->GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
+                                                             JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
+        }
+
+        void CollectSweepQuery(const CanonicalWorld &world, const PhysicsSweepQuery &query, const CanonicalQueryFixtureRecord &source,
+                               CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            const JPH::RMat44 transform = ToNativeTransform(query.pose);
+            const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(source.shape, JPH::Vec3::sOne(), transform,
+                                                                              ToNative(query.direction * query.maximumDistanceMeters));
+            world.system->GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {}, {},
+                                                          bodyFilter);
+        }
+
+        /** @brief Executes one validated native query into the world-owned fixed collectors. */
+        [[nodiscard]] Result<void> CollectCanonicalQuery(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                         CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            const auto *source = FindSourceShape(world, descriptor.geometry);
+            if ((std::holds_alternative<PhysicsSweepQuery>(descriptor.geometry) ||
+                 std::holds_alternative<PhysicsOverlapQuery>(descriptor.geometry)) &&
+                source == nullptr)
+                return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
+
+            std::visit([&]<typename Query>(const Query &query) {
+                if constexpr (std::is_same_v<Query, PhysicsRayQuery>) {
+                    CollectRayQuery(world, query, collectors, bodyFilter);
+                } else if constexpr (std::is_same_v<Query, PhysicsPointQuery>) {
+                    CollectPointQuery(world, query, collectors, bodyFilter);
+                } else if constexpr (std::is_same_v<Query, PhysicsOverlapQuery>) {
+                    CollectOverlapQuery(world, query, *source, collectors, bodyFilter);
+                } else {
+                    static_assert(std::is_same_v<Query, PhysicsSweepQuery>);
+                    CollectSweepQuery(world, query, *source, collectors, bodyFilter);
+                }
+            }, descriptor.geometry);
+            if (collectors.ray.overflow || collectors.point.overflow || collectors.overlap.overflow || collectors.sweep.overflow)
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::CapacityExceeded, "Canonical query exceeded the fixed native hit bound."));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] std::optional<Math::Vec3> ContactNormal(const JPH::Vec3 axis) {
+            if (axis.LengthSq() <= 1.0e-12F)
+                return std::nullopt;
+            const JPH::Vec3 normalized = axis.Normalized();
+            return Math::Vec3{-normalized.GetX(), -normalized.GetY(), -normalized.GetZ()};
+        }
+
+        struct CanonicalHitEvidence final {
+            JPH::BodyID body;
+            Math::Vec3 position;
+            std::optional<Math::Vec3> normal;
+            float distance{};
+        };
+
+        /** @brief Copies one native result into stable Horo query evidence. */
+        [[nodiscard]] Result<void> AppendCanonicalHit(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                      std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                      std::size_t &candidateCount, const CanonicalHitEvidence &evidence) {
+            const auto *fixture = FindFixture(world, evidence.body);
+            if (fixture == nullptr || !Admits(*fixture, descriptor))
+                return Result<void>::Success();
+            if (candidateCount == candidates.size())
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            PhysicsQueryHit hit{.body = fixture->fixture.body,
+                                .shape = fixture->fixture.shape,
+                                .subshape = fixture->descriptor.subshape,
+                                .material = fixture->descriptor.material,
+                                .layer = fixture->descriptor.layer,
+                                .profile = fixture->descriptor.profile,
+                                .channel = fixture->descriptor.channel,
+                                .filterSchemaGeneration = world.querySchemaGeneration,
+                                .response = ToResponse(fixture->descriptor.response),
+                                .position = evidence.position,
+                                .normal = evidence.normal,
+                                .distanceMeters = evidence.distance};
+            if (const Result<void> valid = ValidatePhysicsQueryHit(hit, descriptor); valid.HasError())
+                return valid;
+            candidates[candidateCount++] = std::move(hit);
+            return Result<void>::Success();
+        }
+
+        template <typename Collector, typename EvidenceFunction>
+        [[nodiscard]] Result<void> AppendCollectedQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                            const FixedQueryCollector<Collector> &collector,
+                                                            std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                            std::size_t &candidateCount, const EvidenceFunction &evidenceFunction) {
+            for (std::size_t index = 0; index < collector.count; ++index) {
+                if (const Result<void> appended =
+                        AppendCanonicalHit(world, descriptor, candidates, candidateCount, evidenceFunction(collector.values[index]));
+                    appended.HasError())
+                    return appended;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> AppendRayQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                      const PhysicsRayQuery &ray,
+                                                      const FixedQueryCollector<JPH::CastRayCollector> &collector,
+                                                      std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                      std::size_t &candidateCount) {
+            return AppendCollectedQueryHits(world, descriptor, collector, candidates, candidateCount, [&world, &ray](const auto &hit) {
+                const Math::Vec3 position = ray.origin + ray.direction * (ray.maximumDistanceMeters * hit.mFraction);
+                return CanonicalHitEvidence{.body = hit.mBodyID,
+                                            .position = position,
+                                            .normal = RayNormal(world, hit.mBodyID, hit.mSubShapeID2, position),
+                                            .distance = ray.maximumDistanceMeters * hit.mFraction};
+            });
+        }
+
+        [[nodiscard]] Result<void> AppendPointQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                        const PhysicsPointQuery &point,
+                                                        const FixedQueryCollector<JPH::CollidePointCollector> &collector,
+                                                        std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                        std::size_t &candidateCount) {
+            return AppendCollectedQueryHits(world, descriptor, collector, candidates, candidateCount, [&point](const auto &hit) {
+                return CanonicalHitEvidence{.body = hit.mBodyID, .position = point.point, .normal = std::nullopt, .distance = 0.0F};
+            });
+        }
+
+        template <typename Collector, typename DistanceFunction>
+        [[nodiscard]] Result<void> AppendContactQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                          const FixedQueryCollector<Collector> &collector,
+                                                          std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                          std::size_t &candidateCount, const DistanceFunction &distanceFunction) {
+            return AppendCollectedQueryHits(world, descriptor, collector, candidates, candidateCount, [&distanceFunction](const auto &hit) {
+                const Math::Vec3 position{hit.mContactPointOn2.GetX(), hit.mContactPointOn2.GetY(), hit.mContactPointOn2.GetZ()};
+                return CanonicalHitEvidence{.body = hit.mBodyID2,
+                                            .position = position,
+                                            .normal = ContactNormal(hit.mPenetrationAxis),
+                                            .distance = distanceFunction(hit)};
+            });
+        }
+
+        /** @brief Projects native query collectors into deterministic, bounded Horo hit storage. */
+        [[nodiscard]] Result<void> ProjectCanonicalQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                             const CanonicalQueryCollectors &collectors,
+                                                             std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                             std::size_t &candidateCount) {
+            if (const auto *ray = std::get_if<PhysicsRayQuery>(&descriptor.geometry))
+                return AppendRayQueryHits(world, descriptor, *ray, collectors.ray, candidates, candidateCount);
+            if (const auto *point = std::get_if<PhysicsPointQuery>(&descriptor.geometry))
+                return AppendPointQueryHits(world, descriptor, *point, collectors.point, candidates, candidateCount);
+            if (std::holds_alternative<PhysicsOverlapQuery>(descriptor.geometry))
+                return AppendContactQueryHits(world, descriptor, collectors.overlap, candidates, candidateCount, [](const auto &) {
+                    return 0.0F;
+                });
+            const auto &sweep = std::get<PhysicsSweepQuery>(descriptor.geometry);
+            return AppendContactQueryHits(world, descriptor, collectors.sweep, candidates, candidateCount, [&sweep](const auto &hit) {
+                return hit.mFraction * sweep.maximumDistanceMeters;
+            });
+        }
+
+        /** @brief Applies collection policy, caller-storage truncation and result metadata. */
+        [[nodiscard]] Result<PhysicsQueryResult> FinalizeCanonicalQuery(const PhysicsQueryDescriptor &descriptor,
+                                                                        std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                                        const std::size_t candidateCount,
+                                                                        const std::span<PhysicsQueryHit> hits,
+                                                                        const std::uint64_t schemaGeneration) {
+            std::ranges::sort(candidates.begin(), candidates.begin() + static_cast<std::ptrdiff_t>(candidateCount), PhysicsQueryHitLess);
+            std::size_t selectedCount = candidateCount;
+            if (descriptor.collection == PhysicsQueryCollection::Closest || descriptor.collection == PhysicsQueryCollection::Any)
+                selectedCount = std::min<std::size_t>(selectedCount, 1);
+            else if (descriptor.collection == PhysicsQueryCollection::ThroughFirstBlock) {
+                const auto end = candidates.begin() + static_cast<std::ptrdiff_t>(candidateCount);
+                const auto firstBlock = std::ranges::find_if(candidates.begin(), end, [](const PhysicsQueryHit &hit) {
+                    return hit.response == PhysicsQueryResponse::Block;
+                });
+                selectedCount =
+                    firstBlock == end ? candidateCount : static_cast<std::size_t>(std::distance(candidates.begin(), firstBlock) + 1);
+            }
+            if (selectedCount > descriptor.maximumHitCount)
+                return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            const std::size_t copied = std::min(selectedCount, hits.size());
+            std::copy_n(candidates.begin(), copied, hits.begin());
+            PhysicsQueryResult result{.hitCount = static_cast<std::uint32_t>(copied),
+                                      .truncated = copied < selectedCount,
+                                      .filterSchemaGeneration = schemaGeneration,
+                                      .broadphaseSnapshotGeneration = schemaGeneration};
+            if (const Result<void> valid = ValidatePhysicsQueryResult(result, descriptor); valid.HasError())
+                return Result<PhysicsQueryResult>::Failure(valid.ErrorValue());
+            return Result<PhysicsQueryResult>::Success(result);
         }
     }  // namespace
 
@@ -383,7 +778,8 @@ namespace Horo::Physics::Detail {
             return Result<CanonicalWorldHandle>::Failure(translated.ErrorValue());
 
         const auto &values = translated.Value();
-        auto world = std::make_unique<CanonicalWorld>(*static_cast<CanonicalRuntime *>(runtime.value));
+        auto world = std::make_unique<CanonicalWorld>(*static_cast<CanonicalRuntime *>(runtime.value), values.maximumBodies,
+                                                      settings.Values().budgets.maximumShapes);
         world->scratch = std::make_unique<JPH::TempAllocatorImpl>(static_cast<std::size_t>(values.scratchBytes));
         ++world->owner.resources.scratchAllocators;
         if (failurePoint == CanonicalFailurePoint::ScratchCreated)
@@ -403,6 +799,88 @@ namespace Horo::Physics::Detail {
             return Result<CanonicalWorldHandle>::Failure(
                 MakeError(PhysicsErrors::InitializationFailed, "Native world initialization stage."));
         return Result<CanonicalWorldHandle>::Success({world.release()});
+    }
+
+    /** @copydoc CreateCanonicalQueryFixture */
+    Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle world, const PhysicsWorldId owner,
+                                                            const PhysicsQueryFixtureDescriptor &fixture) {
+        if (world.value == nullptr || !owner.IsValid())
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        if (canonical.nextFixtureSlot == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.nextFixtureGeneration == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.fixtures.size() >= canonical.maximumFixtures)
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+        const auto nativeShape = CreateNativeShape(fixture.shape);
+        if (nativeShape.HasError())
+            return Result<PhysicsQueryFixture>::Failure(nativeShape.ErrorValue());
+
+        const std::uint32_t slot = canonical.nextFixtureSlot++;
+        const std::uint32_t generation = canonical.nextFixtureGeneration++;
+        const PhysicsQueryFixture identity{.body = {owner, {slot, generation}}, .shape = {owner, {slot, generation}}};
+        JPH::BodyCreationSettings settings(nativeShape.Value().GetPtr(),
+                                           JPH::RVec3(fixture.pose.translation.x, fixture.pose.translation.y, fixture.pose.translation.z),
+                                           ToNative(fixture.pose.rotation), JPH::EMotionType::Static, JPH::ObjectLayer{0});
+        settings.mIsSensor = fixture.trigger;
+        const JPH::BodyID nativeBody = canonical.system->GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+        if (nativeBody.IsInvalid())
+            return Result<PhysicsQueryFixture>::Failure(
+                MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the query fixture body admission."));
+        if (nativeBody.GetIndex() >= canonical.nativeFixtureIndices.size()) {
+            canonical.system->GetBodyInterface().RemoveBody(nativeBody);
+            canonical.system->GetBodyInterface().DestroyBody(nativeBody);
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+        }
+        canonical.fixtures.push_back({.fixture = identity, .descriptor = fixture, .nativeBody = nativeBody, .shape = nativeShape.Value()});
+        canonical.nativeFixtureIndices[nativeBody.GetIndex()] = canonical.fixtures.size() - 1;
+        ++canonical.querySchemaGeneration;
+        return Result<PhysicsQueryFixture>::Success(identity);
+    }
+
+    /** @copydoc DestroyCanonicalQueryFixture */
+    Result<void> DestroyCanonicalQueryFixture(const CanonicalWorldHandle world, const PhysicsQueryFixture &fixture) {
+        if (world.value == nullptr)
+            return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        if (const auto owner = ValidatePhysicsHandleOwner(fixture.body, fixture.body.world); owner.HasError())
+            return owner;
+        if (fixture.body.world.Value() != fixture.shape.world.Value() || fixture.body.slot.index != fixture.shape.slot.index ||
+            fixture.body.slot.generation != fixture.shape.slot.generation)
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture body and shape identities must be paired."));
+        const auto found = std::ranges::find_if(canonical.fixtures, [&fixture](const auto &entry) {
+            return entry.fixture == fixture;
+        });
+        if (found == canonical.fixtures.end())
+            return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
+        canonical.system->GetBodyInterface().RemoveBody(found->nativeBody);
+        canonical.system->GetBodyInterface().DestroyBody(found->nativeBody);
+        const auto erasedIndex = static_cast<std::size_t>(std::distance(canonical.fixtures.begin(), found));
+        canonical.nativeFixtureIndices[found->nativeBody.GetIndex()] = CanonicalWorld::InvalidFixtureIndex;
+        canonical.fixtures.erase(found);
+        if (erasedIndex < canonical.fixtures.size())
+            canonical.nativeFixtureIndices[canonical.fixtures[erasedIndex].nativeBody.GetIndex()] = erasedIndex;
+        ++canonical.querySchemaGeneration;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ExecuteCanonicalQuery */
+    Result<PhysicsQueryResult> ExecuteCanonicalQuery(const CanonicalWorldHandle world, const PhysicsQueryDescriptor &descriptor,
+                                                     const std::span<PhysicsQueryHit> hits) {
+        if (world.value == nullptr)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        CanonicalQueryCollectors collectors{canonical, descriptor.collection};
+        const QueryBodyFilter bodyFilter{canonical, descriptor};
+        if (const Result<void> collected = CollectCanonicalQuery(canonical, descriptor, collectors, bodyFilter); collected.HasError())
+            return Result<PhysicsQueryResult>::Failure(collected.ErrorValue());
+
+        auto &candidates = canonical.queryCandidates;
+        std::size_t candidateCount{};
+        if (const Result<void> projected = ProjectCanonicalQueryHits(canonical, descriptor, collectors, candidates, candidateCount);
+            projected.HasError())
+            return Result<PhysicsQueryResult>::Failure(projected.ErrorValue());
+
+        return FinalizeCanonicalQuery(descriptor, candidates, candidateCount, hits, canonical.querySchemaGeneration);
     }
 
     /** @copydoc DestroyCanonicalWorld */

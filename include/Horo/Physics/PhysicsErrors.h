@@ -61,6 +61,10 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor ShapeMotionUnsupported;
     /** @brief A cooked Physics shape artifact is malformed or fails integrity validation. */
     extern const ErrorCodeDescriptor ShapeArtifactInvalid;
+    /** @brief A reusable physical-material asset descriptor is malformed or outside CanonicalV1 bounds. */
+    extern const ErrorCodeDescriptor MaterialDescriptorInvalid;
+    /** @brief A physical-material combine mode is not part of the qualified backend-neutral vocabulary. */
+    extern const ErrorCodeDescriptor MaterialCombineUnsupported;
 
     /** @brief Returns the complete canonical Physics error descriptor set. @return Stable process-lifetime descriptor view. */
     [[nodiscard]] std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept;
