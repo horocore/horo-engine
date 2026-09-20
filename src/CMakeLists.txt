@@ -147,6 +147,14 @@ add_library(HoroEngine::Packages ALIAS HoroPackages)
 target_compile_features(HoroPackages PUBLIC cxx_std_20)
 target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
+add_library(HoroPackageSecurity STATIC
+        packages/verification/PackagePublisherVerification.cpp
+        packages/verification/PackagePublisherVerificationErrors.cpp
+)
+add_library(HoroEngine::PackageSecurity ALIAS HoroPackageSecurity)
+target_compile_features(HoroPackageSecurity PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageSecurity PUBLIC HoroEngine::Foundation HoroPackages HoroEngine::Security)
+
 add_library(HoroApplication STATIC
         application/observability/HostObservability.cpp
         application/project/ProjectErrors.cpp
