@@ -49,11 +49,19 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
 
-        /** @brief Returns the body record for an exact registered handle. */
-        template <typename Records> [[nodiscard]] auto FindBody(Records &records, const BodyHandle &body) {
-            return std::ranges::find_if(records, [body](const auto &record) {
-                return record.registration.body == body;
+        /** @brief Returns the first body record whose handle is not less than the requested handle. */
+        template <typename Records> [[nodiscard]] auto LowerBoundBody(Records &records, const BodyHandle &body) {
+            return std::ranges::lower_bound(records, body, [](const BodyHandle &left, const BodyHandle &right) {
+                return left < right;
+            }, [](const auto &record) {
+                return record.registration.body;
             });
+        }
+
+        /** @brief Returns the body record for an exact registered handle from the sorted body table. */
+        template <typename Records> [[nodiscard]] auto FindBody(Records &records, const BodyHandle &body) {
+            const auto found = LowerBoundBody(records, body);
+            return found != records.end() && found->registration.body == body ? found : records.end();
         }
 
     }  // namespace
@@ -69,15 +77,14 @@ namespace Horo::Physics {
             bool hasDynamicSnapshot{};
         };
 
-        explicit Impl(const PhysicsTransformAuthorityDescriptor &authorityDescriptor)
-            : descriptor(authorityDescriptor), ownerThread(std::this_thread::get_id()) {
+        explicit Impl(const PhysicsTransformAuthorityDescriptor &authorityDescriptor) : descriptor(authorityDescriptor) {
             bodies.reserve(descriptor.maximumBodies);
             commands.reserve(descriptor.maximumPendingCommands);
         }
 
         PhysicsTransformAuthorityDescriptor descriptor;
         PhysicsTransformAuthorityState state{PhysicsTransformAuthorityState::Prepared};
-        std::thread::id ownerThread;
+        std::thread::id ownerThread{std::this_thread::get_id()};
         std::vector<BodyRecord> bodies;
         std::vector<PhysicsTransformCommand> commands;
         std::uint64_t lastAppliedTick{};
@@ -88,8 +95,7 @@ namespace Horo::Physics {
         /** @brief Applies one validated command without allocating or touching authored scene storage. */
         void ApplyTransformCommand(const PhysicsTransformCommand &command, auto &record, PhysicsTransformTickResult &result) noexcept {
             record.lastAppliedTick = CommandIdentity(command).simulationTick;
-            std::visit([&record, &result](const auto &value) {
-                using Type = std::decay_t<decltype(value)>;
+            std::visit([&record, &result]<typename Type>(const Type &value) {  // NOSONAR(cpp:S1188) exhaustive closed-command visitor.
                 if constexpr (std::is_same_v<Type, PhysicsStaticTransformCommand>) {
                     record.registration.authoredPose = value.authoredPose;
                     record.runtimePose = value.authoredPose;
@@ -112,8 +118,8 @@ namespace Horo::Physics {
                     record.lastPublishedTick = 0;
                     ++result.dynamicControls;
                 }
-                ++result.appliedCommands;
             }, command);
+            ++result.appliedCommands;
         }
 
         /** @brief Confirms a typed command's shared identity and exact consuming frame. */
@@ -147,23 +153,43 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
 
+        /** @brief Checks one closed command alternative against one resolved transform authority. */
+        [[nodiscard]] bool MatchesTransformAuthority(const PhysicsTransformCommand &command, const PhysicsTransformAuthority authority) {
+            using enum PhysicsTransformAuthority;
+            return std::visit([authority]<typename Type>(const Type &) {
+                if constexpr (std::is_same_v<Type, PhysicsStaticTransformCommand>)
+                    return authority == StaticScene;
+                if constexpr (std::is_same_v<Type, PhysicsKinematicTargetCommand>)
+                    return authority == KinematicTarget;
+                return authority == DynamicSolver;
+            }, command);
+        }
+
         /** @brief Checks one command's body mode against its selected authority operation. */
         Result<void> ValidateCommandAuthority(const PhysicsTransformCommand &command, const PhysicsMotionType motion) {
             const auto authority = ResolvePhysicsTransformAuthority(motion);
             if (authority.HasError())
                 return Result<void>::Failure(authority.ErrorValue());
-            const bool valid = std::visit([authority = authority.Value()](const auto &value) {
-                using Type = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<Type, PhysicsStaticTransformCommand>)
-                    return authority == PhysicsTransformAuthority::StaticScene;
-                if constexpr (std::is_same_v<Type, PhysicsKinematicTargetCommand>)
-                    return authority == PhysicsTransformAuthority::KinematicTarget;
-                return authority == PhysicsTransformAuthority::DynamicSolver;
-            }, command);
-            if (!valid)
+            if (!MatchesTransformAuthority(command, authority.Value()))
                 return Result<void>::Failure(MakeError(PhysicsErrors::TransformAuthorityViolation,
                                                        "The transform command does not match the registered body's transform authority."));
             return Result<void>::Success();
+        }
+
+        /** @brief Validates one closed command alternative against one receiving admission frame. */
+        Result<void> ValidateQueuedTransformCommand(const PhysicsTransformCommand &command, const PhysicsWorldId expectedWorld,
+                                                    const std::uint64_t expectedSceneGeneration) {
+            return std::visit(
+                [expectedWorld, expectedSceneGeneration,
+                 simulationTick = CommandIdentity(command).simulationTick]<typename Type>(const Type &value) -> Result<void> {
+                if constexpr (std::is_same_v<Type, PhysicsStaticTransformCommand>)
+                    return ValidatePhysicsStaticTransformCommand(value, expectedWorld, expectedSceneGeneration, simulationTick);
+                else if constexpr (std::is_same_v<Type, PhysicsKinematicTargetCommand>)
+                    return ValidatePhysicsKinematicTargetCommand(value, expectedWorld, expectedSceneGeneration, simulationTick);
+                else
+                    return ValidatePhysicsDynamicTransformCommand(value, expectedWorld, expectedSceneGeneration, simulationTick);
+            },
+                command);
         }
 
         /** @brief Validates the shared admission frame before checking one command payload. */
@@ -223,13 +249,15 @@ namespace Horo::Physics {
 
     /** @copydoc ResolvePhysicsTransformAuthority */
     Result<PhysicsTransformAuthority> ResolvePhysicsTransformAuthority(const PhysicsMotionType motion) {
+        using enum PhysicsMotionType;
+        using enum PhysicsTransformAuthority;
         switch (motion) {
-            case PhysicsMotionType::Static:
-                return Result<PhysicsTransformAuthority>::Success(PhysicsTransformAuthority::StaticScene);
-            case PhysicsMotionType::Kinematic:
-                return Result<PhysicsTransformAuthority>::Success(PhysicsTransformAuthority::KinematicTarget);
-            case PhysicsMotionType::Dynamic:
-                return Result<PhysicsTransformAuthority>::Success(PhysicsTransformAuthority::DynamicSolver);
+            case Static:
+                return Result<PhysicsTransformAuthority>::Success(StaticScene);
+            case Kinematic:
+                return Result<PhysicsTransformAuthority>::Success(KinematicTarget);
+            case Dynamic:
+                return Result<PhysicsTransformAuthority>::Success(DynamicSolver);
         }
         return Result<PhysicsTransformAuthority>::Failure(
             MakeError(PhysicsErrors::OperationUnsupported, "Unknown body motion mode has no transform authority."));
@@ -314,6 +342,14 @@ namespace Horo::Physics {
                                                                     rightIdentity.sourceSequence};
     }
 
+    namespace {
+        /** @brief Inserts a command into the reserved buffer while preserving canonical admission order. */
+        void InsertTransformCommand(std::vector<PhysicsTransformCommand> &commands, const PhysicsTransformCommand &command) {
+            const auto insertionPoint = std::ranges::lower_bound(commands, command, PhysicsTransformCommandLess);
+            commands.insert(insertionPoint, command);
+        }
+    }  // namespace
+
     /** @copydoc PhysicsBodyTransformAuthority::Prepare */
     Result<std::unique_ptr<PhysicsBodyTransformAuthority>> PhysicsBodyTransformAuthority::Prepare(
         const PhysicsTransformAuthorityDescriptor &descriptor) {
@@ -321,8 +357,10 @@ namespace Horo::Physics {
             return Result<std::unique_ptr<PhysicsBodyTransformAuthority>>::Failure(valid.ErrorValue());
         try {
             auto impl = std::make_unique<Impl>(descriptor);
-            return Result<std::unique_ptr<PhysicsBodyTransformAuthority>>::Success(
-                std::unique_ptr<PhysicsBodyTransformAuthority>{new PhysicsBodyTransformAuthority(std::move(impl))});
+            // The private factory constructor cannot be called through std::make_unique.
+            auto authority =
+                std::unique_ptr<PhysicsBodyTransformAuthority>{new PhysicsBodyTransformAuthority(std::move(impl))};  // NOSONAR(cpp:S5950)
+            return Result<std::unique_ptr<PhysicsBodyTransformAuthority>>::Success(std::move(authority));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<PhysicsBodyTransformAuthority>>::Failure(
                 MakeError(PhysicsErrors::CapacityExceeded, "Unable to allocate transform-authority candidate storage."));
@@ -355,7 +393,8 @@ namespace Horo::Physics {
             return pose;
         if (const Result<PhysicsTransformAuthority> authority = ResolvePhysicsTransformAuthority(registration.motion); authority.HasError())
             return Result<void>::Failure(authority.ErrorValue());
-        if (FindBody(impl_->bodies, registration.body) != impl_->bodies.end())
+        const auto insertionPoint = LowerBoundBody(impl_->bodies, registration.body);
+        if (insertionPoint != impl_->bodies.end() && insertionPoint->registration.body == registration.body)
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "A body is registered twice."));
         if (impl_->bodies.size() >= impl_->descriptor.maximumBodies)
             return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded, "Transform body capacity is full."));
@@ -367,7 +406,7 @@ namespace Horo::Physics {
                                                  .linearVelocity = {},
                                                  .angularVelocity = {},
                                                  .activity = PhysicsBodyActivity::Awake}};
-        impl_->bodies.push_back(std::move(record));
+        impl_->bodies.insert(insertionPoint, std::move(record));
         return Result<void>::Success();
     }
 
@@ -390,19 +429,8 @@ namespace Horo::Physics {
             return Result<PhysicsTransformCommandAdmission>::Failure(active.ErrorValue());
 
         const auto &identity = CommandIdentity(command);
-        const Result<void> valid = std::visit([this, &identity](const auto &value) -> Result<void> {
-            using Type = std::decay_t<decltype(value)>;
-            if constexpr (std::is_same_v<Type, PhysicsStaticTransformCommand>)
-                return ValidatePhysicsStaticTransformCommand(value, impl_->descriptor.world, impl_->descriptor.sceneGeneration,
-                                                             identity.simulationTick);
-            else if constexpr (std::is_same_v<Type, PhysicsKinematicTargetCommand>)
-                return ValidatePhysicsKinematicTargetCommand(value, impl_->descriptor.world, impl_->descriptor.sceneGeneration,
-                                                             identity.simulationTick);
-            else
-                return ValidatePhysicsDynamicTransformCommand(value, impl_->descriptor.world, impl_->descriptor.sceneGeneration,
-                                                              identity.simulationTick);
-        }, command);
-        if (valid.HasError())
+        if (const Result<void> valid = ValidateQueuedTransformCommand(command, impl_->descriptor.world, impl_->descriptor.sceneGeneration);
+            valid.HasError())
             return Result<PhysicsTransformCommandAdmission>::Failure(valid.ErrorValue());
         if (identity.simulationTick <= impl_->lastAppliedTick)
             return Result<PhysicsTransformCommandAdmission>::Failure(
@@ -421,7 +449,7 @@ namespace Horo::Physics {
             return Result<PhysicsTransformCommandAdmission>::Success(
                 {PhysicsTransformCommandAdmissionStatus::RejectedFull, static_cast<std::uint32_t>(impl_->commands.size())});
 
-        impl_->commands.push_back(command);
+        InsertTransformCommand(impl_->commands, command);
         return Result<PhysicsTransformCommandAdmission>::Success(
             {PhysicsTransformCommandAdmissionStatus::Deferred, static_cast<std::uint32_t>(impl_->commands.size())});
     }
@@ -437,33 +465,38 @@ namespace Horo::Physics {
         impl_->applying = true;
 
         struct ApplyingGuard final {
+            explicit ApplyingGuard(bool &reference) noexcept : value(reference) {}
+
+            ApplyingGuard(const ApplyingGuard &) = delete;
+            ApplyingGuard &operator=(const ApplyingGuard &) = delete;
+            ApplyingGuard(ApplyingGuard &&) = delete;
+            ApplyingGuard &operator=(ApplyingGuard &&) = delete;
+
             bool &value;
 
             ~ApplyingGuard() {
                 value = false;
             }
-        } guard{impl_->applying};
+        };
 
-        std::ranges::sort(impl_->commands, PhysicsTransformCommandLess);
-        if (std::ranges::any_of(impl_->commands, [simulationTick](const auto &command) {
-            return CommandIdentity(command).simulationTick < simulationTick;
-        }))
+        ApplyingGuard guard{impl_->applying};
+
+        if (!impl_->commands.empty() && CommandIdentity(impl_->commands.front()).simulationTick < simulationTick)
             return Result<PhysicsTransformTickResult>::Failure(
                 MakeError(PhysicsErrors::CommandOrderInvalid, "A transform command was retained past its consuming tick."));
 
         PhysicsTransformTickResult result{.simulationTick = simulationTick};
-        for (const auto &command : impl_->commands) {
-            if (CommandIdentity(command).simulationTick != simulationTick)
-                break;
+        auto currentEnd = impl_->commands.begin();
+        while (currentEnd != impl_->commands.end() && CommandIdentity(*currentEnd).simulationTick == simulationTick) {
+            const auto &command = *currentEnd;
             const auto body = FindBody(impl_->bodies, CommandIdentity(command).body);
             if (body == impl_->bodies.end())
                 return Result<PhysicsTransformTickResult>::Failure(MakeError(PhysicsErrors::HandleStale));
             ApplyTransformCommand(command, *body, result);
+            ++currentEnd;
         }
         impl_->lastAppliedTick = simulationTick;
-        std::erase_if(impl_->commands, [simulationTick](const auto &command) {
-            return CommandIdentity(command).simulationTick == simulationTick;
-        });
+        impl_->commands.erase(impl_->commands.begin(), currentEnd);
         return Result<PhysicsTransformTickResult>::Success(result);
     }
 

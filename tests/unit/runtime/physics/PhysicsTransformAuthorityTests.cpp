@@ -119,9 +119,9 @@ namespace Horo::Physics {
         const auto staticBody = Body(1);
         const auto kinematicBody = Body(2);
         const auto dynamicBody = Body(3);
-        Register(*authority, staticBody, PhysicsMotionType::Static, 1);
-        Register(*authority, kinematicBody, PhysicsMotionType::Kinematic, 2);
         Register(*authority, dynamicBody, PhysicsMotionType::Dynamic, 3);
+        Register(*authority, kinematicBody, PhysicsMotionType::Kinematic, 2);
+        Register(*authority, staticBody, PhysicsMotionType::Static, 1);
         REQUIRE(authority->Activate().HasValue());
 
         const PhysicsDirectTransformWrite direct{.sceneGeneration = 9, .body = dynamicBody, .pose = Pose(99)};
@@ -148,11 +148,13 @@ namespace Horo::Physics {
 
         REQUIRE(authority->QueueTransformCommand(KinematicCommand(body, 3, 30)).Value().status ==
                 PhysicsTransformCommandAdmissionStatus::Deferred);
-        REQUIRE(authority->PendingCommandCount() == 1);
-        REQUIRE(authority->ApplyPreStep(1).Value().appliedCommands == 0);
-        REQUIRE(authority->BodyTransform(body).Value().runtimePose == Pose(0));
+        REQUIRE(authority->QueueTransformCommand(KinematicCommand(body, 1, 10)).Value().status ==
+                PhysicsTransformCommandAdmissionStatus::Deferred);
+        REQUIRE(authority->PendingCommandCount() == 2);
+        REQUIRE(authority->ApplyPreStep(1).Value().appliedCommands == 1);
+        REQUIRE(authority->BodyTransform(body).Value().runtimePose == Pose(10));
         REQUIRE(authority->ApplyPreStep(2).Value().appliedCommands == 0);
-        REQUIRE(authority->BodyTransform(body).Value().runtimePose == Pose(0));
+        REQUIRE(authority->BodyTransform(body).Value().runtimePose == Pose(10));
 
         const auto applied = authority->ApplyPreStep(3).Value();
         REQUIRE(applied.kinematicTargets == 1);
