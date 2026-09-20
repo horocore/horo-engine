@@ -304,8 +304,7 @@ namespace Horo::Application {
             if (Result<void> collected = CollectNativeInputs(root, inputs); collected.HasError())
                 return Result<std::string>::Failure(collected.ErrorValue());
             const std::filesystem::path resolvedManifest = root / ".horo/local/gameplay_build_inputs.txt";
-            Result<bool> resolvedInputs = CollectResolvedInputs(root, resolvedManifest, inputs);
-            if (resolvedInputs.HasError())
+            if (Result<bool> resolvedInputs = CollectResolvedInputs(root, resolvedManifest, inputs); resolvedInputs.HasError())
                 return Result<std::string>::Failure(resolvedInputs.ErrorValue());
             std::ranges::sort(inputs);
             inputs.erase(std::ranges::unique(inputs).begin(), inputs.end());
@@ -804,7 +803,7 @@ namespace Horo::Application {
                     return Result<ExclusiveFileLock>::Failure(acquired.ErrorValue());
 
                 Update(session, GameplayBuildState::WaitingForExternalBuild, "waiting_external_build");
-                const std::string externalOwner = ReadExternalLockOwner(lockPath);
+                std::string externalOwner = ReadExternalLockOwner(lockPath);
                 const std::string waitingMessage = externalOwner.empty()
                                                        ? "Waiting for external gameplay build lock held by an unknown owner."
                                                        : std::format("Waiting for external gameplay build lock held by {}.", externalOwner);
@@ -946,8 +945,7 @@ namespace Horo::Application {
             Result<std::string> successorHash = ComputeInputHash(session->request);
             if (successorHash.HasError())
                 return Result<bool>::Failure(successorHash.ErrorValue());
-            const bool recorded = RecordSupersedingInputs(session, successorHash.Value());
-            if (recorded)
+            if (const bool recorded = RecordSupersedingInputs(session, successorHash.Value()); recorded)
                 retryHash = std::move(successorHash).Value();
             return Result<bool>::Success(true);
         }
