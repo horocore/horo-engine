@@ -2,6 +2,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/document/SceneFileWatchService.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <variant>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -160,7 +162,7 @@ namespace {
                             .camera = Runtime::CameraComponent{.nearPlane = 0.25F, .farPlane = 500.0F, .enabled = false},
                             .light = Runtime::LightComponent{.kind = Runtime::LightKind::Point, .intensity = 3.0F},
                             .triggerVolume = Runtime::TriggerVolumeComponent{Runtime::ColliderShapeType::Sphere},
-                            .audioSource = Runtime::AudioSourceComponent{.gain = 0.75F, .spatial = false},
+                            .audioSource = Runtime::AudioSourceComponent{.playback = {.gain = 0.75F, .spatial = false}},
                             .navigationSurface =
                                 Runtime::NavigationSurfaceComponent{
                                     .id = Navigation::SurfaceId::Create(19).Value(),
@@ -209,37 +211,29 @@ namespace {
                                     .traversalCost = 2.0F,
                                 },
                             .rigidBody = Runtime::RigidBodyComponent{.id = {41}, .body = {42}},
-                            .colliders = {Runtime::
-                                              ColliderComponent{
-                                                  .id = {43},
-                                                  .collider = {44},
-                                                  .body = {.object = {1}, .body = {42}},
-                                                  .source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{.radiusMeters =
-                                                                                                                                1.25F}},
-                                                  .localPose = {.translation = {0.0F, 0.5F, 0.0F}},
-                                                  .collisionProfile =
-                                                      Physics::CollisionProfileId::Parse("11111111-2222-4333-8444-555555555555").Value(),
-                                                  .materials = {{.slot = Physics::PhysicsMaterialSlotId::FromValue(1),
-                                                                 .material = Assets::AssetId::Parse("99999999-aaaa-4bbb-8ccc-dddddddddddd")
-                                                                                 .Value()}},
-                                              }},
-                            .physicsConstraints =
-                                {
-                                    Runtime::PhysicsConstraintComponent{
-                                        .id = {45},
-                                        .constraint = {46},
-                                        .first = {.body = {.object = {1}, .body = {42}}},
-                                        .second =
-                                            Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 4.0F, 0.0F}}},
-                                        .parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.5F, .maximumMeters = 4.0F},
-                                    }},
+                            .colliders = {Runtime::ColliderComponent{
+                                .id = {43},
+                                .collider = {44},
+                                .body = {.object = {1}, .body = {42}},
+                                .source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{.radiusMeters = 1.25F}},
+                                .localPose = {.translation = {0.0F, 0.5F, 0.0F}},
+                                .collisionProfile = Physics::CollisionProfileId::Parse("11111111-2222-4333-8444-555555555555").Value(),
+                                .materials = {{.slot = Physics::PhysicsMaterialSlotId::FromValue(1),
+                                               .material = Assets::AssetId::Parse("99999999-aaaa-4bbb-8ccc-dddddddddddd").Value()}},
+                            }},
+                            .physicsConstraints = {Runtime::PhysicsConstraintComponent{
+                                .id = {45},
+                                .constraint = {46},
+                                .first = {.body = {.object = {1}, .body = {42}}},
+                                .second = Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 4.0F, 0.0F}}},
+                                .parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.5F, .maximumMeters = 4.0F},
+                            }},
                             .behaviors =
                                 {
                                     Gameplay::BehaviorComponent{
                                         .instanceId = Gameplay::BehaviorInstanceId{44},
                                         .typeId = Gameplay::BehaviorTypeId::Parse("game.tests.persisted_behavior").Value(),
-                                        .schemaVersion =
-                                            3,
+                                        .schemaVersion = 3,
                                         .enabled = false,
                                         .fields =
                                             {
@@ -496,6 +490,94 @@ TEST_CASE("Imported mesh asset identity persists without a source path", "[unit]
     REQUIRE((loaded.Value()->objects.size() == 1));
     CHECK(loaded.Value()->objects.front().meshAsset == asset.Value());
     CHECK_FALSE(loaded.Value()->objects.front().primitiveMesh.has_value());
+}
+
+void RequireAudioSourceRoundTrip(const std::span<const Audio::AudioSoundReference> references) {
+    TemporaryProject project;
+    project.WriteMetadata();
+    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+
+    std::vector<SceneObjectSnapshot> objects;
+    objects.reserve(references.size());
+    for (std::size_t index = 0; index < references.size(); ++index) {
+        Runtime::AudioSourceComponent audioSource{.sound = references[index]};
+        if (index == 0)
+            audioSource.playback = {.gain = 0.75F, .pitch = 1.25F};
+        objects.push_back(SceneObjectSnapshot{.id = SceneObjectId{static_cast<std::uint64_t>(index + 1)},
+                                              .name = "AudioSource",
+                                              .components = SceneObjectComponentSet{.audioSource = audioSource}});
+    }
+    const SceneDocumentSnapshot snapshot{.revision = DocumentRevision{1}, .state = DocumentStateId{1}, .objects = std::move(objects)};
+
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    const auto fingerprint = InspectProjectSceneFingerprint(project.Root(), project.ScenePath());
+    REQUIRE(fingerprint.HasValue());
+    REQUIRE(SaveProjectScene(project.Root(), project.ScenePath(), snapshot, fingerprint.Value(), false, mutations, files).HasValue());
+    const auto loaded = LoadProjectDefaultScene(project.Root());
+    REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
+    REQUIRE(loaded.Value()->objects.size() == snapshot.objects.size());
+    for (std::size_t index = 0; index < snapshot.objects.size(); ++index) {
+        REQUIRE(loaded.Value()->objects[index].components.audioSource.has_value());
+        CHECK(loaded.Value()->objects[index].components.audioSource->sound == snapshot.objects[index].components.audioSource->sound);
+        CHECK(loaded.Value()->objects[index].components.audioSource->playback == snapshot.objects[index].components.audioSource->playback);
+    }
+}
+
+TEST_CASE("Audio source persists every built-in sound reference kind", "[unit][editor][persistence][audio]") {
+    const auto clip = Audio::AudioClipId::Create(Assets::AssetId::Parse("11111111-1111-4111-8111-111111111111").Value());
+    const auto variation = Audio::AudioSoundId::Create(Assets::AssetId::Parse("22222222-2222-4222-8222-222222222222").Value());
+    const auto stream = Audio::AudioSoundId::Create(Assets::AssetId::Parse("33333333-3333-4333-8333-333333333333").Value());
+    const auto music = Audio::AudioSoundId::Create(Assets::AssetId::Parse("44444444-4444-4444-8444-444444444444").Value());
+    REQUIRE(clip.HasValue());
+    REQUIRE(variation.HasValue());
+    REQUIRE(stream.HasValue());
+    REQUIRE(music.HasValue());
+    const auto clipReference = Audio::AudioSoundReference::ForClip(clip.Value());
+    const auto variationReference = Audio::AudioSoundReference::ForVariation(variation.Value());
+    const auto streamReference = Audio::AudioSoundReference::ForStream(stream.Value());
+    const auto musicReference = Audio::AudioSoundReference::ForMusic(music.Value());
+    REQUIRE(clipReference.HasValue());
+    REQUIRE(variationReference.HasValue());
+    REQUIRE(streamReference.HasValue());
+    REQUIRE(musicReference.HasValue());
+    const std::array references{clipReference.Value(), variationReference.Value(), streamReference.Value(), musicReference.Value()};
+    RequireAudioSourceRoundTrip(references);
+}
+
+TEST_CASE("Audio source persists extension sound references", "[unit][editor][persistence][audio]") {
+    const auto contribution = Audio::AudioContributionId::Create(42);
+    const auto definition = Audio::AudioSoundId::Create(Assets::AssetId::Parse("55555555-5555-4555-8555-555555555555").Value());
+    REQUIRE(contribution.HasValue());
+    REQUIRE(definition.HasValue());
+    const auto extension = Audio::AudioSoundReference::ForExtension(contribution.Value(), definition.Value(), {3, 7});
+    REQUIRE(extension.HasValue());
+    const auto payload = std::get<Audio::AudioSoundExtensionReference>(extension.Value().target);
+    CHECK(payload.contribution.Value() == 42);
+    CHECK(payload.contractVersion == Audio::AudioSoundDefinitionSchemaVersion{3, 7});
+    const std::array references{extension.Value()};
+    RequireAudioSourceRoundTrip(references);
+}
+
+TEST_CASE("Audio source migration clears legacy native and middleware references", "[unit][editor][persistence][audio][migration]") {
+    TemporaryProject project;
+    project.WriteMetadata();
+    project.WriteScene(R"({
+        "schemaVersion": 1,
+        "objects": [
+            {"id": 1, "parent": null, "name": "Native Clip", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"sound": {"kind": "native_clip"}, "gain": 1.0, "spatial": true}}},
+            {"id": 2, "parent": null, "name": "Middleware Event", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"sound": {"kind": "middleware_event"}, "gain": 1.0, "spatial": true}}}
+        ]
+    })");
+
+    const auto loaded = LoadProjectDefaultScene(project.Root());
+    REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
+    REQUIRE(loaded.Value()->objects.size() == 2);
+    for (const SceneObjectSnapshot &object : loaded.Value()->objects) {
+        REQUIRE(object.components.audioSource.has_value());
+        CHECK(object.components.audioSource->sound.kind == Audio::AudioSoundReferenceKind::Unassigned);
+        CHECK(std::holds_alternative<std::monostate>(object.components.audioSource->sound.target));
+    }
 }
 
 TEST_CASE("Scene Comparison Classifies Typed Added Removed And Modified Objects", "[unit][editor][persistence][compare]") {

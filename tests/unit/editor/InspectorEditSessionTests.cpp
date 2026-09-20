@@ -304,12 +304,12 @@ TEST_CASE("Inspector edit session validates typed TriggerVolume and AudioSource 
     REQUIRE((trigger.command == EditorWorkspaceViewCommand::UpdateTriggerVolumeComponent));
     REQUIRE((trigger.triggerVolumePayload->shape == Horo::Runtime::ColliderShapeType::Sphere));
 
-    session.Draft().audioSource->gain = 2.0F;
+    session.Draft().audioSource->playback.gain = 2.0F;
     const EditorWorkspaceViewCommandData audio = session.ApplyAudioSourceEdit(InspectorAudioSourceEdit{.committed = true}, object, true);
     REQUIRE((audio.command == EditorWorkspaceViewCommand::UpdateAudioSourceComponent));
-    REQUIRE((audio.audioSourcePayload->gain == 2.0F));
+    REQUIRE((audio.audioSourcePayload->playback.gain == 2.0F));
 
-    session.Draft().audioSource->gain = -1.0F;
+    session.Draft().audioSource->playback.gain = -1.0F;
     REQUIRE((!session.IsAudioSourceValid()));
     REQUIRE((session.ApplyAudioSourceEdit(InspectorAudioSourceEdit{.committed = true}, object, true).command ==
              EditorWorkspaceViewCommand::None));

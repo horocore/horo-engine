@@ -449,6 +449,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
         audio/api/AudioResamplerPlan.cpp
+        audio/api/AudioSoundReference.cpp
         audio/api/AudioHandleRegistry.h
 )
 add_library(HoroEngine::AudioApi ALIAS HoroAudioApi)
@@ -951,7 +952,7 @@ target_include_directories(HoroSceneModel
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi)
+target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.

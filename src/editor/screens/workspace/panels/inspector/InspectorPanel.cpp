@@ -926,23 +926,20 @@ namespace Horo::Editor {
             return {.committed = header.resetRequested || header.toggleEnabledRequested, .removeRequested = header.removeRequested};
         ImGui::BeginDisabled(!draft.audioSource->enabled);
 
-        const std::array<const char *, 2> kindEntries{
-            context.localization.Get("editor", "workspace.inspector.audio_source_kind_native_clip").c_str(),
-            context.localization.Get("editor", "workspace.inspector.audio_source_kind_middleware_event").c_str(),
-        };
-        auto kind = static_cast<int>(draft.audioSource->kind);
-        const bool kindChanged = Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_kind").c_str(),
-                                                      "audio_source_kind", kind, kindEntries, context.theme.fonts);
-        if (kindChanged)
-            draft.audioSource->kind = static_cast<Runtime::AudioSourceKind>(kind);
-
-        const bool gainValid = std::isfinite(draft.audioSource->gain) && draft.audioSource->gain >= 0.0F;
+        const bool gainValid = std::isfinite(draft.audioSource->playback.gain) && draft.audioSource->playback.gain >= 0.0F;
         const Ui::PropertyEditResult gainEdit =
             Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_gain").c_str(), "audio_source_gain",
-                                 draft.audioSource->gain, context.theme.fonts,
+                                 draft.audioSource->playback.gain, context.theme.fonts,
                                  Ui::FloatPropertyOptions{.speed = 0.01F, .error = !gainValid});
 
-        bool spatialValue = draft.audioSource->spatial;
+        const bool pitchValid = std::isfinite(draft.audioSource->playback.pitch) && draft.audioSource->playback.pitch > 0.0F &&
+                                draft.audioSource->playback.pitch <= 8.0F;
+        const Ui::PropertyEditResult pitchEdit =
+            Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_pitch").c_str(), "audio_source_pitch",
+                                 draft.audioSource->playback.pitch, context.theme.fonts,
+                                 Ui::FloatPropertyOptions{.speed = 0.01F, .error = !pitchValid});
+
+        bool spatialValue = draft.audioSource->playback.spatial;
         const std::array<const char *, 2> spatialEntries{
             context.localization.Get("editor", "workspace.value.off").c_str(),
             context.localization.Get("editor", "workspace.value.on").c_str(),
@@ -952,10 +949,10 @@ namespace Horo::Editor {
             Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_spatial").c_str(),
                                  "audio_source_spatial", spatialInt, spatialEntries, context.theme.fonts);
         if (spatialChanged)
-            draft.audioSource->spatial = spatialInt != 0;
+            draft.audioSource->playback.spatial = spatialInt != 0;
 
         const bool committed =
-            kindChanged || gainEdit.committed || spatialChanged || header.resetRequested || header.toggleEnabledRequested;
+            gainEdit.committed || pitchEdit.committed || spatialChanged || header.resetRequested || header.toggleEnabledRequested;
         ImGui::EndDisabled();
         card.Finish();
         return {.committed = committed, .removeRequested = header.removeRequested};

@@ -50,7 +50,9 @@ namespace Horo::Editor {
 
     /** @copydoc IsValidAudioSourceComponent */
     bool IsValidAudioSourceComponent(const Runtime::AudioSourceComponent &audioSource) noexcept {
-        return std::isfinite(audioSource.gain) && audioSource.gain >= 0.0F;
+        return std::isfinite(audioSource.playback.gain) && audioSource.playback.gain >= 0.0F && std::isfinite(audioSource.playback.pitch) &&
+               audioSource.playback.pitch > 0.0F && audioSource.playback.pitch <= 8.0F &&
+               (!audioSource.playback.bus.has_value() || audioSource.playback.bus->IsValid());
     }
 
     /** @copydoc ResolveSceneObjectEditorState */
@@ -324,9 +326,11 @@ namespace Horo::Editor {
                         MakeDocumentError(SceneDocumentErrors::InvalidLight, "Light authoring values are invalid."));
                 }
             }
-            if (components.audioSource.has_value() && !std::isfinite(components.audioSource->gain)) {
+            if (components.audioSource.has_value() &&
+                (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
+                 Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError())) {
                 return Result<void>::Failure(
-                    MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source gain must be finite."));
+                    MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source values are invalid."));
             }
             std::vector<Gameplay::BehaviorInstanceId> behaviorIds;
             behaviorIds.reserve(components.behaviors.size());
