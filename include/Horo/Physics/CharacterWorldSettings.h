@@ -51,7 +51,7 @@ namespace Horo::Character {
         std::uint32_t maximumQueriesPerTick{32'768};     /**< Physics queries admitted in one attempted tick. */
         std::uint32_t maximumContactsPerMovement{16};    /**< Ordered contacts retained for one move. */
         std::uint32_t maximumMovementIterations{8};      /**< Sweep/slide iterations per movement. */
-        std::uint32_t maximumRecoveryIterations{8};      /**< Overlap-recovery iterations per operation. */
+        std::uint32_t maximumRecoveryIterations{8};      /**< Maximum depenetration steps; a final clearance probe is always admitted. */
         std::uint64_t scratchBytes{64ULL * 1024 * 1024}; /**< Preallocated transient Character scratch. */
         float maximumDisplacementMetersPerTick{128.0F};  /**< Finite world safety envelope, not locomotion tuning. */
 

@@ -639,6 +639,95 @@ namespace Horo::Editor {
             AppendPhysicsConstraints(value, components.physicsConstraints);
         }
 
+        [[nodiscard]] const char *AudioSoundReferenceKindName(const Audio::AudioSoundReferenceKind kind) {
+            using enum Audio::AudioSoundReferenceKind;
+            switch (kind) {
+                case Unassigned:
+                    return "unassigned";
+                case Clip:
+                    return "clip";
+                case Variation:
+                    return "variation";
+                case Stream:
+                    return "stream";
+                case Music:
+                    return "music";
+                case Extension:
+                    return "extension";
+            }
+            return "unassigned";
+        }
+
+        [[nodiscard]] Json AudioSoundReferenceJson(const Audio::AudioSoundReference &reference) {
+            using enum Audio::AudioSoundReferenceKind;
+            Json value{{"kind", AudioSoundReferenceKindName(reference.kind)}};
+            if (reference.kind == Clip) {
+                if (const auto *clip = std::get_if<Audio::AudioClipId>(&reference.target))
+                    value["asset"] = clip->Asset().ToString();
+            } else if (reference.kind == Variation || reference.kind == Stream || reference.kind == Music) {
+                if (const auto *sound = std::get_if<Audio::AudioSoundId>(&reference.target))
+                    value["asset"] = sound->Asset().ToString();
+            } else if (reference.kind == Extension) {
+                if (const auto *extension = std::get_if<Audio::AudioSoundExtensionReference>(&reference.target)) {
+                    value["asset"] = extension->definition.Asset().ToString();
+                    value["contribution"] = extension->contribution.Value();
+                    value["contractMajor"] = extension->contractVersion.major;
+                    value["contractMinor"] = extension->contractVersion.minor;
+                }
+            }
+            return value;
+        }
+
+        [[nodiscard]] Result<Assets::AssetId> ParseAudioReferenceAsset(const Json &value) {
+            if (!value.contains("asset") || !value["asset"].is_string())
+                return Result<Assets::AssetId>::Failure(PersistenceError(SceneInvalid, "Audio sound reference asset is invalid."));
+            auto asset = Assets::AssetId::Parse(value["asset"].get<std::string>());
+            if (asset.HasError())
+                return Result<Assets::AssetId>::Failure(PersistenceError(SceneInvalid, "Audio sound reference asset is invalid."));
+            return asset;
+        }
+
+        [[nodiscard]] Result<Audio::AudioSoundReference> ParseAudioSoundReference(const Json &value) {
+            if (!value.is_object() || !value.contains("kind") || !value["kind"].is_string())
+                return Result<Audio::AudioSoundReference>::Failure(PersistenceError(SceneInvalid, "Audio sound reference is incomplete."));
+            const std::string kind = value["kind"].get<std::string>();
+
+            // These names were emitted before the typed reference contract existed. They carried no identity, so
+            // preserve the scene component as an editor-unassigned source rather than inventing one.
+            if (kind == "native_clip" || kind == "middleware_event" || kind == "unassigned")
+                return Result<Audio::AudioSoundReference>::Success({});
+
+            auto asset = ParseAudioReferenceAsset(value);
+            if (asset.HasError())
+                return Result<Audio::AudioSoundReference>::Failure(asset.ErrorValue());
+            using enum Audio::AudioSoundReferenceKind;
+            if (kind == "clip") {
+                const auto clip = Audio::AudioClipId::Create(asset.Value());
+                if (clip.HasError())
+                    return Result<Audio::AudioSoundReference>::Failure(clip.ErrorValue());
+                return Audio::AudioSoundReference::ForClip(clip.Value());
+            }
+            auto sound = Audio::AudioSoundId::Create(asset.Value());
+            if (sound.HasError())
+                return Result<Audio::AudioSoundReference>::Failure(sound.ErrorValue());
+            if (kind == "variation")
+                return Audio::AudioSoundReference::ForVariation(sound.Value());
+            if (kind == "stream")
+                return Audio::AudioSoundReference::ForStream(sound.Value());
+            if (kind == "music")
+                return Audio::AudioSoundReference::ForMusic(sound.Value());
+            if (kind != "extension" || !value.contains("contribution") || !value["contribution"].is_number_unsigned())
+                return Result<Audio::AudioSoundReference>::Failure(
+                    PersistenceError(SceneInvalid, "Audio sound reference kind is invalid."));
+            const auto contribution = Audio::AudioContributionId::Create(value["contribution"].get<std::uint64_t>());
+            if (contribution.HasError())
+                return Result<Audio::AudioSoundReference>::Failure(
+                    PersistenceError(SceneInvalid, "Audio sound contribution identity is invalid."));
+            const auto contractVersion = Audio::AudioSoundDefinitionSchemaVersion{value.value("contractMajor", std::uint16_t{1}),
+                                                                                  value.value("contractMinor", std::uint16_t{0})};
+            return Audio::AudioSoundReference::ForExtension(contribution.Value(), sound.Value(), contractVersion);
+        }
+
         [[nodiscard]] Json ComponentsJson(const SceneObjectComponentSet &components) {
             Json value = Json::object();
             if (components.camera.has_value()) {
@@ -680,11 +769,17 @@ namespace Horo::Editor {
             if (components.audioSource.has_value()) {
                 const Runtime::AudioSourceComponent &audio = *components.audioSource;
                 value["audioSource"] = {
-                    {"kind", audio.kind == Runtime::AudioSourceKind::NativeClip ? "native_clip" : "middleware_event"},
-                    {"gain", audio.gain},
-                    {"spatial", audio.spatial},
+                    {"sound", AudioSoundReferenceJson(audio.sound)},
+                    {"gain", audio.playback.gain},
+                    {"pitch", audio.playback.pitch},
+                    {"loop", audio.playback.loop},
+                    {"spatial", audio.playback.spatial},
+                    {"enableDoppler", audio.playback.enableDoppler},
+                    {"playOnStart", audio.playback.playOnStart},
                     {"enabled", audio.enabled},
                 };
+                if (audio.playback.bus.has_value())
+                    value["audioSource"]["bus"] = audio.playback.bus->Value();
             }
             AppendNavigationComponents(value, components);
             AppendPhysicsComponents(value, components);
@@ -762,14 +857,33 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] Result<Runtime::AudioSourceComponent> ParseAudioSourceComponent(const Json &audio) {
-            const std::string kind = audio.at("kind").get<std::string>();
-            if (kind != "native_clip" && kind != "middleware_event") {
+            if (!audio.is_object()) {
                 return Result<Runtime::AudioSourceComponent>::Failure(PersistenceError(SceneInvalid, "Audio source is invalid."));
             }
+            const Json &reference = audio.contains("sound") ? audio.at("sound") : audio;
+            auto sound = ParseAudioSoundReference(reference);
+            if (sound.HasError())
+                return Result<Runtime::AudioSourceComponent>::Failure(sound.ErrorValue());
+            std::optional<Audio::AudioBusId> bus;
+            if (audio.contains("bus")) {
+                if (!audio["bus"].is_number_unsigned())
+                    return Result<Runtime::AudioSourceComponent>::Failure(
+                        PersistenceError(SceneInvalid, "Audio source bus identity is invalid."));
+                auto parsedBus = Audio::AudioBusId::Create(audio["bus"].get<std::uint64_t>());
+                if (parsedBus.HasError())
+                    return Result<Runtime::AudioSourceComponent>::Failure(
+                        PersistenceError(SceneInvalid, "Audio source bus identity is invalid."));
+                bus = parsedBus.Value();
+            }
             return Result<Runtime::AudioSourceComponent>::Success(Runtime::AudioSourceComponent{
-                .kind = kind == "native_clip" ? Runtime::AudioSourceKind::NativeClip : Runtime::AudioSourceKind::MiddlewareEvent,
-                .gain = audio.at("gain").get<float>(),
-                .spatial = audio.at("spatial").get<bool>(),
+                .sound = std::move(sound).Value(),
+                .playback = Audio::AudioSoundPlaybackDefaults{.gain = audio.at("gain").get<float>(),
+                                                              .pitch = audio.value("pitch", 1.0F),
+                                                              .bus = bus,
+                                                              .loop = audio.value("loop", false),
+                                                              .spatial = audio.at("spatial").get<bool>(),
+                                                              .enableDoppler = audio.value("enableDoppler", false),
+                                                              .playOnStart = audio.value("playOnStart", true)},
                 .enabled = audio.value("enabled", true),
             });
         }

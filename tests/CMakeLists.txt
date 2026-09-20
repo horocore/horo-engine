@@ -228,6 +228,8 @@ horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp
+        unit/runtime/audio/MixerAssetSchemaTests.cpp
+        unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
@@ -311,6 +313,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
+        unit/runtime/physics/CharacterWorldCommandTests.cpp
         unit/runtime/physics/CanonicalSolverTests.cpp
         unit/runtime/physics/PhysicsBodyDescriptorTests.cpp
         unit/runtime/physics/PhysicsBodyDynamicsTests.cpp
@@ -446,6 +449,7 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationProjectProfileTests.cpp
         unit/runtime/navigation/NavigationProviderTests.cpp
         unit/runtime/navigation/NavigationSourceGeometryTests.cpp
+        unit/runtime/navigation/NavigationDataSerializationTests.cpp
 )
 target_compile_features(HoroNavigationApiTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -502,6 +506,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/OriginRebaseTransactionTests.cpp
         unit/runtime/world_streaming/OriginShiftPolicyTests.cpp
         unit/runtime/world_streaming/RuntimeEntityCellExitOperationTests.cpp
+        unit/runtime/world_streaming/WorldEntityReferenceFixupTests.cpp
         unit/runtime/world_streaming/CookedWorldIndexManifestTests.cpp
         unit/runtime/world_streaming/FallbackStreamingProviderTests.cpp
         unit/runtime/world_streaming/StreamingBudgetModelTests.cpp
@@ -1258,6 +1263,7 @@ endforeach ()
 
 add_executable(HoroRenderBackendRegistryTests
         unit/runtime/renderer/RenderBackendRegistryTests.cpp
+        unit/runtime/renderer/RenderCapabilitiesTests.cpp
 )
 
 target_compile_features(HoroRenderBackendRegistryTests PRIVATE cxx_std_20)
@@ -1504,6 +1510,16 @@ add_executable(HoroRuntimeSaveArchiveFramingTests
 )
 target_compile_features(HoroRuntimeSaveArchiveFramingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveArchiveFramingTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveArchiveFinalizationTests
+        unit/runtime/save/SaveArchiveFinalizationTests.cpp
+)
+target_compile_features(HoroRuntimeSaveArchiveFinalizationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveArchiveFinalizationTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveArchiveReaderTests
+        unit/runtime/save/SaveArchiveReaderTests.cpp
+)
+target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveArchiveReaderTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCanonicalCodecTests
         unit/runtime/save/SaveCanonicalCodecTests.cpp
 )
@@ -2179,6 +2195,8 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
+        HoroRuntimeSaveArchiveFinalizationTests
+        HoroRuntimeSaveArchiveReaderTests
         HoroRuntimeSaveCanonicalCodecTests
         HoroRuntimeSaveReferenceTests
         HoroRuntimeSaveSlotMetadataTests

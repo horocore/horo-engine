@@ -58,7 +58,7 @@ namespace Horo::Physics {
 
         [[nodiscard]] bool IsSupported(const PhysicsQueryCollection value) noexcept {
             using enum PhysicsQueryCollection;
-            return value == Closest || value == All || value == ThroughFirstBlock;
+            return value == Closest || value == Any || value == All || value == ThroughFirstBlock;
         }
 
         [[nodiscard]] bool IsSupported(const PhysicsQueryOrdering value) noexcept {
@@ -117,9 +117,10 @@ namespace Horo::Physics {
             if (descriptor.maximumHitCount == 0 || descriptor.maximumHitCount > MaximumPhysicsQueryHits)
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::CapacityExceeded, "Query result bound is outside the supported profile."));
-            if (descriptor.collection == PhysicsQueryCollection::Closest && descriptor.maximumHitCount != 1)
+            if ((descriptor.collection == PhysicsQueryCollection::Closest || descriptor.collection == PhysicsQueryCollection::Any) &&
+                descriptor.maximumHitCount != 1)
                 return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Closest queries require an exact one-hit result bound."));
+                    MakeError(PhysicsErrors::DescriptorInvalid, "Closest and any queries require an exact one-hit result bound."));
             return Result<void>::Success();
         }
 
@@ -180,6 +181,27 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
     }  // namespace
+
+    /** @copydoc ValidatePhysicsQueryFixtureDescriptor */
+    Result<void> ValidatePhysicsQueryFixtureDescriptor(const PhysicsQueryFixtureDescriptor &fixture, const PhysicsWorldId expectedWorld) {
+        if (!expectedWorld.IsValid())
+            return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        if (const auto shape = ValidatePhysicsShapeDescriptor(fixture.shape); shape.HasError())
+            return shape;
+        if (const auto pose = ValidatePhysicsPose(fixture.pose); pose.HasError())
+            return pose;
+        if (!fixture.layer.IsValid() || !fixture.profile.IsValid() || !fixture.channel.IsValid())
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Query fixtures require stable layer, profile and channel identities."));
+        if (static_cast<std::uint8_t>(fixture.response) > static_cast<std::uint8_t>(PhysicsQueryFixtureResponse::Block))
+            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown query fixture response."));
+        if (fixture.subshape.has_value() && !fixture.subshape->IsValid())
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture subshape identity must be non-zero."));
+        if (fixture.material.has_value() &&
+            (!fixture.material->asset.IsValid() || fixture.material->assetGeneration == 0 || !fixture.material->slot.IsValid()))
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture material evidence is incomplete."));
+        return Result<void>::Success();
+    }
 
     /** @copydoc ValidatePhysicsQueryDescriptor */
     Result<void> ValidatePhysicsQueryDescriptor(const PhysicsQueryDescriptor &descriptor, const PhysicsWorldId expectedWorld,

@@ -209,6 +209,10 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
         runtime/save/SaveArchiveFraming.cpp
+        runtime/save/SaveArchiveFinalization.cpp
+        runtime/save/SaveArchiveFraming.cpp
+        runtime/save/SaveArchiveReader.cpp
+        runtime/save/SaveArchiveReaderValidation.cpp
         runtime/save/SaveCanonicalCodec.cpp
         runtime/save/SaveCanonicalScalarCodec.cpp
         runtime/save/SaveCanonicalCompositeWriter.cpp
@@ -446,9 +450,11 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioDeviceTiming.cpp
         audio/api/AudioFormat.cpp
         audio/api/AudioMediaFormatRegistry.cpp
+        audio/api/MixerAssetSchema.cpp
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
         audio/api/AudioResamplerPlan.cpp
+        audio/api/AudioSoundReference.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioHandleRegistry.h
 )
@@ -536,6 +542,10 @@ add_library(HoroPhysics STATIC
         physics/CharacterErrors.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterWorld.cpp
+        physics/CharacterWorldCommandPipeline.cpp
+        physics/CharacterWorldCommandInternal.h
+        physics/CharacterWorldInternal.h
+        physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldSettings.cpp
         physics/GenerationalSlotStorage.h
         physics/PhysicsBodyDescriptor.cpp
@@ -692,6 +702,9 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationBakeInput.cpp
         runtime/navigation/api/NavigationBakeInputSnapshot.cpp
         runtime/navigation/api/NavigationCapabilities.cpp
+        runtime/navigation/api/NavigationDataSerialization.cpp
+        runtime/navigation/api/NavigationDataSerializationDecode.cpp
+        runtime/navigation/api/NavigationDataSerializationMigration.cpp
         runtime/navigation/api/NavigationErrors.cpp
         runtime/navigation/api/NavigationIdentity.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
@@ -767,6 +780,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/OriginShiftPolicy.cpp
         runtime/world_streaming/OriginShiftPolicyErrors.cpp
         runtime/world_streaming/RuntimeEntityCellExitOperation.cpp
+        runtime/world_streaming/WorldEntityReferenceFixup.cpp
         runtime/world_streaming/CookedWorldIndexManifest.cpp
         runtime/world_streaming/FallbackStreamingProvider.cpp
         runtime/world_streaming/StreamingBudgetModel.cpp
@@ -953,7 +967,7 @@ target_include_directories(HoroSceneModel
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi)
+target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.

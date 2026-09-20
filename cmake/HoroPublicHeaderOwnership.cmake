@@ -124,6 +124,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveRestoreTransaction.h
     Horo/Runtime/Save/SaveArchiveMetadata.h
     Horo/Runtime/Save/SaveArchiveFraming.h
+    Horo/Runtime/Save/SaveArchiveFinalization.h
+    Horo/Runtime/Save/SaveArchiveReader.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h
     Horo/Runtime/Save/SaveSlotMetadata.h
@@ -254,8 +256,10 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioPlanarBlock.h
     Horo/Audio/AudioErrors.h
     Horo/Audio/AudioIdentity.h
+    Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
+    Horo/Audio/AudioSoundReference.h
 )
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
@@ -386,6 +390,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationAgentProfiles.h
     Horo/Navigation/NavigationBackend.h
     Horo/Navigation/NavigationCapabilities.h
+    Horo/Navigation/NavigationDataSerialization.h
     Horo/Navigation/NavigationErrors.h
     Horo/Navigation/NavigationIdentity.h
     Horo/Navigation/NavigationOutcomes.h
@@ -425,6 +430,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/OriginRebaseTransaction.h
     Horo/WorldStreaming/OriginShiftPolicy.h
     Horo/WorldStreaming/RuntimeEntityCellExitOperation.h
+    Horo/WorldStreaming/WorldEntityReferenceFixup.h
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
@@ -485,6 +491,7 @@ horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/RenderAdapter.h
     Horo/Runtime/Render/RenderAdapterErrors.h
     Horo/Runtime/Render/RenderBackend.h
+    Horo/Runtime/Render/RenderCapabilities.h
     Horo/Runtime/Render/RenderDisplay.h
     Horo/Runtime/Render/RenderDisplayErrors.h
     Horo/Runtime/Render/PresentMode.h
