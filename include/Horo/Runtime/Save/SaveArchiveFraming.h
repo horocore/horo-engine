@@ -76,6 +76,8 @@ namespace Horo::Runtime {
         SaveIntegrityAlgorithmVersion integrityAlgorithm; /**< Versioned algorithm for every entry digest. */
         std::uint64_t payloadByteLength{};                /**< Exact stored payload region size. */
         std::vector<SaveChunkDirectoryEntry> entries;     /**< Stable record-identity ordered entries. */
+        std::uint64_t dataByteOffset{};                   /**< Offset of manifest-owned data within the payload region. */
+        std::uint64_t dataByteLength{}; /**< Contiguous manifest-owned data length; zero means the whole payload for legacy callers. */
 
         [[nodiscard]] auto operator<=>(const SaveChunkDirectory &) const noexcept = default;
     };
@@ -157,6 +159,15 @@ namespace Horo::Runtime {
      */
     [[nodiscard]] Result<void> VerifySaveArchiveIntegrity(const SaveArchiveIntegrityManifest &integrity, std::span<const std::byte> archive,
                                                           const ValidatedSaveChunkDirectory &directory);
+
+    /**
+     * @brief Verifies exact finalized envelope coverage before metadata or chunk decode.
+     * @param integrity Finalized coverage evidence read from the archive trailer.
+     * @param archive Complete archive bytes including the explicitly excluded trailer.
+     * @return Success or a typed exact-length, algorithm, or content-hash failure.
+     */
+    [[nodiscard]] Result<void> VerifySaveArchiveIntegrity(const SaveArchiveIntegrityManifest &integrity,
+                                                          std::span<const std::byte> archive);
 
     /**
      * @brief Verifies the logical canonical-state digest before migration or world mutation.
