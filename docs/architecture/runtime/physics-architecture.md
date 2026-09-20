@@ -117,10 +117,12 @@ solver state. ECS components hold generation-checked handles.
 `PhysicsRuntime` is an explicit process-composition owner. `Canonical` is used by
 both graphical and headless hosts that require simulation; `Null` explicitly
 reports omitted Physics and unsupported features. It is never an automatic fallback.
-The initial lifecycle implementation advertises only canonical world creation;
-body, shape, constraint, query and stepping behavior is not advertised merely because
-a native empty system exists. Its private filters remain closed until validated
-collision-profile and body admission are implemented.
+The initial lifecycle implementation advertises canonical world creation and the
+owner-thread immediate-query capability. Rigid-body, constraint, snapshot-query and
+origin-rebasing behavior is not advertised merely because a native empty system
+exists. Simulation filters remain closed until validated collision-profile and body
+admission are implemented; immediate-query fixtures are a narrow analytic admission
+path and do not publish simulation bodies or replace scene activation.
 
 `PrepareWorld` builds an isolated unpublished candidate from one captured settings
 snapshot. It owns scratch storage, serial job dispatch, filters and native system
@@ -467,9 +469,11 @@ storage. A descriptor names one exact `PhysicsWorldId` and non-zero scene
 generation. Resident shape/body selectors remain non-owning generation-checked
 handles and are revalidated by the receiving world.
 
-`Closest` admits exactly one result. `All` admits at most the descriptor's bounded
-maximum. `ThroughFirstBlock` first orders all admitted evidence, then retains
-overlaps through the closest blocking hit. The CanonicalV1 public hit ceiling is
+`Closest` and `Any` admit exactly one result; `Any` uses the same deterministic
+closest-first winner as `Closest` while expressing that only one admissible hit is
+needed. `All` admits at most the descriptor's bounded maximum.
+`ThroughFirstBlock` first orders all admitted evidence, then retains overlaps through
+the closest blocking hit. The CanonicalV1 public hit ceiling is
 `1024`; exceeding it fails admission instead of allocating or truncating silently.
 When caller-provided storage cannot retain every contractually selected hit, the
 result reports `truncated` explicitly.
@@ -491,6 +495,16 @@ evidence are typed errors.
 Immediate queries execute on the physics owner thread outside a step. Parallel
 or asynchronous queries use a read-only broadphase snapshot with documented
 staleness.
+
+CanonicalV1 currently admits bounded analytic query fixtures (box, sphere, capsule
+and static plane) through the active world solely to exercise this query contract
+until authored scene conversion publishes resident bodies and shapes. Fixture
+creation and retirement are owner-thread operations outside a fixed step. The Horo
+channel/profile/layer/trigger selectors are applied by the native body filter before
+collector callbacks; collectors retain at most `1024` hits and project only copied
+generation-checked evidence. Callbacks cannot mutate world structure. A world records
+the scene generation at the last completed fixed tick, so queries before the first
+publication or against a different scene generation fail with `QuerySnapshotStale`.
 
 ## Layers And Filtering
 

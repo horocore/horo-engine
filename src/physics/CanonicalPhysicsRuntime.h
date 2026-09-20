@@ -4,9 +4,11 @@
  * @brief Native-free declarations for private canonical process and world ownership.
  */
 
+#include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
 #include <optional>
+#include <span>
 #include <string_view>
 
 namespace Horo::Physics::Detail {
@@ -37,6 +39,15 @@ namespace Horo::Physics::Detail {
     struct CanonicalWorldHandle final {
         void *value{};
     };
+
+    /** @brief Admits one owner-thread query fixture without exposing its native representation. */
+    [[nodiscard]] Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                          const PhysicsQueryFixtureDescriptor &fixture);
+    /** @brief Retires one exact owner-thread query fixture and its native body/shape. */
+    [[nodiscard]] Result<void> DestroyCanonicalQueryFixture(CanonicalWorldHandle world, const PhysicsQueryFixture &fixture);
+    /** @brief Executes one immediate query and projects only stable Horo evidence. */
+    [[nodiscard]] Result<PhysicsQueryResult> ExecuteCanonicalQuery(CanonicalWorldHandle world, const PhysicsQueryDescriptor &descriptor,
+                                                                   std::span<PhysicsQueryHit> hits);
 
     /** @brief Native-free classification used only across the private canonical adapter seam. */
     enum class CanonicalDiagnosticKind : std::uint8_t {

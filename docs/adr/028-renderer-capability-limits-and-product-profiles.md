@@ -271,7 +271,8 @@ polling the driver each frame. No report treats an unknown value as supported.
    booleans remain transitional; do not reinterpret hardware support as implemented
    support or add a competing global tier authority.
 2. RND-003.3/.4 consume effective queue/feature/format/limit predicates at admission;
-   RND-003.7 rebuilds snapshots and invalidates old plans during recovery.
+   [RND-003.7 / ADR-179](179-device-loss-and-renderer-restart-lifecycle.md) rebuilds
+   snapshots and invalidates old plans during host-owned recovery.
 3. Material/shader cooking and frontend selection replace API-named tiers with
    profile policy plus explicit feature requirements. The mechanical preference
    mapping is `es3` -> `baseline`, `dx11` -> `standard`, `dx12_vulkan` -> `high`,

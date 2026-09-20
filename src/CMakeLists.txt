@@ -450,6 +450,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
         audio/api/AudioResamplerPlan.cpp
+        audio/api/AudioSoundReference.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioHandleRegistry.h
 )
@@ -555,6 +556,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsHandleRegistry.h
         physics/PhysicsIdentity.cpp
         physics/PhysicsMetrics.cpp
+        physics/PhysicsMaterialAsset.cpp
         physics/PhysicsPose.cpp
         physics/PhysicsQuery.cpp
         physics/PhysicsShapeDescriptor.cpp
@@ -767,6 +769,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/OriginShiftPolicy.cpp
         runtime/world_streaming/OriginShiftPolicyErrors.cpp
         runtime/world_streaming/RuntimeEntityCellExitOperation.cpp
+        runtime/world_streaming/WorldEntityReferenceFixup.cpp
         runtime/world_streaming/CookedWorldIndexManifest.cpp
         runtime/world_streaming/FallbackStreamingProvider.cpp
         runtime/world_streaming/StreamingBudgetModel.cpp
@@ -953,7 +956,7 @@ target_include_directories(HoroSceneModel
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi)
+target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.

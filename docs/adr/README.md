@@ -190,6 +190,7 @@ to the replacement.
 | [176](176-runtime-ui-element-and-control-taxonomy.md) | Runtime UI Element and Control Taxonomy | Accepted | 2026-09-07 |
 | [177](177-mcp-application-capability-and-host-boundary.md) | MCP Application Capability and Host Boundary | Accepted | 2026-09-10 |
 | [178](178-application-security-primitive-and-signature-baseline.md) | Application Security Primitive And Signature Baseline | Accepted | 2026-09-10 |
+| [179](179-device-loss-and-renderer-restart-lifecycle.md) | Device Loss and Renderer Restart Lifecycle | Proposed | 2026-09-20 |
 
 ## Conventions
 

@@ -229,6 +229,7 @@ add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp
         unit/runtime/audio/MixerAssetSchemaTests.cpp
+        unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
@@ -327,6 +328,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsHandleRegistryTests.cpp
         unit/runtime/physics/PhysicsIdentityTests.cpp
         unit/runtime/physics/PhysicsMetricsTests.cpp
+        unit/runtime/physics/PhysicsMaterialAssetTests.cpp
         unit/runtime/physics/PhysicsPoseTests.cpp
         unit/runtime/physics/PhysicsQueryTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
@@ -502,6 +504,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/OriginRebaseTransactionTests.cpp
         unit/runtime/world_streaming/OriginShiftPolicyTests.cpp
         unit/runtime/world_streaming/RuntimeEntityCellExitOperationTests.cpp
+        unit/runtime/world_streaming/WorldEntityReferenceFixupTests.cpp
         unit/runtime/world_streaming/CookedWorldIndexManifestTests.cpp
         unit/runtime/world_streaming/FallbackStreamingProviderTests.cpp
         unit/runtime/world_streaming/StreamingBudgetModelTests.cpp

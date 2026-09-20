@@ -257,6 +257,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
+    Horo/Audio/AudioSoundReference.h
 )
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
@@ -305,6 +306,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsDeterminismPolicy.h
     Horo/Physics/PhysicsIdentity.h
     Horo/Physics/PhysicsMetrics.h
+    Horo/Physics/PhysicsMaterialAsset.h
     Horo/Physics/PhysicsPose.h
     Horo/Physics/PhysicsQuery.h
     Horo/Physics/PhysicsShapeDescriptor.h
@@ -425,6 +427,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/OriginRebaseTransaction.h
     Horo/WorldStreaming/OriginShiftPolicy.h
     Horo/WorldStreaming/RuntimeEntityCellExitOperation.h
+    Horo/WorldStreaming/WorldEntityReferenceFixup.h
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
