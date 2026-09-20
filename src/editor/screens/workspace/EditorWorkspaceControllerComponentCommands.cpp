@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <utility>
 #include <vector>
 
 namespace Horo::Editor {

@@ -1330,7 +1330,7 @@ namespace {
         command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
         command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = outsideSource.string(), .line = 1};
         controller.ProcessCommand(command);
-        REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unsafe"));
+        REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.global_dock.build_output.source.invalid"));
 
         std::error_code cleanupError;
         std::filesystem::remove_all(base, cleanupError);

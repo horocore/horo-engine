@@ -5,8 +5,12 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <span>
+#include <string>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {

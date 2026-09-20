@@ -15,6 +15,8 @@ namespace Horo::Editor {
                 m_viewModel.contentBrowserOperationError = "workspace.source_open.unsupported";
             else if (code == SourceOpenErrors::EditorUnavailable.code.Value())
                 m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+            else if (request.origin == SourceOpenOrigin::DiagnosticNavigation)
+                m_viewModel.contentBrowserOperationError = "workspace.global_dock.build_output.source.invalid";
             else
                 m_viewModel.contentBrowserOperationError = "workspace.source_open.unsafe";
             return;
