@@ -173,6 +173,21 @@ namespace Horo::Character {
         return Result<CharacterTransformPublication>::Success(record.Value()->publication);
     }
 
+    /** @copydoc CharacterWorld::ControllerLocomotionSnapshot */
+    Result<CharacterLocomotionSnapshot> CharacterWorld::ControllerLocomotionSnapshot(const CharacterControllerHandle &handle) const {
+        const auto registryLock = impl_->synchronization.LockRegistry();
+        if (impl_->state.load() == CharacterWorldState::Destroyed)
+            return Result<CharacterLocomotionSnapshot>::Failure(MakeError(CharacterErrors::InvalidState));
+        const auto record = impl_->controllers.Resolve(handle);
+        if (record.HasError())
+            return Result<CharacterLocomotionSnapshot>::Failure(record.ErrorValue());
+        const auto publicationLock = impl_->synchronization.LockPublication();
+        if (!record.Value()->spawned || !record.Value()->locomotion.has_value())
+            return Result<CharacterLocomotionSnapshot>::Failure(
+                MakeError(CharacterErrors::InvalidState, "The controller has no committed locomotion snapshot."));
+        return Result<CharacterLocomotionSnapshot>::Success(*record.Value()->locomotion);
+    }
+
     void CharacterWorld::Shutdown() noexcept {
         if (impl_->ownerThread != std::this_thread::get_id())
             return;

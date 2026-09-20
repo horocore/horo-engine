@@ -205,16 +205,21 @@ namespace Horo::Character::Detail {
         const auto nextRevision = record->publication.publicationRevision + 1;
         if (operation == CharacterPlacementOperation::Teleport && record->reservedTeleportTick != tick)
             return Result<CharacterPlacementResult>::Failure(MakeError(CharacterErrors::InvalidState));
-        const CharacterTransformPublication publication{handle, tick,  nextRevision, position, heading, record->descriptor.up,
-                                                        false,  false, true};
+        const CharacterTransformPublication publication{handle,       tick,
+                                                        nextRevision, position,
+                                                        heading,      record->descriptor.up,
+                                                        false,        false,
+                                                        true,         CharacterTransformAuthority::CharacterController};
         if (const auto valid =
                 ValidateCharacterTransformPublication(publication, impl.descriptor.sceneGeneration, impl.descriptor.identity);
             valid.HasError())
             return Result<CharacterPlacementResult>::Failure(valid.ErrorValue());
         record->publication = publication;
         record->spawned = true;
-        if (operation == CharacterPlacementOperation::Teleport)
+        if (operation == CharacterPlacementOperation::Teleport) {
             record->lastMovement.reset();
+            record->locomotion.reset();
+        }
         if (operation == CharacterPlacementOperation::Teleport) {
             record->lastTeleportTick = tick;
             record->reservedTeleportTick.reset();

@@ -222,9 +222,76 @@ namespace Horo::Character {
             result.grounded = true;
             RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
             result.grounded = false;
+            result.platformAttached = true;
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+            result.platformAttached = false;
             result.contacts[0].shape.world = PhysicsWorld(12);
             RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
             REQUIRE(result.contacts[0].shape.world == PhysicsWorld(12));
+        }
+
+        TEST_CASE("Character locomotion snapshots bind stable identity support evidence and authority", "[physics][character][snapshot]") {
+            const auto descriptor = Descriptor();
+            auto movement = MovementResult(descriptor);
+            movement.finalPosition = {1, 2, 3};
+            movement.grounded = true;
+            movement.platformAttached = true;
+            movement.groundMaterial = Material();
+            movement.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
+
+            CharacterLocomotionSnapshot snapshot;
+            snapshot.controller = movement.controller;
+            snapshot.tick = movement.tick;
+            snapshot.stateRevision = 1;
+            snapshot.movement = movement;
+            snapshot.transform.controller = movement.controller;
+            snapshot.transform.sourceTick = movement.tick;
+            snapshot.transform.publicationRevision = 2;
+            snapshot.transform.position = movement.finalPosition;
+            snapshot.transform.heading = movement.finalHeading;
+            snapshot.transform.up = movement.up;
+            snapshot.transform.grounded = movement.grounded;
+            snapshot.transform.platformAttached = movement.platformAttached;
+
+            REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
+            static_assert(std::is_copy_constructible_v<CharacterLocomotionSnapshot>);
+
+            snapshot.transform.position.x += 1;
+            RequireError(ValidateCharacterLocomotionSnapshot(snapshot, descriptor), CharacterErrors::PlacementInvalid);
+            snapshot.transform.position = movement.finalPosition;
+            snapshot.transform.authority = static_cast<CharacterTransformAuthority>(255);
+            RequireError(ValidateCharacterLocomotionSnapshot(snapshot, descriptor), CharacterErrors::OperationUnsupported);
+            snapshot.transform.authority = CharacterTransformAuthority::CharacterController;
+            snapshot.controller.slot.index += 1;
+            RequireError(ValidateCharacterLocomotionSnapshot(snapshot, descriptor), CharacterErrors::PlacementInvalid);
+            snapshot.controller = movement.controller;
+            snapshot.stateRevision = 0;
+            RequireError(ValidateCharacterLocomotionSnapshot(snapshot, descriptor), CharacterErrors::PlacementInvalid);
+        }
+
+        TEST_CASE("Character locomotion snapshots admit the maximum bounded contact prefix", "[physics][character][snapshot][capacity]") {
+            auto descriptor = Descriptor();
+            descriptor.maximumContacts = MaximumCharacterContacts;
+            auto movement = MovementResult(descriptor);
+            movement.truncated = true;
+            movement.contactCount = MaximumCharacterContacts;
+            for (std::uint32_t index = 0; index < movement.contactCount; ++index) {
+                movement.contacts[index] = Contact(descriptor);
+                movement.contacts[index].point.x = static_cast<float>(index);
+            }
+
+            CharacterLocomotionSnapshot snapshot;
+            snapshot.controller = movement.controller;
+            snapshot.tick = movement.tick;
+            snapshot.stateRevision = 1;
+            snapshot.movement = movement;
+            snapshot.transform.controller = movement.controller;
+            snapshot.transform.sourceTick = movement.tick;
+            snapshot.transform.publicationRevision = 2;
+            snapshot.transform.position = movement.finalPosition;
+            snapshot.transform.heading = movement.finalHeading;
+            snapshot.transform.up = movement.up;
+            REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasValue());
         }
 
         TEST_CASE("Character validation partitions preserve public error precedence", "[physics][character][validation]") {

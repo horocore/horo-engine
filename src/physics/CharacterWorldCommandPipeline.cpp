@@ -49,13 +49,15 @@ namespace Horo::Character {
             return frozen;
 
         Detail::ObservePhase(input, CharacterTickPhase::FreezeCommands);
-        const std::uint32_t applied = Detail::ApplyCommandFrame(*impl_, input);
+        const auto applied = Detail::ApplyCommandFrame(*impl_, input);
+        if (applied.HasError())
+            return Result<void>::Failure(applied.ErrorValue());
         if (impl_->state.load() != CharacterWorldState::Active)
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         Detail::ObservePhase(input, CharacterTickPhase::ResolveMovement);
 
         impl_->fastPath.Canonicalize();
-        Detail::PublishTick(*impl_, input, applied);
+        Detail::PublishTick(*impl_, input, applied.Value());
         impl_->completedTicks.fetch_add(1);
         Detail::ObservePhase(input, CharacterTickPhase::PublishCompletedTick);
         return Result<void>::Success();

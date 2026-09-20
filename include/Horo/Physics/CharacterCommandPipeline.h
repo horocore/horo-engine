@@ -36,13 +36,16 @@ namespace Horo::Character {
      * @brief Optional allocation-free observer for tests and explicit host composition.
      *
      * Callbacks run synchronously on the Character owner thread. They must not throw or retain
-     * borrowed requests. Movement callbacks receive only the final replacement selected for each
-     * controller and tick.
+     * borrowed requests or publications. Movement callbacks receive only the final replacement
+     * selected for each controller and tick. The optional result callback supplies backend-neutral
+     * post-tick evidence; Character validates it before publishing any state.
      */
     struct CharacterTickObserver final {
         void *context{}; /**< Caller-owned context valid until AdvanceFixedTick returns. */
         void (*phase)(void *context, CharacterTickPhase phase, std::uint64_t tick) noexcept {};
         void (*movement)(void *context, const CharacterMovementRequest &request) noexcept {};
+        Result<CharacterMovementResult> (*movementResult)(void *context, const CharacterMovementRequest &request,
+                                                          const CharacterTransformPublication &previous) noexcept {};
     };
 
     /** @brief Exact host-owned Character tick; no render time or live input state is accepted. */

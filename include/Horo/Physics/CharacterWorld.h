@@ -123,9 +123,17 @@ namespace Horo::Character {
         /**
          * @brief Returns the last coherent spawn or teleport root publication.
          * @param handle Live spawned controller handle.
-         * @return Owned snapshot or a typed lifecycle/handle error.
+         * @return Owned authoritative transform copy or a typed lifecycle/handle error.
          */
         [[nodiscard]] Result<CharacterTransformPublication> ControllerTransform(const CharacterControllerHandle &handle) const;
+
+        /**
+         * @brief Returns the last immutable post-tick movement state and authoritative transform.
+         * @param handle Live spawned controller handle with a committed movement tick.
+         * @return Owned locomotion snapshot or a typed lifecycle/handle error.
+         * @post Mutating the returned copy cannot feed back into Character, Scene or Physics state.
+         */
+        [[nodiscard]] Result<CharacterLocomotionSnapshot> ControllerLocomotionSnapshot(const CharacterControllerHandle &handle) const;
 
         /**
          * @brief Copies one future tick-addressed movement request into bounded world storage without blocking.

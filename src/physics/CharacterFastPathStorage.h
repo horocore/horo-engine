@@ -82,6 +82,7 @@ namespace Horo::Character::Detail {
         std::size_t impulses{};
     };
 
+    /** @brief Atomic telemetry only; owner-thread vectors remain externally synchronized. */
     struct CharacterFastPathCounters final {
         std::atomic<std::uint32_t> contactCount{};
         std::atomic<std::uint32_t> hitCount{};
@@ -109,6 +110,10 @@ namespace Horo::Character::Detail {
         return left.slot < right.slot;
     }
 
+    [[nodiscard]] inline bool CharacterFastPathMaterialIsValid(const Physics::PhysicsQueryMaterial &material) noexcept {
+        return material.asset.IsValid() && material.assetGeneration != 0 && material.slot.IsValid();
+    }
+
     /**
      * @brief Owns every fixed-capacity Character hot-path collection for one prepared world.
      *
@@ -122,7 +127,7 @@ namespace Horo::Character::Detail {
      */
     class CharacterFastPathStorage final {
     public:
-        /** @brief Reserves all command, contact, hit, event, impulse and byte-scratch storage. */
+        /** @brief Reserves all command, movement-result, contact, hit, event, impulse and byte-scratch storage. */
         explicit CharacterFastPathStorage(const CharacterWorldSettings &settings)
             : capacities_{.scratch = static_cast<std::size_t>(settings.Values().work.scratchBytes),
                           .contacts = settings.Values().capacities.maximumRetainedContacts,
@@ -133,6 +138,7 @@ namespace Horo::Character::Detail {
             const CharacterWorldWorkBudgets &work = settings.Values().work;
             commands_.reserve(capacities.maximumQueuedCommands);
             commandScratch_.reserve(work.maximumCommandsPerTick);
+            movementResults_.reserve(work.maximumCommandsPerTick);
             contacts_.reserve(capacities_.contacts);
             hits_.reserve(capacities_.hits);
             events_.reserve(capacities_.events);
@@ -164,6 +170,16 @@ namespace Horo::Character::Detail {
         /** @brief Returns the prepared per-tick command ordering storage read-only. */
         [[nodiscard]] const std::vector<CharacterMovementRequest> &CommandScratch() const noexcept {
             return commandScratch_;
+        }
+
+        /** @brief Returns the prepared per-tick movement-result candidates. */
+        [[nodiscard]] std::vector<CharacterMovementResult> &MovementResults() noexcept {
+            return movementResults_;
+        }
+
+        /** @brief Returns the prepared movement-result candidates read-only. */
+        [[nodiscard]] const std::vector<CharacterMovementResult> &MovementResults() const noexcept {
+            return movementResults_;
         }
 
         /** @brief Returns the total command capacity reserved during preparation. */
@@ -207,7 +223,8 @@ namespace Horo::Character::Detail {
          * @return Append/replacement/full/invalid disposition without allocation.
          */
         [[nodiscard]] CharacterFastPathAppendStatus TryAppendHit(const Physics::PhysicsQueryHit &hit) noexcept {
-            return AppendReduced(hits_, capacities_.hits, hit, HitLess, counters_.hitCount, counters_.hitOverflowCount, IsValidHit(hit));
+            return AppendReduced(hits_, capacities_.hits, hit, Physics::PhysicsQueryHitLess, counters_.hitCount, counters_.hitOverflowCount,
+                                 IsValidHit(hit));
         }
 
         /**
@@ -255,10 +272,6 @@ namespace Horo::Character::Detail {
 
             auto *const aligned = static_cast<std::byte *>(candidate);
             const auto start = static_cast<std::size_t>(aligned - scratch_.data());
-            if (byteCount > capacities_.scratch - start) {
-                SaturatingIncrement(counters_.scratchOverflowCount);
-                return std::nullopt;
-            }
             scratchOffset_ = start + byteCount;
             counters_.scratchBytesUsed.store(scratchOffset_);
             return std::span<std::byte>{aligned, byteCount};
@@ -267,14 +280,15 @@ namespace Horo::Character::Detail {
         /** @brief Sorts every collected domain by its stable Horo tie-break without allocating. */
         void Canonicalize() noexcept {
             std::ranges::sort(contacts_, ContactLess);
-            std::ranges::sort(hits_, HitLess);
+            std::ranges::sort(hits_, Physics::PhysicsQueryHitLess);
             std::ranges::sort(events_, EventLess);
             std::ranges::sort(impulses_, ImpulseLess);
         }
 
-        /** @brief Clears per-tick command scratch, contacts, hits, impulses and byte scratch. */
+        /** @brief Clears per-tick command and result scratch, contacts, hits, impulses and byte scratch. */
         void ResetTransient() noexcept {
             commandScratch_.clear();
+            movementResults_.clear();
             contacts_.clear();
             hits_.clear();
             impulses_.clear();
@@ -338,15 +352,15 @@ namespace Horo::Character::Detail {
         static void SaturatingIncrement(std::atomic<std::uint64_t> &counter) noexcept {
             std::uint64_t current = counter.load();
             while (current != std::numeric_limits<std::uint64_t>::max() && !counter.compare_exchange_weak(current, current + 1U)) {
-                // Retry using the value observed by the failed compare-exchange.
+                // A failed compare-exchange refreshes current; the empty body intentionally retries the saturating increment.
             }
         }
 
         [[nodiscard]] static bool IsValidContact(const CharacterSurfaceContact &contact) noexcept {
             return contact.shape.IsValid() && (!contact.body.has_value() || contact.body->IsValid()) &&
                    (!contact.body.has_value() || contact.body->world == contact.shape.world) && Math::IsFinite(contact.point) &&
-                   IsUnit(contact.normal) && IsValidMaterial(contact.material) && std::isfinite(contact.penetrationDepthMeters) &&
-                   contact.penetrationDepthMeters >= 0.0F;
+                   IsUnit(contact.normal) && CharacterFastPathMaterialIsValid(contact.material) &&
+                   std::isfinite(contact.penetrationDepthMeters) && contact.penetrationDepthMeters >= 0.0F;
         }
 
         [[nodiscard]] static bool IsValidHit(const Physics::PhysicsQueryHit &hit) noexcept {
@@ -354,7 +368,7 @@ namespace Horo::Character::Detail {
                    hit.profile.IsValid() && hit.layer.IsValid() && hit.filterSchemaGeneration != 0 &&
                    CharacterFastPathIsSupported(hit.response) && Math::IsFinite(hit.position) &&
                    (!hit.normal.has_value() || IsUnit(*hit.normal)) && (!hit.subshape.has_value() || hit.subshape->IsValid()) &&
-                   (!hit.material.has_value() || IsValidMaterial(*hit.material)) && std::isfinite(hit.distanceMeters) &&
+                   (!hit.material.has_value() || CharacterFastPathMaterialIsValid(*hit.material)) && std::isfinite(hit.distanceMeters) &&
                    hit.distanceMeters >= 0.0F;
         }
 
@@ -376,10 +390,6 @@ namespace Horo::Character::Detail {
             return std::abs(squaredNorm - 1.0) <= Physics::PhysicsQueryUnitVectorSquaredNormTolerance;
         }
 
-        [[nodiscard]] static bool IsValidMaterial(const Physics::PhysicsQueryMaterial &material) noexcept {
-            return material.asset.IsValid() && material.assetGeneration != 0 && material.slot.IsValid();
-        }
-
         [[nodiscard]] static bool ContactLess(const CharacterSurfaceContact &left, const CharacterSurfaceContact &right) noexcept {
             if (left.penetrationDepthMeters != right.penetrationDepthMeters)
                 return left.penetrationDepthMeters > right.penetrationDepthMeters;
@@ -392,10 +402,6 @@ namespace Horo::Character::Detail {
             if (left.normal != right.normal)
                 return left.normal < right.normal;
             return CharacterFastPathMaterialLess(left.material, right.material);
-        }
-
-        [[nodiscard]] static bool HitLess(const Physics::PhysicsQueryHit &left, const Physics::PhysicsQueryHit &right) noexcept {
-            return Physics::PhysicsQueryHitLess(left, right);
         }
 
         [[nodiscard]] static bool EventLess(const CharacterFastPathEvent &left, const CharacterFastPathEvent &right) noexcept {
@@ -430,6 +436,7 @@ namespace Horo::Character::Detail {
 
         std::vector<CharacterMovementRequest> commands_;
         std::vector<CharacterMovementRequest> commandScratch_;
+        std::vector<CharacterMovementResult> movementResults_;
         std::vector<CharacterSurfaceContact> contacts_;
         std::vector<Physics::PhysicsQueryHit> hits_;
         std::vector<CharacterFastPathEvent> events_;
