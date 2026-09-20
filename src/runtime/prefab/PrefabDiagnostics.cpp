@@ -77,10 +77,19 @@ namespace Horo::Prefab {
             return source->line != 0 || source->column == 0;
         }
 
+        [[nodiscard]] bool IsValidObjectAddress(const PrefabObjectAddress &address) noexcept {
+            const auto scope = address.NestedInstanceScope();
+            return scope.size() <= MaximumPrefabObjectScopeDepth && std::ranges::all_of(scope, [](const LocalObjectId object) {
+                return !object.IsRoot();
+            });
+        }
+
         [[nodiscard]] bool IsValidContext(const PrefabDiagnosticContext &context) noexcept {
             if (!context.prefabAsset.IsValid() || !IsValidSourceRevision(context.revision))
                 return false;
             if (context.instance.has_value() && !context.instance->IsValid())
+                return false;
+            if (context.localMember.has_value() && !IsValidObjectAddress(*context.localMember))
                 return false;
             if (context.property.has_value()) {
                 if (!context.localMember.has_value() || context.property->Object() != *context.localMember ||

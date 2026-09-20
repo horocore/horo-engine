@@ -208,8 +208,8 @@ namespace Horo::Prefab::PrefabErrors {
         Describe("prefab.diagnostic.budget_exceeded", "Prefab diagnostic evidence exceeds its explicit bound.",
                  "Reduce cause, dependency, message, or source evidence before publishing the diagnostic.");
 
-    std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
-        static const std::array descriptors{
+    namespace {
+        const std::array CanonicalDescriptors{
             &IdentityInvalid,
             &AddressInvalid,
             &ReferenceInvalid,
@@ -269,6 +269,9 @@ namespace Horo::Prefab::PrefabErrors {
             &DiagnosticUnsupported,
             &DiagnosticBudgetExceeded,
         };
-        return descriptors;
+    }  // namespace
+
+    std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
+        return CanonicalDescriptors;
     }
 }  // namespace Horo::Prefab::PrefabErrors
