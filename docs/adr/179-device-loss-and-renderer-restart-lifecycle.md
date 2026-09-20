@@ -52,15 +52,21 @@ The controller's externally observable phase is one of:
 ```text
 Ready -> FrameActive -> Ready
 Ready -> Recovering -> Ready
+FrameActive -> Recovering -> Ready
 Ready -> TerminalFailure
+FrameActive -> TerminalFailure
+Recovering -> TerminalFailure
 any non-terminal phase -> ShuttingDown
 ```
 
 `Recovering` is a host safe-point phase, not permission for callers to submit
-work. A new device generation is not published as `Ready` until backend
-initialization, capability/profile admission, surface realization, and required
-resource reconstruction have committed. The old generation remains frozen and
-cannot be made current again.
+work. Device/context loss accepted during an active frame first aborts that frame,
+then enters `Recovering`; `BackendFatal` may transition directly to
+`TerminalFailure`. A failed recovery enters `TerminalFailure` from `Recovering`.
+A new device generation is not published as `Ready` until backend initialization,
+capability/profile admission, surface realization, and required resource
+reconstruction have committed. The old generation remains frozen and cannot be
+made current again.
 
 ### 2. Loss is reported through a typed, generation-bound fact
 
@@ -114,8 +120,9 @@ occurrence count and the first authoritative cause.
 At the next legal render safe point, the controller accepts the first current
 loss fact and performs this ordered transition:
 
-1. close normal frame, resource, query and diagnostic admission for the old
-   device generation;
+1. close normal frame, resource, query and renderer-diagnostic event admission
+   for the old device generation while preserving the pre-admitted ADR-048
+   incident-evidence lane;
 2. freeze the old generation's frame/graph/resource/surface correlation;
 3. abort the active frame exactly once, if one exists; no `Present` is allowed
    after a loss fact;

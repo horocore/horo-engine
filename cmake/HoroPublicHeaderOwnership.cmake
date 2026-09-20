@@ -256,6 +256,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioPlanarBlock.h
     Horo/Audio/AudioErrors.h
     Horo/Audio/AudioIdentity.h
+    Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
     Horo/Audio/AudioSoundReference.h
@@ -389,6 +390,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationAgentProfiles.h
     Horo/Navigation/NavigationBackend.h
     Horo/Navigation/NavigationCapabilities.h
+    Horo/Navigation/NavigationDataSerialization.h
     Horo/Navigation/NavigationErrors.h
     Horo/Navigation/NavigationIdentity.h
     Horo/Navigation/NavigationOutcomes.h

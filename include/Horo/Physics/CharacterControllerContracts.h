@@ -115,6 +115,142 @@ namespace Horo::Character {
         std::uint32_t maximumContacts{16};
     };
 
+    /** @brief Operation that may publish a new collision-root transform. */
+    enum class CharacterPlacementOperation : std::uint8_t {
+        Spawn,
+        Teleport,
+    };
+
+    /**
+     * @brief Backend-neutral overlap evidence reduced by the Physics query adapter.
+     *
+     * The adapter owns native query traversal and must reduce its evidence before returning. Character
+     * consumes only the stable overlap count and one deterministic depenetration displacement.
+     */
+    struct CharacterOverlapProbeResult final {
+        std::uint32_t overlapCount{};
+        Math::Vec3 recoveryDisplacement{};
+    };
+
+    /** @brief Read-only overlap probe request for one candidate Character placement. */
+    struct CharacterOverlapProbeRequest final {
+        CharacterControllerHandle controller;
+        std::uint64_t sceneGeneration{};
+        CharacterWorldId characterWorld;
+        Physics::PhysicsWorldId physicsWorld;
+        Physics::PhysicsCapsuleShape capsule;
+        Math::Vec3 position;
+        Math::Vec3 up{0, 1, 0};
+        Physics::CollisionProfileId collisionProfile;
+        Physics::PhysicsQueryChannelId queryChannel;
+        std::uint32_t iteration{};
+    };
+
+    /**
+     * @brief Callback used by the private Physics adapter to answer one overlap probe.
+     * @param context Adapter-owned state; Character retains no ownership or lifetime of it.
+     * @param request Backend-neutral candidate placement and filter evidence.
+     * @return Reduced overlap evidence or the original typed Physics failure.
+     */
+    using CharacterOverlapProbe = Result<CharacterOverlapProbeResult> (*)(void *context,
+                                                                          const CharacterOverlapProbeRequest &request) noexcept;
+
+    /**
+     * @brief World- and tick-affine read-only query context for placement validation.
+     *
+     * This is a borrowed adapter seam. It carries no backend-native handle and is valid only for the
+     * owner-thread operation that receives it.
+     */
+    struct CharacterPhysicsQueryContext final {
+        std::uint64_t sceneGeneration{};
+        CharacterWorldId characterWorld;
+        Physics::PhysicsWorldId physicsWorld;
+        void *context{};
+        CharacterOverlapProbe overlap{};
+        std::uint64_t collisionFilterGeneration{};
+        std::uint64_t originGeneration{};
+        std::uint64_t tick{};
+        std::uint64_t physicsSnapshotRevision{};
+    };
+
+    /** @brief Exact world and snapshot identity expected by one placement query operation. */
+    struct CharacterPhysicsQueryExpectations final {
+        std::uint64_t sceneGeneration{};
+        CharacterWorldId characterWorld;
+        Physics::PhysicsWorldId physicsWorld;
+        std::uint64_t collisionFilterGeneration{};
+        std::uint64_t originGeneration{};
+        std::uint64_t tick{};
+        std::uint64_t physicsSnapshotRevision{};
+    };
+
+    /** @brief One coherent collision-root publication produced by spawn or teleport. */
+    struct CharacterTransformPublication final {
+        CharacterControllerHandle controller;
+        std::uint64_t sourceTick{};
+        std::uint64_t publicationRevision{};
+        Math::Vec3 position;
+        Math::Quaternion heading{Math::Quaternion::Identity()};
+        Math::Vec3 up{0, 1, 0};
+        bool grounded{};
+        bool platformAttached{};
+        bool groundingRevalidationRequired{};
+    };
+
+    /** @brief Result of a bounded spawn or explicit teleport operation. */
+    struct CharacterPlacementResult final {
+        CharacterControllerHandle controller;
+        CharacterPlacementOperation operation{CharacterPlacementOperation::Spawn};
+        CharacterTransformPublication publication;
+        std::uint32_t recoveryIterations{};
+        bool recovered{};
+    };
+
+    /**
+     * @brief Validates one borrowed query context against exact Character and Physics generations.
+     * @param context Read-only Physics adapter context.
+     * @param expected Exact active world and snapshot identity.
+     * @return Success or a stable world, descriptor or operation error.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterPhysicsQueryContext(const CharacterPhysicsQueryContext &context,
+                                                                    const CharacterPhysicsQueryExpectations &expected);
+
+    /**
+     * @brief Validates reduced overlap evidence without mutating it.
+     * @param result Adapter-reduced overlap evidence.
+     * @return Success or a stable placement/recovery error.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterOverlapProbeResult(const CharacterOverlapProbeResult &result);
+
+    /**
+     * @brief Validates a coherent Character transform publication.
+     * @param publication Candidate publication.
+     * @param expectedSceneGeneration Exact active scene generation.
+     * @param expectedCharacterWorld Exact active Character-world generation.
+     * @return Success or a stable identity/placement error.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterTransformPublication(const CharacterTransformPublication &publication,
+                                                                     std::uint64_t expectedSceneGeneration,
+                                                                     CharacterWorldId expectedCharacterWorld);
+
+    /** @brief Explicit teleport request; it is never inferred from a movement request. */
+    struct CharacterTeleportRequest final {
+        CharacterControllerHandle controller;
+        std::uint64_t tick{};
+        Math::Vec3 targetPosition;
+        Math::Quaternion targetHeading{Math::Quaternion::Identity()};
+    };
+
+    /**
+     * @brief Validates one fixed-tick-addressed teleport request.
+     * @param request Explicit target root and heading.
+     * @param expectedSceneGeneration Exact active scene generation.
+     * @param expectedWorld Exact active Character-world generation.
+     * @return Success or a stable handle, order or placement error.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterTeleportRequest(const CharacterTeleportRequest &request,
+                                                                std::uint64_t expectedSceneGeneration, CharacterWorldId expectedWorld);
+
     /**
      * @brief Owned fixed-tick movement intent without caller-selected delta time.
      *

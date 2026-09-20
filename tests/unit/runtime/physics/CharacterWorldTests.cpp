@@ -1,117 +1,8 @@
-#include "CharacterControllerRegistry.h"
-#include "Horo/Physics/CharacterWorld.h"
-#include "PhysicsTestUtils.h"
-
-#include <array>
-#include <barrier>
-#include <catch2/catch_test_macros.hpp>
-#include <cstdint>
-#include <limits>
-#include <thread>
-#include <utility>
-#include <vector>
+#include "CharacterWorldTestHelpers.h"
 
 namespace Horo::Character {
     namespace {
-        [[nodiscard]] CharacterWorldId WorldId(const std::uint64_t value = 71) {
-            const auto result = CharacterWorldId::Create(value);
-            REQUIRE(result.HasValue());
-            return result.Value();
-        }
-
-        [[nodiscard]] Physics::PhysicsWorldId PhysicsWorldId(const std::uint64_t value = 81) {
-            const auto result = Physics::PhysicsWorldId::Create(value);
-            REQUIRE(result.HasValue());
-            return result.Value();
-        }
-
-        [[nodiscard]] CharacterWorldPreparationDescriptor WorldDescriptor() {
-            return {61, PhysicsWorldId(), 91, 101};
-        }
-
-        [[nodiscard]] CharacterWorldSettings Settings(const std::uint32_t maximumControllers = 2) {
-            CharacterWorldSettingsDescriptor descriptor;
-            descriptor.capacities.maximumControllers = maximumControllers;
-            const auto result = CharacterWorldSettings::Capture(descriptor);
-            REQUIRE(result.HasValue());
-            return result.Value();
-        }
-
-        [[nodiscard]] Physics::PhysicsQueryMaterial Material() {
-            return {
-                Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
-                3,
-                Physics::PhysicsMaterialSlotId::FromValue(5),
-            };
-        }
-
-        [[nodiscard]] CharacterControllerDescriptor ControllerDescriptor(const CharacterWorldDescriptor &world) {
-            CharacterControllerDescriptor descriptor;
-            descriptor.sceneGeneration = world.sceneGeneration;
-            descriptor.characterWorld = world.identity;
-            descriptor.physicsWorld = world.physicsWorld;
-            descriptor.collisionProfile = Physics::CollisionProfileId::Parse("22345678-1234-4234-8234-123456789abc").Value();
-            descriptor.queryChannel = Physics::PhysicsQueryChannelId::Parse("32345678-1234-4234-8234-123456789abc").Value();
-            descriptor.defaultMaterial = Material();
-            return descriptor;
-        }
-
-        using Physics::Test::RequireError;
-
-        [[nodiscard]] std::unique_ptr<CharacterWorld> PreparedWorld(const std::uint32_t maximumControllers = 2) {
-            const auto settings = Settings(maximumControllers);
-            auto prepared = CharacterWorld::Prepare(WorldDescriptor(), settings);
-            REQUIRE(prepared.HasValue());
-            return std::move(prepared).Value();
-        }
-
-        struct ActiveWorld final {
-            std::unique_ptr<CharacterWorld> world;
-            std::array<CharacterControllerHandle, 2> controllers{};
-        };
-
-        [[nodiscard]] ActiveWorld ActiveWorldWithControllers(const std::uint32_t controllerCount = 1) {
-            REQUIRE(controllerCount <= 2);
-            ActiveWorld result{PreparedWorld(controllerCount)};
-            const auto descriptor = ControllerDescriptor(result.world->Descriptor());
-            for (std::uint32_t index = 0; index < controllerCount; ++index)
-                result.controllers[index] = result.world->CreateController(descriptor).Value();
-            REQUIRE(result.world->Activate().HasValue());
-            return result;
-        }
-
-        [[nodiscard]] CharacterMovementRequest Movement(const CharacterControllerHandle controller, const std::uint64_t tick,
-                                                        const std::uint64_t sequence) {
-            return {.controller = controller, .tick = tick, .sequence = sequence};
-        }
-
-        [[nodiscard]] CharacterFixedTickInput FixedTick(const std::uint64_t tick, const CharacterTickObserver observer = {}) {
-            return {.tick = tick,
-                    .sceneGeneration = WorldDescriptor().sceneGeneration,
-                    .fixedDelta = Duration::FromNanoseconds(16'666'667),
-                    .observer = observer};
-        }
-
-        struct CommandTrace final {
-            std::array<CharacterTickPhase, 3> phases{};
-            std::array<CharacterMovementRequest, 2> movements{};
-            std::size_t phaseCount{};
-            std::size_t movementCount{};
-
-            static void Phase(void *context, const CharacterTickPhase phase, const std::uint64_t) noexcept {
-                auto &trace = *static_cast<CommandTrace *>(context);
-                trace.phases[trace.phaseCount++] = phase;
-            }
-
-            static void Movement(void *context, const CharacterMovementRequest &request) noexcept {
-                auto &trace = *static_cast<CommandTrace *>(context);
-                trace.movements[trace.movementCount++] = request;
-            }
-
-            [[nodiscard]] CharacterTickObserver Observer() noexcept {
-                return {.context = this, .phase = Phase, .movement = Movement};
-            }
-        };
+        using namespace TestDetail;
 
         TEST_CASE("Character world preparation captures exact ownership and capacity", "[physics][character][world]") {
             const auto settings = Settings(2);
@@ -123,6 +14,7 @@ namespace Horo::Character {
             REQUIRE(prepared.Value()->Descriptor().physicsWorld == owner.physicsWorld);
             REQUIRE(prepared.Value()->Descriptor().collisionFilterGeneration == owner.collisionFilterGeneration);
             REQUIRE(prepared.Value()->Descriptor().originGeneration == owner.originGeneration);
+            REQUIRE(prepared.Value()->Descriptor().physicsSnapshotRevision == owner.physicsSnapshotRevision);
             REQUIRE(prepared.Value()->Descriptor().identity.IsValid());
             REQUIRE(prepared.Value()->Settings().Identity() == settings.Identity());
             REQUIRE(prepared.Value()->ControllerCapacity() == 2);
@@ -139,6 +31,9 @@ namespace Horo::Character {
             RequireError(CharacterWorld::Prepare(invalid, settings), CharacterErrors::WorldInvalid);
             invalid = owner;
             invalid.originGeneration = 0;
+            RequireError(CharacterWorld::Prepare(invalid, settings), CharacterErrors::WorldInvalid);
+            invalid = owner;
+            invalid.physicsSnapshotRevision = 0;
             RequireError(CharacterWorld::Prepare(invalid, settings), CharacterErrors::WorldInvalid);
         }
 
@@ -217,6 +112,185 @@ namespace Horo::Character {
             RequireError(world->Activate(), CharacterErrors::InvalidState);
         }
 
+        TEST_CASE("Character spawn recovers bounded overlap and teleport publishes one detached root",
+                  "[physics][character][world][placement]") {
+            auto world = PreparedWorld();
+            const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+            REQUIRE(world->Activate().HasValue());
+
+            OverlapProbe probe{.overlappingCalls = 2};
+            const auto spawned = world->SpawnController(controller, probe.Context(world->Descriptor()));
+            REQUIRE(spawned.HasValue());
+            REQUIRE(spawned.Value().operation == CharacterPlacementOperation::Spawn);
+            REQUIRE(spawned.Value().recovered);
+            REQUIRE(spawned.Value().recoveryIterations == 2);
+            REQUIRE(probe.calls == 3);
+            REQUIRE(spawned.Value().publication.position == Math::Vec3{0, 2, 0});
+            REQUIRE(spawned.Value().publication.groundingRevalidationRequired);
+            REQUIRE_FALSE(spawned.Value().publication.grounded);
+            REQUIRE_FALSE(spawned.Value().publication.platformAttached);
+
+            const CharacterTeleportRequest teleport{controller, 1, {8, 4, -2}, Math::Quaternion::Identity()};
+            const auto teleported = world->TeleportController(teleport, probe.Context(world->Descriptor(), teleport.tick));
+            REQUIRE(teleported.HasValue());
+            REQUIRE(teleported.Value().operation == CharacterPlacementOperation::Teleport);
+            REQUIRE(teleported.Value().publication.position == teleport.targetPosition);
+            REQUIRE(teleported.Value().publication.publicationRevision == spawned.Value().publication.publicationRevision + 1);
+            REQUIRE_FALSE(teleported.Value().publication.grounded);
+            REQUIRE_FALSE(teleported.Value().publication.platformAttached);
+            REQUIRE(teleported.Value().publication.groundingRevalidationRequired);
+            REQUIRE(world->ControllerTransform(controller).Value().position == teleport.targetPosition);
+            RequireError(world->SpawnController(controller, probe.Context(world->Descriptor())), CharacterErrors::InvalidState);
+        }
+
+        TEST_CASE("Character spawn failure exhausts recovery without penetrating or publishing partial state",
+                  "[physics][character][world][placement][failure]") {
+            auto active = ActiveWorldWithControllers(1, 2);
+
+            OverlapProbe probe{.alwaysOverlapping = true};
+            RequireError(active.world->SpawnController(active.controllers[0], probe.Context(active.world->Descriptor())),
+                         CharacterErrors::OverlapRecoveryFailed);
+            REQUIRE(probe.calls == 3);
+            RequireError(active.world->ControllerTransform(active.controllers[0]), CharacterErrors::InvalidState);
+
+            probe = {};
+            const auto retry = active.world->SpawnController(active.controllers[0], probe.Context(active.world->Descriptor()));
+            REQUIRE(retry.HasValue());
+            REQUIRE_FALSE(retry.Value().recovered);
+            REQUIRE(retry.Value().recoveryIterations == 0);
+        }
+
+        TEST_CASE("Character placement contracts reject malformed evidence and stale lifecycle requests",
+                  "[physics][character][world][placement][validation]") {
+            auto world = PreparedWorld();
+            const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+            REQUIRE(world->Activate().HasValue());
+
+            OverlapProbe probe;
+            auto context = probe.Context(world->Descriptor());
+            context.sceneGeneration += 1;
+            RequireError(world->SpawnController(controller, context), CharacterErrors::HandleWorldMismatch);
+            context = probe.Context(world->Descriptor());
+            context.overlap = nullptr;
+            RequireError(world->SpawnController(controller, context), CharacterErrors::OperationUnsupported);
+
+            const CharacterTeleportRequest malformed{controller, 1, {0, 0, 0}, {0, 0, 0, 0}};
+            RequireError(world->TeleportController(malformed, probe.Context(world->Descriptor(), malformed.tick)),
+                         CharacterErrors::RequestInvalid);
+        }
+
+        TEST_CASE("Character placement reentrancy rejects removal and defers shutdown drain safely",
+                  "[physics][character][world][placement][lifetime]") {
+            auto world = PreparedWorld(1);
+            const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+            REQUIRE(world->Activate().HasValue());
+
+            ReentrantPlacementProbe removal{world.get()};
+            const auto recovered = world->SpawnController(controller, removal.Context(world->Descriptor()));
+            REQUIRE(recovered.HasValue());
+            REQUIRE(removal.destroyResult.has_value());
+            RequireError(*removal.destroyResult, CharacterErrors::InvalidState);
+            REQUIRE(world->ControllerTransform(controller).HasValue());
+
+            auto shutdownWorld = PreparedWorld(1);
+            const auto shutdownController = shutdownWorld->CreateController(ControllerDescriptor(shutdownWorld->Descriptor())).Value();
+            REQUIRE(shutdownWorld->Activate().HasValue());
+            ReentrantPlacementProbe shutdown{shutdownWorld.get(), {}, true};
+            const auto rejected = shutdownWorld->SpawnController(shutdownController, shutdown.Context(shutdownWorld->Descriptor()));
+            RequireError(rejected, CharacterErrors::InvalidState);
+            REQUIRE(shutdown.destroyResult.has_value());
+            RequireError(*shutdown.destroyResult, CharacterErrors::InvalidState);
+            REQUIRE(shutdownWorld->State() == CharacterWorldState::Destroyed);
+            REQUIRE(shutdownWorld->ActiveControllerCount() == 0);
+            RequireError(shutdownWorld->ControllerTransform(shutdownController), CharacterErrors::InvalidState);
+        }
+
+        TEST_CASE("Character recovery budgets admit the final clearance probe deterministically",
+                  "[physics][character][world][placement][recovery]") {
+            for (const std::uint32_t budget : {0U, 1U, CharacterWorldSettingLimits::MaximumRecoveryIterations}) {
+                auto active = ActiveWorldWithControllers(1, budget);
+                OverlapProbe probe{.overlappingCalls = budget};
+                const auto result = active.world->SpawnController(active.controllers[0], probe.Context(active.world->Descriptor()));
+                REQUIRE(result.HasValue());
+                REQUIRE(result.Value().recoveryIterations == budget);
+                REQUIRE(probe.calls == budget + 1);
+            }
+        }
+
+        TEST_CASE("Character teleports reserve the exact next tick and require clear bounded targets",
+                  "[physics][character][world][placement][command-order]") {
+            auto active = SpawnedActiveWorldWithController();
+            auto &world = active.world;
+            const auto controller = active.controller;
+            OverlapProbe probe;
+
+            const CharacterTeleportRequest future{controller, 2, {1, 0, 0}, Math::Quaternion::Identity()};
+            RequireError(world->TeleportController(future, probe.Context(world->Descriptor(), 2)), CharacterErrors::CommandOrderInvalid);
+            const CharacterTeleportRequest first{controller, 1, {1, 0, 0}, Math::Quaternion::Identity()};
+            REQUIRE(world->TeleportController(first, probe.Context(world->Descriptor(), 1)).HasValue());
+            RequireError(world->TeleportController(first, probe.Context(world->Descriptor(), 1)), CharacterErrors::CommandOrderInvalid);
+            RequireError(world->QueueMovementCommand(Movement(controller, 1, 1)), CharacterErrors::CommandOrderInvalid);
+            REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
+            RequireError(world->TeleportController(first, probe.Context(world->Descriptor(), 1)), CharacterErrors::CommandOrderInvalid);
+            const CharacterTeleportRequest second{controller, 2, {2, 0, 0}, Math::Quaternion::Identity()};
+            REQUIRE(world->TeleportController(second, probe.Context(world->Descriptor(), 2)).HasValue());
+
+            std::optional<Result<CharacterPlacementResult>> foreignResult;
+            std::thread foreign([&] {
+                foreignResult = world->TeleportController(CharacterTeleportRequest{controller, 3, {3, 0, 0}, Math::Quaternion::Identity()},
+                                                          probe.Context(world->Descriptor(), 3));
+            });
+            foreign.join();
+            REQUIRE(foreignResult.has_value());
+            RequireError(*foreignResult, CharacterErrors::InvalidState);
+        }
+
+        TEST_CASE("Character placement rejects stale, out-of-envelope, oversized and overlapping targets",
+                  "[physics][character][world][placement][bounds]") {
+            auto outOfEnvelopeWorld = PreparedWorld(1);
+            auto outOfEnvelopeDescriptor = ControllerDescriptor(outOfEnvelopeWorld->Descriptor());
+            outOfEnvelopeDescriptor.collisionRootPosition = {Physics::MaximumPhysicsLocalHalfExtentMeters + 1.0F, 0, 0};
+            const auto outOfEnvelopeController = outOfEnvelopeWorld->CreateController(outOfEnvelopeDescriptor).Value();
+            REQUIRE(outOfEnvelopeWorld->Activate().HasValue());
+            OverlapProbe outOfEnvelopeProbe;
+            RequireError(outOfEnvelopeWorld->SpawnController(outOfEnvelopeController,
+                                                             outOfEnvelopeProbe.Context(outOfEnvelopeWorld->Descriptor())),
+                         CharacterErrors::PlacementInvalid);
+
+            auto active = SpawnedActiveWorldWithController();
+            auto &world = active.world;
+            const auto controller = active.controller;
+            OverlapProbe probe;
+            const CharacterTeleportRequest oversized{controller, 1, {200, 0, 0}, Math::Quaternion::Identity()};
+            RequireError(world->TeleportController(oversized, probe.Context(world->Descriptor(), 1)), CharacterErrors::PlacementInvalid);
+            probe = OverlapProbe{.overlappingCalls = 1};
+            const CharacterTeleportRequest overlapping{controller, 1, {1, 0, 0}, Math::Quaternion::Identity()};
+            RequireError(world->TeleportController(overlapping, probe.Context(world->Descriptor(), 1)), CharacterErrors::PlacementInvalid);
+            OverlapProbe nonFinite{.overlappingCalls = 1, .recoveryDisplacement = {std::numeric_limits<float>::quiet_NaN(), 0, 0}};
+            const auto nonFiniteResult = world->TeleportController(overlapping, nonFinite.Context(world->Descriptor(), overlapping.tick));
+            RequireError(nonFiniteResult, CharacterErrors::PlacementInvalid);
+            REQUIRE(nonFiniteResult.ErrorValue().message == "Overlap recovery displacement must be finite.");
+            REQUIRE(world->ControllerTransform(controller).Value().position == Math::Vec3{});
+        }
+
+        TEST_CASE("Character overlap recovery rejects zero and non-finite depenetration evidence",
+                  "[physics][character][world][placement][recovery][validation]") {
+            for (const Math::Vec3 displacement : {Math::Vec3{}, {std::numeric_limits<float>::quiet_NaN(), 0, 0}, {200, 0, 0}}) {
+                auto world = PreparedWorld(1);
+                const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
+                REQUIRE(world->Activate().HasValue());
+                OverlapProbe probe{.overlappingCalls = 1, .recoveryDisplacement = displacement};
+                const auto result = world->SpawnController(controller, probe.Context(world->Descriptor()));
+                if (Math::IsFinite(displacement) && displacement != Math::Vec3{})
+                    RequireError(result, CharacterErrors::PlacementInvalid);
+                else if (!Math::IsFinite(displacement))
+                    RequireError(result, CharacterErrors::PlacementInvalid);
+                else
+                    RequireError(result, CharacterErrors::OverlapRecoveryFailed);
+                REQUIRE_FALSE(world->ControllerTransform(controller).HasValue());
+            }
+        }
+
         TEST_CASE("Character worlds issue distinct owner generations and reject cross-world aliases",
                   "[physics][character][world][identity]") {
             auto first = PreparedWorld(1);
@@ -252,211 +326,12 @@ namespace Horo::Character {
             REQUIRE(creationResult.has_value());
             RequireError(*creationResult, CharacterErrors::InvalidState);
             REQUIRE(world->ActiveControllerCount() == 0);
-        }
 
-        TEST_CASE("Character fixed ticks canonically order commands and select the final replacement",
-                  "[physics][character][world][command]") {
-            auto [world, controllers] = ActiveWorldWithControllers(2);
-            const auto [first, second] = controllers;
-
-            REQUIRE(world->QueueMovementCommand(Movement(second, 1, 5)).Value().status == CharacterCommandAdmissionStatus::Deferred);
-            REQUIRE(world->QueueMovementCommand(Movement(first, 1, 2)).Value().status == CharacterCommandAdmissionStatus::Deferred);
-            REQUIRE(world->QueueMovementCommand(Movement(first, 1, 3)).Value().status == CharacterCommandAdmissionStatus::Deferred);
-
-            CommandTrace trace;
-            REQUIRE(world->AdvanceFixedTick(FixedTick(1, trace.Observer())).HasValue());
-            REQUIRE(trace.phaseCount == 3);
-            REQUIRE(trace.phases == std::array{CharacterTickPhase::FreezeCommands, CharacterTickPhase::ResolveMovement,
-                                               CharacterTickPhase::PublishCompletedTick});
-            REQUIRE(trace.movementCount == 2);
-            REQUIRE(trace.movements[0].controller == first);
-            REQUIRE(trace.movements[0].sequence == 3);
-            REQUIRE(trace.movements[1].controller == second);
-            REQUIRE(trace.movements[1].sequence == 5);
-            REQUIRE((world->PublishedTick() == CharacterPublishedTick{1, 1, 2}));
-
-            RequireError(world->QueueMovementCommand(Movement(first, 2, 2)), CharacterErrors::CommandOrderInvalid);
-            trace = {};
-            REQUIRE(world->AdvanceFixedTick(FixedTick(2, trace.Observer())).HasValue());
-            REQUIRE(trace.movementCount == 0);
-            REQUIRE((world->PublishedTick() == CharacterPublishedTick{2, 2, 0}));
-            RequireError(world->QueueMovementCommand(Movement(first, 2, 6)), CharacterErrors::CommandOrderInvalid);
-
-            const auto statistics = world->TickStatistics();
-            REQUIRE(statistics.completedTicks == 2);
-            REQUIRE(statistics.admittedCommands == 3);
-            REQUIRE(statistics.rejectedCommands == 2);
-            REQUIRE(statistics.pendingCommands == 0);
-            REQUIRE(statistics.maximumCommandDepth == 3);
-        }
-
-        TEST_CASE("Character fixed ticks reject foreign owner threads without closing the command frame",
-                  "[physics][character][world][command][thread]") {
-            auto [world, controllers] = ActiveWorldWithControllers();
-            const auto handle = controllers.front();
-            REQUIRE(world->QueueMovementCommand(Movement(handle, 1, 1)).HasValue());
-
-            std::optional<Result<void>> tickResult;
-            std::thread foreign([&] {
-                tickResult = world->AdvanceFixedTick(FixedTick(1));
+            std::thread foreignShutdown([&] {
+                world->Shutdown();
             });
-            foreign.join();
-            REQUIRE(tickResult.has_value());
-            RequireError(*tickResult, CharacterErrors::InvalidState);
-            REQUIRE((world->PublishedTick() == CharacterPublishedTick{}));
-            REQUIRE(world->TickStatistics().pendingCommands == 1);
-            REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
-            REQUIRE((world->PublishedTick() == CharacterPublishedTick{1, 1, 1}));
-        }
-
-        TEST_CASE("Character command admission rejects duplicates and preserves an over-budget tick",
-                  "[physics][character][world][command][capacity]") {
-            CharacterWorldSettingsDescriptor values;
-            values.capacities.maximumControllers = 2;
-            values.capacities.maximumQueuedCommands = 2;
-            values.work.maximumCommandsPerTick = 1;
-            const auto settings = CharacterWorldSettings::Capture(values);
-            REQUIRE(settings.HasValue());
-            auto prepared = CharacterWorld::Prepare(WorldDescriptor(), settings.Value());
-            REQUIRE(prepared.HasValue());
-            auto world = std::move(prepared).Value();
-            const auto first = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-            const auto second = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-            REQUIRE(world->Activate().HasValue());
-
-            REQUIRE(world->QueueMovementCommand(Movement(first, 1, 1)).HasValue());
-            RequireError(world->QueueMovementCommand(Movement(first, 1, 1)), CharacterErrors::CommandOrderInvalid);
-            REQUIRE(world->QueueMovementCommand(Movement(second, 1, 1)).HasValue());
-            REQUIRE(world->QueueMovementCommand(Movement(first, 2, 2)).Value().status == CharacterCommandAdmissionStatus::RejectedFull);
-            RequireError(world->AdvanceFixedTick(FixedTick(1)), CharacterErrors::CapacityExceeded);
-            REQUIRE((world->PublishedTick() == CharacterPublishedTick{}));
-            REQUIRE(world->TickStatistics().pendingCommands == 2);
-
-            RequireError(world->AdvanceFixedTick(FixedTick(2)), CharacterErrors::CommandOrderInvalid);
-            auto invalid = FixedTick(1);
-            invalid.fixedDelta = {};
-            RequireError(world->AdvanceFixedTick(invalid), CharacterErrors::CommandOrderInvalid);
-        }
-
-        struct ReentrantProducer final {
-            CharacterWorld *world{};
-            CharacterMovementRequest closed;
-            CharacterMovementRequest future;
-            std::optional<Result<CharacterCommandAdmission>> closedResult;
-            std::optional<Result<CharacterCommandAdmission>> futureResult;
-
-            static void Movement(void *context, const CharacterMovementRequest &) noexcept {
-                auto &producer = *static_cast<ReentrantProducer *>(context);
-                producer.closedResult = producer.world->QueueMovementCommand(producer.closed);
-                producer.futureResult = producer.world->QueueMovementCommand(producer.future);
-            }
-        };
-
-        TEST_CASE("Character closes the current command frame before producer callbacks execute",
-                  "[physics][character][world][command][thread]") {
-            auto [world, controllers] = ActiveWorldWithControllers();
-            const auto handle = controllers.front();
-            REQUIRE(world->QueueMovementCommand(Movement(handle, 1, 1)).HasValue());
-
-            ReentrantProducer producer{world.get(), Movement(handle, 1, 2), Movement(handle, 2, 2)};
-            const CharacterTickObserver observer{.context = &producer, .movement = ReentrantProducer::Movement};
-            REQUIRE(world->AdvanceFixedTick(FixedTick(1, observer)).HasValue());
-            REQUIRE(producer.closedResult.has_value());
-            RequireError(*producer.closedResult, CharacterErrors::CommandOrderInvalid);
-            REQUIRE(producer.futureResult.has_value());
-            REQUIRE(producer.futureResult->Value().status == CharacterCommandAdmissionStatus::Deferred);
-            REQUIRE(world->TickStatistics().pendingCommands == 1);
-            REQUIRE(world->AdvanceFixedTick(FixedTick(2)).HasValue());
-            REQUIRE((world->PublishedTick() == CharacterPublishedTick{2, 2, 1}));
-        }
-
-        TEST_CASE("Concurrent Character producers receive bounded non-blocking admission outcomes",
-                  "[physics][character][world][command][thread]") {
-            constexpr std::size_t ProducerCount = 16;
-            auto world = PreparedWorld(1);
-            const auto handle = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-            REQUIRE(world->Activate().HasValue());
-
-            std::barrier start{static_cast<std::ptrdiff_t>(ProducerCount + 1)};
-            std::array<std::optional<Result<CharacterCommandAdmission>>, ProducerCount> results;
-            std::vector<std::thread> producers;
-            producers.reserve(ProducerCount);
-            for (std::size_t index = 0; index < ProducerCount; ++index) {
-                producers.emplace_back([&, index] {
-                    start.arrive_and_wait();
-                    results[index] = world->QueueMovementCommand(Movement(handle, 1, index + 1));
-                });
-            }
-            start.arrive_and_wait();
-            for (std::thread &producer : producers)
-                producer.join();
-
-            std::uint32_t deferred{};
-            for (const auto &result : results) {
-                REQUIRE(result.has_value());
-                REQUIRE(result->HasValue());
-                const auto status = result->Value().status;
-                REQUIRE((status == CharacterCommandAdmissionStatus::Deferred || status == CharacterCommandAdmissionStatus::RejectedBusy));
-                deferred += static_cast<std::uint32_t>(status == CharacterCommandAdmissionStatus::Deferred);
-            }
-            REQUIRE(deferred != 0);
-            REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
-            REQUIRE(world->PublishedTick().appliedCommands == 1);
-            REQUIRE(world->TickStatistics().pendingCommands == 0);
-        }
-
-        struct TrackedRecord final {
-            explicit TrackedRecord(std::uint32_t &live) noexcept : live_(&live) {
-                ++*live_;
-            }
-
-            TrackedRecord(const TrackedRecord &) = delete;
-            TrackedRecord &operator=(const TrackedRecord &) = delete;
-
-            TrackedRecord(TrackedRecord &&other) noexcept : live_(std::exchange(other.live_, nullptr)) {}
-
-            TrackedRecord &operator=(TrackedRecord &&) noexcept = delete;
-
-            ~TrackedRecord() noexcept {
-                Release();
-            }
-
-        private:
-            void Release() noexcept {
-                if (live_ != nullptr)
-                    --*live_;
-                live_ = nullptr;
-            }
-
-            std::uint32_t *live_{};
-        };
-
-        TEST_CASE("Character registry drains owned records and retires non-wrapping generations",
-                  "[physics][character][world][lifecycle]") {
-            using Registry = Detail::CharacterControllerRegistry<TrackedRecord>;
-            std::uint32_t live{};
-            Registry source{61, WorldId(), {.maximumSlots = 1, .maximumGeneration = 2}};
-            auto registry = std::move(source);
-            RequireError(source.Acquire(TrackedRecord{live}), CharacterErrors::CapacityExceeded);
-            const auto first = registry.Acquire(TrackedRecord{live});
-            REQUIRE(first.HasValue());
-            REQUIRE(live == 1);
-            REQUIRE(registry.Remove(first.Value()).HasValue());
-            REQUIRE(live == 0);
-            const auto last = registry.Acquire(TrackedRecord{live});
-            REQUIRE(last.HasValue());
-            REQUIRE(last.Value().slot.generation == 2);
-            REQUIRE(registry.Remove(last.Value()).HasValue());
-            REQUIRE(live == 0);
-            RequireError(registry.Acquire(TrackedRecord{live}), CharacterErrors::GenerationExhausted);
-            REQUIRE(live == 0);
-
-            Registry drainable{61, WorldId(), {.maximumSlots = 1}};
-            REQUIRE(drainable.Acquire(TrackedRecord{live}).HasValue());
-            REQUIRE(live == 1);
-            drainable.Drain();
-            REQUIRE(live == 0);
-            REQUIRE(drainable.Statistics().active == 0);
+            foreignShutdown.join();
+            REQUIRE(world->State() == CharacterWorldState::Prepared);
         }
 
     }  // namespace

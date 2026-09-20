@@ -110,4 +110,30 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor SceneSurfaceMissing;
     /** @brief A grounded link selects a profile absent from one or both endpoint surfaces. */
     extern const ErrorCodeDescriptor SceneProfileMismatch;
+    /** @brief The navigation source envelope has invalid framing or reserved fields. */
+    extern const ErrorCodeDescriptor SourceEnvelopeInvalid;
+    /** @brief A navigation source schema version is outside the explicitly supported range. */
+    extern const ErrorCodeDescriptor SourceUnsupportedVersion;
+    /** @brief Two authored or generated source records claim the same stable identity. */
+    extern const ErrorCodeDescriptor SourceDuplicateIdentity;
+    /** @brief The navigation source envelope checksum does not match its exact bytes. */
+    extern const ErrorCodeDescriptor SourceChecksumMismatch;
+    /** @brief A source record or envelope exceeds a qualified bounded parser limit. */
+    extern const ErrorCodeDescriptor SourceSerializationCapacityExceeded;
+    /** @brief An unknown authored record cannot be safely retained under the selected policy. */
+    extern const ErrorCodeDescriptor SourceUnknownAuthoredRecord;
+    /** @brief A generated payload was retained for inspection but quarantined from activation. */
+    extern const ErrorCodeDescriptor GeneratedPayloadQuarantined;
+    /** @brief No explicit migration edge exists for the requested source-schema transition. */
+    extern const ErrorCodeDescriptor SourceMigrationMissing;
+    /** @brief An explicit migration catalog contains an invalid or ambiguous edge. */
+    extern const ErrorCodeDescriptor SourceMigrationInvalid;
+
+    // Compatibility names keep the serialization vocabulary discoverable without duplicating error identities.
+    inline const ErrorCodeDescriptor &SerializationDuplicateIdentity = SourceDuplicateIdentity;
+    inline const ErrorCodeDescriptor &SerializationUnsupportedVersion = SourceUnsupportedVersion;
+    inline const ErrorCodeDescriptor &SerializationChecksumMismatch = SourceChecksumMismatch;
+    inline const ErrorCodeDescriptor &SerializationCapacityExceeded = SourceSerializationCapacityExceeded;
+    inline const ErrorCodeDescriptor &SerializationUnknownAuthoredRecord = SourceUnknownAuthoredRecord;
+    inline const ErrorCodeDescriptor &SerializationGeneratedPayloadQuarantined = GeneratedPayloadQuarantined;
 }  // namespace Horo::Navigation::NavigationErrors

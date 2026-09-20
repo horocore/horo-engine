@@ -228,6 +228,7 @@ horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp
+        unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
@@ -312,6 +313,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
+        unit/runtime/physics/CharacterWorldCommandTests.cpp
         unit/runtime/physics/CanonicalSolverTests.cpp
         unit/runtime/physics/PhysicsBodyDescriptorTests.cpp
         unit/runtime/physics/PhysicsBodyDynamicsTests.cpp
@@ -447,6 +449,7 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationProjectProfileTests.cpp
         unit/runtime/navigation/NavigationProviderTests.cpp
         unit/runtime/navigation/NavigationSourceGeometryTests.cpp
+        unit/runtime/navigation/NavigationDataSerializationTests.cpp
 )
 target_compile_features(HoroNavigationApiTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
