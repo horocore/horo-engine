@@ -259,6 +259,8 @@ namespace Horo::Editor::ScenePersistenceDetail {
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("navigationLink", components.navigationLink, ParseNavigationLink); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
+        if (auto parsed = parse("navigationAgent", components.navigationAgent, ParseNavigationAgent); parsed.HasError())
+            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (value.contains("colliders")) {

@@ -79,6 +79,13 @@ TEST_CASE("Navigation link direction and modifier shape round trip explicitly", 
     components.navigationModifier->traversalCost.reset();
     components.navigationLink->kind = Runtime::NavigationLinkKind::Jump;
     components.navigationLink->direction = Runtime::NavigationLinkDirection::StartToEnd;
+    components.navigationAgent = Runtime::NavigationAgentComponent{
+        .schemaVersion = 1,
+        .profile = Navigation::NavigationAgentProfileId::Create(6).Value(),
+        .filter = Navigation::NavigationFilterId::Create(8).Value(),
+        .radiusOverride = 0.65F,
+        .movementCapability = Navigation::NavigationAgentMovementCapability::Grounded,
+    };
 
     NativeDurableFileSystem files;
     ProjectMutationCoordinator mutations(files);
@@ -92,6 +99,7 @@ TEST_CASE("Navigation link direction and modifier shape round trip explicitly", 
     const auto &loadedComponents = loaded.Value()->objects.front().components;
     REQUIRE(loadedComponents.navigationModifier == components.navigationModifier);
     REQUIRE(loadedComponents.navigationLink == components.navigationLink);
+    REQUIRE(loadedComponents.navigationAgent == components.navigationAgent);
     REQUIRE(std::holds_alternative<Runtime::NavigationLocalBounds>(loadedComponents.navigationModifier->volume));
     REQUIRE(loadedComponents.navigationLink->direction == Runtime::NavigationLinkDirection::StartToEnd);
 }

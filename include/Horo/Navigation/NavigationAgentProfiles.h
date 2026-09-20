@@ -9,6 +9,7 @@
 #include "Horo/Navigation/NavigationIdentity.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
@@ -19,6 +20,12 @@ namespace Horo::Navigation {
 
     /** @brief Stable project-owned profile identity, independent of display name and registry order. */
     using NavigationAgentProfileId = NavigationIdentity<NavigationAgentProfileIdentityTag>;
+
+    /** @brief Closed movement-capability vocabulary accepted by the grounded agent contract. */
+    enum class NavigationAgentMovementCapability : std::uint8_t {
+        Grounded,
+        Count,
+    };
 
     /** @brief Grounded-agent dimensions and voxel resolution used only to build navigation geometry. */
     struct NavigationAgentBuildGeometry final {

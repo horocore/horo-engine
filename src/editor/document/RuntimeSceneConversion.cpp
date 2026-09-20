@@ -1,12 +1,17 @@
 #include "editor/document/RuntimeSceneConversion.h"
 
+#include "Horo/Gameplay/Component.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSceneIdentityRemap.h"
+#include "editor/document/NavigationAgentJson.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <format>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <string>
+#include <string_view>
 
 namespace Horo::Editor {
     namespace {
@@ -29,6 +34,8 @@ namespace Horo::Editor {
             .retryable = false,
             .userActionable = true,
         };
+        constexpr std::string_view NavigationAgentPrefabComponentType = "game.horo.navigation_agent";
+        using Json = nlohmann::json;
 
         template <typename Component> [[nodiscard]] std::optional<Component> ActiveComponent(const std::optional<Component> &component) {
             return component.has_value() && component->enabled ? component : std::nullopt;
@@ -58,6 +65,43 @@ namespace Horo::Editor {
             return composed;
         }
 
+        [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParsePrefabNavigationAgent(const Prefab::RawComponentPayload &payload) {
+            if (payload.component.typeId.Value() != NavigationAgentPrefabComponentType ||
+                payload.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson || payload.component.schemaVersion != 1)
+                return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+
+            try {
+                std::string bytes;
+                bytes.reserve(payload.component.payload.size());
+                for (const std::byte byte : payload.component.payload)
+                    bytes.push_back(static_cast<char>(byte));
+                const Json value = Json::parse(bytes);
+                auto parsed = Detail::ParseNavigationAgentJson(value);
+                if (parsed.HasError())
+                    return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                return Result<Runtime::NavigationAgentComponent>::Success(std::move(parsed).Value());
+            } catch (const nlohmann::json::exception &) {
+                return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+            }
+        }
+
+        /** @brief Projects one resolved prefab object's supported typed components into the runtime component set. */
+        [[nodiscard]] Result<Runtime::RuntimeComponentSet> ProjectPrefabComponents(const Prefab::ResolvedPrefabObject &object) {
+            Runtime::RuntimeComponentSet components{.behaviors = object.object.behaviors};
+            for (const Prefab::RawComponentPayload &payload : object.object.components) {
+                if (payload.component.typeId.Value() != NavigationAgentPrefabComponentType)
+                    return Result<Runtime::RuntimeComponentSet>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                if (components.navigationAgent.has_value())
+                    return Result<Runtime::RuntimeComponentSet>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                auto parsed = ParsePrefabNavigationAgent(payload);
+                if (parsed.HasError())
+                    return Result<Runtime::RuntimeComponentSet>::Failure(parsed.ErrorValue());
+                if (parsed.Value().enabled)
+                    components.navigationAgent = std::move(parsed).Value();
+            }
+            return Result<Runtime::RuntimeComponentSet>::Success(std::move(components));
+        }
+
         [[nodiscard]] Result<void> AddAuthoredObjects(const SceneDocumentSnapshot &document, Runtime::SceneDefinitionBuilder &builder,
                                                       std::vector<Prefab::PrefabSceneObjectId> &occupied) {
             occupied.reserve(document.objects.size());
@@ -72,6 +116,7 @@ namespace Horo::Editor {
                     .navigationRegion = ActiveComponent(object.components.navigationRegion),
                     .navigationModifier = ActiveComponent(object.components.navigationModifier),
                     .navigationLink = ActiveComponent(object.components.navigationLink),
+                    .navigationAgent = ActiveComponent(object.components.navigationAgent),
                     .rigidBody = ActiveComponent(object.components.rigidBody),
                     .colliders = ActiveComponents(object.components.colliders),
                     .physicsConstraints = ActiveComponents(object.components.physicsConstraints),
@@ -93,8 +138,9 @@ namespace Horo::Editor {
                                                       const Prefab::PrefabSceneIdentityMap &identityMap,
                                                       Runtime::SceneDefinitionBuilder &builder) {
             for (const Prefab::ResolvedPrefabObject &object : candidate.Objects()) {
-                if (!object.object.components.empty())
-                    return Result<void>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                auto components = ProjectPrefabComponents(object);
+                if (components.HasError())
+                    return Result<void>::Failure(components.ErrorValue());
                 const std::optional<Prefab::PrefabSceneObjectId> sceneId = identityMap.Find(object.key);
                 if (!sceneId)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::IdentityCollision));
@@ -116,7 +162,7 @@ namespace Horo::Editor {
                     .parent = parent,
                     .localTransform = transform.Value(),
                     .primitiveMesh = std::nullopt,
-                    .components = Runtime::RuntimeComponentSet{.behaviors = object.object.behaviors},
+                    .components = std::move(components).Value(),
                 });
             }
             return Result<void>::Success();

@@ -30,6 +30,11 @@ namespace Horo::Runtime {
         virtual ~SceneActivationCandidate() = default;
         /** @brief Revalidates authoritative evidence immediately before aggregate publication. */
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+
+        /** @brief Installs fully validated state after every aggregate participant has passed validation.
+         * @details Implementations must not fail, allocate, or perform provider work in this call. */
+        virtual void Publish() noexcept {}
+
         /** @brief Closes subsystem admission and releases fully prepared state; safe before or after publication. */
         virtual void Shutdown() noexcept = 0;
     };
@@ -348,6 +353,8 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<void> BeginPreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config);
         [[nodiscard]] Result<void> PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const;
+        [[nodiscard]] Result<void> ProcessCompletedPreparationLoads();
+        [[nodiscard]] Result<void> FinalizePreparation();
         void AdvancePreparation();
         void CancelPreparation(bool waitForCompletion) noexcept;
         [[nodiscard]] Result<void> SubmitPreparationLoads();

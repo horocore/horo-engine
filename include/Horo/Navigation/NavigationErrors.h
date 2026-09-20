@@ -122,6 +122,16 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor DynamicRegistryUpdateRateExceeded;
     /** @brief Dynamic registry mutation or snapshot admission is closed during teardown. */
     extern const ErrorCodeDescriptor DynamicRegistryShuttingDown;
+    /** @brief A Scene navigation-agent payload or movement capability is malformed. */
+    extern const ErrorCodeDescriptor AgentDescriptorInvalid;
+    /** @brief Navigation-agent owners collide within one complete Scene candidate. */
+    extern const ErrorCodeDescriptor AgentRegistryConflict;
+    /** @brief The navigation-agent registry cannot retain the complete candidate population. */
+    extern const ErrorCodeDescriptor AgentRegistryCapacityExceeded;
+    /** @brief A navigation-agent registration targets a replaced Scene/world or stale entity generation. */
+    extern const ErrorCodeDescriptor AgentRegistryStale;
+    /** @brief Navigation-agent registration is closed during registry teardown. */
+    extern const ErrorCodeDescriptor AgentRegistryShuttingDown;
     /** @brief The navigation source envelope has invalid framing or reserved fields. */
     extern const ErrorCodeDescriptor SourceEnvelopeInvalid;
     /** @brief A navigation source schema version is outside the explicitly supported range. */

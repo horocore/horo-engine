@@ -410,8 +410,12 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationBakeJobs.h
     Horo/Navigation/NavigationDynamicRegistry.h
+    Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
+)
+horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
+    Horo/Navigation/NavigationSceneActivation.h
 )
 horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRCapabilities.h

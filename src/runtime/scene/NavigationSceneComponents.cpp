@@ -118,6 +118,17 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> ValidateAgent(const NavigationAgentComponent &component) {
+            if (component.schemaVersion != 1 || !component.profile.IsValid() || !component.filter.IsValid() ||
+                component.movementCapability >= Navigation::NavigationAgentMovementCapability::Count ||
+                (component.radiusOverride.has_value() &&
+                 (!std::isfinite(*component.radiusOverride) || *component.radiusOverride <= 0.0F))) {
+                return Failure(Navigation::NavigationErrors::AgentDescriptorInvalid,
+                               "Navigation agents require valid schema, profile, filter, movement capability, and radius values.");
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateReferences(const std::span<const NavigationSceneComponentView> components,
                                                       const NavigationSurfaceMap &surfaces) {
             std::unordered_set<std::uint64_t> regionIds;
@@ -137,6 +148,10 @@ namespace Horo::Runtime {
                 }
                 if (component.link != nullptr) {
                     if (Result<void> valid = ValidateLink(*component.link, surfaces, linkIds); valid.HasError())
+                        return valid;
+                }
+                if (component.agent != nullptr) {
+                    if (Result<void> valid = ValidateAgent(*component.agent); valid.HasError())
                         return valid;
                 }
             }
@@ -218,13 +233,19 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc ValidateNavigationAgentComponent */
+    Result<void> ValidateNavigationAgentComponent(const NavigationAgentComponent &component) {
+        return ValidateAgent(component);
+    }
+
     /** @copydoc ValidateNavigationSceneComponents */
     Result<void> ValidateNavigationSceneComponents(const std::span<const NavigationSurfaceComponent> surfaces,
                                                    const std::span<const NavigationRegionComponent> regions,
                                                    const std::span<const NavigationModifierComponent> modifiers,
-                                                   const std::span<const NavigationLinkComponent> links) {
+                                                   const std::span<const NavigationLinkComponent> links,
+                                                   const std::span<const NavigationAgentComponent> agents) {
         std::vector<NavigationSceneComponentView> views;
-        views.reserve(surfaces.size() + regions.size() + modifiers.size() + links.size());
+        views.reserve(surfaces.size() + regions.size() + modifiers.size() + links.size() + agents.size());
         for (const NavigationSurfaceComponent &surface : surfaces)
             views.push_back({.surface = &surface});
         for (const NavigationRegionComponent &region : regions)
@@ -233,6 +254,8 @@ namespace Horo::Runtime {
             views.push_back({.modifier = &modifier});
         for (const NavigationLinkComponent &link : links)
             views.push_back({.link = &link});
+        for (const NavigationAgentComponent &agent : agents)
+            views.push_back({.agent = &agent});
         return ValidateNavigationSceneComponentViews(views);
     }
 

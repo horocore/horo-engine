@@ -112,6 +112,7 @@ namespace Horo::Editor {
         std::optional<Runtime::NavigationRegionComponent> navigationRegion;
         std::optional<Runtime::NavigationModifierComponent> navigationModifier;
         std::optional<Runtime::NavigationLinkComponent> navigationLink;
+        std::optional<Runtime::NavigationAgentComponent> navigationAgent;
         std::optional<Runtime::RigidBodyComponent> rigidBody;
         std::vector<Runtime::ColliderComponent> colliders;
         std::vector<Runtime::PhysicsConstraintComponent> physicsConstraints;
@@ -294,6 +295,12 @@ namespace Horo::Editor {
     struct SetSceneNavigationLinkCommand {
         SceneObjectId object;
         std::optional<Runtime::NavigationLinkComponent> link;
+    };
+
+    /** @brief Undoable replacement, attachment, or removal of one authored navigation agent. */
+    struct SetSceneNavigationAgentCommand {
+        SceneObjectId object;
+        std::optional<Runtime::NavigationAgentComponent> agent;
     };
 
     /** @brief Undoable replacement of one object's local editor-only visibility and lock state. */
@@ -560,6 +567,9 @@ namespace Horo::Editor {
         /** @brief Validates endpoint/profile compatibility and atomically commits a grounded navigation link value. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneNavigationLinkCommand &command);
 
+        /** @brief Validates and atomically commits one provider-neutral navigation-agent value. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneNavigationAgentCommand &command);
+
         /** @brief Atomically commits local editor visibility/lock state without changing runtime activation. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectEditorStateCommand &command);
         [[nodiscard]] Result<SceneCommandResult> Execute(const AddSceneObjectComponentCommand &command);
@@ -609,7 +619,7 @@ namespace Horo::Editor {
             SceneObjectId object, const std::optional<Runtime::NavigationSurfaceComponent> *surface,
             const std::optional<Runtime::NavigationRegionComponent> *region,
             const std::optional<Runtime::NavigationModifierComponent> *modifier,
-            const std::optional<Runtime::NavigationLinkComponent> *link);
+            const std::optional<Runtime::NavigationLinkComponent> *link, const std::optional<Runtime::NavigationAgentComponent> *agent);
 
         /** @brief Commits one validated prefab delta through the shared document/history transition. */
         [[nodiscard]] Result<SceneCommandResult> CommitPrefab(PrefabCommitContext context);

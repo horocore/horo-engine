@@ -85,6 +85,8 @@ namespace Horo::Runtime {
                 return false;
             if (components.navigationLink && ValidateNavigationLinkComponent(*components.navigationLink).HasError())
                 return false;
+            if (components.navigationAgent && ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
+                return false;
             return ValidBehaviors(components.behaviors);
         }
 
@@ -97,7 +99,8 @@ namespace Horo::Runtime {
                     {.surface = entity.components.navigationSurface ? &*entity.components.navigationSurface : nullptr,
                      .region = entity.components.navigationRegion ? &*entity.components.navigationRegion : nullptr,
                      .modifier = entity.components.navigationModifier ? &*entity.components.navigationModifier : nullptr,
-                     .link = entity.components.navigationLink ? &*entity.components.navigationLink : nullptr});
+                     .link = entity.components.navigationLink ? &*entity.components.navigationLink : nullptr,
+                     .agent = entity.components.navigationAgent ? &*entity.components.navigationAgent : nullptr});
             }
             return ValidateNavigationSceneComponentViews(navigationComponents);
         }

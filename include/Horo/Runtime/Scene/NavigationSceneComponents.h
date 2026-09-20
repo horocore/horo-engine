@@ -2,7 +2,7 @@
 
 /**
  * @file NavigationSceneComponents.h
- * @brief Typed authored navigation surface, region, modifier-volume, and grounded-link Scene components.
+ * @brief Typed authored navigation surface, region, modifier-volume, link, and agent Scene components.
  */
 
 #include "Horo/Assets/AssetId.h"
@@ -165,12 +165,29 @@ namespace Horo::Runtime {
         [[nodiscard]] bool operator==(const NavigationLinkComponent &) const noexcept = default;
     };
 
+    /**
+     * @brief Provider-neutral authored navigation-agent intent owned by one Scene object.
+     * @details The profile, filter, radius override, and movement capability are durable authoring values. Runtime crowd
+     * handles and provider state are created only for the exact active entity generation.
+     */
+    struct NavigationAgentComponent final {
+        std::uint32_t schemaVersion{1};
+        Navigation::NavigationAgentProfileId profile;
+        Navigation::NavigationFilterId filter;
+        std::optional<float> radiusOverride;
+        Navigation::NavigationAgentMovementCapability movementCapability{Navigation::NavigationAgentMovementCapability::Grounded};
+        bool enabled{true};
+
+        [[nodiscard]] constexpr bool operator==(const NavigationAgentComponent &) const noexcept = default;
+    };
+
     /** @brief Borrowed Scene-object projection used to validate navigation components without copying payload storage. */
     struct NavigationSceneComponentView final {
         const NavigationSurfaceComponent *surface{};   /**< Optional surface owned by the immutable source snapshot. */
         const NavigationRegionComponent *region{};     /**< Optional region owned by the immutable source snapshot. */
         const NavigationModifierComponent *modifier{}; /**< Optional modifier owned by the immutable source snapshot. */
         const NavigationLinkComponent *link{};         /**< Optional grounded link owned by the immutable source snapshot. */
+        const NavigationAgentComponent *agent{};       /**< Optional agent intent owned by the immutable source snapshot. */
     };
 
     /** @brief Validates one surface payload independently of Scene-wide identity references.
@@ -198,17 +215,26 @@ namespace Horo::Runtime {
     [[nodiscard]] Result<void> ValidateNavigationLinkComponent(const NavigationLinkComponent &component);
 
     /**
+     * @brief Validates one navigation-agent payload independently of runtime entity ownership.
+     * @param component Authored component value.
+     * @return Success or NavigationErrors::AgentDescriptorInvalid.
+     */
+    [[nodiscard]] Result<void> ValidateNavigationAgentComponent(const NavigationAgentComponent &component);
+
+    /**
      * @brief Validates unique identities and exact region-to-surface references in one committed Scene snapshot.
      * @param surfaces Surface components in arbitrary Scene-object order.
      * @param regions Region components in arbitrary Scene-object order.
      * @param modifiers Modifier components in arbitrary Scene-object order.
      * @param links Grounded-link components in arbitrary Scene-object order.
+     * @param agents Agent components in arbitrary Scene-object order.
      * @return Success, or a typed invalid, conflict, missing-surface, or profile-mismatch diagnostic.
      */
     [[nodiscard]] Result<void> ValidateNavigationSceneComponents(std::span<const NavigationSurfaceComponent> surfaces,
                                                                  std::span<const NavigationRegionComponent> regions,
                                                                  std::span<const NavigationModifierComponent> modifiers = {},
-                                                                 std::span<const NavigationLinkComponent> links = {});
+                                                                 std::span<const NavigationLinkComponent> links = {},
+                                                                 std::span<const NavigationAgentComponent> agents = {});
 
     /**
      * @brief Validates unique identities and references through borrowed component projections without payload copies.
