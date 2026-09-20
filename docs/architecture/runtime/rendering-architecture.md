@@ -25,6 +25,9 @@ The equal first-class obligations of interactive backend modules are defined by
   implementations. Implementation order does not grant architectural priority.
 - Backend loss or unavailability returns typed errors rather than leaking API
   failures through engine interfaces.
+- Device loss and renderer replacement follow [ADR-179](../../adr/179-device-loss-and-renderer-restart-lifecycle.md): the host owns the
+  generation-bound restart state machine, old-owner handles become stale, and
+  terminal failure is explicit.
 - The active renderer backend is selected by configuration or command-line
   override at host startup. Runtime scene, editor, asset, gameplay, and MCP code
   do not branch on concrete backend types.
@@ -1681,18 +1684,29 @@ the concrete backend.
 
 ## Device Or Context Failure
 
-Backends classify failure as:
+The complete loss, abort, evidence, restart and terminal-failure contract is
+[ADR-179](../../adr/179-device-loss-and-renderer-restart-lifecycle.md). In
+summary, backends classify failure as:
 
 - recoverable frame failure
 - surface recreation required
 - device/context recreation required
 - fatal unsupported or corrupted state
 
-Recovery tears down the old registry and recreates resources from each
-residency record's reconstruction source (asset identity, retained CPU data, or
-owner rebuild). Resources without a source are `NonRecoverable` and their
-owners are notified. Backend handles are never assumed stable across
-recreation.
+The host accepts the first current generation-bound loss fact at a render safe
+point, aborts the active frame exactly once, freezes ADR-048 evidence, closes
+old-generation admission, and replaces the native owner. Recovery reruns
+adapter/capability/profile admission and rebuilds snapshots, plans, surface
+state and resources. The replacement receives a new ADR-027 resource owner;
+every old handle and completion is stale, even when slot numbers match.
+
+Resources are reconstructed from an explicit residency source (asset identity,
+retained CPU data, or owner rebuild). Resources without a source are
+`NonRecoverable` and their owners are notified. If required admission,
+realization or reconstruction fails, the host publishes typed `TerminalFailure`
+without changing project state or silently switching an interactive host to
+Null/another backend. Surface-only loss follows ADR-033 and does not close the
+device generation.
 
 ## Null Renderer
 
