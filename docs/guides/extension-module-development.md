@@ -68,6 +68,25 @@ permission checks, result storage, and teardown.
 11. Test registration, permission denial, event handling, workspace persistence,
    and teardown.
 
+### Backend operation lifecycle
+
+Long-running backend work uses the host `BackendOperationRegistry`. Register the
+provider generation with one or more canonical typed operation contracts and the
+expected result identity; use the exact `ApplicationCapabilityProviderIdentity`
+selected by composition when beginning work. Keep the returned producer alive
+until it publishes `Complete` or `Fail`, and pass `Cancellation()` to worker code
+so parent, caller, provider, and host shutdown cancellation is observable.
+
+The copyable operation handle is for polling snapshots and requesting caller
+cancellation. Publish exact stage-local progress and bounded Foundation
+`Diagnostic` values. A phase change may reset its counters, but progress within a
+phase may not regress. Result bytes are optional: omitting a payload is a valid
+successful completion for an operation whose contract has no bytes to publish;
+when present, the payload identity must match the registered result contract and
+remain within the provider's bound. Provider registration reset and host shutdown
+terminalize active operations before the provider is released, so an extension
+must not retain a producer as a workaround for lifecycle teardown.
+
 Every module and every importer contribution declares an independent canonical
 semantic version. C++ importer adapters must populate both
 `AssetImporterContribution::moduleVersion` and
