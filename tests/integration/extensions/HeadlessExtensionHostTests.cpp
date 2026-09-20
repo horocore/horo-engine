@@ -7,10 +7,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <future>
 #include <memory>
+#include <semaphore>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace Horo::Extensions::Tests {
@@ -39,9 +43,9 @@ namespace Horo::Extensions::Tests {
         }
 
         [[nodiscard]] ErrorCodeRegistry ValidationErrors() {
-            ModuleDescriptor module{.id = ModuleId{"horo.test-headless"}, .version = {1U, 0U, 0U}};
-            module.errorDomains.push_back({.id = ErrorDomainId{"horo.test.headless"}, .descriptors = {&ValidationFinding}});
-            auto errors = BuildErrorCodeRegistry(std::span{&module, 1U});
+            ModuleDescriptor moduleDescriptor{.id = ModuleId{"horo.test-headless"}, .version = {1U, 0U, 0U}};
+            moduleDescriptor.errorDomains.push_back({.id = ErrorDomainId{"horo.test.headless"}, .descriptors = {&ValidationFinding}});
+            auto errors = BuildErrorCodeRegistry(std::span{&moduleDescriptor, 1U});
             REQUIRE(errors.HasValue());
             return std::move(errors).Value();
         }
@@ -62,6 +66,33 @@ namespace Horo::Extensions::Tests {
             Result<void> Cook(const AssetCookerInput &input, AssetCookerOutputSink &output, const CancellationToken &) const override {
                 return output.WritePayload(input.sourceBytes);
             }
+        };
+
+        class BlockingCooker final : public IAssetCooker {
+        public:
+            BlockingCooker() = default;
+            BlockingCooker(const BlockingCooker &) = delete;
+            BlockingCooker &operator=(const BlockingCooker &) = delete;
+            BlockingCooker(BlockingCooker &&) = delete;
+            BlockingCooker &operator=(BlockingCooker &&) = delete;
+
+            Result<void> Cook(const AssetCookerInput &input, AssetCookerOutputSink &output, const CancellationToken &) const override {
+                entered_.release();
+                release_.acquire();
+                return output.WritePayload(input.sourceBytes);
+            }
+
+            void WaitUntilEntered() const {
+                entered_.acquire();
+            }
+
+            void Release() const {
+                release_.release();
+            }
+
+        private:
+            mutable std::binary_semaphore entered_{0};
+            mutable std::binary_semaphore release_{0};
         };
 
         class HeadlessValidator final : public IProjectValidator {
@@ -106,8 +137,8 @@ namespace Horo::Extensions::Tests {
 
         struct HeadlessHostFixture {
             std::filesystem::path root =
-                std::filesystem::temp_directory_path() /
-                ("horo-headless-host-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+                std::filesystem::temp_directory_path() /  // NOSONAR(cpp:S5443) Unique test-only directory; no untrusted input.
+                std::format("horo-headless-host-{}", std::chrono::steady_clock::now().time_since_epoch().count());
             HeadlessToolchainPolicy toolchainPolicy;
             RecordingProcessRunner processRunner;
 
@@ -120,7 +151,12 @@ namespace Horo::Extensions::Tests {
                 std::filesystem::remove_all(root, error);
             }
 
-            [[nodiscard]] std::unique_ptr<HeadlessExtensionHost> CreateHost() {
+            HeadlessHostFixture(const HeadlessHostFixture &) = delete;
+            HeadlessHostFixture &operator=(const HeadlessHostFixture &) = delete;
+            HeadlessHostFixture(HeadlessHostFixture &&) = delete;
+            HeadlessHostFixture &operator=(HeadlessHostFixture &&) = delete;
+
+            [[nodiscard]] std::unique_ptr<HeadlessExtensionHost> CreateHost(const std::size_t maximumDiagnostics = 1024U) {
                 HeadlessExtensionHostConfiguration configuration;
                 configuration.roots.push_back({.id = "test-root",
                                                .path = root,
@@ -130,6 +166,7 @@ namespace Horo::Extensions::Tests {
                 configuration.discoveryPolicy = {.profile = Discovery::DiscoveryProfile::Development, .enableDevelopmentOverrides = true};
                 configuration.validationErrors = ValidationErrors();
                 configuration.artifactGate = Horo::Tests::CreateAcceptingArtifactGate();
+                configuration.maximumDiagnostics = maximumDiagnostics;
                 auto host = HeadlessExtensionHost::Create(std::move(configuration), toolchainPolicy, processRunner);
                 REQUIRE(host.HasValue());
                 return std::move(host).Value();
@@ -204,7 +241,7 @@ namespace Horo::Extensions::Tests {
                 toolchainAuthority = std::move(toolchain).Value();
             }
 
-            void RequireCapabilityResolution(HeadlessExtensionHost &host) const {
+            void RequireCapabilityResolution(const HeadlessExtensionHost &host) const {
                 const ExtensionAdmissionPolicy policy{.revision = 1U, .availableCapabilities = {{"horo.asset.pipeline"}}};
                 const ExtensionAdmissionRequest request{.extensionId = "com.example.consumer",
                                                         .moduleId = "com.example.consumer.backend",
@@ -312,6 +349,60 @@ namespace Horo::Extensions::Tests {
                                        .tools = {{"tool.compiler"}}})
                   .ErrorValue()
                   .code.Value() == "headless_host_state_invalid");
+    }
+
+    TEST_CASE_METHOD(HeadlessHostFixture, "Headless shutdown waits for admitted provider work before releasing ownership",
+                     "[integration][extensions][headless][concurrency]") {
+        std::unique_ptr<HeadlessExtensionHost> host = CreateHost();
+        auto cooker = std::make_shared<BlockingCooker>();
+        REQUIRE(host->RegisterCooker({.cookerId = {"com.example.blocking-cooker"},
+                                      .providerId = "com.example.backend",
+                                      .providerGeneration = 1U,
+                                      .assetType = MeshType(),
+                                      .targets = {HeadlessTarget()},
+                                      .cookerVersion = "1.0.0",
+                                      .artifactFormatVersion = 1U},
+                                     cooker)
+                    .HasValue());
+        REQUIRE(host->Start({}).HasValue());
+
+        bool cookSucceeded = false;
+        std::thread operation([&cookSucceeded, &host] {  // NOSONAR(cpp:S6168) Test target toolchain has no std::jthread.
+            cookSucceeded = host->Cook(CookRequest(), {}).HasValue();
+        });
+        cooker->WaitUntilEntered();
+        std::binary_semaphore shutdownStarted{0};
+        std::promise<void> shutdownComplete;
+        std::future<void> shutdownResult = shutdownComplete.get_future();
+        std::thread shutdown(  // NOSONAR(cpp:S6168) Test target toolchain has no std::jthread.
+            [&host, &shutdownComplete, &shutdownStarted] {
+            shutdownStarted.release();
+            host->Shutdown();
+            shutdownComplete.set_value();
+        });
+        shutdownStarted.acquire();
+        CHECK(shutdownResult.wait_for(std::chrono::milliseconds{10}) == std::future_status::timeout);
+
+        cooker->Release();
+        operation.join();
+        shutdown.join();
+        CHECK(cookSucceeded);
+        CHECK(host->Inspect().state == HeadlessExtensionHostState::Shutdown);
+    }
+
+    TEST_CASE_METHOD(HeadlessHostFixture, "Headless diagnostics evict the oldest record at the configured bound",
+                     "[integration][extensions][headless]") {
+        std::unique_ptr<HeadlessExtensionHost> host = CreateHost(2U);
+        REQUIRE(host->Start({}).HasValue());
+
+        REQUIRE(host->Import("com.example.first", {}, {}).HasError());
+        REQUIRE(host->Import("com.example.second", {}, {}).HasError());
+        REQUIRE(host->Import("com.example.third", {}, {}).HasError());
+
+        const HeadlessExtensionHostSnapshot snapshot = host->Inspect();
+        REQUIRE(snapshot.diagnostics.size() == 2U);
+        CHECK(snapshot.diagnostics[0].subject == "com.example.second");
+        CHECK(snapshot.diagnostics[1].subject == "com.example.third");
     }
 
     TEST_CASE_METHOD(HeadlessHostFixture, "Headless host fails closed with an attributed activation diagnostic",

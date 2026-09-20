@@ -21,6 +21,26 @@ namespace Horo::Physics::Detail {
     /** @copydoc DestroyCanonicalWorld */
     void DestroyCanonicalWorld(const CanonicalWorldHandle) noexcept {}
 
+    /** @copydoc CreateCanonicalQueryFixture */
+    Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                            const PhysicsQueryFixtureDescriptor &) {
+        return Result<PhysicsQueryFixture>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc DestroyCanonicalQueryFixture */
+    Result<void> DestroyCanonicalQueryFixture(const CanonicalWorldHandle, const PhysicsQueryFixture &) {
+        return Result<void>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc ExecuteCanonicalQuery */
+    Result<PhysicsQueryResult> ExecuteCanonicalQuery(const CanonicalWorldHandle, const PhysicsQueryDescriptor &,
+                                                     const std::span<PhysicsQueryHit>) {
+        return Result<PhysicsQueryResult>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
     /** @copydoc StepCanonicalWorld */
     Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle, const float) {
         return Result<CanonicalStepOutcome>::Failure(

@@ -21,9 +21,11 @@ namespace Horo::Prefab {
 
     /** @brief One authored object copied into an effective revision-pinned hierarchy. */
     struct ResolvedPrefabObject final {
-        Assets::AssetId sourcePrefab; /**< Source asset that owns the authored object. */
-        ExpandedPrefabObjectKey key;  /**< Stable instance-qualified nested object identity. */
-        PrefabObjectNode object;      /**< Owned portable object data; contains no source path. */
+        Assets::AssetId sourcePrefab;                  /**< Source asset that owns the authored object. */
+        ExpandedPrefabObjectKey key;                   /**< Stable instance-qualified nested object identity. */
+        std::optional<ExpandedPrefabObjectKey> parent; /**< Effective parent, when the object is not a placement root. */
+        PrefabObjectNode object;                       /**< Owned authored object data; contains no source path. */
+        Math::Transform effectiveLocalTransform;       /**< Placement-adjusted transform used by Scene conversion. */
 
         [[nodiscard]] bool operator==(const ResolvedPrefabObject &) const noexcept = default;
     };

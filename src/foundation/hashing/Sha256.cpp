@@ -2,6 +2,7 @@
 
 #include "../FoundationErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -85,6 +86,61 @@ namespace Horo {
             state[7] += h;
         }
 
+        class Sha256Accumulator final {
+        public:
+            void Update(const std::span<const std::byte> input) noexcept {
+                totalBytes_ += input.size();
+                std::size_t offset = 0;
+                while (offset < input.size()) {
+                    const std::size_t copied = std::min(block_.size() - blockBytes_, input.size() - offset);
+                    for (std::size_t index = 0; index < copied; ++index)
+                        block_[blockBytes_ + index] = std::to_integer<std::uint8_t>(input[offset + index]);
+                    blockBytes_ += copied;
+                    offset += copied;
+                    if (blockBytes_ == block_.size()) {
+                        ProcessBlock(block_.data(), state_);
+                        blockBytes_ = 0;
+                    }
+                }
+            }
+
+            [[nodiscard]] Sha256Digest Finalize() noexcept {
+                block_[blockBytes_] = 0x80U;
+                ++blockBytes_;
+                if (blockBytes_ > 56) {
+                    while (blockBytes_ < block_.size())
+                        block_[blockBytes_++] = 0;
+                    ProcessBlock(block_.data(), state_);
+                    blockBytes_ = 0;
+                }
+                while (blockBytes_ < 56)
+                    block_[blockBytes_++] = 0;
+                const std::uint64_t bitLength = totalBytes_ * 8U;
+                for (std::size_t index = 0; index < 8; ++index) {
+                    const auto shift = static_cast<unsigned int>((7 - index) * 8);
+                    block_[56 + index] = static_cast<std::uint8_t>(bitLength >> shift);
+                }
+                ProcessBlock(block_.data(), state_);
+
+                Sha256Digest digest;
+                for (std::size_t wordIndex = 0; wordIndex < state_.size(); ++wordIndex) {
+                    for (std::size_t byteIndex = 0; byteIndex < 4; ++byteIndex) {
+                        const auto shift = static_cast<unsigned int>((3 - byteIndex) * 8);
+                        digest.bytes[wordIndex * 4 + byteIndex] = static_cast<std::uint8_t>(state_[wordIndex] >> shift);
+                    }
+                }
+                return digest;
+            }
+
+        private:
+            std::array<std::uint32_t, 8> state_{
+                0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U,
+            };
+            std::array<std::uint8_t, 64> block_{};
+            std::size_t blockBytes_{};
+            std::uint64_t totalBytes_{};
+        };
+
         /**
          * @brief Decodes one canonical lowercase hexadecimal digit.
          * @param character Character to decode.
@@ -109,43 +165,16 @@ namespace Horo {
 
     /** @copydoc ComputeSha256 */
     Sha256Digest ComputeSha256(const std::span<const std::byte> input) noexcept {
-        std::array<std::uint32_t, 8> state{
-            0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U,
-        };
+        const std::array fragments{input};
+        return ComputeSha256Fragments(std::span<const std::span<const std::byte>>{fragments});
+    }
 
-        std::size_t offset = 0;
-        std::array<std::uint8_t, 64> block{};
-        while (offset + block.size() <= input.size()) {
-            for (std::size_t index = 0; index < block.size(); ++index)
-                block[index] = std::to_integer<std::uint8_t>(input[offset + index]);
-            ProcessBlock(block.data(), state);
-            offset += block.size();
-        }
-
-        std::array<std::uint8_t, 128> finalBlocks{};
-        const std::size_t remaining = input.size() - offset;
-        for (std::size_t index = 0; index < remaining; ++index)
-            finalBlocks[index] = std::to_integer<std::uint8_t>(input[offset + index]);
-        finalBlocks[remaining] = 0x80U;
-
-        const std::size_t paddedSize = remaining < 56 ? 64 : 128;
-        const std::uint64_t bitLength = static_cast<std::uint64_t>(input.size()) * 8U;
-        for (std::size_t index = 0; index < 8; ++index) {
-            const auto shift = static_cast<unsigned int>((7 - index) * 8);
-            finalBlocks[paddedSize - 8 + index] = static_cast<std::uint8_t>(bitLength >> shift);
-        }
-        ProcessBlock(finalBlocks.data(), state);
-        if (paddedSize == finalBlocks.size())
-            ProcessBlock(finalBlocks.data() + block.size(), state);
-
-        Sha256Digest digest;
-        for (std::size_t wordIndex = 0; wordIndex < state.size(); ++wordIndex) {
-            for (std::size_t byteIndex = 0; byteIndex < 4; ++byteIndex) {
-                const auto shift = static_cast<unsigned int>((3 - byteIndex) * 8);
-                digest.bytes[wordIndex * 4 + byteIndex] = static_cast<std::uint8_t>(state[wordIndex] >> shift);
-            }
-        }
-        return digest;
+    /** @copydoc ComputeSha256Fragments */
+    Sha256Digest ComputeSha256Fragments(const std::span<const std::span<const std::byte>> inputs) noexcept {
+        Sha256Accumulator accumulator;
+        for (const auto input : inputs)
+            accumulator.Update(input);
+        return accumulator.Finalize();
     }
 
     /** @copydoc FormatSha256 */

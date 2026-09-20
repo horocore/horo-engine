@@ -184,7 +184,8 @@ namespace Horo::Editor {
             std::string absolutePath;
             std::string contributionId;
             std::string providerVersion;
-            Assets::AssetPreviewHandle handle;
+            Assets::AssetPreviewRequest request;
+            std::optional<Assets::AssetPreviewHandle> handle;
         };
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;

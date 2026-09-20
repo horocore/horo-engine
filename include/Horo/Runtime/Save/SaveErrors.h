@@ -78,6 +78,26 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor ArchiveHeaderInvalid;
     /** @brief Save manifest JSON was malformed, noncanonical, duplicated, or out of order. */
     extern const ErrorCodeDescriptor ArchiveManifestInvalid;
+    /** @brief The finalized save envelope or integrity trailer is malformed. */
+    extern const ErrorCodeDescriptor ArchiveEnvelopeInvalid;
+    /** @brief The bounded save container header or entry table is malformed. */
+    extern const ErrorCodeDescriptor ArchiveContainerInvalid;
+    /** @brief A save entry has an invalid kind, identity, or bounded field. */
+    extern const ErrorCodeDescriptor ArchiveEntryInvalid;
+    /** @brief A save archive declares a codec this backend does not implement. */
+    extern const ErrorCodeDescriptor ArchiveCodecUnsupported;
+    /** @brief A save archive exceeds its decoded-byte or expansion budget. */
+    extern const ErrorCodeDescriptor ArchiveDecompressionLimitExceeded;
+    /** @brief A save archive exceeds its bounded structural nesting budget. */
+    extern const ErrorCodeDescriptor ArchiveNestingLimitExceeded;
+    /** @brief A save archive contains an unsafe path or embedded link form. */
+    extern const ErrorCodeDescriptor ArchiveUnsafeReference;
+    /** @brief A save archive extension record is unknown, malformed, or disallowed. */
+    extern const ErrorCodeDescriptor ArchiveExtensionInvalid;
+    /** @brief Bounded save archive admission storage could not be allocated. */
+    extern const ErrorCodeDescriptor ArchiveAllocationFailed;
+    /** @brief Save archive metadata contains malformed UTF-8 or unsafe control text. */
+    extern const ErrorCodeDescriptor ArchiveStringInvalid;
     /** @brief Save metadata exceeded an explicit byte, string, participant, or chunk bound. */
     extern const ErrorCodeDescriptor ArchiveMetadataLimitExceeded;
     /** @brief A chunk directory has unsafe bounds, ordering, ownership, alignment, or correspondence. */
@@ -88,6 +108,14 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor ArchivePayloadTruncated;
     /** @brief A selected decoded chunk does not match its manifest checksum. */
     extern const ErrorCodeDescriptor ArchiveChunkHashMismatch;
+    /** @brief The archive uses an integrity algorithm or domain version this reader does not support. */
+    extern const ErrorCodeDescriptor ArchiveIntegrityAlgorithmUnsupported;
+    /** @brief Archive integrity coverage, lengths, or explicit trailer exclusion are contradictory. */
+    extern const ErrorCodeDescriptor ArchiveIntegrityCoverageInvalid;
+    /** @brief Finalized preamble and stored payload bytes do not match ArchiveContentHash. */
+    extern const ErrorCodeDescriptor ArchiveContentHashMismatch;
+    /** @brief Canonical logical record bytes do not match CanonicalStateHash. */
+    extern const ErrorCodeDescriptor CanonicalStateHashMismatch;
     /** @brief A caller supplied an invalid value or schema argument to the canonical encoder. */
     extern const ErrorCodeDescriptor CanonicalCodecInvalid;
     /** @brief Untrusted canonical wire bytes are malformed, noncanonical, truncated, or contain trailing data. */

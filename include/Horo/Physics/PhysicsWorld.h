@@ -8,12 +8,14 @@
 #include "Horo/Physics/PhysicsCapabilities.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
+#include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsTickPipeline.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace Horo {
@@ -101,7 +103,8 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsAvailability Availability() const noexcept;
         /** @brief Reports current implemented support; Null reports every known feature Unsupported.
          * @param capability Known Horo feature to inspect.
-         * @return WorldCreation is available only while Canonical is ready; later body/query features remain unsupported.
+         * @return WorldCreation and ImmediateQueries are available only while Canonical is ready;
+         * rigid-body, constraint and snapshot-query features remain unsupported.
          */
         [[nodiscard]] PhysicsCapabilitySupport Capability(PhysicsCapability capability) const noexcept;
 
@@ -169,6 +172,28 @@ namespace Horo::Physics {
          * admission or worker completion order has no semantic authority.
          */
         [[nodiscard]] Result<PhysicsCommandAdmission> QueueStructuralCommand(const PhysicsStructuralCommand &command);
+        /**
+         * @brief Admits one explicit analytic query fixture on the owner thread.
+         * @param fixture Complete geometry, pose and stable query-filter evidence.
+         * @return Generation-safe body and shape identities, or a typed admission error.
+         * @pre Active canonical world, outside a fixed-step execution.
+         * @post The returned identities remain valid until DestroyQueryFixture, reset, unload or shutdown.
+         */
+        [[nodiscard]] Result<PhysicsQueryFixture> CreateQueryFixture(const PhysicsQueryFixtureDescriptor &fixture) const;
+        /**
+         * @brief Retires one exact query fixture on the owner thread.
+         * @param fixture Body and shape identities returned by CreateQueryFixture.
+         * @return Success or a typed malformed, foreign-world, stale or lifecycle error.
+         */
+        [[nodiscard]] Result<void> DestroyQueryFixture(const PhysicsQueryFixture &fixture) const;
+        /**
+         * @brief Executes one immediate query against the current owner-thread broadphase.
+         * @param descriptor Exact world/scene query request.
+         * @param hits Caller-owned bounded hit storage; no world or native lifetime is retained.
+         * @return Bounded result metadata, including explicit caller-storage truncation.
+         * @pre Active canonical world, outside a fixed-step execution, and owner-thread affinity.
+         */
+        [[nodiscard]] Result<PhysicsQueryResult> Query(const PhysicsQueryDescriptor &descriptor, std::span<PhysicsQueryHit> hits) const;
         /** @brief Executes one exact host-issued fixed tick and publishes its results atomically.
          * @param input One-based next tick, exact immutable world delta and optional synchronous observer.
          * @return Success or typed affinity/lifecycle/sequence/delta/job/native-capacity error without partial publication.

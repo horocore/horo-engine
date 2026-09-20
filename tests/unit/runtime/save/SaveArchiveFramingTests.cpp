@@ -1,11 +1,14 @@
 #include "Horo/Runtime/Save/SaveArchiveFraming.h"
 #include "SaveTestUtils.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -117,5 +120,87 @@ namespace {
         limits = {};
         limits.maximumDecodedChunkBytes = 2;
         CHECK(ValidateSaveChunkDirectory(Directory(payload), Manifest(), limits).HasError());
+    }
+
+    TEST_CASE("Save integrity verifies canonical state, whole archive coverage, and every entry", "[runtime][save][integrity]") {
+        const auto payload = Payload();
+        const auto preamble = std::vector<std::byte>(SaveArchivePreambleByteLength, std::byte{7});
+        const auto validated = ValidateSaveChunkDirectory(Directory(payload), Manifest()).Value();
+        const auto finalized = FinalizeSaveArchiveIntegrity(preamble, payload);
+        REQUIRE(finalized.HasValue());
+        CHECK(finalized.Value().algorithm == SaveIntegrityAlgorithmVersion{});
+        CHECK(finalized.Value().preambleByteLength == SaveArchivePreambleByteLength);
+        CHECK(finalized.Value().payloadByteLength == payload.size());
+        CHECK(finalized.Value().trailerByteLength == SaveArchiveUnsignedTrailerByteLength);
+
+        std::vector<std::byte> archive = preamble;
+        archive.insert(archive.end(), payload.begin(), payload.end());
+        archive.insert(archive.end(), SaveArchiveUnsignedTrailerByteLength, std::byte{});
+        CHECK(VerifySaveArchiveIntegrity(finalized.Value(), archive, validated).HasValue());
+
+        auto modifiedPreamble = archive;
+        modifiedPreamble[0] = std::byte{8};
+        CHECK(VerifySaveArchiveIntegrity(finalized.Value(), modifiedPreamble, validated).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveContentHashMismatch.code.Value());
+
+        auto truncated = archive;
+        truncated.pop_back();
+        CHECK(VerifySaveArchiveIntegrity(finalized.Value(), truncated, validated).ErrorValue().code.Value() ==
+              SaveErrors::ArchivePayloadTruncated.code.Value());
+
+        auto substituted = archive;
+        substituted[SaveArchivePreambleByteLength + 3] = std::byte{99};
+        auto updatedIntegrity = finalized.Value();
+        updatedIntegrity.archiveContent =
+            ComputeArchiveContentHash(std::span<const std::byte>{substituted}.first(SaveArchivePreambleByteLength),
+                                      std::span<const std::byte>{substituted}.subspan(SaveArchivePreambleByteLength, payload.size()));
+        REQUIRE(VerifySaveArchiveIntegrity(updatedIntegrity, substituted, validated).HasValue());
+        const auto entryFailure =
+            SelectSaveChunkPayload(std::span<const std::byte>{substituted}.subspan(SaveArchivePreambleByteLength, payload.size()),
+                                   validated, Id<SaveRecordId>(21));
+        REQUIRE(entryFailure.HasError());
+        CHECK(entryFailure.ErrorValue().code.Value() == SaveErrors::ArchiveChunkHashMismatch.code.Value());
+        REQUIRE(!entryFailure.ErrorValue().diagnostics.empty());
+        CHECK(entryFailure.ErrorValue().diagnostics.front().path ==
+              "participant/" + validated.Entries()[1].owner.Value() + "/record/" + validated.Entries()[1].record.ToString());
+
+        const std::array canonicalFirst{std::byte{1}, std::byte{2}};
+        const std::array canonicalSecond{std::byte{3}, std::byte{4}};
+        const std::array fragments{std::span<const std::byte>{canonicalFirst}, std::span<const std::byte>{canonicalSecond}};
+        std::vector<std::byte> canonicalConcatenated{canonicalFirst.begin(), canonicalFirst.end()};
+        canonicalConcatenated.insert(canonicalConcatenated.end(), canonicalSecond.begin(), canonicalSecond.end());
+        CHECK(ComputeSha256Fragments(fragments) == ComputeSha256(canonicalConcatenated));
+        const auto canonicalHash = ComputeCanonicalStateHash(canonicalConcatenated);
+        CHECK(VerifyCanonicalStateHash(canonicalHash, canonicalConcatenated).HasValue());
+        canonicalConcatenated.back() = std::byte{5};
+        CHECK(VerifyCanonicalStateHash(canonicalHash, canonicalConcatenated).ErrorValue().code.Value() ==
+              SaveErrors::CanonicalStateHashMismatch.code.Value());
+    }
+
+    TEST_CASE("Save integrity uses one explicit domain terminator", "[runtime][save][integrity]") {
+        const std::array canonicalState{std::byte{1}, std::byte{2}, std::byte{3}};
+        constexpr std::string_view tag = "HoroSave.CanonicalState.v1";
+        const auto tagBytes = std::as_bytes(std::span<const char>{tag.data(), tag.size()});
+        const std::array<std::byte, 1> terminator{};
+        const std::array fragments{tagBytes, std::span<const std::byte>{terminator}, std::span<const std::byte>{canonicalState}};
+
+        CHECK(ComputeCanonicalStateHash(canonicalState).value == ComputeSha256Fragments(fragments));
+    }
+
+    TEST_CASE("Save integrity rejects unsupported algorithms and ambiguous coverage", "[runtime][save][integrity]") {
+        const auto payload = Payload();
+        const auto preamble = std::vector<std::byte>(SaveArchivePreambleByteLength, std::byte{});
+        CHECK(FinalizeSaveArchiveIntegrity(preamble, payload, SaveArchiveUnsignedTrailerByteLength,
+                                           {.algorithm = static_cast<SaveIntegrityHashAlgorithm>(99), .version = 1})
+                  .ErrorValue()
+                  .code.Value() == SaveErrors::ArchiveIntegrityAlgorithmUnsupported.code.Value());
+        CHECK(FinalizeSaveArchiveIntegrity(preamble, payload, SaveArchiveUnsignedTrailerByteLength,
+                                           {.algorithm = SaveIntegrityHashAlgorithm::Sha256, .version = 2})
+                  .ErrorValue()
+                  .code.Value() == SaveErrors::ArchiveIntegrityAlgorithmUnsupported.code.Value());
+        CHECK(FinalizeSaveArchiveIntegrity(preamble, payload, 1).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveIntegrityCoverageInvalid.code.Value());
+        CHECK(FinalizeSaveArchiveIntegrity(std::span<const std::byte>{preamble}.first(31), payload).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveIntegrityCoverageInvalid.code.Value());
     }
 }  // namespace

@@ -9,6 +9,12 @@
 #define MA_NO_DEVICE_IO
 #define MA_NO_ENCODING
 #define STB_VORBIS_HEADER_ONLY
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
 #include <stb_vorbis.c>
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>

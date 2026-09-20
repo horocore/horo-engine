@@ -82,7 +82,7 @@ namespace Horo::Assets {
         [[nodiscard]] std::string CacheKey(const AssetPreviewRequest &request, const std::span<const std::uint8_t> payload) {
             std::vector<std::byte> preimage;
             preimage.reserve(request.contributionId.size() + request.moduleId.size() + request.moduleVersion.size() +
-                             request.providerVersion.size() + request.assetType.Value().size() + 64U);
+                             request.providerVersion.size() + request.assetType.Value().size() + 128U);
             AppendField(preimage, "HoroAssetPreviewCacheV1");
             AppendField(preimage, request.contributionId);
             AppendField(preimage, request.moduleId);

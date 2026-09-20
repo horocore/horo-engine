@@ -208,6 +208,9 @@ namespace Horo::Extensions {
         /** @brief Copies the latest snapshot without waiting or invoking provider code. @return Empty for an invalid handle. */
         [[nodiscard]] std::optional<BackendOperationSnapshot> Snapshot() const;
 
+        /** @brief Reads the latest revision without copying bounded payloads. @return Empty for an invalid handle. */
+        [[nodiscard]] std::optional<std::uint64_t> Revision() const noexcept;
+
         /** @brief Requests caller cancellation without waiting for the producer. @return Stable request disposition. */
         [[nodiscard]] BackendOperationCancellationRequestResult RequestCancellation() const noexcept;
 
@@ -239,20 +242,21 @@ namespace Horo::Extensions {
          * @param progress Exact completed/total work units for the phase.
          * @return Applied, cancellation-won, already-terminal, or invalid-transition disposition.
          */
-        [[nodiscard]] BackendOperationTransitionResult PublishProgress(BackendOperationPhaseId phase, BackendOperationProgress progress);
+        [[nodiscard]] BackendOperationTransitionResult PublishProgress(const BackendOperationPhaseId &phase,
+                                                                       BackendOperationProgress progress) const;
 
         /**
          * @brief Adds one bounded Foundation diagnostic to the current operation snapshot.
          * @param diagnostic Provider finding copied into host-owned bounded storage.
          * @return Success or a stable closed/payload-bound failure.
          */
-        [[nodiscard]] Result<void> AddDiagnostic(Diagnostic diagnostic);
+        [[nodiscard]] Result<void> AddDiagnostic(Diagnostic diagnostic) const;
 
         /**
          * @brief Observes parent, caller, provider, or shutdown cancellation and terminalizes when it wins.
          * @return NotRequested, cancellation-won, or already-terminal disposition.
          */
-        [[nodiscard]] BackendOperationCancellationObservation ObserveCancellation() noexcept;
+        [[nodiscard]] BackendOperationCancellationObservation ObserveCancellation() const noexcept;
 
         /**
          * @brief Publishes one immutable successful terminal state and optional bounded typed result payload.
@@ -260,14 +264,14 @@ namespace Horo::Extensions {
          * @return Applied, cancellation-won, already-terminal, or invalid-transition disposition.
          * @note Omitting the payload is a valid successful completion for operations with no result bytes to publish.
          */
-        [[nodiscard]] BackendOperationTransitionResult Complete(std::optional<BackendOperationResultPayload> result = {});
+        [[nodiscard]] BackendOperationTransitionResult Complete(std::optional<BackendOperationResultPayload> result = {}) const;
 
         /**
          * @brief Publishes one immutable failed terminal state while preserving the typed cause.
          * @param error Provider failure or host-attributed cause to retain in the terminal snapshot.
          * @return Applied, cancellation-won, or already-terminal disposition.
          */
-        [[nodiscard]] BackendOperationTransitionResult Fail(Error error);
+        [[nodiscard]] BackendOperationTransitionResult Fail(Error error) const;
 
     private:
         explicit BackendOperationController(std::shared_ptr<BackendOperationStateData> state) noexcept;
@@ -295,7 +299,7 @@ namespace Horo::Extensions {
          * @param descriptor Exact module/provider/generation identity and hard payload bounds.
          * @return Move-only registration or a stable invalid, duplicate, capacity, or shutdown error.
          */
-        [[nodiscard]] Result<BackendOperationRegistration> Register(BackendOperationProviderDescriptor descriptor);
+        [[nodiscard]] Result<BackendOperationRegistration> Register(BackendOperationProviderDescriptor descriptor) const;
 
         /**
          * @brief Begins one operation for an exact currently registered provider generation and operation contract.
@@ -309,7 +313,7 @@ namespace Horo::Extensions {
                                                                BackendOperationDescriptor descriptor = {});
 
         /** @brief Idempotently closes admission and terminalizes every active operation. */
-        void BeginShutdown() noexcept;
+        void BeginShutdown() const noexcept;
 
         /** @brief Reports whether registration and operation admission are terminally closed. */
         [[nodiscard]] bool IsShutdown() const noexcept;

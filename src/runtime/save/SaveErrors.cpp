@@ -125,6 +125,36 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor ArchiveManifestInvalid{kDomain, ErrorCode{"save.archive.manifest_invalid"}, kError,
                                                      "Save archive manifest metadata is invalid.",
                                                      "Use unique stable-sorted participant and chunk identities with valid schemas."};
+    const ErrorCodeDescriptor ArchiveEnvelopeInvalid{kDomain, ErrorCode{"save.archive.envelope_invalid"}, kError,
+                                                     "Save archive envelope or integrity trailer is invalid.",
+                                                     "Provide one complete v1 envelope with an exact integrity trailer."};
+    const ErrorCodeDescriptor ArchiveContainerInvalid{kDomain, ErrorCode{"save.archive.container_invalid"}, kError,
+                                                      "Save archive container framing is invalid.",
+                                                      "Provide the canonical bounded entry table and contiguous entry bytes."};
+    const ErrorCodeDescriptor ArchiveEntryInvalid{kDomain, ErrorCode{"save.archive.entry_invalid"}, kError,
+                                                  "A save archive entry is invalid.",
+                                                  "Use one canonical entry kind with bounded identity, length, and offset fields."};
+    const ErrorCodeDescriptor ArchiveCodecUnsupported{kDomain, ErrorCode{"save.archive.codec_unsupported"}, kError,
+                                                      "Save archive entry compression is unsupported by this backend.",
+                                                      "Use the backend-supported raw codec or an explicitly qualified decoder."};
+    const ErrorCodeDescriptor ArchiveDecompressionLimitExceeded{kDomain, ErrorCode{"save.archive.decompression_limit_exceeded"}, kError,
+                                                                "Save archive decoded data exceeds its finite expansion budget.",
+                                                                "Reduce decoded size or compression expansion before admission."};
+    const ErrorCodeDescriptor ArchiveNestingLimitExceeded{kDomain, ErrorCode{"save.archive.nesting_limit_exceeded"}, kError,
+                                                          "Save archive structural nesting exceeds the admission budget.",
+                                                          "Reduce nesting or revise the trusted finite reader limits."};
+    const ErrorCodeDescriptor ArchiveUnsafeReference{kDomain, ErrorCode{"save.archive.unsafe_reference"}, kError,
+                                                     "Save archive metadata contains an unsafe path or embedded link.",
+                                                     "Use path-free stable save identities and bounded diagnostic text."};
+    const ErrorCodeDescriptor ArchiveExtensionInvalid{kDomain, ErrorCode{"save.archive.extension_invalid"}, kError,
+                                                      "Save archive extension data is unknown or malformed.",
+                                                      "Reject unrecognized extension records instead of forwarding them."};
+    const ErrorCodeDescriptor ArchiveAllocationFailed{kDomain, ErrorCode{"save.archive.allocation_failed"}, kError,
+                                                      "Bounded save archive admission storage could not be allocated.",
+                                                      "Release the rejected archive and retry only under the same finite policy."};
+    const ErrorCodeDescriptor ArchiveStringInvalid{kDomain, ErrorCode{"save.archive.string_invalid"}, kError,
+                                                   "Save archive text is not valid safe UTF-8.",
+                                                   "Use valid UTF-8 scalar sequences without control, path, or link data."};
     const ErrorCodeDescriptor ArchiveMetadataLimitExceeded{kDomain, ErrorCode{"save.archive.metadata_limit_exceeded"}, kError,
                                                            "Save archive metadata exceeds an admission bound.",
                                                            "Reduce metadata size or revise the trusted product limits."};
@@ -140,6 +170,19 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor ArchiveChunkHashMismatch{kDomain, ErrorCode{"save.archive.chunk_hash_mismatch"}, kError,
                                                        "Decoded save chunk bytes do not match their declared digest.",
                                                        "Reject the archive and retain it for corruption diagnostics."};
+    const ErrorCodeDescriptor
+        ArchiveIntegrityAlgorithmUnsupported{kDomain, ErrorCode{"save.archive.integrity_algorithm_unsupported"}, kError,
+                                             "The save archive uses an unsupported integrity algorithm or version.",
+                                             "Use a reader that supports the declared integrity algorithm and version."};
+    const ErrorCodeDescriptor ArchiveIntegrityCoverageInvalid{kDomain, ErrorCode{"save.archive.integrity_coverage_invalid"}, kError,
+                                                              "Save archive integrity coverage or framing evidence is contradictory.",
+                                                              "Reject the archive before decoding or applying any save state."};
+    const ErrorCodeDescriptor ArchiveContentHashMismatch{kDomain, ErrorCode{"save.archive.content_hash_mismatch"}, kError,
+                                                         "Finalized save archive bytes do not match their declared content digest.",
+                                                         "Reject the archive and retain the last-known-good publication."};
+    const ErrorCodeDescriptor CanonicalStateHashMismatch{kDomain, ErrorCode{"save.canonical_state_hash_mismatch"}, kError,
+                                                         "Canonical save records do not match their declared logical-state digest.",
+                                                         "Reject the decoded candidate before migration or world mutation."};
     const ErrorCodeDescriptor CanonicalCodecInvalid{kDomain, ErrorCode{"save.canonical_codec.invalid"}, kError,
                                                     "A canonical save codec argument is invalid.",
                                                     "Supply a valid schema argument or caller-owned value."};

@@ -77,7 +77,9 @@ namespace Horo::Extensions {
      * Registration is accepted only while Configuring. Start discovers only declared packages,
      * activates them under the Headless profile, then atomically publishes the importer catalog.
      * Work is admitted only while Ready. Shutdown closes every typed registry before releasing
-     * native module ownership and is safe to call repeatedly.
+     * native module ownership and is safe to call repeatedly. Admitted work retains a shared
+     * lifecycle lease through its provider call; shutdown first closes admission and requests
+     * registry-owned cancellation, then waits for those calls before unloading module code.
      */
     class HeadlessExtensionHost final {
     public:
