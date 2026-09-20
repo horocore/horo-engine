@@ -213,6 +213,21 @@ descriptor. After publication, query snapshots expose current pose, velocities a
 awake/sleeping evidence separately; they are not persistence input, creation policy,
 mutation authority or a lifetime-extending body lease.
 
+Mass properties are a separate Physics-owned semantic result. `PhysicsMass` applies
+one uniform derived density to an admitted finite-volume contributor set so an
+explicit total mass preserves the compound's geometric distribution; the derived
+density must remain within the CanonicalV1 density envelope. `PhysicsDensity`
+derives total mass directly in kg/m³. Each analytic contributor contributes volume,
+center, and inertia in SI units, and Physics combines translated/rotated contributors
+with the parallel-axis theorem before publishing one center-of-mass inertia tensor.
+The bounded compound input is a borrowed span and is never retained. It does not
+subtract overlapping regions or infer a collider from a render mesh. Exact cooked
+shape artifacts may provide a complete `PhysicsMassPropertiesOverride`, which is
+validated as finite positive mass and symmetric positive-definite inertia without
+accepting native solver state. Empty, non-volumetric, overflowing, non-finite, or
+invalid-inertia input fails before body publication; no value is clamped or silently
+replaced.
+
 ## Shape Authoring, Cook And Runtime Boundary
 
 [ADR-085](../../adr/085-physics-shape-authoring-cook-and-runtime-boundary.md)
