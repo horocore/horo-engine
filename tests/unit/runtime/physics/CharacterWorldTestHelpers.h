@@ -62,8 +62,9 @@ namespace Horo::Character::TestDetail {
 
     using Physics::Test::RequireError;
 
-    [[nodiscard]] inline std::unique_ptr<CharacterWorld> PreparedWorld(const std::uint32_t maximumControllers = 2) {
-        const auto settings = Settings(maximumControllers);
+    [[nodiscard]] inline std::unique_ptr<CharacterWorld> PreparedWorld(const std::uint32_t maximumControllers = 2,
+                                                                       const std::uint32_t maximumRecoveryIterations = 8) {
+        const auto settings = Settings(maximumControllers, maximumRecoveryIterations);
         auto prepared = CharacterWorld::Prepare(WorldDescriptor(), settings);
         REQUIRE(prepared.HasValue());
         return std::move(prepared).Value();
@@ -74,9 +75,10 @@ namespace Horo::Character::TestDetail {
         std::array<CharacterControllerHandle, 2> controllers{};
     };
 
-    [[nodiscard]] inline ActiveWorld ActiveWorldWithControllers(const std::uint32_t controllerCount = 1) {
+    [[nodiscard]] inline ActiveWorld ActiveWorldWithControllers(const std::uint32_t controllerCount = 1,
+                                                                const std::uint32_t maximumRecoveryIterations = 8) {
         REQUIRE(controllerCount <= 2);
-        ActiveWorld result{PreparedWorld(controllerCount)};
+        ActiveWorld result{PreparedWorld(controllerCount, maximumRecoveryIterations)};
         const auto descriptor = ControllerDescriptor(result.world->Descriptor());
         for (std::uint32_t index = 0; index < controllerCount; ++index)
             result.controllers[index] = result.world->CreateController(descriptor).Value();
@@ -117,6 +119,19 @@ namespace Horo::Character::TestDetail {
                     world.originGeneration, tick,           world.physicsSnapshotRevision};
         }
     };
+
+    struct SpawnedActiveWorld final {
+        std::unique_ptr<CharacterWorld> world;
+        CharacterControllerHandle controller;
+    };
+
+    [[nodiscard]] inline SpawnedActiveWorld SpawnedActiveWorldWithController(const std::uint32_t maximumRecoveryIterations = 8) {
+        auto active = ActiveWorldWithControllers(1, maximumRecoveryIterations);
+        const auto controller = active.controllers[0];
+        OverlapProbe probe;
+        REQUIRE(active.world->SpawnController(controller, probe.Context(active.world->Descriptor())).HasValue());
+        return {std::move(active.world), controller};
+    }
 
     struct CommandTrace final {
         std::array<CharacterTickPhase, 3> phases{};

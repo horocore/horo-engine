@@ -145,20 +145,16 @@ namespace Horo::Character {
 
         TEST_CASE("Character spawn failure exhausts recovery without penetrating or publishing partial state",
                   "[physics][character][world][placement][failure]") {
-            const auto settings = Settings(1, 2);
-            auto prepared = CharacterWorld::Prepare(WorldDescriptor(), settings);
-            REQUIRE(prepared.HasValue());
-            auto world = std::move(prepared).Value();
-            const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-            REQUIRE(world->Activate().HasValue());
+            auto active = ActiveWorldWithControllers(1, 2);
 
             OverlapProbe probe{.alwaysOverlapping = true};
-            RequireError(world->SpawnController(controller, probe.Context(world->Descriptor())), CharacterErrors::OverlapRecoveryFailed);
+            RequireError(active.world->SpawnController(active.controllers[0], probe.Context(active.world->Descriptor())),
+                         CharacterErrors::OverlapRecoveryFailed);
             REQUIRE(probe.calls == 3);
-            RequireError(world->ControllerTransform(controller), CharacterErrors::InvalidState);
+            RequireError(active.world->ControllerTransform(active.controllers[0]), CharacterErrors::InvalidState);
 
             probe = {};
-            const auto retry = world->SpawnController(controller, probe.Context(world->Descriptor()));
+            const auto retry = active.world->SpawnController(active.controllers[0], probe.Context(active.world->Descriptor()));
             REQUIRE(retry.HasValue());
             REQUIRE_FALSE(retry.Value().recovered);
             REQUIRE(retry.Value().recoveryIterations == 0);
@@ -212,14 +208,9 @@ namespace Horo::Character {
         TEST_CASE("Character recovery budgets admit the final clearance probe deterministically",
                   "[physics][character][world][placement][recovery]") {
             for (const std::uint32_t budget : {0U, 1U, CharacterWorldSettingLimits::MaximumRecoveryIterations}) {
-                const auto settings = Settings(1, budget);
-                auto prepared = CharacterWorld::Prepare(WorldDescriptor(), settings);
-                REQUIRE(prepared.HasValue());
-                auto world = std::move(prepared).Value();
-                const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-                REQUIRE(world->Activate().HasValue());
+                auto active = ActiveWorldWithControllers(1, budget);
                 OverlapProbe probe{.overlappingCalls = budget};
-                const auto result = world->SpawnController(controller, probe.Context(world->Descriptor()));
+                const auto result = active.world->SpawnController(active.controllers[0], probe.Context(active.world->Descriptor()));
                 REQUIRE(result.HasValue());
                 REQUIRE(result.Value().recoveryIterations == budget);
                 REQUIRE(probe.calls == budget + 1);
@@ -228,11 +219,10 @@ namespace Horo::Character {
 
         TEST_CASE("Character teleports reserve the exact next tick and require clear bounded targets",
                   "[physics][character][world][placement][command-order]") {
-            auto world = PreparedWorld(1);
-            const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-            REQUIRE(world->Activate().HasValue());
+            auto active = SpawnedActiveWorldWithController();
+            auto &world = active.world;
+            const auto controller = active.controller;
             OverlapProbe probe;
-            REQUIRE(world->SpawnController(controller, probe.Context(world->Descriptor())).HasValue());
 
             const CharacterTeleportRequest future{controller, 2, {1, 0, 0}, Math::Quaternion::Identity()};
             RequireError(world->TeleportController(future, probe.Context(world->Descriptor(), 2)), CharacterErrors::CommandOrderInvalid);
@@ -267,11 +257,10 @@ namespace Horo::Character {
                                                              outOfEnvelopeProbe.Context(outOfEnvelopeWorld->Descriptor())),
                          CharacterErrors::PlacementInvalid);
 
-            auto world = PreparedWorld(1);
-            const auto controller = world->CreateController(ControllerDescriptor(world->Descriptor())).Value();
-            REQUIRE(world->Activate().HasValue());
+            auto active = SpawnedActiveWorldWithController();
+            auto &world = active.world;
+            const auto controller = active.controller;
             OverlapProbe probe;
-            REQUIRE(world->SpawnController(controller, probe.Context(world->Descriptor())).HasValue());
             const CharacterTeleportRequest oversized{controller, 1, {200, 0, 0}, Math::Quaternion::Identity()};
             RequireError(world->TeleportController(oversized, probe.Context(world->Descriptor(), 1)), CharacterErrors::PlacementInvalid);
             probe = OverlapProbe{.overlappingCalls = 1};
