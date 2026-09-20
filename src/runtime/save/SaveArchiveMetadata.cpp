@@ -1,12 +1,13 @@
 #include "Horo/Runtime/Save/SaveArchiveMetadata.h"
 
+#include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
-#include <array>
 #include <functional>
 #include <initializer_list>
 #include <limits>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <string>
@@ -18,16 +19,21 @@ namespace Horo::Runtime {
         using Json = nlohmann::json;
         using OrderedJson = nlohmann::ordered_json;
 
-        constexpr std::size_t kMaximumMetadataDepth = 8;
+        constexpr std::size_t kMaximumMetadataDepth = 32;
 
         /** @brief Rejects duplicate object keys and excessive nesting before values enter the DOM. */
         struct MetadataDecodeGuard final {
-            std::array<std::set<std::string, std::less<>>, kMaximumMetadataDepth + 1> keys;
+            explicit MetadataDecodeGuard(const std::size_t maximumDepth) : keys(maximumDepth + 2), maximumDepth(maximumDepth) {}
+
+            std::vector<std::set<std::string, std::less<>>> keys;
+            std::size_t maximumDepth{};
             bool valid{true};
+            bool nestingExceeded{false};
 
             bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || static_cast<std::size_t>(depth) >= kMaximumMetadataDepth) {
+                if (depth < 0 || static_cast<std::size_t>(depth) > maximumDepth) {
                     valid = false;
+                    nestingExceeded = true;
                     return false;
                 }
                 const auto index = static_cast<std::size_t>(depth);
@@ -48,11 +54,27 @@ namespace Horo::Runtime {
             });
         }
 
+        /** @brief Reports whether one untrusted metadata text value is safe to retain. */
+        [[nodiscard]] bool IsSafeMetadataText(const std::string_view text) noexcept {
+            return IsValidUtf8ScalarSequence(text) &&
+                   !std::ranges::any_of(text,
+                                        [](const char value) {
+                return static_cast<unsigned char>(value) < 0x20U || value == '\x7f';
+            }) && text.find('/') == std::string_view::npos &&
+                   text.find('\\') == std::string_view::npos && text.find("..") == std::string_view::npos &&
+                   text.find("://") == std::string_view::npos && text.front() != ':';
+        }
+
+        /** @brief Validates the scalar and collection limits for untrusted metadata. */
+        [[nodiscard]] bool HasValidMetadataLimits(const SaveArchiveMetadataLimits &limits) noexcept {
+            return limits.maximumParticipants != 0 && limits.maximumChunksPerParticipant != 0 && limits.maximumTotalChunks != 0 &&
+                   limits.maximumChunksPerParticipant <= limits.maximumTotalChunks;
+        }
+
         /** @brief Validates finite nonzero decode limits and their aggregate relationship. */
         [[nodiscard]] bool HasValidLimits(const SaveArchiveMetadataLimits &limits) noexcept {
             return limits.maximumHeaderBytes != 0 && limits.maximumManifestBytes != 0 && limits.maximumTextBytes != 0 &&
-                   limits.maximumParticipants != 0 && limits.maximumChunksPerParticipant != 0 && limits.maximumTotalChunks != 0 &&
-                   limits.maximumChunksPerParticipant <= limits.maximumTotalChunks;
+                   HasValidMetadataLimits(limits) && limits.maximumNestingDepth != 0 && limits.maximumNestingDepth <= kMaximumMetadataDepth;
         }
 
         /** @brief Parses a required canonical persistent identity string. */
@@ -82,17 +104,24 @@ namespace Horo::Runtime {
             const auto &text = value.get_ref<const std::string &>();
             if (text.empty() || text.size() > limits.maximumTextBytes)
                 return Result<std::string>::Failure(MakeError(SaveErrors::ArchiveMetadataLimitExceeded));
+            if (!IsValidUtf8ScalarSequence(text))
+                return Result<std::string>::Failure(MakeError(SaveErrors::ArchiveStringInvalid));
+            if (!IsSafeMetadataText(text))
+                return Result<std::string>::Failure(MakeError(SaveErrors::ArchiveUnsafeReference));
             return Result<std::string>::Success(text);
         }
 
         /** @brief Parses untrusted JSON with duplicate-key and nesting protection. */
-        [[nodiscard]] Result<Json> ParseMetadataJson(const std::string_view text, const ErrorCodeDescriptor &invalidError) {
+        [[nodiscard]] Result<Json> ParseMetadataJson(const std::string_view text, const std::size_t maximumDepth,
+                                                     const ErrorCodeDescriptor &invalidError) {
             try {
-                MetadataDecodeGuard guard;
+                MetadataDecodeGuard guard{maximumDepth};
                 auto value = Json::parse(text, std::ref(guard));
                 if (!guard.valid)
-                    return Result<Json>::Failure(MakeError(invalidError));
+                    return Result<Json>::Failure(MakeError(guard.nestingExceeded ? SaveErrors::ArchiveNestingLimitExceeded : invalidError));
                 return Result<Json>::Success(std::move(value));
+            } catch (const std::bad_alloc &) {
+                return Result<Json>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
             } catch (const Json::exception &) {
                 return Result<Json>::Failure(MakeError(invalidError));
             }
@@ -158,7 +187,8 @@ namespace Horo::Runtime {
         /** @brief Reports whether header provenance strings fit the configured bounds. */
         [[nodiscard]] bool HasValidHeaderText(const SaveArchiveHeader &header, const SaveArchiveMetadataLimits &limits) noexcept {
             return !header.engineVersion.empty() && !header.projectBuildId.empty() &&
-                   header.engineVersion.size() <= limits.maximumTextBytes && header.projectBuildId.size() <= limits.maximumTextBytes;
+                   header.engineVersion.size() <= limits.maximumTextBytes && header.projectBuildId.size() <= limits.maximumTextBytes &&
+                   IsSafeMetadataText(header.engineVersion) && IsSafeMetadataText(header.projectBuildId);
         }
 
         /** @brief Reports whether parent generation, versions, timestamps, and feature bits are coherent. */
@@ -388,7 +418,7 @@ namespace Horo::Runtime {
     Result<SaveArchiveHeader> DecodeSaveArchiveHeader(const std::string_view json, const SaveArchiveMetadataLimits &limits) {
         if (!HasValidLimits(limits) || json.size() > limits.maximumHeaderBytes)
             return Result<SaveArchiveHeader>::Failure(MakeError(SaveErrors::ArchiveMetadataLimitExceeded));
-        auto decoded = ParseMetadataJson(json, SaveErrors::ArchiveHeaderInvalid);
+        auto decoded = ParseMetadataJson(json, limits.maximumNestingDepth, SaveErrors::ArchiveHeaderInvalid);
         if (decoded.HasError())
             return Result<SaveArchiveHeader>::Failure(decoded.ErrorValue());
         const Json &root = decoded.Value();
@@ -452,7 +482,7 @@ namespace Horo::Runtime {
     Result<SaveGameManifest> DecodeSaveGameManifest(const std::string_view json, const SaveArchiveMetadataLimits &limits) {
         if (!HasValidLimits(limits) || json.size() > limits.maximumManifestBytes)
             return Result<SaveGameManifest>::Failure(MakeError(SaveErrors::ArchiveMetadataLimitExceeded));
-        auto decoded = ParseMetadataJson(json, SaveErrors::ArchiveManifestInvalid);
+        auto decoded = ParseMetadataJson(json, limits.maximumNestingDepth, SaveErrors::ArchiveManifestInvalid);
         if (decoded.HasError())
             return Result<SaveGameManifest>::Failure(decoded.ErrorValue());
         const Json &root = decoded.Value();

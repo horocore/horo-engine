@@ -48,6 +48,7 @@ namespace Horo::Runtime {
         std::size_t maximumParticipants{256};           /**< Maximum manifest participant entries. */
         std::size_t maximumChunksPerParticipant{4'096}; /**< Maximum chunk references per participant. */
         std::size_t maximumTotalChunks{16'384};         /**< Aggregate manifest chunk reference limit. */
+        std::size_t maximumNestingDepth{8};             /**< Maximum JSON object/array nesting depth. */
         std::uint64_t supportedFeatureFlagsMask{};      /**< Feature bits understood by this codec. */
     };
 
