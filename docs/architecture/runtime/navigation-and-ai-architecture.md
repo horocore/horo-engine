@@ -81,7 +81,8 @@ only on an exact compatibility match; mismatch is a typed cooked-version failure
 absence is distinct from corruption. Provider payloads can always be discarded without
 changing portable topology meaning.
 
-Separate provider capabilities in `NavigationBackend.h`:
+Separate provider capabilities use narrow Horo-owned contracts (`NavigationBackend.h`
+and `NavigationMeshBuilder.h`):
 
 - `INavigationQueryBackend`: bounded spatial queries over pinned immutable topology.
 - `INavigationTopologyBackend`: staged tile installation/removal and obstacle carving;
@@ -156,6 +157,15 @@ The host activates inert provider descriptors or calls Horo-only factories and i
 owned query/topology/crowd interfaces into the coordinator. Selection happens before scene
 activation. Stop admission, cancel/drain outstanding work under ADR-010, release snapshots,
 then destroy providers before unloading their module; no callback or lease may outlive it.
+
+The selected Recast provider also exposes an `INavigationMeshBuilder` implementation for
+one synchronous, already-admitted tile invocation. The builder owns no scheduler, cache,
+artifact publication or source lifetime. It runs the pinned walkability-filter, compact-
+heightfield, region, contour and polygon stages against one borrowed canonical partition,
+then returns an owned provider-neutral tile result. A successful result is explicitly
+`Built` or `Empty`; typed capacity failure never mutates caller-owned or neighboring tile
+state. Provider log categories are reduced to bounded neutral warning counts, and output
+statistics contain no native Recast types or timing-dependent values.
 
 Recast tile builds own separate contexts, intermediate data and allocator domains.
 Each Detour query job exclusively leases one `dtNavMeshQuery` and scratch/node
@@ -424,6 +434,13 @@ NavMesh is generated from scene collision geometry:
 - NavMesh generation runs as an offline asset cook step or background tooling job
 - Generated NavMesh is stored as immutable cooked `NavMeshData` under the source
   definition AssetId and its typed scope/profile partitions
+
+Tile generation is independently bounded by vertex, polygon, link, owned-byte and work-unit
+ceilings. A tile builder validates its exact `(x, z, layer)` bounds before voxelization,
+sorts canonical triangles by stable provenance, applies slope and span walkability filters,
+partitions regions, simplifies contours and emits convex polygons with stable adjacency and
+source-provenance ranges. A tile with no surviving walkable region is a valid empty result;
+malformed input, provider failure, cancellation and budget exhaustion are typed failures.
 
 ```cpp
 struct NavMeshBuildSettings {

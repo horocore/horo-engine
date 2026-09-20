@@ -763,9 +763,19 @@ target_link_libraries(HoroNavigationRecastDetour PUBLIC HoroEngine::NavigationAp
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationRecastDetour PRIVATE
             runtime/navigation/backends/recast_detour/RecastDetourProvider.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourMeshBuilder.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourMeshBuilderInternal.h
+            runtime/navigation/backends/recast_detour/RecastDetourMeshBuilderPreparation.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourMeshBuilderPipeline.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourMeshBuilderTranslation.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderValidation.h
     )
-    target_link_libraries(HoroNavigationRecastDetour PRIVATE HoroThirdPartyDetour)
+    target_compile_definitions(HoroNavigationRecastDetour PRIVATE DT_POLYREF64 RC_DISABLE_ASSERTS)
+    target_include_directories(HoroNavigationRecastDetour PRIVATE
+            ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/Detour/Include
+            ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/Recast/Include
+    )
+    target_link_libraries(HoroNavigationRecastDetour PRIVATE HoroThirdPartyDetour HoroThirdPartyRecast)
 else()
     target_sources(HoroNavigationRecastDetour PRIVATE
             runtime/navigation/backends/recast_detour/RecastDetourProviderOmitted.cpp
