@@ -24,6 +24,13 @@ namespace {
             bytes[offset + index] = static_cast<std::byte>(static_cast<std::uint64_t>(value) >> (index * 8U));
     }
 
+    template <typename Value> Value GetLittleEndian(const std::vector<std::byte> &bytes, const std::size_t offset) {
+        Value value = 0;
+        for (std::size_t index = 0; index < sizeof(Value); ++index)
+            value |= static_cast<Value>(std::to_integer<std::uint8_t>(bytes[offset + index])) << (index * 8U);
+        return value;
+    }
+
     void PutBytes(std::vector<std::byte> &bytes, const std::size_t offset, const std::span<const std::uint8_t> values) {
         for (std::size_t index = 0; index < values.size(); ++index)
             bytes[offset + index] = static_cast<std::byte>(values[index]);
@@ -237,10 +244,7 @@ namespace {
         fixture = MakeArchive();
         const auto headerEntryOffset = SaveArchivePreambleByteLength + EntryOffset(0);
         const std::size_t headerDataOffset = headerEntryOffset + 124;
-        std::uint64_t relativeOffset = 0;
-        for (std::size_t index = 0; index < sizeof(relativeOffset); ++index)
-            relativeOffset |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(fixture.bytes[headerDataOffset + index]))
-                              << (index * 8U);
+        const auto relativeOffset = GetLittleEndian<std::uint64_t>(fixture.bytes, headerDataOffset);
         const auto absoluteHeader = SaveArchivePreambleByteLength + SaveArchiveContainerHeaderByteLength +
                                     3 * SaveArchiveContainerEntryByteLength + static_cast<std::size_t>(relativeOffset);
         fixture.bytes[absoluteHeader] = std::byte{static_cast<unsigned char>(0xc0)};
@@ -250,11 +254,7 @@ namespace {
 
     TEST_CASE("Bounded reader defers chunk checksum verification until selection", "[runtime][save][archive-reader]") {
         auto fixture = MakeArchive();
-        std::uint64_t relativeOffset = 0;
-        for (std::size_t index = 0; index < sizeof(relativeOffset); ++index)
-            relativeOffset |=
-                static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(fixture.bytes[fixture.chunkEntryOffset + 124 + index]))
-                << (index * 8U);
+        const auto relativeOffset = GetLittleEndian<std::uint64_t>(fixture.bytes, fixture.chunkEntryOffset + 124);
         const auto absoluteChunk = SaveArchivePreambleByteLength + SaveArchiveContainerHeaderByteLength +
                                    3 * SaveArchiveContainerEntryByteLength + static_cast<std::size_t>(relativeOffset);
         fixture.bytes[absoluteChunk] = static_cast<std::byte>(std::to_integer<std::uint8_t>(fixture.bytes[absoluteChunk]) ^ 1U);
