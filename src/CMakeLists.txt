@@ -449,6 +449,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
         audio/api/AudioResamplerPlan.cpp
+        audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioHandleRegistry.h
 )
 add_library(HoroEngine::AudioApi ALIAS HoroAudioApi)
