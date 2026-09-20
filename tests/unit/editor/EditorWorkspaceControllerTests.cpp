@@ -2360,7 +2360,7 @@ namespace {
         addAudio.componentTypePayload = ComponentType::AudioSource;
         controller.ProcessCommand(addAudio);
         Runtime::AudioSourceComponent audio = *controller.ViewModel().objects.front().components.audioSource;
-        audio.gain = 1.5F;
+        audio.playback.gain = 1.5F;
         EditorWorkspaceViewCommandData updateAudio;
         updateAudio.command = EditorWorkspaceViewCommand::UpdateAudioSourceComponent;
         updateAudio.objectPayload = object;

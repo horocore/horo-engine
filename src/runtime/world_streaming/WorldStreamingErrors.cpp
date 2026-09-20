@@ -423,6 +423,38 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
         Describe("world_streaming.dependency_plan.ambiguous", ErrorSeverity::Error,
                  "A deferred reference connects objects already joined by the transitive hard co-load policy.",
                  "Remove the soft edge or replace the conflicting hard path with one unambiguous dependency policy.", true);
+    const ErrorCodeDescriptor EntityFixupInvalid =
+        Describe("world_streaming.entity_fixup.invalid", ErrorSeverity::Error,
+                 "A stable entity-reference fixup request, mapping, result, or limit is malformed.",
+                 "Provide valid stable endpoints, revisions, runtime tokens, and bounded activation evidence.", true);
+    const ErrorCodeDescriptor EntityFixupUnsupported =
+        Describe("world_streaming.entity_fixup.unsupported", ErrorSeverity::Error,
+                 "A stable entity-reference fixup policy or result value is unsupported.",
+                 "Use the declared hard or soft reference policy and typed fixup lifecycle values.", true);
+    const ErrorCodeDescriptor EntityFixupStale =
+        Describe("world_streaming.entity_fixup.stale", ErrorSeverity::Warning,
+                 "A stable entity-reference fixup names an obsolete owner, revision, or activation mapping.",
+                 "Capture the current owner and exact endpoint revisions before retrying the fixup.", false);
+    const ErrorCodeDescriptor EntityFixupIdentityConflict =
+        Describe("world_streaming.entity_fixup.identity_conflict", ErrorSeverity::Error,
+                 "An activation batch repeats a stable entity endpoint or runtime mapping identity.",
+                 "Publish one exact runtime mapping for each stable endpoint and runtime token.", true);
+    const ErrorCodeDescriptor EntityFixupCapacityExceeded =
+        Describe("world_streaming.entity_fixup.capacity_exceeded", ErrorSeverity::Warning,
+                 "The bounded entity-reference fixup owner cannot retain another soft reference or activation mapping.",
+                 "Drain pending fixups or admit an explicitly larger bounded capacity before activation.", false);
+    const ErrorCodeDescriptor EntityFixupLifecycleUnavailable =
+        Describe("world_streaming.entity_fixup.lifecycle_unavailable", ErrorSeverity::Warning,
+                 "Entity-reference fixup admission or activation is closed by cancellation or shutdown.",
+                 "Drain retained references through cancellation/failure or create a ledger for the next owner lifetime.", false);
+    const ErrorCodeDescriptor EntityFixupSourceUnavailable =
+        Describe("world_streaming.entity_fixup.source_unavailable", ErrorSeverity::Warning,
+                 "The source entity is not present in the exact activation mapping.",
+                 "Activate the source under the matching endpoint revision before submitting its reference fixups.", false);
+    const ErrorCodeDescriptor EntityFixupTargetUnavailable =
+        Describe("world_streaming.entity_fixup.target_unavailable", ErrorSeverity::Warning,
+                 "A hard entity-reference target is not present in the exact activation mapping.",
+                 "Co-load and activate the target for a hard reference, or author the relationship as a soft reference.", false);
     const ErrorCodeDescriptor SourceDescriptorInvalid =
         Describe("world_streaming.source.descriptor_invalid", ErrorSeverity::Error,
                  "A streaming source descriptor or admission context is structurally invalid.",
