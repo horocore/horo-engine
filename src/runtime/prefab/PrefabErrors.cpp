@@ -1,5 +1,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 
+#include <array>
+
 namespace Horo::Prefab::PrefabErrors {
     namespace {
         const ErrorDomainId Domain{"horo.prefab"};
@@ -103,4 +105,173 @@ namespace Horo::Prefab::PrefabErrors {
     const ErrorCodeDescriptor ReferenceRewriteInvalid =
         Describe("prefab.reference_rewrite.invalid", "A prefab reference cannot be rewritten transactionally.",
                  "Provide one canonical typed target whose owner and referenced object belong to the complete candidate.");
+
+    const ErrorCodeDescriptor MissingPrefabSource =
+        Describe("prefab.source.missing", "A referenced prefab source is unavailable.",
+                 "Restore the source in the pinned project snapshot or remove the reference before expanding or cooking.");
+    const ErrorCodeDescriptor SourceRevisionUnavailable =
+        Describe("prefab.source.revision_unavailable", "A referenced prefab source revision is unavailable.",
+                 "Resolve the reference against one coherent source and Asset Registry revision.");
+    const ErrorCodeDescriptor UnsupportedPrefabSchema =
+        Describe("prefab.source.schema_unsupported", "The prefab source schema is unsupported.",
+                 "Run the supported project migration before validating, expanding, or cooking the prefab.");
+    const ErrorCodeDescriptor InvalidPlacement =
+        Describe("prefab.placement.invalid", "A prefab placement is invalid.",
+                 "Provide one unique bounded placement identity with a valid containing object and source revision.");
+    const ErrorCodeDescriptor MultipleVariantParents =
+        Describe("prefab.composition.multiple_variant_parents", "A prefab declares multiple variant parents.",
+                 "Keep exactly one immediate variant parent and preserve other references as ordinary dependencies.");
+    const ErrorCodeDescriptor CyclicComposition = Describe("prefab.composition.cycle", "Prefab composition contains a cycle.",
+                                                           "Remove the nested or variant edge that closes the dependency cycle.");
+    const ErrorCodeDescriptor VariantDepthExceeded =
+        Describe("prefab.variant.depth_exceeded", "Prefab variant inheritance exceeds its bound.",
+                 "Reduce the variant chain to the configured maximum inheritance depth.");
+    const ErrorCodeDescriptor CompositionDepthExceeded =
+        Describe("prefab.composition.depth_exceeded", "Prefab nested composition exceeds its bound.",
+                 "Flatten or reduce nested placements within the configured composition depth.");
+    const ErrorCodeDescriptor CompositionEdgeLimitExceeded =
+        Describe("prefab.composition.edge_limit_exceeded", "Prefab composition contains too many edges.",
+                 "Reduce nested and variant composition edges admitted into one candidate.");
+
+    const ErrorCodeDescriptor OverrideInvalid =
+        Describe("prefab.override.invalid", "A prefab override record is invalid.",
+                 "Use a supported typed operation and complete object, component, property, and source-revision identity.");
+    const ErrorCodeDescriptor OverrideConflict =
+        Describe("prefab.override.conflict", "A prefab override conflicts with another authored change.",
+                 "Resolve the conflicting operation explicitly before applying or cooking the override set.");
+    const ErrorCodeDescriptor OverrideOrphan = Describe("prefab.override.orphan", "A prefab override target cannot be resolved.",
+                                                        "Preserve or repair the orphan against the current source and schema identities.");
+    const ErrorCodeDescriptor OverrideSourceStale =
+        Describe("prefab.override.source_stale", "A prefab override targets a stale source revision.",
+                 "Rebase the override against the current source revision before applying it.");
+
+    const ErrorCodeDescriptor CookInputInvalid =
+        Describe("prefab.cook.input_invalid", "Prefab cook input is incomplete or inconsistent.",
+                 "Supply a migrated, fully resolved candidate with its complete dependency and revision evidence.");
+    const ErrorCodeDescriptor CookArtifactInvalid =
+        Describe("prefab.cook.artifact_invalid", "A cooked prefab artifact is invalid.",
+                 "Discard the candidate and rebuild the artifact from the authoritative resolved source.");
+    const ErrorCodeDescriptor CookPayloadTooLarge =
+        Describe("prefab.cook.payload_too_large", "A cooked prefab payload exceeds its bound.",
+                 "Reduce the effective hierarchy or payload to the configured cooked representation limit.");
+
+    const ErrorCodeDescriptor MigrationRequired =
+        Describe("prefab.migration.required", "The prefab source requires migration.",
+                 "Run the project migration pipeline before editing, expanding, or cooking this source.");
+    const ErrorCodeDescriptor MigrationFailed =
+        Describe("prefab.migration.failed", "Prefab source migration failed.",
+                 "Retain the authoritative source and repair the reported migration failure before publication.");
+
+    const ErrorCodeDescriptor AssetNotFound =
+        Describe("prefab.runtime.asset_not_found", "The requested runtime prefab is not in the cooked catalog.",
+                 "Cook or mount the prefab artifact before submitting the spawn request.");
+    const ErrorCodeDescriptor AssetNotLoaded = Describe("prefab.runtime.asset_not_loaded", "The requested runtime prefab is not resident.",
+                                                        "Use the admitted load-then-spawn path or wait for the required asset lease.");
+    const ErrorCodeDescriptor UnsupportedCookedVersion =
+        Describe("prefab.runtime.cooked_version_unsupported", "The cooked prefab format is unsupported.",
+                 "Use a runtime-compatible cooked artifact; runtime never migrates or recooks cooked bytes.");
+    const ErrorCodeDescriptor CorruptedPayload = Describe("prefab.runtime.payload_corrupted", "The cooked prefab payload is corrupt.",
+                                                          "Discard the artifact and rebuild it from the authoritative source.");
+    const ErrorCodeDescriptor ComponentTypeUnregistered =
+        Describe("prefab.runtime.component_type_unregistered", "The cooked prefab references an unavailable component type.",
+                 "Load the owning gameplay module or recook without the unavailable component.");
+    const ErrorCodeDescriptor ComponentAllocationFailed =
+        Describe("prefab.runtime.component_allocation_failed", "Runtime prefab component staging could not allocate storage.",
+                 "Reduce the admitted spawn workload or retry after releasing bounded runtime capacity.");
+    const ErrorCodeDescriptor SpawnRecursionDetected =
+        Describe("prefab.runtime.spawn_recursion_detected", "Runtime prefab spawn recursion was detected.",
+                 "Remove the repeated prefab from the inherited spawn lineage.");
+    const ErrorCodeDescriptor SpawnDepthExceeded =
+        Describe("prefab.runtime.spawn_depth_exceeded", "Runtime prefab spawn depth exceeds its bound.",
+                 "Reduce lifecycle-created spawn depth to the configured runtime limit.");
+    const ErrorCodeDescriptor AdmissionRejected =
+        Describe("prefab.runtime.admission_rejected", "Runtime prefab spawn admission was rejected.",
+                 "Retry after the bounded scene command or operation capacity becomes available.");
+    const ErrorCodeDescriptor Cancelled =
+        Describe("prefab.runtime.cancelled", "Runtime prefab spawn was cancelled before publication.",
+                 "Retry from the still-active owning operation when cancellation is no longer requested.");
+    const ErrorCodeDescriptor SceneUnavailable = Describe("prefab.runtime.scene_unavailable", "The target runtime scene is unavailable.",
+                                                          "Submit the request against the current active scene generation.");
+    const ErrorCodeDescriptor InvalidParent = Describe("prefab.runtime.invalid_parent", "The runtime prefab spawn parent is invalid.",
+                                                       "Use a live parent in the target scene with the current entity generation.");
+    const ErrorCodeDescriptor EntityAllocationExhausted =
+        Describe("prefab.runtime.entity_allocation_exhausted", "Runtime entity identity capacity is exhausted.",
+                 "Release or replace the owning scene runtime before admitting another spawn.");
+
+    const ErrorCodeDescriptor DiagnosticInvalid =
+        Describe("prefab.diagnostic.invalid", "Prefab diagnostic evidence is malformed.",
+                 "Provide complete bounded identity, revision, operation, source, and dependency evidence.");
+    const ErrorCodeDescriptor DiagnosticUnsupported =
+        Describe("prefab.diagnostic.unsupported", "The prefab diagnostic source is outside the declared contract.",
+                 "Use a declared prefab category and preserve only supported Asset, Scene, Gameplay, or migration causes.");
+    const ErrorCodeDescriptor DiagnosticBudgetExceeded =
+        Describe("prefab.diagnostic.budget_exceeded", "Prefab diagnostic evidence exceeds its explicit bound.",
+                 "Reduce cause, dependency, message, or source evidence before publishing the diagnostic.");
+
+    namespace {
+        const std::array CanonicalDescriptors{
+            &IdentityInvalid,
+            &AddressInvalid,
+            &ReferenceInvalid,
+            &LimitProfileInvalid,
+            &WorkBudgetExceeded,
+            &DocumentInvalid,
+            &HierarchyInvalid,
+            &ObjectCountExceeded,
+            &NestedPlacementCountExceeded,
+            &ReferenceCountExceeded,
+            &HierarchyDepthExceeded,
+            &ComponentCountExceeded,
+            &PayloadTooLarge,
+            &CompositionInvalid,
+            &DependencyGraphInvalid,
+            &DependencyUnavailable,
+            &DependencyTypeMismatch,
+            &DependencyRevisionMismatch,
+            &DependencyConflict,
+            &DependencyConflictPolicyUnsupported,
+            &DependencyClosureCapacityExceeded,
+            &ResolutionStale,
+            &IdentityCollision,
+            &ReferenceRewriteInvalid,
+            &MissingPrefabSource,
+            &SourceRevisionUnavailable,
+            &UnsupportedPrefabSchema,
+            &InvalidPlacement,
+            &MultipleVariantParents,
+            &CyclicComposition,
+            &VariantDepthExceeded,
+            &CompositionDepthExceeded,
+            &CompositionEdgeLimitExceeded,
+            &OverrideInvalid,
+            &OverrideConflict,
+            &OverrideOrphan,
+            &OverrideSourceStale,
+            &CookInputInvalid,
+            &CookArtifactInvalid,
+            &CookPayloadTooLarge,
+            &MigrationRequired,
+            &MigrationFailed,
+            &AssetNotFound,
+            &AssetNotLoaded,
+            &UnsupportedCookedVersion,
+            &CorruptedPayload,
+            &ComponentTypeUnregistered,
+            &ComponentAllocationFailed,
+            &SpawnRecursionDetected,
+            &SpawnDepthExceeded,
+            &AdmissionRejected,
+            &Cancelled,
+            &SceneUnavailable,
+            &InvalidParent,
+            &EntityAllocationExhausted,
+            &DiagnosticInvalid,
+            &DiagnosticUnsupported,
+            &DiagnosticBudgetExceeded,
+        };
+    }  // namespace
+
+    std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
+        return CanonicalDescriptors;
+    }
 }  // namespace Horo::Prefab::PrefabErrors

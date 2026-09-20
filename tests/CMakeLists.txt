@@ -351,6 +351,7 @@ add_executable(HoroAITests
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
         unit/runtime/ai/BlackboardSchemaTests.cpp
+        unit/runtime/ai/DecisionAssetValidationTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
 )
@@ -548,6 +549,7 @@ horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;he
 
 add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
+        unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp

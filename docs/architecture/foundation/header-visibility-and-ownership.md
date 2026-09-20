@@ -473,6 +473,17 @@ caller migration and no second schema/value authority. Future AI runtime composi
 must consume this contract instead of duplicating string-keyed storage or exposing
 mutable instance memory to worker tasks.
 
+`Horo/AI/DecisionAssetValidation.h` extends the same Foundation-only AI boundary
+with stable decision-asset/node/provider identities, typed schema requirements,
+source-located validation findings, and immutable plans that own their admitted
+blackboard schema snapshot. Node descriptors and asset catalogs remain inert
+borrowed metadata; package and script providers are not invoked during validation.
+Future Behavior Tree, state-machine, and utility asset adapters map their semantic
+nodes into this contract and must not add display-name or widget lookup fallbacks.
+Invalid recompilation is rejected by `DecisionAssetPlanStore` without replacing the
+last valid plan, so existing runtime callers require no migration until a concrete
+decision-graph asset family adopts the adapter seam.
+
 ## PCG Identity Boundary
 
 HoroEngine::PCG owns Horo/PCG/PCGIdentity.h and Horo/PCG/PCGErrors.h.
