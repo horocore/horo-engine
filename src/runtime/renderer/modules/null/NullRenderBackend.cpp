@@ -20,6 +20,33 @@ namespace Horo::Render {
                    placement.offsetBytes == 0;
         }
 
+        [[nodiscard]] RenderCapabilitySnapshot NullCapabilitySnapshot() noexcept {
+            using enum RenderCapability;
+            using enum RenderTextureUsage;
+            RenderCapabilitySnapshot snapshot{
+                .deviceIncarnation = 1,
+                .capabilityRevision = 1,
+                .synthetic = true,
+                .features = {},
+                .queues = {.graphics = true, .compute = false, .copy = true, .present = false},
+                .limits = {.maxBufferBytes = 256U * 1024U * 1024U,
+                           .maxTextureDimension2D = 16'384,
+                           .maxColorAttachments = 8,
+                           .maxVertexAttributes = 16,
+                           .maxFramesInFlight = 8},
+                .formats = {},
+            };
+            for (const RenderCapability capability :
+                 {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources}) {
+                snapshot.features.Enable(capability);
+            }
+            const RenderTextureUsage allUsages = Sampled | RenderAttachment | CopySource | CopyDestination | Storage;
+            snapshot.formats.usages.fill(allUsages);
+            for (const std::uint32_t sampleCount : {1U, 2U, 4U, 8U, 16U, 32U})
+                snapshot.formats.sampleCountMask |= std::uint64_t{1} << sampleCount;
+            return snapshot;
+        }
+
         /** @brief Headless backend that validates renderer lifecycle without acquiring GPU resources. */
         class NullRenderBackend final : public IRenderBackend {
         public:
@@ -63,6 +90,10 @@ namespace Horo::Render {
                 if (!initialized_ || !descriptor.IsValid())
                     return Result<RenderMemoryCostPlan>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null buffer memory requirement request is invalid."));
+                if (!capabilities_.support.Supports(descriptor))
+                    return Result<RenderMemoryCostPlan>::Failure(
+                        MakeBackendError(NullBackendErrors::UnsupportedResourceOperation,
+                                         "Null buffer request exceeds the advertised capability limit."));
                 return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
                                                               .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                                               .provenance = RenderMemoryCostProvenance::Exact,
@@ -78,6 +109,10 @@ namespace Horo::Render {
                 if (!initialized_ || !bytes.has_value())
                     return Result<RenderMemoryCostPlan>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture memory requirement request is invalid."));
+                if (!capabilities_.support.Supports(descriptor))
+                    return Result<RenderMemoryCostPlan>::Failure(
+                        MakeBackendError(NullBackendErrors::UnsupportedResourceOperation,
+                                         "Null texture request exceeds the advertised capability limit."));
                 return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
                                                               .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                                               .provenance = RenderMemoryCostProvenance::Exact,
@@ -94,8 +129,10 @@ namespace Horo::Render {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::NotInitialized, "Renderer backend is not initialized."));
                 }
-                if (const auto cost = QueryBufferMemoryCost(descriptor);
-                    !descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) || cost.HasError() ||
+                const auto cost = QueryBufferMemoryCost(descriptor);
+                if (cost.HasError())
+                    return Result<std::uint64_t>::Failure(cost.ErrorValue());
+                if (!descriptor.IsValid() || (!initialData.empty() && initialData.size() != descriptor.byteSize) ||
                     !MatchesPlacement(cost.Value(), placement)) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null buffer realization request is invalid."));
@@ -110,7 +147,8 @@ namespace Horo::Render {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::NotInitialized, "Renderer backend is not initialized."));
                 }
-                if (!descriptor.IsValid() || vertexBuffer == 0 || indexBuffer == 0) {
+                if (!descriptor.IsValid() || vertexBuffer == 0 || indexBuffer == 0 ||
+                    !capabilities_.support.features.Supports(RenderCapability::MeshResources)) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null mesh realization request is invalid."));
                 }
@@ -121,9 +159,11 @@ namespace Horo::Render {
             Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
                                                 const RenderMemoryPlacement &placement) override {
                 const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
-                if (const auto cost = QueryTextureMemoryCost(descriptor); !initialized_ || !bytes.has_value() ||
-                                                                          (!initialData.empty() && initialData.size() != *bytes) ||
-                                                                          cost.HasError() || !MatchesPlacement(cost.Value(), placement))
+                const auto cost = QueryTextureMemoryCost(descriptor);
+                if (cost.HasError())
+                    return Result<std::uint64_t>::Failure(cost.ErrorValue());
+                if (!initialized_ || !bytes.has_value() || (!initialData.empty() && initialData.size() != *bytes) ||
+                    !MatchesPlacement(cost.Value(), placement))
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture realization request is invalid."));
                 return NextResourceInstance();
@@ -322,6 +362,7 @@ namespace Horo::Render {
                 .supportsMeshResources = true,
                 .supportsTextureResources = true,
                 .supportsRenderTargetResources = true,
+                .support = NullCapabilitySnapshot(),
             };
             RenderBackendConfig config_{};
             FramebufferExtent extent_{};

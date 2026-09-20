@@ -1260,6 +1260,7 @@ endforeach ()
 
 add_executable(HoroRenderBackendRegistryTests
         unit/runtime/renderer/RenderBackendRegistryTests.cpp
+        unit/runtime/renderer/RenderCapabilitiesTests.cpp
 )
 
 target_compile_features(HoroRenderBackendRegistryTests PRIVATE cxx_std_20)
