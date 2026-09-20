@@ -89,6 +89,7 @@ namespace Horo::Audio {
     struct AudioBusIdentityTag;
     struct AudioParameterIdentityTag;
     struct AudioEventIdentityTag;
+    struct AudioContributionIdentityTag;
     struct AudioRuntimeIdentityTag;
 
     /** @brief Persistent identity of one authored or cooked audio clip asset. */
@@ -101,6 +102,8 @@ namespace Horo::Audio {
     using AudioParameterId = AudioStableIdentity<AudioParameterIdentityTag>;
     /** @brief Stable event identity resolved before callback submission. */
     using AudioEventId = AudioStableIdentity<AudioEventIdentityTag>;
+    /** @brief Stable Audio contribution identity used by package-provided sound definitions. */
+    using AudioContributionId = AudioStableIdentity<AudioContributionIdentityTag>;
     /** @brief Process-local owner identity of one audio runtime generation. */
     using AudioRuntimeId = AudioStableIdentity<AudioRuntimeIdentityTag>;
 
