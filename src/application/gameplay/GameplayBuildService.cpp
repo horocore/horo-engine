@@ -9,6 +9,7 @@
 #include "Horo/Platform/ExternalProcess.h"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -75,6 +76,13 @@ namespace Horo::Application {
                                                            "Wait for an active build to finish and retry.",
                                                            true,
                                                            true};
+        const ErrorCodeDescriptor BuildInputsChanged{Domain,
+                                                     ErrorCode{"inputs_changed"},
+                                                     ErrorSeverity::Info,
+                                                     "Gameplay build inputs changed while the build was running.",
+                                                     "The build will be retried with the latest inputs.",
+                                                     true,
+                                                     false};
 
         [[nodiscard]] bool IsTerminal(const GameplayBuildState state) noexcept {
             using enum GameplayBuildState;
@@ -236,13 +244,15 @@ namespace Horo::Application {
             return Result<std::string>::Success(std::move(compiler).Value().binaryHash);
         }
 
-        [[nodiscard]] std::string BuildInputHashPrefix(const GameplayBuildRequest &request, const std::string_view compilerHash) {
-            return std::format("{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n", Gameplay::CurrentGameplayBuildFingerprint(),
+        [[nodiscard]] std::string BuildInputHashPrefix(const GameplayBuildRequest &request, const std::string_view compilerHash,
+                                                       const std::string_view resolvedInputStructureHash) {
+            return std::format("{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n", Gameplay::CurrentGameplayBuildFingerprint(),
                                request.environment.configuration, request.environment.gameplaySdkPackage.generic_string(),
                                request.environment.cxxCompiler.value_or(std::filesystem::path{}).generic_string(),
                                request.environment.generator.value_or(""), request.environment.generatorPlatform.value_or(""),
                                request.environment.generatorToolset.value_or(""),
-                               request.environment.toolchainFile.value_or(std::filesystem::path{}).generic_string(), compilerHash);
+                               request.environment.toolchainFile.value_or(std::filesystem::path{}).generic_string(), compilerHash,
+                               resolvedInputStructureHash);
         }
 
         [[nodiscard]] Result<std::string> HashBuildInputs(const std::filesystem::path &root,
@@ -259,6 +269,21 @@ namespace Horo::Application {
                 bytes.append(std::filesystem::relative(path, root, error).generic_string()).push_back('\0');
                 bytes.append(std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{});
                 bytes.push_back('\0');
+            }
+            return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))));
+        }
+
+        [[nodiscard]] Result<std::string> HashInputStructure(const std::filesystem::path &root,
+                                                             const std::vector<std::filesystem::path> &inputs) {
+            constexpr std::size_t MaximumStructureBytes = 1U * 1024U * 1024U;
+            std::string bytes;
+            for (const std::filesystem::path &path : inputs) {
+                std::error_code error;
+                const std::string relative = std::filesystem::relative(path, root, error).generic_string();
+                if (error || bytes.size() + relative.size() + 1U > MaximumStructureBytes)
+                    return Result<std::string>::Failure(
+                        MakeError(InvalidRequest, "Gameplay input structure exceeds the bounded hash budget."));
+                bytes.append(relative).push_back('\0');
             }
             return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))));
         }
@@ -281,10 +306,13 @@ namespace Horo::Application {
             std::ranges::sort(inputs);
             inputs.erase(std::ranges::unique(inputs).begin(), inputs.end());
 
+            Result<std::string> inputStructureHash = HashInputStructure(root, inputs);
+            if (inputStructureHash.HasError())
+                return Result<std::string>::Failure(inputStructureHash.ErrorValue());
             Result<std::string> compilerHash = ResolveCompilerHash(request);
             if (compilerHash.HasError())
                 return Result<std::string>::Failure(compilerHash.ErrorValue());
-            return HashBuildInputs(root, inputs, BuildInputHashPrefix(request, compilerHash.Value()));
+            return HashBuildInputs(root, inputs, BuildInputHashPrefix(request, compilerHash.Value(), inputStructureHash.Value()));
         }
 
         [[nodiscard]] std::optional<std::string> ReadSuccessfulHash(const std::filesystem::path &root) {
@@ -706,7 +734,7 @@ namespace Horo::Application {
             if (postHash.HasError())
                 return Result<void>::Failure(postHash.ErrorValue());
             if (postHash.Value() != inputHash)
-                return Result<void>::Failure(MakeError(BuildFailed, "Gameplay sources changed during the build."));
+                return Result<void>::Failure(MakeError(BuildInputsChanged, "Gameplay sources changed during the build."));
 
             const std::filesystem::path local = session->request.projectRoot / ".horo/local";
             Result<std::string> manifestHash = HashFile(candidate, 1024U * 1024U);
@@ -756,11 +784,16 @@ namespace Horo::Application {
 
                 Update(session, GameplayBuildState::WaitingForExternalBuild, "waiting_external_build");
                 std::ifstream metadata{lockPath, std::ios::binary};
-                std::string externalOwner{std::istreambuf_iterator<char>{metadata}, std::istreambuf_iterator<char>{}};
-                if (externalOwner.size() > 512U)
-                    externalOwner.resize(512U);
+                std::array<char, 512> ownerBuffer{};
+                std::string externalOwner;
+                if (metadata) {
+                    metadata.read(ownerBuffer.data(), static_cast<std::streamsize>(ownerBuffer.size()));
+                    const std::streamsize bytesRead = metadata.gcount();
+                    if (bytesRead > 0)
+                        externalOwner.assign(ownerBuffer.data(), static_cast<std::size_t>(bytesRead));
+                }
                 const std::string waitingMessage = externalOwner.empty()
-                                                       ? "Waiting for external gameplay build lock."
+                                                       ? "Waiting for external gameplay build lock held by an unknown owner."
                                                        : std::format("Waiting for external gameplay build lock held by {}.", externalOwner);
                 UpdateOperation(state, session, OperationState::Waiting, "waiting_external_build", waitingMessage.c_str(), 0.05F);
                 if (!waitingRecordPublished) {
@@ -778,14 +811,15 @@ namespace Horo::Application {
             }
         }
 
-        void AdoptPendingRequest(const std::shared_ptr<GameplayBuildService::State::Session> &session) {
+        [[nodiscard]] bool AdoptPendingRequest(const std::shared_ptr<GameplayBuildService::State::Session> &session) {
             std::lock_guard lock(session->Mutex());
             if (!session->pendingRequest.has_value())
-                return;
+                return false;
             session->request = std::move(*session->pendingRequest);
             session->pendingRequest.reset();
             session->snapshot.pendingInputHash.reset();
             session->snapshot.newerInputsPending = false;
+            return true;
         }
 
         [[nodiscard]] std::vector<std::string> BuildConfigureArguments(const GameplayBuildRequest &request,
@@ -825,21 +859,31 @@ namespace Horo::Application {
             return session->pendingRequest.has_value() && session->snapshot.pendingInputHash != activeHash;
         }
 
-        void RecordSupersedingInputs(const std::shared_ptr<GameplayBuildService::State::Session> &session,
-                                     const std::string_view successorHash) {
+        [[nodiscard]] bool RecordSupersedingInputs(const std::shared_ptr<GameplayBuildService::State::Session> &session,
+                                                   const std::string_view successorHash) {
             std::lock_guard lock(session->Mutex());
+            if (session->pendingRequest.has_value())
+                return false;
             session->snapshot.newerInputsPending = true;
             session->snapshot.pendingInputHash = successorHash;
+            return true;
         }
 
-        [[nodiscard]] Result<std::string> PrepareActiveInput(const std::shared_ptr<GameplayBuildService::State::Session> &session) {
-            AdoptPendingRequest(session);
-            Result<std::string> hash = ComputeInputHash(session->request);
+        [[nodiscard]] Result<std::string> PrepareActiveInput(const std::shared_ptr<GameplayBuildService::State::Session> &session,
+                                                             std::optional<std::string> reusableHash) {
+            const bool adoptedPendingRequest = AdoptPendingRequest(session);
+            Result<std::string> hash = !adoptedPendingRequest && reusableHash.has_value()
+                                           ? Result<std::string>::Success(std::move(*reusableHash))
+                                           : ComputeInputHash(session->request);
             if (hash.HasError())
                 return hash;
             {
                 std::lock_guard lock(session->Mutex());
                 session->snapshot.activeInputHash = hash.Value();
+                if (!adoptedPendingRequest && session->snapshot.pendingInputHash == hash.Value()) {
+                    session->snapshot.pendingInputHash.reset();
+                    session->snapshot.newerInputsPending = false;
+                }
                 if (!session->snapshot.pendingInputHash.has_value())
                     session->snapshot.desiredInputHash = hash.Value();
             }
@@ -864,7 +908,8 @@ namespace Horo::Application {
 
         [[nodiscard]] Result<bool> RunBuildCycle(GameplayBuildService::State &state,
                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session,
-                                                 const std::string_view inputHash, OutputBudget &budget) {
+                                                 const std::string_view inputHash, OutputBudget &budget,
+                                                 std::optional<std::string> &retryHash) {
             const std::filesystem::path buildRoot = session->request.projectRoot / ".horo/local/build/gameplay-debug";
             const std::filesystem::path candidateManifest = buildRoot / "candidate_gameplay_module.json";
             if (Result<void> configured = RunPhase(state, session, GameplayBuildState::Configuring, "configure",
@@ -883,12 +928,14 @@ namespace Horo::Application {
             Result<void> validated = ValidateAndPublish(state, session, inputHash);
             if (validated.HasValue())
                 return Result<bool>::Success(false);
-            if (validated.ErrorValue().message.find("changed during") == std::string::npos)
+            if (validated.ErrorValue().code.Value() != BuildInputsChanged.code.Value())
                 return Result<bool>::Failure(validated.ErrorValue());
             Result<std::string> successorHash = ComputeInputHash(session->request);
             if (successorHash.HasError())
                 return Result<bool>::Failure(successorHash.ErrorValue());
-            RecordSupersedingInputs(session, successorHash.Value());
+            const bool recorded = RecordSupersedingInputs(session, successorHash.Value());
+            if (recorded)
+                retryHash = std::move(successorHash).Value();
             return Result<bool>::Success(true);
         }
 
@@ -897,8 +944,10 @@ namespace Horo::Application {
                                       [[maybe_unused]] ExclusiveFileLock buildLock) {
             OutputBudget budget;
             OutputSummaryGuard outputSummary{*state, session, budget};
+            std::optional<std::string> retryHash;
             for (;;) {
-                Result<std::string> hash = PrepareActiveInput(session);
+                Result<std::string> hash = PrepareActiveInput(session, std::move(retryHash));
+                retryHash.reset();
                 if (hash.HasError())
                     return Result<void>::Failure(hash.ErrorValue());
                 Result<bool> cached = TryUseCachedBuild(*state, session, hash.Value());
@@ -906,7 +955,7 @@ namespace Horo::Application {
                     return Result<void>::Failure(cached.ErrorValue());
                 if (cached.Value())
                     return Result<void>::Success();
-                Result<bool> cycle = RunBuildCycle(*state, session, hash.Value(), budget);
+                Result<bool> cycle = RunBuildCycle(*state, session, hash.Value(), budget, retryHash);
                 if (cycle.HasError())
                     return Result<void>::Failure(cycle.ErrorValue());
                 if (!cycle.Value())

@@ -11,8 +11,10 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -69,6 +71,14 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
             // not depend on generator-specific timestamp/change detection.
             std::error_code error;
             std::filesystem::remove_all(root / ".horo/local/build/gameplay-debug", error);
+        }
+
+        void AddResolvedInput() const {
+            Write(root / "project-settings.txt", "gameplay settings\n");
+            std::ofstream manifest{root / ".horo/local/gameplay_build_inputs.txt", std::ios::app};
+            manifest << "project-settings.txt\n";
+            if (!manifest)
+                throw std::runtime_error("Unable to update gameplay build input manifest.");
         }
 
         std::filesystem::path root;
@@ -202,6 +212,59 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
     private:
         ProcessTerminationReason reason_;
     };
+
+    template <typename ProcessRunner> class GameplayBuildFixture final {
+    public:
+        explicit GameplayBuildFixture(ProcessRunner &runner, const std::size_t workerCount = 1U, const std::size_t queueCapacity = 4U,
+                                      const std::size_t outputCapacity = 32U, const std::size_t operationCapacity = 4U,
+                                      const std::size_t operationQueueCapacity = 4U, const bool withOperations = true)
+            : processes(runner), project(), jobs{{workerCount, queueCapacity}}, output(outputCapacity),
+              operations(operationCapacity, operationQueueCapacity),
+              service(processes, jobs, files, &output, withOperations ? &operations : nullptr) {
+            project.WriteValid();
+        }
+
+        GameplayBuildFixture(const GameplayBuildFixture &) = delete;
+        GameplayBuildFixture &operator=(const GameplayBuildFixture &) = delete;
+
+        ~GameplayBuildFixture() {
+            service.Shutdown();
+            jobs.Shutdown(ShutdownPolicy::Cancel);
+        }
+
+        [[nodiscard]] GameplayBuildRequest Request() const {
+            return {.projectRoot = project.root, .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR}};
+        }
+
+        ProcessRunner &processes;
+        TemporaryProject project;
+        JobSystem jobs;
+        NativeDurableFileSystem files;
+        BuildOutputStore output;
+        OperationStore operations;
+        GameplayBuildService service;
+    };
+
+    void AssertTerminalOperation(OperationStore &operations, const GameplayBuildSnapshot &terminal, const OperationState expectedState) {
+        REQUIRE(terminal.operationId.has_value());
+        const auto snapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(snapshot.has_value());
+        const auto operation = std::ranges::find_if(snapshot->operations, [&](const OperationRecord &record) {
+            return record.id == *terminal.operationId;
+        });
+        REQUIRE((operation != snapshot->operations.end()));
+        REQUIRE(operation->state == expectedState);
+        REQUIRE(operation->finishedAt.has_value());
+    }
+
+    void AssertTerminalOutput(const BuildOutputSnapshot &snapshot, const GameplayBuildSnapshot &terminal,
+                              const BuildOutputResult expectedResult, const std::string_view expectedCode) {
+        REQUIRE((std::ranges::count_if(snapshot.records, [&](const BuildOutputRecord &record) {
+            return record.operationId == terminal.operationId && record.result != BuildOutputResult::None;
+        }) == 1));
+        REQUIRE(snapshot.records.back().result == expectedResult);
+        REQUIRE(snapshot.records.back().code.Value() == expectedCode);
+    }
 }  // namespace
 
 TEST_CASE("Compiler diagnostic parser supports GCC Clang and MSVC output", "[unit][gameplay][build][diagnostics]") {
@@ -280,21 +343,15 @@ TEST_CASE("Compiler diagnostic parser rejects malformed and oversized input safe
 }
 
 TEST_CASE("Gameplay build service consumes exported SDK and preserves last success on failure", "[integration][gameplay][build]") {
-    TemporaryProject project;
-    project.WriteValid();
     CountingExternalProcessRunner processes;
-    JobSystem jobs{{2, 16}};
-    NativeDurableFileSystem files;
-    BuildOutputStore output{1024};
-    OperationStore operations{16, 64};
-    GameplayBuildService service{processes, jobs, files, &output, &operations};
-    const GameplayBuildRequest request{
-        .projectRoot = project.root,
-        .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR,
-                        .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
-                        .generator = HORO_TEST_CMAKE_GENERATOR},
-        .timeouts = {.configure = std::chrono::minutes{1}, .build = std::chrono::minutes{2}},
-    };
+    GameplayBuildFixture fixture{processes, 2U, 16U, 1024U, 16U, 64U};
+    auto &service = fixture.service;
+    auto &project = fixture.project;
+    auto &output = fixture.output;
+    GameplayBuildRequest request = fixture.Request();
+    request.environment.cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER};
+    request.environment.generator = HORO_TEST_CMAKE_GENERATOR;
+    request.timeouts = {.configure = std::chrono::minutes{1}, .build = std::chrono::minutes{2}};
 
     const auto started = service.Start(request);
     REQUIRE(started.HasValue());
@@ -314,6 +371,8 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     const std::optional<BuildOutputSnapshot> cachedOutput = output.SnapshotIfChanged(buildOutput->revision);
     REQUIRE(cachedOutput.has_value());
     AssertCachedBuildOutput(*cachedOutput);
+    project.AddResolvedInput();
+    REQUIRE_FALSE(service.IsUpToDate(request));
     const std::filesystem::path successfulState = project.root / ".horo/local/gameplay_build_state.json";
     const std::string beforeFailure = Read(successfulState);
     REQUIRE_FALSE(beforeFailure.empty());
@@ -329,23 +388,15 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     REQUIRE(Read(successfulState) == beforeFailure);
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
     REQUIRE_FALSE(service.IsUpToDate(request));
-
-    service.Shutdown();
-    jobs.Shutdown(ShutdownPolicy::Cancel);
 }
 
 TEST_CASE("Gameplay build output classifies bounded GCC and Clang diagnostics", "[unit][gameplay][build]") {
-    TemporaryProject project;
-    project.WriteValid();
     CompilerDiagnosticProcessRunner processes;
-    JobSystem jobs{{1, 4}};
-    NativeDurableFileSystem files;
-    BuildOutputStore output{16};
-    GameplayBuildService service{processes, jobs, files, &output, nullptr};
-    const GameplayBuildRequest request{
-        .projectRoot = project.root,
-        .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
-    };
+    GameplayBuildFixture fixture{processes, 1U, 4U, 16U, 4U, 4U, false};
+    auto &service = fixture.service;
+    auto &project = fixture.project;
+    auto &output = fixture.output;
+    const GameplayBuildRequest request = fixture.Request();
 
     const auto started = service.Start(request);
     REQUIRE(started.HasValue());
@@ -382,23 +433,16 @@ TEST_CASE("Gameplay build output classifies bounded GCC and Clang diagnostics", 
     REQUIRE_FALSE(malformed->source.has_value());
     REQUIRE((malformed->severity == DiagnosticSeverity::Note));
     REQUIRE((malformed->code.Value() == "gameplay.build.output"));
-
-    service.Shutdown();
-    jobs.Shutdown(ShutdownPolicy::Cancel);
 }
 
 TEST_CASE("Gameplay build service maps cancellation to one correlated terminal record", "[unit][gameplay][build][cancellation]") {
-    TemporaryProject project;
-    project.WriteValid();
     TerminalProcessRunner processes{ProcessTerminationReason::Cancelled};
-    JobSystem jobs{{1, 4}};
-    NativeDurableFileSystem files;
-    BuildOutputStore output{32};
-    OperationStore operations{4, 4};
-    GameplayBuildService service{processes, jobs, files, &output, &operations};
-    const GameplayBuildRequest request{.projectRoot = project.root,
-                                       .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
-                                       .timeouts = {.configure = std::chrono::seconds{1}}};
+    GameplayBuildFixture fixture{processes};
+    auto &service = fixture.service;
+    auto &output = fixture.output;
+    auto &operations = fixture.operations;
+    GameplayBuildRequest request = fixture.Request();
+    request.timeouts.configure = std::chrono::seconds{1};
 
     const auto started = service.Start(request);
     REQUIRE(started.HasValue());
@@ -411,37 +455,18 @@ TEST_CASE("Gameplay build service maps cancellation to one correlated terminal r
     REQUIRE(terminal.operationId.has_value());
     const auto snapshot = output.SnapshotIfChanged(0);
     REQUIRE(snapshot.has_value());
-    REQUIRE((std::ranges::count_if(snapshot->records, [&](const BuildOutputRecord &record) {
-        return record.sessionId.has_value() && record.operationId == terminal.operationId && record.result != BuildOutputResult::None;
-    }) == 1));
-    REQUIRE((snapshot->records.back().result == BuildOutputResult::Cancelled));
-    REQUIRE((snapshot->records.back().code.Value() == "gameplay.build.cancelled"));
-
-    const auto operationSnapshot = operations.SnapshotIfChanged(0);
-    REQUIRE(operationSnapshot.has_value());
-    const auto operation = std::ranges::find_if(operationSnapshot->operations, [&](const OperationRecord &record) {
-        return record.id == *terminal.operationId;
-    });
-    REQUIRE((operation != operationSnapshot->operations.end()));
-    REQUIRE((operation->state == OperationState::Cancelled));
-    REQUIRE(operation->finishedAt.has_value());
-
-    service.Shutdown();
-    jobs.Shutdown(ShutdownPolicy::Cancel);
+    AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+    AssertTerminalOperation(operations, terminal, OperationState::Cancelled);
 }
 
 TEST_CASE("Gameplay build service maps process timeout to one correlated terminal record", "[unit][gameplay][build][timeout]") {
-    TemporaryProject project;
-    project.WriteValid();
     TerminalProcessRunner processes{ProcessTerminationReason::TimedOut};
-    JobSystem jobs{{1, 4}};
-    NativeDurableFileSystem files;
-    BuildOutputStore output{32};
-    OperationStore operations{4, 4};
-    GameplayBuildService service{processes, jobs, files, &output, &operations};
-    const GameplayBuildRequest request{.projectRoot = project.root,
-                                       .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
-                                       .timeouts = {.configure = std::chrono::milliseconds{20}}};
+    GameplayBuildFixture fixture{processes};
+    auto &service = fixture.service;
+    auto &output = fixture.output;
+    auto &operations = fixture.operations;
+    GameplayBuildRequest request = fixture.Request();
+    request.timeouts.configure = std::chrono::milliseconds{20};
 
     const auto started = service.Start(request);
     REQUIRE(started.HasValue());
@@ -450,39 +475,22 @@ TEST_CASE("Gameplay build service maps process timeout to one correlated termina
     REQUIRE(terminal.operationId.has_value());
     const auto snapshot = output.SnapshotIfChanged(0);
     REQUIRE(snapshot.has_value());
-    REQUIRE((std::ranges::count_if(snapshot->records, [&](const BuildOutputRecord &record) {
-        return record.operationId == terminal.operationId && record.result != BuildOutputResult::None;
-    }) == 1));
-    REQUIRE((snapshot->records.back().result == BuildOutputResult::TimedOut));
-    REQUIRE((snapshot->records.back().code.Value() == "gameplay.build.timed_out"));
-
-    const auto operationSnapshot = operations.SnapshotIfChanged(0);
-    REQUIRE(operationSnapshot.has_value());
-    const auto operation = std::ranges::find_if(operationSnapshot->operations, [&](const OperationRecord &record) {
-        return record.id == *terminal.operationId;
-    });
-    REQUIRE((operation != operationSnapshot->operations.end()));
-    REQUIRE((operation->state == OperationState::Failed));
-    REQUIRE(operation->finishedAt.has_value());
-
-    service.Shutdown();
-    jobs.Shutdown(ShutdownPolicy::Cancel);
+    AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::TimedOut, "gameplay.build.timed_out");
+    AssertTerminalOperation(operations, terminal, OperationState::Failed);
 }
 
 TEST_CASE("Gameplay build service exposes external lock waiting and bounded timeout", "[unit][gameplay][build][lock]") {
-    TemporaryProject project;
-    project.WriteValid();
     TerminalProcessRunner processes{ProcessTerminationReason::Exited};
-    JobSystem jobs{{1, 4}};
-    NativeDurableFileSystem files;
-    const auto held = files.TryAcquireExclusive(project.root / ".horo/local/locks/gameplay-build.lock", "external-test-owner");
+    GameplayBuildFixture fixture{processes};
+    auto &service = fixture.service;
+    auto &project = fixture.project;
+    auto &files = fixture.files;
+    auto &output = fixture.output;
+    auto &operations = fixture.operations;
+    const auto held = files.TryAcquireExclusive(project.root / ".horo/local/locks/gameplay-build.lock", std::string(4096U, 'x'));
     REQUIRE(held.HasValue());
-    BuildOutputStore output{32};
-    OperationStore operations{4, 4};
-    GameplayBuildService service{processes, jobs, files, &output, &operations};
-    const GameplayBuildRequest request{.projectRoot = project.root,
-                                       .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR},
-                                       .timeouts = {.externalWait = std::chrono::milliseconds{80}}};
+    GameplayBuildRequest request = fixture.Request();
+    request.timeouts.externalWait = std::chrono::milliseconds{80};
 
     const auto started = service.Start(request);
     REQUIRE(started.HasValue());
@@ -499,6 +507,7 @@ TEST_CASE("Gameplay build service exposes external lock waiting and bounded time
     const GameplayBuildSnapshot terminal = AwaitTerminal(service, started.Value());
     REQUIRE(terminal.state == GameplayBuildState::TimedOut);
     REQUIRE(terminal.operationId.has_value());
+    REQUIRE(terminal.externalLockOwner.size() <= 512U);
     REQUIRE((processes.calls.load(std::memory_order_relaxed) == 0U));
 
     const auto snapshot = output.SnapshotIfChanged(0);
@@ -507,30 +516,21 @@ TEST_CASE("Gameplay build service exposes external lock waiting and bounded time
         return record.code.Value() == "gameplay.build.waiting_for_external_lock";
     })));
     REQUIRE((snapshot->records.back().result == BuildOutputResult::TimedOut));
-
-    service.Shutdown();
-    jobs.Shutdown(ShutdownPolicy::Cancel);
 }
 
 TEST_CASE("Gameplay build service rejects operation-store admission without uncorrelated output", "[unit][gameplay][build][admission]") {
-    TemporaryProject project;
-    project.WriteValid();
     TerminalProcessRunner processes{ProcessTerminationReason::Exited};
-    JobSystem jobs{{1, 4}};
-    NativeDurableFileSystem files;
-    BuildOutputStore output{32};
-    OperationStore operations{1, 4};
+    GameplayBuildFixture fixture{processes, 1U, 4U, 32U, 1U, 4U};
+    auto &service = fixture.service;
+    auto &output = fixture.output;
+    auto &operations = fixture.operations;
     const auto occupied = operations.Begin({.kind = OperationKind::Build, .title = "Existing build"});
     REQUIRE(occupied.has_value());
-    GameplayBuildService service{processes, jobs, files, &output, &operations};
-    const GameplayBuildRequest request{.projectRoot = project.root, .environment = {.gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR}};
+    const GameplayBuildRequest request = fixture.Request();
 
     const auto rejected = service.Start(request);
     REQUIRE(rejected.HasError());
     REQUIRE((rejected.ErrorValue().code.Value() == "operation_admission_failed"));
     REQUIRE_FALSE(output.SnapshotIfChanged(0).has_value());
     REQUIRE((processes.calls.load(std::memory_order_relaxed) == 0U));
-
-    service.Shutdown();
-    jobs.Shutdown(ShutdownPolicy::Cancel);
 }
