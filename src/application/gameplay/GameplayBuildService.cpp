@@ -255,6 +255,10 @@ namespace Horo::Application {
                                resolvedInputStructureHash);
         }
 
+        [[nodiscard]] Result<std::string> FinalizeInputHash(std::string bytes) {
+            return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))));
+        }
+
         [[nodiscard]] Result<std::string> HashBuildInputs(const std::filesystem::path &root,
                                                           const std::vector<std::filesystem::path> &inputs, std::string bytes) {
             constexpr std::uintmax_t MaximumInputBytes = 64U * 1024U * 1024U;
@@ -270,7 +274,7 @@ namespace Horo::Application {
                 bytes.append(std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{});
                 bytes.push_back('\0');
             }
-            return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))));
+            return FinalizeInputHash(std::move(bytes));
         }
 
         [[nodiscard]] Result<std::string> HashInputStructure(const std::filesystem::path &root,
@@ -285,7 +289,7 @@ namespace Horo::Application {
                         MakeError(InvalidRequest, "Gameplay input structure exceeds the bounded hash budget."));
                 bytes.append(relative).push_back('\0');
             }
-            return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))));
+            return FinalizeInputHash(std::move(bytes));
         }
 
         [[nodiscard]] Result<std::string> ComputeInputHash(const GameplayBuildRequest &request) {
@@ -388,6 +392,13 @@ namespace Horo::Application {
     };
 
     namespace {
+        [[nodiscard]] std::shared_ptr<GameplayBuildService::State::Session> FindSession(
+            const std::shared_ptr<GameplayBuildService::State> &state, const GameplayBuildSessionId id) {
+            std::lock_guard lock(state->Mutex());
+            const auto found = state->sessions.find(id);
+            return found == state->sessions.end() ? nullptr : found->second;
+        }
+
         void Update(const std::shared_ptr<GameplayBuildService::State::Session> &session, const GameplayBuildState state, std::string phase,
                     std::optional<Error> error = std::nullopt) {
             std::lock_guard lock(session->Mutex());
@@ -1213,27 +1224,17 @@ namespace Horo::Application {
     }
 
     std::optional<GameplayBuildSnapshot> GameplayBuildService::Query(const GameplayBuildSessionId id) const {
-        std::shared_ptr<State::Session> session;
-        {
-            std::lock_guard lock(state_->Mutex());
-            const auto found = state_->sessions.find(id);
-            if (found == state_->sessions.end())
-                return std::nullopt;
-            session = found->second;
-        }
+        const std::shared_ptr<State::Session> session = FindSession(state_, id);
+        if (!session)
+            return std::nullopt;
         std::lock_guard lock(session->Mutex());
         return session->snapshot;
     }
 
     bool GameplayBuildService::RequestCancel(const GameplayBuildSessionId id) const {
-        std::shared_ptr<State::Session> session;
-        {
-            std::lock_guard lock(state_->Mutex());
-            const auto found = state_->sessions.find(id);
-            if (found == state_->sessions.end())
-                return false;
-            session = found->second;
-        }
+        const std::shared_ptr<State::Session> session = FindSession(state_, id);
+        if (!session)
+            return false;
         session->cancellation.RequestCancellation();
         {
             std::lock_guard lock(session->Mutex());
