@@ -256,6 +256,7 @@ horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
     Horo/Audio/AudioSourceImporter.h
 )
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
+    Horo/Audio/AudioDSPNode.h
     Horo/Audio/AudioResampler.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
