@@ -15,6 +15,9 @@ resource, frame, presentation, or GUI assumptions.
 Renderer components are independently installable. Discovery, verification,
 probing, and no-renderer recovery are defined by
 [Renderer Distribution And Availability](./renderer-distribution-and-availability.md).
+Device loss, frame abortion, resource invalidation, host-owned restart and
+terminal failure are defined by
+[ADR-179](../../adr/179-device-loss-and-renderer-restart-lifecycle.md).
 
 ## Non-Negotiable Invariants
 
@@ -533,7 +536,7 @@ below passes; skipped native rows are unqualified, not successful.
 | Dependency and submission pins | Resource-registry tests | Native API completion rules plus GPU smoke | Command-buffer completion plus GPU smoke | No backend destroy occurs before all dependency and accepted-submission pins drain. |
 | Creation failure and rollback | Frontend failure-injection tests | Incomplete-framebuffer rollback test | Fake-runtime failure tests | The operation retains its original typed error, partial native state is released once, and the previous ready generation remains usable. |
 | Shutdown | Registry and headless viewport-resource tests | Backend lifecycle and viewport smoke tests | Backend lifecycle and viewport smoke tests | Pending work is cancelled, dependents retire before dependencies, every native instance is released once, and a second shutdown is a no-op. |
-| Backend/device loss | Deterministic failure fixtures when recovery is introduced | Required before recovery is advertised | Required before recovery is advertised | No unavailable native API is called; all old-owner handles become stale and recoverable records publish only under a new owner. |
+| Backend/device loss | Deterministic failure fixtures required by ADR-179 | Required before recovery is advertised | Required before recovery is advertised | The first current loss closes old-generation admission, aborts exactly once, captures bounded evidence, calls no unavailable native API, and publishes recoverable records only under a new owner; terminal failure remains typed and actionable. |
 
 Failures must retain a registered descriptor. Its domain identifies the
 frontend, OpenGL, Metal, or Null boundary; its code identifies the operation and
