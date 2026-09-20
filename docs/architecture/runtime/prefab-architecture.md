@@ -57,6 +57,34 @@ Authoring: Editor / Tools
                          -> gameplay lifecycle after publication
 ```
 
+## Stable Diagnostics And Context
+
+Prefab failures use the `horo.prefab` error namespace for prefab-owned
+operation identities. A `PrefabDiagnosticRecord` is an owned, backend-neutral
+projection of one failed operation; it is not a logger, operation store,
+document handle, or runtime mutation authority. Each record carries the
+`PrefabAssetId`, exact `PrefabSourceRevision`, operation and category, with
+optional scene-instance, nested local-member, property, operation and source
+navigation evidence. A bounded dependency chain retains the exact AssetIds,
+edge kinds and available source revisions used by graph, expansion, cook or
+spawn work.
+
+The record preserves an outer typed error and every admitted immutable cause
+identity as `(domain, code, severity)`. Asset, Scene, Gameplay and project
+migration identities remain typed data; presentation text is never parsed to
+recover an origin. Unsupported domains or invented prefab codes are rejected
+before publication. Cause depth, dependency depth, message bytes, source-path
+bytes and identity bytes have explicit limits, and malformed context produces
+no partial record.
+
+Prefab producers retain the record for details and project it into the existing
+Foundation `BuildOutputStore` record for build/cook presentation. Observability
+adapters emit the same stable category, operation, code and typed context
+through the process-owned runtime. The source-navigation service owns path
+containment and current-revision checks; the diagnostic source location is only
+a bounded navigation hint. No prefab-specific sink, history store or navigation
+fallback is introduced.
+
 ---
 
 ## Capability Tiers
