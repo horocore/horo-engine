@@ -66,6 +66,14 @@ sequenceDiagram
 10. Refresh asset index and static behavior, service, and script descriptors.
 11. Report project-ready state or blocking diagnostics.
 
+The authoritative `PackageRestoreService` receives the host-computed canonical
+dependency-request digest and the selected host platform as part of its typed
+request. It may use an inline lockfile snapshot for adapters that already own
+durable metadata reads, but it never resolves a replacement version/source or
+writes the requested dependency set. It stages every exact locked artifact in
+a candidate graph and publishes that graph only after all entries pass cache,
+archive, manifest, and optional publisher-policy checks.
+
 Restore may read validated static descriptors, immutable package models,
 generated metadata and asset indexes. It cannot pass a TOML DOM, decoded-only
 manifest or unknown string token into the resolver or lifecycle. Restore must not

@@ -114,6 +114,7 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackageArchiveTests.cpp
     unit/packages/PackageCacheTests.cpp
     unit/packages/PackageFileManifestTests.cpp
+    unit/packages/PackageRestoreTests.cpp
     unit/packages/PackagePublisherVerificationTests.cpp)
 target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPackageValidationTests LABELS "packages;headless")

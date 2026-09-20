@@ -148,6 +148,9 @@ target_compile_features(HoroPackages PUBLIC cxx_std_20)
 target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
 add_library(HoroPackageSecurity STATIC
+        packages/restore/PackageRestore.cpp
+        packages/restore/PackageRestoreService.cpp
+        packages/restore/PackageRestoreErrors.cpp
         packages/verification/PackagePublisherVerification.cpp
         packages/verification/PackagePublisherVerificationErrors.cpp
 )
