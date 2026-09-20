@@ -5,12 +5,15 @@
  */
 
 #include "Horo/Physics/CharacterWorldSettings.h"
+#include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <compare>
 #include <cstdint>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace Horo::Physics {
     /** @brief Exact collision-filter and local-origin evidence captured for one scene candidate. */
@@ -51,6 +54,28 @@ namespace Horo::Physics {
         PhysicsWorldSettings physics;
         Character::CharacterWorldSettings character;
     };
+
+    /**
+     * @brief Backend-neutral runtime binding for one legacy authored trigger volume.
+     *
+     * The object identity remains authored-scene evidence while the fixture descriptor is an
+     * inert, scale-free Physics admission value. No field owns a native solver resource.
+     */
+    struct PhysicsTriggerVolumeBinding final {
+        Runtime::SceneObjectId object;
+        PhysicsQueryFixtureDescriptor fixture;
+    };
+
+    /**
+     * @brief Converts legacy trigger-volume metadata into deterministic analytic sensor descriptors.
+     * @param definition Validated immutable scene definition containing legacy trigger components.
+     * @return Bindings sorted by authored object identity, or a stable conversion/capacity error.
+     * @pre Conversion runs before Physics-world publication and performs no native work.
+     * @post Disabled trigger components produce no binding; enabled components contain explicit
+     * geometry, world pose, filter identities, and sensor admission policy.
+     */
+    [[nodiscard]] Result<std::vector<PhysicsTriggerVolumeBinding>> BuildPhysicsTriggerVolumeBindings(
+        const Runtime::RuntimeSceneDefinition &definition);
 
     /** @brief Prepares and retires paired Physics and Character worlds through RuntimeScene's aggregate boundary. */
     class PhysicsSceneActivationParticipant final : public Runtime::SceneActivationParticipant {

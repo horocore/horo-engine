@@ -281,6 +281,26 @@ work and final generation/budget validation succeed. Replacement failure destroy
 only the candidate and leaves the prior scene/world/query state unchanged. The
 first Physics tick occurs after the complete bundle is authoritative.
 
+### Legacy trigger-volume conversion
+
+While the shape-only `TriggerVolumeComponent` is being migrated to the canonical
+sensor-body/collider schema, the Physics activation participant performs the
+runtime bridge owned by PHY-004.8. Enabled legacy volumes are converted before
+world publication into deterministic analytic sensor descriptors. Their authored
+hierarchy is resolved into a finite world-space translation, rotation, and
+positive scale; singular, non-finite, sheared, unsupported, or over-capacity
+inputs fail candidate preparation with typed Physics errors. Disabled volumes
+produce no runtime admission.
+
+The bridge uses fixed inert layer/profile/query-channel identities until the
+schema migration supplies project-owned filter evidence. The participant creates
+the resulting sensor fixtures only on the Physics owner thread and retains the
+fixture handles in the detached candidate. Replacement and unload destroy those
+fixtures before retiring the candidate world, so no overlap state or handle can
+survive a failed or superseded scene bundle. The bridge is transitional: it does
+not infer colliders from render meshes, and the canonical schema migration must
+replace these fixed identities before the legacy component is removed.
+
 [ADR-137](../../adr/137-terrain-foliage-ownership-data-tier-and-lifecycle.md)
 keeps terrain/foliage collision on this ownership path. Terrain supplies immutable
 cooked shape-install descriptors tagged with exact dataset/tile/content generations;
@@ -543,10 +563,11 @@ Immediate queries execute on the physics owner thread outside a step. Parallel
 or asynchronous queries use a read-only broadphase snapshot with documented
 staleness.
 
-CanonicalV1 currently admits bounded analytic query fixtures (box, sphere, capsule
-and static plane) through the active world solely to exercise this query contract
-until authored scene conversion publishes resident bodies and shapes. Fixture
-creation and retirement are owner-thread operations outside a fixed step. The Horo
+CanonicalV1 admits bounded analytic query fixtures (box, sphere, capsule and static
+plane) through the active world. The transitional legacy-trigger bridge above uses
+the same owner-thread admission and retirement boundary; canonical body/collider
+activation remains the schema migration's responsibility. Fixture creation and
+retirement are owner-thread operations outside a fixed step. The Horo
 channel/profile/layer/trigger selectors are applied by the native body filter before
 collector callbacks; collectors retain at most `1024` hits and project only copied
 generation-checked evidence. Callbacks cannot mutate world structure. A world records
