@@ -535,20 +535,21 @@ namespace Horo::Physics::Detail {
                                                              bodyFilter);
         }
 
+        [[nodiscard]] JPH::RMat44 ToNativeTransform(const PhysicsPose &pose) {
+            return JPH::RMat44::sRotationTranslation(ToNative(pose.rotation),
+                                                     JPH::RVec3(pose.translation.x, pose.translation.y, pose.translation.z));
+        }
+
         void CollectOverlapQuery(const CanonicalWorld &world, const PhysicsOverlapQuery &query, const CanonicalQueryFixtureRecord &source,
                                  CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
-            const JPH::RMat44 transform =
-                JPH::RMat44::sRotationTranslation(ToNative(query.pose.rotation),
-                                                  JPH::RVec3(query.pose.translation.x, query.pose.translation.y, query.pose.translation.z));
+            const JPH::RMat44 transform = ToNativeTransform(query.pose);
             world.system->GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
                                                              JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
         }
 
         void CollectSweepQuery(const CanonicalWorld &world, const PhysicsSweepQuery &query, const CanonicalQueryFixtureRecord &source,
                                CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
-            const JPH::RMat44 transform =
-                JPH::RMat44::sRotationTranslation(ToNative(query.pose.rotation),
-                                                  JPH::RVec3(query.pose.translation.x, query.pose.translation.y, query.pose.translation.z));
+            const JPH::RMat44 transform = ToNativeTransform(query.pose);
             const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(source.shape, JPH::Vec3::sOne(), transform,
                                                                               ToNative(query.direction * query.maximumDistanceMeters));
             world.system->GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {}, {},
@@ -623,23 +624,32 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
+        template <typename Collector, typename EvidenceFunction>
+        [[nodiscard]] Result<void> AppendCollectedQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
+                                                            const FixedQueryCollector<Collector> &collector,
+                                                            std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
+                                                            std::size_t &candidateCount, const EvidenceFunction &evidenceFunction) {
+            for (std::size_t index = 0; index < collector.count; ++index) {
+                if (const Result<void> appended =
+                        AppendCanonicalHit(world, descriptor, candidates, candidateCount, evidenceFunction(collector.values[index]));
+                    appended.HasError())
+                    return appended;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> AppendRayQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
                                                       const PhysicsRayQuery &ray,
                                                       const FixedQueryCollector<JPH::CastRayCollector> &collector,
                                                       std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
                                                       std::size_t &candidateCount) {
-            for (std::size_t index = 0; index < collector.count; ++index) {
-                const auto &hit = collector.values[index];
+            return AppendCollectedQueryHits(world, descriptor, collector, candidates, candidateCount, [&world, &ray](const auto &hit) {
                 const Math::Vec3 position = ray.origin + ray.direction * (ray.maximumDistanceMeters * hit.mFraction);
-                if (const Result<void> appended = AppendCanonicalHit(world, descriptor, candidates, candidateCount,
-                                                                     {.body = hit.mBodyID,
-                                                                      .position = position,
-                                                                      .normal = RayNormal(world, hit.mBodyID, hit.mSubShapeID2, position),
-                                                                      .distance = ray.maximumDistanceMeters * hit.mFraction});
-                    appended.HasError())
-                    return appended;
-            }
-            return Result<void>::Success();
+                return CanonicalHitEvidence{.body = hit.mBodyID,
+                                            .position = position,
+                                            .normal = RayNormal(world, hit.mBodyID, hit.mSubShapeID2, position),
+                                            .distance = ray.maximumDistanceMeters * hit.mFraction};
+            });
         }
 
         [[nodiscard]] Result<void> AppendPointQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
@@ -647,15 +657,9 @@ namespace Horo::Physics::Detail {
                                                         const FixedQueryCollector<JPH::CollidePointCollector> &collector,
                                                         std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
                                                         std::size_t &candidateCount) {
-            for (std::size_t index = 0; index < collector.count; ++index) {
-                const auto &hit = collector.values[index];
-                if (const Result<void> appended =
-                        AppendCanonicalHit(world, descriptor, candidates, candidateCount,
-                                           {.body = hit.mBodyID, .position = point.point, .normal = std::nullopt, .distance = 0.0F});
-                    appended.HasError())
-                    return appended;
-            }
-            return Result<void>::Success();
+            return AppendCollectedQueryHits(world, descriptor, collector, candidates, candidateCount, [&point](const auto &hit) {
+                return CanonicalHitEvidence{.body = hit.mBodyID, .position = point.point, .normal = std::nullopt, .distance = 0.0F};
+            });
         }
 
         template <typename Collector, typename DistanceFunction>
@@ -663,18 +667,13 @@ namespace Horo::Physics::Detail {
                                                           const FixedQueryCollector<Collector> &collector,
                                                           std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
                                                           std::size_t &candidateCount, const DistanceFunction &distanceFunction) {
-            for (std::size_t index = 0; index < collector.count; ++index) {
-                const auto &hit = collector.values[index];
+            return AppendCollectedQueryHits(world, descriptor, collector, candidates, candidateCount, [&distanceFunction](const auto &hit) {
                 const Math::Vec3 position{hit.mContactPointOn2.GetX(), hit.mContactPointOn2.GetY(), hit.mContactPointOn2.GetZ()};
-                if (const Result<void> appended = AppendCanonicalHit(world, descriptor, candidates, candidateCount,
-                                                                     {.body = hit.mBodyID2,
-                                                                      .position = position,
-                                                                      .normal = ContactNormal(hit.mPenetrationAxis),
-                                                                      .distance = distanceFunction(hit)});
-                    appended.HasError())
-                    return appended;
-            }
-            return Result<void>::Success();
+                return CanonicalHitEvidence{.body = hit.mBodyID2,
+                                            .position = position,
+                                            .normal = ContactNormal(hit.mPenetrationAxis),
+                                            .distance = distanceFunction(hit)};
+            });
         }
 
         /** @brief Projects native query collectors into deterministic, bounded Horo hit storage. */
