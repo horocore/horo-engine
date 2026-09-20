@@ -143,14 +143,6 @@ namespace Horo::Editor {
             return std::filesystem::path{record.source->absolutePath}.filename().string();
         }
 
-        [[nodiscard]] bool ContainsCaseInsensitive(const std::string_view text, const std::string_view needle) {
-            if (needle.empty())
-                return true;
-            return std::ranges::search(text, needle, [](const char left, const char right) {
-                return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
-            }).begin() != text.end();
-        }
-
         [[nodiscard]] std::string FormatTimeOfDay(const std::chrono::system_clock::time_point &timestampUtc) {
             const std::time_t timeT = std::chrono::system_clock::to_time_t(timestampUtc);
             std::tm tmValue{};
@@ -203,13 +195,10 @@ namespace Horo::Editor {
         const bool snapshotChanged = RefreshSnapshot();
         if (m_filterDirty)
             RebuildFilter();
-
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
             ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
 
         std::size_t errorCount = 0U;
         std::size_t warningCount = 0U;
@@ -217,76 +206,100 @@ namespace Horo::Editor {
             errorCount += IsErrorRecord(record) ? 1U : 0U;
             warningCount += IsWarningRecord(record) ? 1U : 0U;
         }
+        DrawToolbar(regions, metrics, context, errorCount, warningCount);
+        DrawTable(regions, metrics, context, command, snapshotChanged);
+        DrawFooter(regions, metrics, context, errorCount, warningCount);
+    }
 
-        DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
+    void GlobalDockBuildOutputPane::DrawToolbar(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                                const EditorGuiContext &context, const std::size_t errorCount,
+                                                const std::size_t warningCount) {
         const float controlY = regions.toolbarOrigin.y + (metrics.toolbarHeight - metrics.controlHeight) * 0.5F;
-        const auto allProps = GlobalDockToolbarChipProps{
+        DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
+        const float x = DrawToolbarStatus(regions, metrics, context, errorCount, warningCount, controlY);
+        DrawToolbarTargets(metrics, context, x, controlY);
+    }
+
+    float GlobalDockBuildOutputPane::DrawToolbarStatus(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                                       const EditorGuiContext &context, const std::size_t errorCount,
+                                                       const std::size_t warningCount, const float controlY) {
+        const Theme::Fonts &fonts = context.theme.fonts;
+        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
+        const GlobalDockToolbarChipProps allProps{
             .id = "BuildAll",
             .label = context.localization.Get("editor", "workspace.global_dock.build_output.status.all"),
             .count = m_snapshot.records.size(),
             .active = m_statusFilter == StatusFilter::All,
         };
-        const auto errorProps = GlobalDockToolbarChipProps{
+        const GlobalDockToolbarChipProps errorProps{
             .id = "BuildErrors",
             .label = context.localization.Get("editor", "workspace.global_dock.build_output.status.failed"),
             .count = errorCount,
             .tone = GlobalDockTone::Error,
             .active = m_statusFilter == StatusFilter::Errors,
         };
-        const auto warningProps = GlobalDockToolbarChipProps{
+        const GlobalDockToolbarChipProps warningProps{
             .id = "BuildWarnings",
             .label = context.localization.Get("editor", "workspace.global_dock.build_output.status.warning"),
             .count = warningCount,
             .tone = GlobalDockTone::Warning,
             .active = m_statusFilter == StatusFilter::Warning,
         };
+        const GlobalDockToolbarChipProps rebuildProps{
+            .id = "BuildRebuild",
+            .label = context.localization.Get("editor", "workspace.global_dock.build_output.rebuild"),
+            .tone = GlobalDockTone::Accent,
+            .active = true,
+            .icon = Ui::UiIcon::Reset,
+        };
         const float allWidth = MeasureGlobalDockToolbarChip(allProps, fonts);
         const float errorWidth = MeasureGlobalDockToolbarChip(errorProps, fonts);
         const float warningWidth = MeasureGlobalDockToolbarChip(warningProps, fonts);
-        const float targetWidth = 108.0F * scale;
-        const float configurationWidth = 132.0F * scale;
-        const auto rebuildProps =
-            GlobalDockToolbarChipProps{.id = "BuildRebuild",
-                                       .label = context.localization.Get("editor", "workspace.global_dock.build_output.rebuild"),
-                                       .tone = GlobalDockTone::Accent,
-                                       .active = true,
-                                       .icon = Ui::UiIcon::Reset};
         const float rebuildWidth = MeasureGlobalDockToolbarChip(rebuildProps, fonts);
-        const float fixedWidth = allWidth + errorWidth + warningWidth + targetWidth + configurationWidth + rebuildWidth +
-                                 metrics.toolbarGap * 7.0F + 1.0F * scale;
+        const float fixedWidth =
+            allWidth + errorWidth + warningWidth + rebuildWidth + (108.0F + 132.0F) * scale + metrics.toolbarGap * 7.0F + scale;
         const float searchWidth = std::max(180.0F * scale, regions.toolbarWidth - metrics.toolbarPaddingX * 2.0F - fixedWidth);
         float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
-        ImGui::SetCursorScreenPos({x, controlY});
-        if (const std::string &searchHint = context.localization.Get("editor", "workspace.global_dock.build_output.search");
-            Ui::InputTextControl("##BuildOutputSearch", m_search.data(), m_search.size(), fonts,
-                                 {.width = searchWidth / scale,
-                                  .hint = searchHint.c_str(),
-                                  .prefixIconWidth = 20.0F,
-                                  .componentSize = Ui::ComponentSize::Small,
-                                  .surface = Ui::InputTextSurface::BottomDockToolbar})) {
+        const std::string previousSearch{m_search.data()};
+        x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##BuildOutputSearch", m_search,
+                                        context.localization.Get("editor", "workspace.global_dock.build_output.search"), fonts);
+        if (previousSearch != std::string_view{m_search.data()})
             m_filterDirty = true;
-        }
-        Ui::DrawEditorIcon(ImGui::GetWindowDrawList(), Ui::UiIcon::Search, {x + 8.0F * scale, controlY + 8.0F * scale},
-                           {14.0F * scale, 14.0F * scale}, Theme::U32(Theme::Dim()), fonts.icon);
-        x += searchWidth + metrics.toolbarGap;
-        if (DrawGlobalDockToolbarChip({x, controlY}, allWidth, allProps, fonts)) {
+        return DrawToolbarStatusChips(x, controlY, scale, metrics.toolbarGap, fonts, allProps, errorProps, warningProps, allWidth,
+                                      errorWidth, warningWidth);
+    }
+
+    float GlobalDockBuildOutputPane::DrawToolbarStatusChips(const float x, const float controlY, const float scale, const float gap,
+                                                            const Theme::Fonts &fonts, const GlobalDockToolbarChipProps &allProps,
+                                                            const GlobalDockToolbarChipProps &errorProps,
+                                                            const GlobalDockToolbarChipProps &warningProps, const float allWidth,
+                                                            const float errorWidth, const float warningWidth) {
+        float cursorX = x;
+        if (DrawGlobalDockToolbarChip({cursorX, controlY}, allWidth, allProps, fonts)) {
             m_statusFilter = StatusFilter::All;
             m_filterDirty = true;
         }
-        x += allWidth + metrics.toolbarGap;
-        if (DrawGlobalDockToolbarChip({x, controlY}, errorWidth, errorProps, fonts)) {
+        cursorX += allWidth + gap;
+        if (DrawGlobalDockToolbarChip({cursorX, controlY}, errorWidth, errorProps, fonts)) {
             m_statusFilter = StatusFilter::Errors;
             m_filterDirty = true;
         }
-        x += errorWidth + metrics.toolbarGap;
-        if (DrawGlobalDockToolbarChip({x, controlY}, warningWidth, warningProps, fonts)) {
+        cursorX += errorWidth + gap;
+        if (DrawGlobalDockToolbarChip({cursorX, controlY}, warningWidth, warningProps, fonts)) {
             m_statusFilter = StatusFilter::Warning;
             m_filterDirty = true;
         }
-        x += warningWidth + metrics.toolbarGap;
-        DrawGlobalDockToolbarSeparator(x, controlY);
-        x += metrics.toolbarGap + 1.0F * scale;
+        cursorX += warningWidth + gap;
+        DrawGlobalDockToolbarSeparator(cursorX, controlY);
+        return cursorX + gap + scale;
+    }
 
+    void GlobalDockBuildOutputPane::DrawToolbarTargets(const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float x,
+                                                       const float controlY) {
+        const Theme::Fonts &fonts = context.theme.fonts;
+        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
+        const float targetWidth = 108.0F * scale;
+        const float configurationWidth = 132.0F * scale;
         const std::array<std::string, 3> targetText{
             context.localization.Get("editor", "workspace.global_dock.build_output.target.editor"),
             context.localization.Get("editor", "workspace.global_dock.build_output.target.runtime"),
@@ -301,6 +314,7 @@ namespace Horo::Editor {
                                             .componentSize = Ui::ComponentSize::Small,
                                             .surface = Ui::ComboControlSurface::BottomDockToolbar}));
         x += targetWidth + metrics.toolbarGap;
+
         const std::array<std::string, 3> configurationText{
             context.localization.Get("editor", "workspace.global_dock.build_output.configuration.development"),
             context.localization.Get("editor", "workspace.global_dock.build_output.configuration.debug"),
@@ -316,100 +330,141 @@ namespace Horo::Editor {
                                             .componentSize = Ui::ComponentSize::Small,
                                             .surface = Ui::ComboControlSurface::BottomDockToolbar}));
         x += configurationWidth + metrics.toolbarGap;
+        const GlobalDockToolbarChipProps rebuildProps{
+            .id = "BuildRebuild",
+            .label = context.localization.Get("editor", "workspace.global_dock.build_output.rebuild"),
+            .tone = GlobalDockTone::Accent,
+            .active = true,
+            .icon = Ui::UiIcon::Reset,
+        };
+        const float rebuildWidth = MeasureGlobalDockToolbarChip(rebuildProps, fonts);
         static_cast<void>(DrawGlobalDockToolbarChip({x, controlY}, rebuildWidth, rebuildProps, fonts));
+    }
 
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
+    void GlobalDockBuildOutputPane::DrawTable(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                              const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
+                                              const bool snapshotChanged) {
+        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const ImVec2 headerMin = regions.contentOrigin;
-        DrawGlobalDockTableHeaderSurface(headerMin, regions.contentWidth, metrics.tableHeaderHeight);
+        DrawTableHeader(regions, metrics, context, scale);
         const float levelX = headerMin.x + metrics.contentPadding;
         const float lineX = levelX + 68.0F * scale + metrics.columnGap;
         const float fileX = lineX + 74.0F * scale + metrics.columnGap;
         const float messageX = fileX + 96.0F * scale + metrics.columnGap;
-        const float headerTextY = headerMin.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {levelX, headerTextY}, Theme::U32(Theme::Muted()),
-                          context.localization.Get("editor", "workspace.global_dock.build_output.column.level").c_str());
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {lineX, headerTextY}, Theme::U32(Theme::Muted()),
-                          context.localization.Get("editor", "workspace.global_dock.build_output.column.line").c_str());
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {fileX, headerTextY}, Theme::U32(Theme::Muted()),
-                          context.localization.Get("editor", "workspace.global_dock.build_output.column.file").c_str());
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {messageX, headerTextY}, Theme::U32(Theme::Muted()),
-                          context.localization.Get("editor", "workspace.global_dock.build_output.column.message").c_str());
+        DrawTableRows(regions, metrics, context, command, snapshotChanged, levelX, lineX, fileX, messageX);
+    }
 
-        const ImVec2 rowsOrigin{regions.contentOrigin.x, regions.contentOrigin.y + metrics.tableHeaderHeight};
+    void GlobalDockBuildOutputPane::DrawTableHeader(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                                    const EditorGuiContext &context, const float scale) {
+        ImDrawList *drawList = ImGui::GetWindowDrawList();
+        const ImVec2 headerMin = regions.contentOrigin;
+        DrawGlobalDockTableHeaderSurface(headerMin, regions.contentWidth, metrics.tableHeaderHeight);
+        const float headerY = headerMin.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
+        const std::array positions{
+            headerMin.x + metrics.contentPadding,
+            headerMin.x + metrics.contentPadding + 68.0F * scale + metrics.columnGap,
+            headerMin.x + metrics.contentPadding + (68.0F + 74.0F) * scale + metrics.columnGap * 2.0F,
+            headerMin.x + metrics.contentPadding + (68.0F + 74.0F + 96.0F) * scale + metrics.columnGap * 3.0F,
+        };
+        const std::array<const char *, 4> keys{
+            "workspace.global_dock.build_output.column.level",
+            "workspace.global_dock.build_output.column.line",
+            "workspace.global_dock.build_output.column.file",
+            "workspace.global_dock.build_output.column.message",
+        };
+        for (std::size_t index = 0; index < positions.size(); ++index)
+            drawList->AddText(context.theme.fonts.sansCompact, Theme::TextPx::Caption(), {positions[index], headerY},
+                              Theme::U32(Theme::Muted()), context.localization.Get("editor", keys[index]).c_str());
+    }
+
+    void GlobalDockBuildOutputPane::DrawTableRows(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                                  const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
+                                                  const bool snapshotChanged, const float levelX, const float lineX, const float fileX,
+                                                  const float messageX) {
         const float rowsHeight = std::max(1.0F, regions.contentHeight - metrics.tableHeaderHeight);
+        const ImVec2 rowsOrigin{regions.contentOrigin.x, regions.contentOrigin.y + metrics.tableHeaderHeight};
         ImGui::SetCursorScreenPos(rowsOrigin);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
         ImGui::BeginChild("##BuildOutputRows", {regions.contentWidth, rowsHeight}, false,
                           ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoSavedSettings);
-        ImDrawList *rowsDrawList = ImGui::GetWindowDrawList();
+        ImDrawList *drawList = ImGui::GetWindowDrawList();
         const bool wasAtBottom = ImGui::GetScrollY() >= std::max(0.0F, ImGui::GetScrollMaxY() - 2.0F);
-        for (std::size_t visibleIndex = 0; visibleIndex < m_filteredIndices.size(); ++visibleIndex) {
-            const BuildOutputRecord &record = m_snapshot.records[m_filteredIndices[visibleIndex]];
-            const ImVec2 rowMin{rowsOrigin.x,
-                                rowsOrigin.y + static_cast<float>(visibleIndex) * metrics.tableRowHeight - ImGui::GetScrollY()};
-            ImGui::SetCursorScreenPos(rowMin);
-            ImGui::PushID(static_cast<int>(visibleIndex));
-            const bool activated = ImGui::InvisibleButton("##diagnostic", {regions.contentWidth, metrics.tableRowHeight});
-            const bool hovered = ImGui::IsItemHovered();
-            ImGui::PopID();
-            if (hovered)
-                rowsDrawList->AddRectFilled(rowMin, {rowMin.x + regions.contentWidth, rowMin.y + metrics.tableRowHeight},
-                                            Theme::U32(Theme::Hover()));
-            rowsDrawList->AddLine({rowMin.x, rowMin.y + metrics.tableRowHeight - 1.0F},
-                                  {rowMin.x + regions.contentWidth, rowMin.y + metrics.tableRowHeight - 1.0F}, Theme::U32(Theme::Border()));
-            const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
-            const std::string level = context.localization.Get("editor", StatusLocalizationKey(record));
-            const std::string line = LineLabel(record);
-            const std::string file = FileLabel(record);
-            DrawGlobalDockClippedText(*rowsDrawList, fonts.sansCompact, Theme::TextPx::Label(), {levelX, textY},
-                                      {lineX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, StatusColor(record), level);
-            DrawGlobalDockClippedText(*rowsDrawList, fonts.sansCompact, Theme::TextPx::Label(), {lineX, textY},
-                                      {fileX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(), line);
-            DrawGlobalDockClippedText(*rowsDrawList, fonts.sansCompact, Theme::TextPx::Label(), {fileX, textY},
-                                      {messageX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Accent(), file);
-            DrawGlobalDockClippedText(*rowsDrawList, fonts.sansCompact, Theme::TextPx::Label(), {messageX, textY},
-                                      {rowMin.x + regions.contentWidth - metrics.contentPadding, rowMin.y + metrics.tableRowHeight},
-                                      Theme::Text(), record.message);
-            if (activated && record.source.has_value()) {
-                command.command = EditorWorkspaceViewCommand::OpenSourceFile;
-                command.sourceOpenRequest = SourceOpenRequest{
-                    .path = record.source->absolutePath,
-                    .origin = SourceOpenOrigin::DiagnosticNavigation,
-                    .mode = SourceOpenMode::AllowExternalFallback,
-                    .line = record.source->line,
-                    .column = record.source->column,
-                };
-            }
-        }
+        for (std::size_t visibleIndex = 0; visibleIndex < m_filteredIndices.size(); ++visibleIndex)
+            DrawTableRow(m_snapshot.records[m_filteredIndices[visibleIndex]], visibleIndex, regions, metrics, context, command, levelX,
+                         lineX, fileX, messageX, *drawList);
         if (snapshotChanged && (wasAtBottom || m_initialFollowTail))
             ImGui::SetScrollHereY(1.0F);
         m_initialFollowTail = false;
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
+    }
 
-        DrawGlobalDockFooterSurface(regions.footerOrigin, regions.footerWidth, metrics.footerHeight);
-        const float footerY = regions.footerOrigin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
+    void GlobalDockBuildOutputPane::DrawTableRow(const BuildOutputRecord &record, const std::size_t visibleIndex,
+                                                 const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                                 const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
+                                                 const float levelX, const float lineX, const float fileX, const float messageX,
+                                                 ImDrawList &drawList) {
+        const ImVec2 rowMin{regions.contentOrigin.x, regions.contentOrigin.y + metrics.tableHeaderHeight +
+                                                         static_cast<float>(visibleIndex) * metrics.tableRowHeight - ImGui::GetScrollY()};
+        ImGui::SetCursorScreenPos(rowMin);
+        ImGui::PushID(static_cast<int>(visibleIndex));
+        const bool activated = ImGui::InvisibleButton("##diagnostic", {regions.contentWidth, metrics.tableRowHeight});
+        const bool hovered = ImGui::IsItemHovered();
+        ImGui::PopID();
+        DrawGlobalDockTableRowSurface(rowMin, regions.contentWidth, metrics.tableRowHeight, hovered);
+        const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
+        const std::string level = context.localization.Get("editor", StatusLocalizationKey(record));
+        const std::string line = LineLabel(record);
+        const std::string file = FileLabel(record);
+        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {levelX, textY},
+                                  {lineX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, StatusColor(record), level);
+        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {lineX, textY},
+                                  {fileX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(), line);
+        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {fileX, textY},
+                                  {messageX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Accent(), file);
+        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {messageX, textY},
+                                  {rowMin.x + regions.contentWidth - metrics.contentPadding, rowMin.y + metrics.tableRowHeight},
+                                  Theme::Text(), record.message);
+        if (activated && record.source.has_value()) {
+            command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+            command.sourceOpenRequest = SourceOpenRequest{
+                .path = record.source->absolutePath,
+                .origin = SourceOpenOrigin::DiagnosticNavigation,
+                .mode = SourceOpenMode::AllowExternalFallback,
+                .line = record.source->line,
+                .column = record.source->column,
+            };
+        }
+    }
+
+    void GlobalDockBuildOutputPane::DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                               const EditorGuiContext &context, const std::size_t errorCount,
+                                               const std::size_t warningCount) {
+        const Theme::Fonts &fonts = context.theme.fonts;
         const std::string summary =
             std::format("{} {}   {} {}   {} {}", m_snapshot.records.size(),
                         context.localization.Get("editor", "workspace.global_dock.build_output.footer.diagnostics"), errorCount,
                         context.localization.Get("editor", "workspace.global_dock.build_output.footer.errors"), warningCount,
                         context.localization.Get("editor", "workspace.global_dock.build_output.footer.warnings"));
+        DrawGlobalDockFooterSurface(regions.footerOrigin, regions.footerWidth, metrics.footerHeight);
+        ImDrawList *drawList = ImGui::GetWindowDrawList();
+        const float footerY = regions.footerOrigin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
         drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {regions.footerOrigin.x + metrics.contentPadding, footerY},
                           Theme::U32(Theme::Muted()), summary.c_str());
-        if (!m_snapshot.records.empty()) {
-            const BuildOutputRecord &last = m_snapshot.records.back();
-            const std::string lastBuild =
-                std::format("{} {} · {}", context.localization.Get("editor", "workspace.global_dock.build_output.footer.last_build"),
-                            FormatTimeOfDay(last.timestampUtc), context.localization.Get("editor", StatusLocalizationKey(last)));
-            const float textWidth = (fonts.sansCompact != nullptr ? fonts.sansCompact : ImGui::GetFont())
-                                        ->CalcTextSizeA(Theme::TextPx::Caption(), FLT_MAX, 0.0F, lastBuild.c_str())
-                                        .x;
-            drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                              {regions.footerOrigin.x + regions.footerWidth - metrics.contentPadding - textWidth, footerY},
-                              Theme::U32(Theme::Muted()), lastBuild.c_str());
-        }
+        if (m_snapshot.records.empty())
+            return;
+        const BuildOutputRecord &last = m_snapshot.records.back();
+        const std::string lastBuild =
+            std::format("{} {} · {}", context.localization.Get("editor", "workspace.global_dock.build_output.footer.last_build"),
+                        FormatTimeOfDay(last.timestampUtc), context.localization.Get("editor", StatusLocalizationKey(last)));
+        const float textWidth = (fonts.sansCompact != nullptr ? fonts.sansCompact : ImGui::GetFont())
+                                    ->CalcTextSizeA(Theme::TextPx::Caption(), FLT_MAX, 0.0F, lastBuild.c_str())
+                                    .x;
+        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
+                          {regions.footerOrigin.x + regions.footerWidth - metrics.contentPadding - textWidth, footerY},
+                          Theme::U32(Theme::Muted()), lastBuild.c_str());
     }
 
     bool GlobalDockBuildOutputPane::RefreshSnapshot() {
@@ -451,9 +506,10 @@ namespace Horo::Editor {
             const std::string source = FormatSource(record.source);
             if (!PassesStatusFilter(record, statusFilter))
                 continue;
-            if (!search.empty() && !ContainsCaseInsensitive(record.stage, search) &&
-                !ContainsCaseInsensitive(record.code.Value(), search) && !ContainsCaseInsensitive(record.message, search) &&
-                !ContainsCaseInsensitive(source, search) && !ContainsCaseInsensitive(TechnicalStatusText(record), search))
+            if (!search.empty() && !GlobalDockContainsCaseInsensitive(record.stage, search) &&
+                !GlobalDockContainsCaseInsensitive(record.code.Value(), search) &&
+                !GlobalDockContainsCaseInsensitive(record.message, search) && !GlobalDockContainsCaseInsensitive(source, search) &&
+                !GlobalDockContainsCaseInsensitive(TechnicalStatusText(record), search))
                 continue;
             projected.push_back(index);
         }

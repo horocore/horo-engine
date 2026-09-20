@@ -50,20 +50,6 @@ namespace Horo::Editor {
             return message;
         }
 
-        [[nodiscard]] Math::Transform ResolveRuntimeEntityTransform(const Runtime::RuntimeSceneView &runtimeView,
-                                                                    const Runtime::RuntimeEntityView &entity) {
-            if (!entity.authoredObject.has_value())
-                return *entity.localTransform;
-            const Result<SceneObjectWorldTransforms> world =
-                ResolveSceneObjectWorldTransforms(runtimeView, SceneObjectId{entity.authoredObject->value});
-            if (world.HasError())
-                return *entity.localTransform;
-            if (const Result<Math::Transform> decomposed = Math::TryDecomposeAffineTRS(world.Value().localToWorld); decomposed.HasValue()) {
-                return decomposed.Value();
-            }
-            return *entity.localTransform;
-        }
-
         [[nodiscard]] std::filesystem::path ResolveProjectRoot(const std::filesystem::path &projectRoot) {
             std::error_code error;
             std::filesystem::path resolved = std::filesystem::absolute(projectRoot, error).lexically_normal();
@@ -98,16 +84,21 @@ namespace Horo::Editor {
             };
         }
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);
+        InitializeProjectState(absoluteProjectRoot);
+        InitializeWorkspaceLayout();
+        InitializeInitialScene(absoluteProjectRoot);
+        RefreshSceneProjections();
+    }
+
+    void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {
         m_viewModel.projectRoot = absoluteProjectRoot.string();
-        m_viewModel.assetRegistryRevision = assetRegistry.Revision();
+        m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
         RebuildContentBrowserProjection(m_viewModel.projectRoot, {});
         if (m_durableFiles != nullptr) {
             ProjectIntegrityValidatorService validator{*m_durableFiles};
-            const Result<void> repaired = validator.Repair(absoluteProjectRoot);
-            if (repaired.HasError()) {
+            if (const Result<void> repaired = validator.Repair(absoluteProjectRoot); repaired.HasError())
                 LOG_ERROR("editor.project_validator", "Project integrity repair failed for '%s': %s", absoluteProjectRoot.string().c_str(),
                           repaired.ErrorValue().message.c_str());
-            }
         }
         m_gameplayRegistry = ProjectGameplayRegistry::Discover(absoluteProjectRoot);
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->Diagnostics())
@@ -115,6 +106,9 @@ namespace Horo::Editor {
                       diagnostic.error.message.c_str());
         for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())
             m_viewModel.availableBehaviors.push_back(registration.descriptor);
+    }
+
+    void EditorWorkspaceController::InitializeWorkspaceLayout() {
         m_viewModel.panelDockAreas = {{"horo.hierarchy", WorkspaceDockArea::Left},  {"horo.viewport", WorkspaceDockArea::Document},
                                       {"horo.game", WorkspaceDockArea::Document},   {"horo.global_dock", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}, {"horo.input_mapping", WorkspaceDockArea::Right}};
@@ -124,54 +118,66 @@ namespace Horo::Editor {
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.global_dock", ActivityBarSlot{ActivityBarRail::Left, 2, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.input_mapping", ActivityBarSlot{ActivityBarRail::Right, 1, 0}));
+    }
 
-        bool loadedProjectScene = false;
-        if (const Result<std::optional<LoadedProjectScene>> loaded = LoadProjectDefaultScene(absoluteProjectRoot); loaded.HasError()) {
+    void EditorWorkspaceController::InitializeInitialScene(const std::filesystem::path &absoluteProjectRoot) {
+        if (!LoadInitialScene(absoluteProjectRoot) && !m_initializationError.has_value())
+            CreateBootstrapScene();
+        if (m_defaultScenePath.has_value())
+            InspectInitialSceneRecovery(absoluteProjectRoot);
+    }
+
+    bool EditorWorkspaceController::LoadInitialScene(const std::filesystem::path &absoluteProjectRoot) {
+        const Result<std::optional<LoadedProjectScene>> loaded = LoadProjectDefaultScene(absoluteProjectRoot);
+        if (loaded.HasError()) {
             m_initializationError = loaded.ErrorValue();
             LOG_ERROR("editor.scene_document", "Default scene load failed: %s", loaded.ErrorValue().message.c_str());
-        } else if (loaded.Value().has_value()) {
-            LoadedProjectScene projectScene = *loaded.Value();
-            if (const Result<void> installed =
-                    m_document.LoadSaved(std::move(projectScene.objects), std::move(projectScene.prefabInstances));
-                installed.HasError()) {
-                m_initializationError = installed.ErrorValue();
-                LOG_ERROR("editor.scene_document", "Default scene validation failed: %s", installed.ErrorValue().message.c_str());
-            } else {
-                m_defaultScenePath = std::move(projectScene.absolutePath);
-                m_sceneFingerprint = std::move(projectScene.fingerprint);
-                loadedProjectScene = true;
-                m_history.Clear();
-                LOG_INFO("editor.scene_document", "Loaded default scene '%s'.", m_defaultScenePath->string().c_str());
-            }
+            return false;
         }
+        if (!loaded.Value().has_value())
+            return false;
+        LoadedProjectScene projectScene = *loaded.Value();
+        if (const Result<void> installed = m_document.LoadSaved(std::move(projectScene.objects), std::move(projectScene.prefabInstances));
+            installed.HasError()) {
+            m_initializationError = installed.ErrorValue();
+            LOG_ERROR("editor.scene_document", "Default scene validation failed: %s", installed.ErrorValue().message.c_str());
+            return false;
+        }
+        m_defaultScenePath = std::move(projectScene.absolutePath);
+        m_sceneFingerprint = std::move(projectScene.fingerprint);
+        m_history.Clear();
+        LOG_INFO("editor.scene_document", "Loaded default scene '%s'.", m_defaultScenePath->string().c_str());
+        return true;
+    }
 
-        if (!loadedProjectScene && !m_initializationError.has_value()) {
-            const Math::Quaternion pitch = Math::Quaternion::FromAxisAngle({1.0F, 0.0F, 0.0F}, -0.42F);
-            const Math::Quaternion yaw = Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, 0.55F);
-            const Result<SceneCommandResult> created = m_documentCommands.Execute(CreateSceneObjectCommand{
-                .name = "Box",
-                .localTransform = Math::Transform{.rotation = pitch * yaw},
-                .primitiveMesh = PrimitiveMeshDescriptor{},
-            });
-            if (created.HasError()) {
-                LOG_ERROR("editor.scene_document", "Bootstrap scene creation failed: %s", created.ErrorValue().message.c_str());
-            } else {
-                static_cast<void>(m_document.MarkSaved(m_document.Revision(), m_document.State()));
-                m_history.Clear();
-            }
+    void EditorWorkspaceController::CreateBootstrapScene() {
+        const Math::Quaternion pitch = Math::Quaternion::FromAxisAngle({1.0F, 0.0F, 0.0F}, -0.42F);
+        const Math::Quaternion yaw = Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, 0.55F);
+        const Result<SceneCommandResult> created = m_documentCommands.Execute(CreateSceneObjectCommand{
+            .name = "Box",
+            .localTransform = Math::Transform{.rotation = pitch * yaw},
+            .primitiveMesh = PrimitiveMeshDescriptor{},
+        });
+        if (created.HasError()) {
+            LOG_ERROR("editor.scene_document", "Bootstrap scene creation failed: %s", created.ErrorValue().message.c_str());
+            return;
         }
-        if (m_defaultScenePath.has_value()) {
-            const Result<std::optional<ProjectSceneRecoveryRecord>> recovery =
-                InspectProjectSceneRecovery(absoluteProjectRoot, *m_defaultScenePath);
-            if (recovery.HasError()) {
-                LOG_ERROR("editor.scene_recovery", "Recovery inspection failed: %s", recovery.ErrorValue().message.c_str());
-            } else if (recovery.Value().has_value()) {
-                m_viewModel.recoveryAvailable = true;
-                LOG_WARN("editor.scene_recovery", "Validated recovery is available for '%s'; canonical scene was not modified.",
-                         m_defaultScenePath->string().c_str());
-            }
+        static_cast<void>(m_document.MarkSaved(m_document.Revision(), m_document.State()));
+        m_history.Clear();
+    }
+
+    void EditorWorkspaceController::InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot) {
+        const Result<std::optional<ProjectSceneRecoveryRecord>> recovery =
+            InspectProjectSceneRecovery(absoluteProjectRoot, *m_defaultScenePath);
+        if (recovery.HasError()) {
+            LOG_ERROR("editor.scene_recovery", "Recovery inspection failed: %s", recovery.ErrorValue().message.c_str());
+            return;
         }
-        RefreshSceneProjections();
+        if (recovery.Value().has_value()) {
+            m_viewModel.recoveryAvailable = true;
+            LOG_WARN("editor.scene_recovery", "Validated recovery is available for '%s'; canonical scene was not modified.",
+                     m_defaultScenePath->string().c_str());
+        }
     }
 
     /** @copydoc EditorWorkspaceController::UpdateExternalSceneWatch */
@@ -306,6 +312,39 @@ namespace Horo::Editor {
                  static_cast<unsigned long long>(snapshot.revision.value), m_defaultScenePath->string().c_str());
     }
 
+    bool EditorWorkspaceController::CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                                                    const std::optional<std::filesystem::path> &newActivePath) {
+        if (const Result<void> marked = m_document.MarkSaved(snapshot.revision, snapshot.state); marked.HasError()) {
+            LOG_ERROR("editor.scene_document", "Saved scene state could not be acknowledged: %s", marked.ErrorValue().message.c_str());
+            return false;
+        }
+        if (newActivePath.has_value())
+            m_defaultScenePath = *newActivePath;
+        m_sceneFingerprint = fingerprint;
+        if (m_sceneFileWatch != nullptr)
+            m_sceneFileWatch->Reset();
+        m_viewModel.sceneExternalConflict = false;
+        m_sceneFileWatchErrorPresented = false;
+        m_sceneFileWatchElapsedSeconds = 0.0F;
+        if (const Result<void> recoveryDiscarded =
+                DiscardProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles);
+            recoveryDiscarded.HasError()) {
+            LOG_WARN("editor.scene_recovery", "Saved scene but could not clean recovery state: %s",
+                     recoveryDiscarded.ErrorValue().message.c_str());
+        } else {
+            m_viewModel.recoveryAvailable = false;
+            m_lastAutosavedState = {};
+        }
+        m_autosaveSuppressedForDiscard = false;
+        m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(),
+                                                    m_document.State(),
+                                                    DocumentChangeKind::SaveStateChanged,
+                                                    m_document.IsDirty(),
+                                                    {}});
+        RefreshSceneProjections();
+        return true;
+    }
+
     /** @copydoc EditorWorkspaceController::SaveScene */
     void EditorWorkspaceController::SaveScene(const bool overwriteConflict) {
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr) {
@@ -334,34 +373,26 @@ namespace Horo::Editor {
             return;
         }
 
-        if (const Result<void> marked = m_document.MarkSaved(snapshot.revision, snapshot.state); marked.HasError()) {
-            LOG_ERROR("editor.scene_document", "Saved scene state could not be acknowledged: %s", marked.ErrorValue().message.c_str());
+        if (!CommitSceneSave(snapshot, saved.Value().fingerprint))
             return;
-        }
-        m_sceneFingerprint = saved.Value().fingerprint;
-        if (m_sceneFileWatch != nullptr)
-            m_sceneFileWatch->Reset();
-        m_viewModel.sceneExternalConflict = false;
-        m_sceneFileWatchErrorPresented = false;
-        m_sceneFileWatchElapsedSeconds = 0.0F;
-        if (const Result<void> recoveryDiscarded =
-                DiscardProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles);
-            recoveryDiscarded.HasError()) {
-            LOG_WARN("editor.scene_recovery", "Saved scene but could not clean recovery state: %s",
-                     recoveryDiscarded.ErrorValue().message.c_str());
-        } else {
-            m_viewModel.recoveryAvailable = false;
-            m_lastAutosavedState = {};
-        }
-        m_autosaveSuppressedForDiscard = false;
-        m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(),
-                                                    m_document.State(),
-                                                    DocumentChangeKind::SaveStateChanged,
-                                                    m_document.IsDirty(),
-                                                    {}});
-        RefreshSceneProjections();
         LOG_INFO("editor.scene_document", "Saved scene revision %llu to '%s'.", static_cast<unsigned long long>(snapshot.revision.value),
                  m_defaultScenePath->string().c_str());
+    }
+
+    std::optional<std::filesystem::path> EditorWorkspaceController::ResolveSceneSaveDestination(
+        const std::filesystem::path &absolutePath) const {
+        std::error_code canonicalError;
+        const std::filesystem::path destination = std::filesystem::weakly_canonical(absolutePath, canonicalError);
+        if (canonicalError) {
+            LOG_ERROR("editor.scene_document", "Destination save rejected because '%s' could not be normalized: %s",
+                      absolutePath.string().c_str(), canonicalError.message().c_str());
+            return std::nullopt;
+        }
+        if (!destination.is_absolute()) {
+            LOG_ERROR("editor.scene_document", "Destination save rejected because '%s' is not absolute.", destination.string().c_str());
+            return std::nullopt;
+        }
+        return destination;
     }
 
     /** @copydoc EditorWorkspaceController::SaveSceneToPath */
@@ -372,81 +403,44 @@ namespace Horo::Editor {
             return;
         }
 
-        std::error_code canonicalError;
-        const std::filesystem::path destination = std::filesystem::weakly_canonical(absolutePath, canonicalError);
-        if (canonicalError) {
-            LOG_ERROR("editor.scene_document", "Destination save rejected because '%s' could not be normalized: %s",
-                      absolutePath.string().c_str(), canonicalError.message().c_str());
+        const std::optional<std::filesystem::path> destination = ResolveSceneSaveDestination(absolutePath);
+        if (!destination.has_value())
             return;
-        }
         const std::filesystem::path activePath = m_defaultScenePath->lexically_normal();
-        if (!destination.is_absolute()) {
-            LOG_ERROR("editor.scene_document", "Destination save rejected because '%s' is not absolute.", destination.string().c_str());
-            return;
-        }
-        if (copyOnly && destination == activePath) {
+        if (copyOnly && *destination == activePath) {
             LOG_ERROR("editor.scene_document", "Save Copy As rejected because the destination is the active scene path '%s'.",
                       activePath.string().c_str());
             return;
         }
-        if (!copyOnly && destination == activePath) {
+        if (!copyOnly && *destination == activePath) {
             SaveScene(true);
             return;
         }
 
         const SceneDocumentSnapshot snapshot = m_document.Snapshot();
-        auto saved = SaveProjectSceneToPath(std::filesystem::path{m_viewModel.projectRoot}, destination, snapshot, true, *m_mutations,
+        auto saved = SaveProjectSceneToPath(std::filesystem::path{m_viewModel.projectRoot}, *destination, snapshot, true, *m_mutations,
                                             *m_durableFiles);
         if (saved.HasError()) {
             LOG_ERROR("editor.scene_document", "%s failed for '%s': %s", copyOnly ? "Save Copy As" : "Save As",
-                      destination.string().c_str(), saved.ErrorValue().message.c_str());
+                      destination->string().c_str(), saved.ErrorValue().message.c_str());
             return;
         }
         if (saved.Value().status != ProjectSceneDestinationSaveStatus::Saved) {
             LOG_WARN("editor.scene_document", "%s paused because destination '%s' changed during the save.",
-                     copyOnly ? "Save Copy As" : "Save As", destination.string().c_str());
+                     copyOnly ? "Save Copy As" : "Save As", destination->string().c_str());
             return;
         }
 
         if (copyOnly) {
             LOG_INFO("editor.scene_document", "Saved scene copy revision %llu to '%s'.",
-                     static_cast<unsigned long long>(snapshot.revision.value), destination.string().c_str());
+                     static_cast<unsigned long long>(snapshot.revision.value), destination->string().c_str());
             return;
         }
 
-        if (const Result<void> marked = m_document.MarkSaved(snapshot.revision, snapshot.state); marked.HasError()) {
-            LOG_ERROR("editor.scene_document",
-                      "Saved As destination is durable but the active document state could not be "
-                      "acknowledged: %s",
-                      marked.ErrorValue().message.c_str());
+        if (!CommitSceneSave(snapshot, saved.Value().fingerprint, *destination))
             return;
-        }
-
-        m_defaultScenePath = destination;
-        m_sceneFingerprint = saved.Value().fingerprint;
-        if (m_sceneFileWatch != nullptr)
-            m_sceneFileWatch->Reset();
-        m_viewModel.sceneExternalConflict = false;
-        m_sceneFileWatchErrorPresented = false;
-        m_sceneFileWatchElapsedSeconds = 0.0F;
-        if (const Result<void> recoveryDiscarded =
-                DiscardProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles);
-            recoveryDiscarded.HasError()) {
-            LOG_WARN("editor.scene_recovery", "Saved scene to a new path but could not clean recovery state: %s",
-                     recoveryDiscarded.ErrorValue().message.c_str());
-        } else {
-            m_viewModel.recoveryAvailable = false;
-            m_lastAutosavedState = {};
-        }
-        m_autosaveSuppressedForDiscard = false;
-        m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(),
-                                                    m_document.State(),
-                                                    DocumentChangeKind::SaveStateChanged,
-                                                    m_document.IsDirty(),
-                                                    {}});
-        RefreshSceneProjections();
         LOG_INFO("editor.scene_document", "Saved scene revision %llu as '%s'; active document identity was updated.",
-                 static_cast<unsigned long long>(snapshot.revision.value), destination.string().c_str());
+                 static_cast<unsigned long long>(snapshot.revision.value), destination->string().c_str());
     }
 
     /** @copydoc EditorWorkspaceController::ReloadExternalScene */
@@ -609,39 +603,13 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::HandleInstantiateAsset(const AssetSceneDropRequest &request) {
-        const auto parsedId = Assets::AssetId::Parse(request.assetId);
-        if (parsedId.HasError() || request.documentRevision != m_document.Revision()) {
-            m_notifications.Publish("asset", NotificationSeverity::Warning,
-                                    Localized("workspace.asset_drop.stale",
-                                              "The asset drop was cancelled because the scene or drag reference changed."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_stale");
+        const Assets::AssetRecord *record = ResolveAssetDropRecord(request);
+        if (record == nullptr)
             return;
-        }
-        const Assets::AssetRecord *record = m_assetRegistry.Find(parsedId.Value());
-        if (record == nullptr || record->type.Value() != request.assetType) {
-            m_notifications.Publish("asset", NotificationSeverity::Error,
-                                    Localized("workspace.asset_drop.missing", "The dragged asset is no longer registered in this project."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_missing");
-            return;
-        }
-        if (!CanInstantiateAssetType(record->type.Value())) {
-            m_notifications.Publish("asset", NotificationSeverity::Info,
-                                    Localized("workspace.asset_drop.unsupported",
-                                              "This asset type cannot be instantiated as a scene object."),
-                                    Localized("workspace.asset_drop.unsupported_title", "Unsupported asset"),
-                                    std::format("asset_drop_unsupported_{}", record->type.Value()));
-            return;
-        }
-        if (request.parent.has_value() && !m_document.Contains(*request.parent)) {
-            m_notifications.Publish("asset", NotificationSeverity::Warning,
-                                    Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_parent_missing");
-            return;
-        }
 
         const std::filesystem::path source =
             (std::filesystem::path{m_viewModel.projectRoot} / record->sourcePath.String()).lexically_normal();
-        auto loaded = m_assetMeshCache.Load(record->id, source);
+        const auto loaded = m_assetMeshCache.Load(record->id, source);
         if (loaded.HasError()) {
             m_notifications.Publish("asset", NotificationSeverity::Error, loaded.ErrorValue().message,
                                     Localized("workspace.asset_drop.load_failed_title", "Asset could not be loaded"),
@@ -652,12 +620,48 @@ namespace Horo::Editor {
         Math::Transform localTransform;
         if (!ApplyAssetViewportPlacement(request, loaded.Value().mesh->localBounds, localTransform))
             return;
-
         std::string baseName = source.stem().string();
         if (baseName.empty())
             baseName = "Mesh";
         Result<SceneCommandResult> result =
             m_instantiateSceneAsset.Execute(AssetInstantiationRequest{record->id, std::move(baseName), request.parent, localTransform});
+        HandleInstantiatedAssetCommand(result);
+    }
+
+    const Assets::AssetRecord *EditorWorkspaceController::ResolveAssetDropRecord(const AssetSceneDropRequest &request) {
+        const auto parsedId = Assets::AssetId::Parse(request.assetId);
+        if (parsedId.HasError() || request.documentRevision != m_document.Revision()) {
+            m_notifications.Publish("asset", NotificationSeverity::Warning,
+                                    Localized("workspace.asset_drop.stale",
+                                              "The asset drop was cancelled because the scene or drag reference changed."),
+                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_stale");
+            return nullptr;
+        }
+        const Assets::AssetRecord *record = m_assetRegistry.Find(parsedId.Value());
+        if (record == nullptr || record->type.Value() != request.assetType) {
+            m_notifications.Publish("asset", NotificationSeverity::Error,
+                                    Localized("workspace.asset_drop.missing", "The dragged asset is no longer registered in this project."),
+                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_missing");
+            return nullptr;
+        }
+        if (!CanInstantiateAssetType(record->type.Value())) {
+            m_notifications.Publish("asset", NotificationSeverity::Info,
+                                    Localized("workspace.asset_drop.unsupported",
+                                              "This asset type cannot be instantiated as a scene object."),
+                                    Localized("workspace.asset_drop.unsupported_title", "Unsupported asset"),
+                                    std::format("asset_drop_unsupported_{}", record->type.Value()));
+            return nullptr;
+        }
+        if (request.parent.has_value() && !m_document.Contains(*request.parent)) {
+            m_notifications.Publish("asset", NotificationSeverity::Warning,
+                                    Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
+                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_parent_missing");
+            return nullptr;
+        }
+        return record;
+    }
+
+    void EditorWorkspaceController::HandleInstantiatedAssetCommand(Result<SceneCommandResult> &result) {
         if (result.HasError()) {
             const std::string message = result.ErrorValue().message;
             HandleDocumentCommandResult(result, "Instantiate asset");
@@ -711,13 +715,16 @@ namespace Horo::Editor {
         HandleDeleteSelectedObjects({object});
     }
 
-    void EditorWorkspaceController::HandleDeleteSelectedObjects(const std::vector<SceneObjectId> &objects) {
+    std::vector<SceneObjectId> EditorWorkspaceController::CollectExistingDeleteObjects(const std::vector<SceneObjectId> &objects,
+                                                                                       std::string &singleName,
+                                                                                       std::size_t &requestedCount) const {
         std::vector<SceneObjectId> requested;
         requested.reserve(objects.size());
         for (const SceneObjectId object : objects) {
             if (object.IsValid() && std::ranges::find(requested, object) == requested.end())
                 requested.push_back(object);
         }
+        requestedCount = requested.size();
 
         std::vector<SceneObjectId> existing;
         existing.reserve(requested.size());
@@ -731,7 +738,14 @@ namespace Horo::Editor {
             if (existing.size() == 1)
                 singleName = found->name;
         }
-        const std::size_t skipped = requested.size() - existing.size();
+        return existing;
+    }
+
+    void EditorWorkspaceController::HandleDeleteSelectedObjects(const std::vector<SceneObjectId> &objects) {
+        std::string singleName;
+        std::size_t requestedCount = 0;
+        std::vector<SceneObjectId> existing = CollectExistingDeleteObjects(objects, singleName, requestedCount);
+        const std::size_t skipped = requestedCount - existing.size();
         if (existing.empty()) {
             m_notifications.Publish("scene", NotificationSeverity::Warning,
                                     Localized("workspace.hierarchy.delete_blocked", "Selected objects cannot be deleted."),
@@ -1016,303 +1030,4 @@ namespace Horo::Editor {
         }
     }
 
-    Application::GameplayBuildRequest EditorWorkspaceController::MakeGameplayBuildRequest() const {
-        return Application::GameplayBuildRequest{
-            .projectRoot = m_viewModel.projectRoot,
-            .environment = m_gameplayBuildEnvironment,
-        };
-    }
-
-    bool EditorWorkspaceController::HasNativeGameplaySources() const {
-        const std::filesystem::path sourceRoot = std::filesystem::path{m_viewModel.projectRoot} / "source" / "gameplay";
-        std::error_code error;
-        if (!std::filesystem::is_directory(sourceRoot, error))
-            return false;
-        std::filesystem::recursive_directory_iterator iterator{sourceRoot, error};
-        const std::filesystem::recursive_directory_iterator end;
-        while (iterator != end && !error) {
-            const std::filesystem::directory_entry entry = *iterator;
-            iterator.increment(error);
-            if (!entry.is_regular_file(error))
-                continue;
-            const std::string extension = entry.path().extension().string();
-            if (extension == ".c" || extension == ".cc" || extension == ".cpp" || extension == ".cxx" || extension == ".ixx" ||
-                extension == ".cppm")
-                return true;
-        }
-        return false;
-    }
-
-    void EditorWorkspaceController::StartGameplayBuild(const bool playWhenReady) {
-        LOG_INFO("editor.gameplay", "StartGameplayBuild requested (playWhenReady=%s, project='%s').", playWhenReady ? "true" : "false",
-                 m_viewModel.projectRoot.c_str());
-        if (m_gameplayBuilds == nullptr || m_gameplayBuildEnvironment.gameplaySdkPackage.empty()) {
-            LOG_ERROR("editor.gameplay", "Gameplay build failed to start: build service or SDK package is unavailable.");
-            if (playWhenReady) {
-                m_viewModel.playState = EditorPlayState::Failed;
-                m_viewModel.playError = "Native gameplay build service is unavailable.";
-            }
-            return;
-        }
-        const Result<Application::GameplayBuildSessionId> started = m_gameplayBuilds->Start(MakeGameplayBuildRequest());
-        if (started.HasError()) {
-            LOG_ERROR("editor.gameplay", "Gameplay build service failed to start build: %s", started.ErrorValue().message.c_str());
-            if (playWhenReady) {
-                m_viewModel.playState = EditorPlayState::Failed;
-                m_viewModel.playError = started.ErrorValue().message;
-            }
-            return;
-        }
-        m_gameplayBuildSession = started.Value();
-        LOG_INFO("editor.gameplay", "Gameplay build session #%" PRIu64 " started.", *m_gameplayBuildSession);
-        m_playAfterGameplayBuild = m_playAfterGameplayBuild || playWhenReady;
-        if (playWhenReady) {
-            m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
-            m_viewModel.activeDocumentPanelId = "horo.game";
-            m_viewModel.playState = EditorPlayState::Starting;
-            m_viewModel.playError.clear();
-        }
-    }
-
-    void EditorWorkspaceController::UpdateGameplayBuild(const float elapsedSeconds) {
-        if (m_nativeBuildDebounceSeconds >= 0.0F && std::isfinite(elapsedSeconds) && elapsedSeconds > 0.0F) {
-            m_nativeBuildDebounceSeconds -= elapsedSeconds;
-            if (m_nativeBuildDebounceSeconds <= 0.0F) {
-                m_nativeBuildDebounceSeconds = -1.0F;
-                StartGameplayBuild(false);
-            }
-        }
-        if (!m_gameplayBuildSession.has_value() || m_gameplayBuilds == nullptr)
-            return;
-        const std::optional<Application::GameplayBuildSnapshot> snapshot = m_gameplayBuilds->Query(*m_gameplayBuildSession);
-        if (!snapshot.has_value())
-            return;
-        switch (snapshot->state) {
-            case Application::GameplayBuildState::Succeeded: {
-                LOG_INFO("editor.gameplay", "Gameplay build session #%" PRIu64 " succeeded.", *m_gameplayBuildSession);
-                const bool startPlay = m_playAfterGameplayBuild;
-                m_gameplayBuildSession.reset();
-                m_playAfterGameplayBuild = false;
-                RefreshGameplayRegistry();
-                if (startPlay)
-                    BeginPlaySession();
-                break;
-            }
-            case Application::GameplayBuildState::Failed:
-            case Application::GameplayBuildState::Cancelled:
-            case Application::GameplayBuildState::TimedOut: {
-                const std::string errorMsg = snapshot->error.has_value() ? snapshot->error->message : "Gameplay build failed.";
-                LOG_ERROR("editor.gameplay", "Gameplay build session #%" PRIu64 " %s: %s", *m_gameplayBuildSession,
-                          snapshot->state == Application::GameplayBuildState::Failed      ? "failed"
-                          : snapshot->state == Application::GameplayBuildState::Cancelled ? "was cancelled"
-                                                                                          : "timed out",
-                          errorMsg.c_str());
-                m_gameplayBuildSession.reset();
-                if (m_playAfterGameplayBuild) {
-                    m_playAfterGameplayBuild = false;
-                    m_viewModel.playState = EditorPlayState::Failed;
-                    m_viewModel.playError = errorMsg;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-
-    void EditorWorkspaceController::StartPlaySession() {
-        LOG_INFO("editor.play_session", "StartPlaySession initiated for project '%s'.", m_viewModel.projectRoot.c_str());
-        if (m_nativeGameplayReloadQuarantined) {
-            m_viewModel.playState = EditorPlayState::Failed;
-            m_viewModel.playError = MakeError(Gameplay::GameplayErrors::GameplayReloadRestartRequired).message;
-            LOG_ERROR("editor.play_session", "%s", m_viewModel.playError.c_str());
-            return;
-        }
-        if (HasNativeGameplaySources() && (m_gameplayBuilds == nullptr || !m_gameplayBuilds->IsUpToDate(MakeGameplayBuildRequest()))) {
-            LOG_INFO("editor.play_session", "Native gameplay build required before play. Starting gameplay build...");
-            StartGameplayBuild(true);
-            return;
-        }
-        RefreshGameplayRegistry();
-        BeginPlaySession();
-    }
-
-    void EditorWorkspaceController::BeginPlaySession() {
-        LOG_INFO("editor.play_session", "Beginning play session for '%s'...", m_viewModel.projectRoot.c_str());
-        if (m_gameplayRegistry == nullptr)
-            m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot);
-        if (m_gameplayRegistry->HasBlockingDiagnostics()) {
-            const std::string diagMsg = m_gameplayRegistry->Diagnostics().front().error.message;
-            LOG_ERROR("editor.play_session", "Play session blocked by gameplay diagnostic: %s", diagMsg.c_str());
-            m_viewModel.playState = EditorPlayState::Failed;
-            m_viewModel.playError = diagMsg;
-            m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
-            m_viewModel.activeDocumentPanelId = "horo.game";
-            m_notifications.Publish("gameplay", NotificationSeverity::Error, diagMsg, "Play session blocked", "play_blocked", 0.0F,
-                                    {{"Open logs", "open_logs"}});
-            return;
-        }
-
-        m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
-        std::unique_ptr<Runtime::RuntimeScene> preparedScene;
-        if (auto cloned = m_runtimeScene.CloneActive(Runtime::SceneRuntimeId{0x8000000000000001ULL}); cloned.HasValue())
-            preparedScene = std::move(cloned).Value();
-        const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), std::move(preparedScene));
-        m_viewModel.activeDocumentPanelId = "horo.game";
-        if (started.HasError())
-            LOG_ERROR("editor.play_mode", "Play Mode failed to start: %s", started.ErrorValue().message.c_str());
-        RefreshPlayStateProjection();
-        ExtractPlayViewportScene();
-    }
-
-    void EditorWorkspaceController::StopPlaySession() {
-        m_playSession.Stop();
-        m_nativeGameplayReloadPending = false;
-        if (m_pendingGameplayRegistry && !m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
-            m_gameplayRegistry = std::move(m_pendingGameplayRegistry);
-            RefreshAvailableBehaviorProjection();
-        } else {
-            m_pendingGameplayRegistry.reset();
-        }
-        m_viewModel.playError.clear();
-        m_viewModel.playState = EditorPlayState::Idle;
-        m_viewModel.activeDocumentPanelId = m_prePlayDocumentPanelId.empty() ? "horo.viewport" : m_prePlayDocumentPanelId;
-        m_activeRuntimeRevision = {};
-    }
-
-    void EditorWorkspaceController::RefreshPlayStateProjection() {
-        switch (m_playSession.State()) {
-            case EditorPlaySessionState::Idle:
-                m_viewModel.playState = EditorPlayState::Idle;
-                break;
-            case EditorPlaySessionState::Starting:
-                m_viewModel.playState = EditorPlayState::Starting;
-                break;
-            case EditorPlaySessionState::Playing:
-                m_viewModel.playState = EditorPlayState::Playing;
-                break;
-            case EditorPlaySessionState::Paused:
-                m_viewModel.playState = EditorPlayState::Paused;
-                break;
-            case EditorPlaySessionState::Reloading:
-                m_viewModel.playState = EditorPlayState::Starting;
-                break;
-            case EditorPlaySessionState::Stopping:
-                m_viewModel.playState = EditorPlayState::Stopping;
-                break;
-            case EditorPlaySessionState::Failed:
-                m_viewModel.playState = EditorPlayState::Failed;
-                break;
-        }
-        m_viewModel.playError = m_playSession.LastError().has_value() ? m_playSession.LastError()->message : std::string{};
-    }
-
-    void EditorWorkspaceController::UpdatePlayPresentation(const float elapsedSeconds) {
-        if (!std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0F)
-            return;
-        m_playSession.PresentationUpdate(Gameplay::FrameDeltaTime{static_cast<double>(elapsedSeconds)});
-        ExtractPlayViewportScene();
-    }
-
-    void EditorWorkspaceController::UpdatePlayFixed(const std::span<const Gameplay::GameplayInputAction> input,
-                                                    const double fixedDeltaSeconds) {
-        if (!std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds <= 0.0)
-            return;
-        ApplyNativeGameplayReload();
-        ApplyPendingGameplayRegistry();
-        if (const Result<void> updated = m_playSession.FixedUpdate(input, Gameplay::FixedDeltaTime{fixedDeltaSeconds}); updated.HasError())
-            LOG_ERROR("editor.play_mode", "Play Mode fixed update failed: %s", updated.ErrorValue().message.c_str());
-        RefreshPlayStateProjection();
-        ExtractPlayViewportScene();
-    }
-
-    EditorViewportCamera EditorWorkspaceController::ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const {
-        EditorViewportCamera camera = m_viewport.Current().camera;
-        for (std::size_t slot = 0; slot < runtimeView.SlotCount(); ++slot) {
-            const std::optional<Runtime::RuntimeEntityView> entity = runtimeView.EntityAt(slot);
-            if (!entity || !entity->components->camera.has_value())
-                continue;
-            const Runtime::CameraComponent &authoredCamera = *entity->components->camera;
-            const Math::Transform worldTransform = ResolveRuntimeEntityTransform(runtimeView, *entity);
-            return EditorViewportCamera{
-                .projection = authoredCamera.projection,
-                .position = worldTransform.translation,
-                .target = worldTransform.translation + worldTransform.rotation.Rotate({0.0F, 0.0F, -1.0F}),
-                .up = worldTransform.rotation.Rotate({0.0F, 1.0F, 0.0F}),
-                .verticalFovRadians = authoredCamera.verticalFieldOfViewRadians,
-                .orthographicHeight = authoredCamera.orthographicHeight,
-                .nearPlane = authoredCamera.nearPlane,
-                .farPlane = authoredCamera.farPlane,
-            };
-        }
-        return camera;
-    }
-
-    void EditorWorkspaceController::ExtractPlayViewportScene() {
-        const Runtime::RuntimeScene *scene = m_playSession.Scene();
-        if (scene == nullptr)
-            return;
-        const Runtime::RuntimeSceneView runtimeView = scene->View();
-        const EditorViewportCamera camera = ResolvePlayViewportCamera(runtimeView);
-        LoadDocumentAssetMeshes();
-        const SceneDocumentSnapshot document = m_document.Snapshot();
-        Result<EditorViewportSceneSnapshot> extracted =
-            ExtractEditorViewportScene(runtimeView, m_playSession.AuthoringRevision(), camera, m_primitiveMeshCache, &document,
-                                       &m_assetMeshCache, false);
-        if (extracted.HasError()) {
-            LOG_ERROR("editor.play_mode", "Game viewport extraction failed: %s", extracted.ErrorValue().message.c_str());
-            return;
-        }
-        m_viewportScene = std::move(extracted).Value();
-        ++m_viewportSceneRevision;
-        m_viewModel.viewportCamera = camera;
-        RefreshViewportLightProjection();
-    }
-
-    void EditorWorkspaceController::RefreshSelectionProjection() {
-        const SelectionSnapshot &selection = m_selection.Current();
-        m_viewModel.primarySelection = selection.primary;
-        m_viewModel.selectedObjects = selection.objects;
-        m_viewModel.viewportCamera = m_viewportScene.camera;
-        m_viewModel.primarySelectionWorldTransform.reset();
-        m_viewModel.primarySelectionPreviewWorldTransform.reset();
-        m_viewModel.primarySelectionParentWorldTransform.reset();
-        m_viewModel.primarySelectionWorldBounds.reset();
-        if (const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
-            selection.primary && active && m_viewportScene.runtimeSceneId == active->RuntimeId()) {
-            const Result<SceneObjectWorldTransforms> transforms = ResolveSceneObjectWorldTransforms(*active, *selection.primary);
-            if (transforms.HasValue()) {
-                m_viewModel.primarySelectionWorldTransform = transforms.Value().localToWorld;
-                m_viewModel.primarySelectionParentWorldTransform = transforms.Value().parentToWorld;
-            } else {
-                LOG_ERROR("editor.viewport", "Selected object transform projection failed: %s", transforms.ErrorValue().message.c_str());
-            }
-        }
-        if (m_viewportScene.instances.size() != m_viewportScene.instanceObjects.size()) {
-            return;
-        }
-        for (std::size_t index = 0; index < m_viewportScene.instances.size(); ++index) {
-            m_viewportScene.instances[index].presentation.tint = {0.12F, 0.72F, 1.0F};
-            m_viewportScene.instances[index].presentation.tintStrength =
-                std::ranges::find(selection.objects, m_viewportScene.instanceObjects[index]) != selection.objects.end() ? 0.65F : 0.0F;
-            if (selection.primary == m_viewportScene.instanceObjects[index]) {
-                const Result<Math::Aabb> bounds =
-                    Math::TransformAabb(m_viewportScene.instances[index].localBounds, m_viewportScene.instances[index].localToWorld);
-                if (bounds.HasValue())
-                    m_viewModel.primarySelectionWorldBounds = bounds.Value();
-                else
-                    LOG_ERROR("editor.viewport", "Selected object bounds projection failed: %s", bounds.ErrorValue().message.c_str());
-            }
-        }
-    }
-
-    void EditorWorkspaceController::RefreshViewportLightProjection() {
-        m_viewModel.viewportLights.clear();
-        if (m_viewportScene.lights.size() != m_viewportScene.lightObjects.size())
-            return;
-        m_viewModel.viewportLights.reserve(m_viewportScene.lights.size());
-        for (std::size_t index = 0; index < m_viewportScene.lights.size(); ++index) {
-            m_viewModel.viewportLights.emplace_back(m_viewportScene.lightObjects[index], m_viewportScene.lights[index]);
-        }
-    }
 }  // namespace Horo::Editor

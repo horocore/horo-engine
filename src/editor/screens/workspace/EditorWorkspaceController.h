@@ -220,6 +220,15 @@ namespace Horo::Editor {
             std::vector<std::filesystem::path> sources;
         };
 
+        struct ContentBrowserAssetTransferPlan {
+            std::filesystem::path projectRoot;
+            std::filesystem::path source;
+            std::filesystem::path sourceSidecar;
+            std::filesystem::path destination;
+            std::vector<std::filesystem::path> companions;
+            Assets::AssetId assetId;
+        };
+
         using ContentBrowserPathMoves = std::vector<std::pair<std::filesystem::path, std::filesystem::path>>;
 
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
@@ -254,6 +263,7 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessViewportEditCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessComponentCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessObjectPropertyCommand(const EditorWorkspaceViewCommandData &cmd);
+        [[nodiscard]] bool ProcessObjectComponentValueCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessBehaviorCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserNavigationCommand(const EditorWorkspaceViewCommandData &cmd);
@@ -280,6 +290,15 @@ namespace Horo::Editor {
         void SaveScene(bool overwriteConflict = false);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
+        [[nodiscard]] std::optional<std::filesystem::path> ResolveSceneSaveDestination(const std::filesystem::path &absolutePath) const;
+        void InitializeProjectState(const std::filesystem::path &absoluteProjectRoot);
+        void InitializeWorkspaceLayout();
+        void InitializeInitialScene(const std::filesystem::path &absoluteProjectRoot);
+        [[nodiscard]] bool LoadInitialScene(const std::filesystem::path &absoluteProjectRoot);
+        void CreateBootstrapScene();
+        void InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot);
+        [[nodiscard]] bool CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                                           const std::optional<std::filesystem::path> &newActivePath = std::nullopt);
         /** @brief Replaces the active session from the validated external canonical scene. */
         void ReloadExternalScene();
         /** @brief Restores validated recovery content into a new dirty document session. */
@@ -303,11 +322,15 @@ namespace Horo::Editor {
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform) const;
         void HandleInstantiateAsset(const AssetSceneDropRequest &request);
+        [[nodiscard]] const Assets::AssetRecord *ResolveAssetDropRecord(const AssetSceneDropRequest &request);
+        void HandleInstantiatedAssetCommand(Result<SceneCommandResult> &result);
         void LoadDocumentAssetMeshes();
         [[nodiscard]] std::string Localized(std::string_view key, std::string_view fallback) const;
         void HandleDuplicateObject(SceneObjectId object);
         void HandleDeleteObject(SceneObjectId object);
         void HandleDeleteSelectedObjects(const std::vector<SceneObjectId> &objects);
+        [[nodiscard]] std::vector<SceneObjectId> CollectExistingDeleteObjects(const std::vector<SceneObjectId> &objects,
+                                                                              std::string &singleName, std::size_t &requestedCount) const;
         void HandleDocumentCommandResult(const Result<SceneCommandResult> &result, const char *operation);
         void PreviewObjectTransform(SceneObjectId object, const Math::Transform &transform);
         void PreviewObjectTransforms(std::span<const SceneObjectTransformUpdate> updates);
@@ -323,6 +346,7 @@ namespace Horo::Editor {
         void RenameContentBrowserEntry(const std::filesystem::path &absolutePath, std::string_view newName);
         [[nodiscard]] std::optional<ContentBrowserRenamePlan> PrepareContentBrowserRename(const std::filesystem::path &absolutePath,
                                                                                           std::string_view newName);
+        [[nodiscard]] bool ResolveContentBrowserRenameSources(ContentBrowserRenamePlan &plan);
         void DeleteContentBrowserEntry(const std::filesystem::path &absolutePath);
         [[nodiscard]] std::optional<ContentBrowserDeletePlan> PrepareContentBrowserDelete(const std::filesystem::path &source);
         [[nodiscard]] std::optional<std::filesystem::path> CreateContentBrowserTrash(const ContentBrowserDeletePlan &plan);
@@ -358,12 +382,19 @@ namespace Horo::Editor {
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);
+        [[nodiscard]] std::optional<ContentBrowserAssetTransferPlan> PrepareContentBrowserAssetTransfer(
+            const std::filesystem::path &absoluteSource, const std::filesystem::path &absoluteDestinationDirectory, bool moving);
+        [[nodiscard]] bool ResolveContentBrowserAssetTransferMetadata(const std::filesystem::path &projectRoot,
+                                                                      const std::filesystem::path &source, Assets::AssetId &assetId,
+                                                                      std::vector<std::filesystem::path> &companions);
         [[nodiscard]] std::optional<std::vector<std::filesystem::path>> CopyContentBrowserCompanions(
             const std::filesystem::path &source, const std::filesystem::path &sourceSidecar, const std::filesystem::path &destination,
             const std::vector<std::filesystem::path> &companions, std::span<const std::byte> sidecarBytes);
         [[nodiscard]] bool PublishCopiedContentBrowserAsset(const std::filesystem::path &projectRoot,
                                                             const std::filesystem::path &destination, Assets::AssetId copiedId,
                                                             const std::vector<std::filesystem::path> &created);
+        [[nodiscard]] bool RollbackContentBrowserMutation(const std::filesystem::path &projectRoot, bool rollbackComplete,
+                                                          std::string_view failureKey);
         [[nodiscard]] bool MoveContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                      const std::filesystem::path &absoluteDestinationDirectory);
         [[nodiscard]] std::optional<ContentBrowserPathMoves> MoveContentBrowserCompanions(
