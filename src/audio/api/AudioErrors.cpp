@@ -248,6 +248,24 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor VoiceInvalidTransition{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.voice.invalid_transition"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio voice cannot enter the requested lifecycle state.",
+        .remediationHint = "Follow the admitted voice lifecycle and use Cancel only before a terminal state.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor VoiceAdmissionClosed{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.voice.admission_closed"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The audio voice registry has closed admission.",
+        .remediationHint = "Finish or release existing terminal voices, then create a new audio runtime generation.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor CapabilityUnavailable{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.capability.unavailable"},
