@@ -123,6 +123,27 @@ def file_details(owner: str, repo: str, file_id: int, token: str | None) -> dict
     return codacy_json(f"/organizations/gh/{owner}/repositories/{repo}/files/{file_id}", token)
 
 
+def file_issues(owner: str, repo: str, file_id: int, token: str | None) -> dict[str, Any]:
+    """Return all Codacy issues reported for one generated file ID."""
+
+    base = f"/organizations/gh/{owner}/repositories/{repo}/files/{file_id}/issues"
+    next_url = f"{base}?limit=100"
+    issues: list[Any] = []
+    seen_cursors: set[str] = set()
+    while next_url:
+        payload = codacy_json(next_url, token)
+        page = payload.get("data", [])
+        if isinstance(page, list):
+            issues.extend(page)
+        pagination = payload.get("pagination") or {}
+        cursor = pagination.get("cursor")
+        if not cursor or str(cursor) in seen_cursors:
+            break
+        seen_cursors.add(str(cursor))
+        next_url = f"{base}?limit=100&cursor={urllib.parse.quote(str(cursor), safe='')}"
+    return {"data": issues, "pagination": {"total": len(issues)}}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--owner", required=True, help="GitHub/Codacy organization, for example horocore")
@@ -192,6 +213,7 @@ def main() -> int:
         else:
             try:
                 result["fileDetails"] = file_details(args.owner, args.repo, file_id, token)
+                result["issueDetails"] = file_issues(args.owner, args.repo, file_id, token)
                 result["duplicationDetails"] = duplication(args.owner, args.repo, file_id, token)
             except CodacyNotFound as error:
                 result["status"] = "codacy_file_not_found"
