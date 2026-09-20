@@ -39,6 +39,8 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor HandleStale;
     extern const ErrorCodeDescriptor HandleCapacityExhausted;
     extern const ErrorCodeDescriptor HandleGenerationExhausted;
+    extern const ErrorCodeDescriptor VoiceInvalidTransition;
+    extern const ErrorCodeDescriptor VoiceAdmissionClosed;
     extern const ErrorCodeDescriptor CapabilityUnavailable;
     extern const ErrorCodeDescriptor OperationUnsupported;
     extern const ErrorCodeDescriptor OperationCancelled;
