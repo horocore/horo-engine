@@ -303,6 +303,7 @@ HoroEngine::Foundation
 HoroEngine::CliHost
 HoroEngine::Security
 HoroEngine::Platform
+HoroEngine::PackageSecurity
 HoroEngine::Runtime
 HoroEngine::Assets
 HoroEngine::SceneModel
