@@ -127,4 +127,20 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor HeadlessHostActivationFailed;
     /** @brief No published importer matches the exact requested contribution identity. */
     extern const ErrorCodeDescriptor HeadlessImporterUnavailable;
+    /** @brief A backend-operation provider, request, transition, or payload is malformed. */
+    extern const ErrorCodeDescriptor BackendOperationRegistryInvalid;
+    /** @brief The exact backend-operation provider generation is already registered. */
+    extern const ErrorCodeDescriptor BackendOperationRegistryDuplicate;
+    /** @brief The bounded backend-operation provider or active-operation capacity is full. */
+    extern const ErrorCodeDescriptor BackendOperationRegistryCapacityExceeded;
+    /** @brief Backend-operation registration and new operation admission are closed. */
+    extern const ErrorCodeDescriptor BackendOperationRegistryShutdown;
+    /** @brief The requested backend-operation provider generation is unavailable. */
+    extern const ErrorCodeDescriptor BackendOperationProviderUnavailable;
+    /** @brief A backend-operation diagnostic or typed result exceeds its host bounds. */
+    extern const ErrorCodeDescriptor BackendOperationPayloadInvalid;
+    /** @brief A backend operation was abandoned before its producer published a terminal result. */
+    extern const ErrorCodeDescriptor BackendOperationAbandoned;
+    /** @brief A backend operation was cancelled by its caller, parent, provider, or host shutdown. */
+    extern const ErrorCodeDescriptor BackendOperationCancelled;
 }  // namespace Horo::Extensions::ExtensionErrors

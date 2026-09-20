@@ -1868,6 +1868,13 @@ add_executable(HoroBackendServiceRegistryTests
 target_compile_features(HoroBackendServiceRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendServiceRegistryTests PRIVATE HoroBackendServiceReference Catch2::Catch2WithMain)
 add_test(NAME HoroBackendServiceRegistryTests COMMAND HoroBackendServiceRegistryTests)
+
+add_executable(HoroBackendOperationRegistryTests
+        unit/extensions/BackendOperationRegistryTests.cpp
+)
+target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests
