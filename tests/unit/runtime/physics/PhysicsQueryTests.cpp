@@ -218,6 +218,7 @@ namespace Horo::Physics {
 
         const auto first = world->CreateQueryFixture(QueryFixture({0, 0, -5}, PhysicsQueryFixtureResponse::Overlap)).Value();
         const auto second = world->CreateQueryFixture(QueryFixture({0, 0, -10})).Value();
+        REQUIRE(first.body.slot.generation != second.body.slot.generation);
         AdvanceOneTick(*world);
 
         const auto rayGeometry = PhysicsRayQuery{{0, 0, 0}, {0, 0, -1}, 20};

@@ -358,6 +358,7 @@ namespace Horo::Physics::Detail {
             std::vector<CanonicalQueryFixtureRecord> fixtures;
             std::vector<std::size_t> nativeFixtureIndices;
             std::uint32_t nextFixtureSlot{};
+            std::uint32_t nextFixtureGeneration{1};
             std::uint64_t querySchemaGeneration{1};
             std::array<JPH::CastRayCollector::ResultType, MaximumPhysicsQueryHits> rayQueryResults{};
             std::array<JPH::CollidePointCollector::ResultType, MaximumPhysicsQueryHits> pointQueryResults{};
@@ -530,29 +531,28 @@ namespace Horo::Physics::Detail {
 
         void CollectPointQuery(const CanonicalWorld &world, const PhysicsPointQuery &query, CanonicalQueryCollectors &collectors,
                                const QueryBodyFilter &bodyFilter) {
-            world.system->GetNarrowPhaseQuery().CollidePoint({query.point.x, query.point.y, query.point.z}, collectors.point, {},
-                                                             {}, bodyFilter);
+            world.system->GetNarrowPhaseQuery().CollidePoint({query.point.x, query.point.y, query.point.z}, collectors.point, {}, {},
+                                                             bodyFilter);
         }
 
-        void CollectOverlapQuery(const CanonicalWorld &world, const PhysicsOverlapQuery &query,
-                                 const CanonicalQueryFixtureRecord &source, CanonicalQueryCollectors &collectors,
-                                 const QueryBodyFilter &bodyFilter) {
-            const JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(
-                ToNative(query.pose.rotation), JPH::RVec3(query.pose.translation.x, query.pose.translation.y, query.pose.translation.z));
-            world.system->GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform,
-                                                             JPH::CollideShapeSettings{}, JPH::RVec3::sZero(), collectors.overlap,
-                                                             {}, {}, bodyFilter);
+        void CollectOverlapQuery(const CanonicalWorld &world, const PhysicsOverlapQuery &query, const CanonicalQueryFixtureRecord &source,
+                                 CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            const JPH::RMat44 transform =
+                JPH::RMat44::sRotationTranslation(ToNative(query.pose.rotation),
+                                                  JPH::RVec3(query.pose.translation.x, query.pose.translation.y, query.pose.translation.z));
+            world.system->GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
+                                                             JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
         }
 
-        void CollectSweepQuery(const CanonicalWorld &world, const PhysicsSweepQuery &query,
-                               const CanonicalQueryFixtureRecord &source, CanonicalQueryCollectors &collectors,
-                               const QueryBodyFilter &bodyFilter) {
-            const JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(
-                ToNative(query.pose.rotation), JPH::RVec3(query.pose.translation.x, query.pose.translation.y, query.pose.translation.z));
-            const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(
-                source.shape, JPH::Vec3::sOne(), transform, ToNative(query.direction * query.maximumDistanceMeters));
-            world.system->GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {},
-                                                          {}, bodyFilter);
+        void CollectSweepQuery(const CanonicalWorld &world, const PhysicsSweepQuery &query, const CanonicalQueryFixtureRecord &source,
+                               CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            const JPH::RMat44 transform =
+                JPH::RMat44::sRotationTranslation(ToNative(query.pose.rotation),
+                                                  JPH::RVec3(query.pose.translation.x, query.pose.translation.y, query.pose.translation.z));
+            const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(source.shape, JPH::Vec3::sOne(), transform,
+                                                                              ToNative(query.direction * query.maximumDistanceMeters));
+            world.system->GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {}, {},
+                                                          bodyFilter);
         }
 
         /** @brief Executes one validated native query into the world-owned fixed collectors. */
@@ -658,11 +658,11 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
-        template <typename Collector>
+        template <typename Collector, typename DistanceFunction>
         [[nodiscard]] Result<void> AppendContactQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
                                                           const FixedQueryCollector<Collector> &collector,
                                                           std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
-                                                          std::size_t &candidateCount) {
+                                                          std::size_t &candidateCount, const DistanceFunction &distanceFunction) {
             for (std::size_t index = 0; index < collector.count; ++index) {
                 const auto &hit = collector.values[index];
                 const Math::Vec3 position{hit.mContactPointOn2.GetX(), hit.mContactPointOn2.GetY(), hit.mContactPointOn2.GetZ()};
@@ -670,26 +670,7 @@ namespace Horo::Physics::Detail {
                                                                      {.body = hit.mBodyID2,
                                                                       .position = position,
                                                                       .normal = ContactNormal(hit.mPenetrationAxis),
-                                                                      .distance = 0.0F});
-                    appended.HasError())
-                    return appended;
-            }
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> AppendSweepQueryHits(const CanonicalWorld &world, const PhysicsQueryDescriptor &descriptor,
-                                                        const PhysicsSweepQuery &sweep,
-                                                        const FixedQueryCollector<JPH::CastShapeCollector> &collector,
-                                                        std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> &candidates,
-                                                        std::size_t &candidateCount) {
-            for (std::size_t index = 0; index < collector.count; ++index) {
-                const auto &hit = collector.values[index];
-                const Math::Vec3 position{hit.mContactPointOn2.GetX(), hit.mContactPointOn2.GetY(), hit.mContactPointOn2.GetZ()};
-                if (const Result<void> appended = AppendCanonicalHit(world, descriptor, candidates, candidateCount,
-                                                                     {.body = hit.mBodyID2,
-                                                                      .position = position,
-                                                                      .normal = ContactNormal(hit.mPenetrationAxis),
-                                                                      .distance = hit.mFraction * sweep.maximumDistanceMeters});
+                                                                      .distance = distanceFunction(hit)});
                     appended.HasError())
                     return appended;
             }
@@ -706,9 +687,13 @@ namespace Horo::Physics::Detail {
             if (const auto *point = std::get_if<PhysicsPointQuery>(&descriptor.geometry))
                 return AppendPointQueryHits(world, descriptor, *point, collectors.point, candidates, candidateCount);
             if (std::holds_alternative<PhysicsOverlapQuery>(descriptor.geometry))
-                return AppendContactQueryHits(world, descriptor, collectors.overlap, candidates, candidateCount);
+                return AppendContactQueryHits(world, descriptor, collectors.overlap, candidates, candidateCount, [](const auto &) {
+                    return 0.0F;
+                });
             const auto &sweep = std::get<PhysicsSweepQuery>(descriptor.geometry);
-            return AppendSweepQueryHits(world, descriptor, sweep, collectors.sweep, candidates, candidateCount);
+            return AppendContactQueryHits(world, descriptor, collectors.sweep, candidates, candidateCount, [&sweep](const auto &hit) {
+                return hit.mFraction * sweep.maximumDistanceMeters;
+            });
         }
 
         /** @brief Applies collection policy, caller-storage truncation and result metadata. */
@@ -824,6 +809,7 @@ namespace Horo::Physics::Detail {
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         if (canonical.nextFixtureSlot == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.nextFixtureGeneration == std::numeric_limits<std::uint32_t>::max() ||
             canonical.fixtures.size() >= canonical.maximumFixtures)
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         const auto nativeShape = CreateNativeShape(fixture.shape);
@@ -831,7 +817,8 @@ namespace Horo::Physics::Detail {
             return Result<PhysicsQueryFixture>::Failure(nativeShape.ErrorValue());
 
         const std::uint32_t slot = canonical.nextFixtureSlot++;
-        const PhysicsQueryFixture identity{.body = {owner, {slot, 1}}, .shape = {owner, {slot, 1}}};
+        const std::uint32_t generation = canonical.nextFixtureGeneration++;
+        const PhysicsQueryFixture identity{.body = {owner, {slot, generation}}, .shape = {owner, {slot, generation}}};
         JPH::BodyCreationSettings settings(nativeShape.Value().GetPtr(),
                                            JPH::RVec3(fixture.pose.translation.x, fixture.pose.translation.y, fixture.pose.translation.z),
                                            ToNative(fixture.pose.rotation), JPH::EMotionType::Static, JPH::ObjectLayer{0});
