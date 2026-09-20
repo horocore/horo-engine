@@ -167,6 +167,17 @@ namespace Horo::Packages {
             return Result<std::vector<std::byte>>::Success(std::move(output));
         }
 
+        /** @brief Reads the required package-intent manifest after archive metadata has been validated. */
+        [[nodiscard]] Result<Sha256Digest> ReadPackageManifestDigest(mz_zip_archive &zip, const FileIndex &files) {
+            const auto found = files.find("horo-package.toml");
+            if (found == files.end())
+                return Result<Sha256Digest>::Failure(MakeError(Detail::InventoryMismatch));
+            auto bytes = ReadFile(zip, found->second);
+            if (bytes.HasError())
+                return Result<Sha256Digest>::Failure(bytes.ErrorValue());
+            return Result<Sha256Digest>::Success(ComputeSha256(bytes.Value()));
+        }
+
         /** @brief Checks declared size and mode before allocating content and comparing the actual digest. */
         [[nodiscard]] Result<void> MatchFile(mz_zip_archive &zip, const mz_zip_archive_file_stat &stat, const PackageFileEntry &entry) {
             const bool executable = ((stat.m_external_attr >> 16) & 0111) != 0;
@@ -246,14 +257,19 @@ namespace Horo::Packages {
         if (manifest.HasError()) {
             return Result<ValidatedPackageArchive>::Failure(manifest.ErrorValue());
         }
+        auto packageManifestDigest = ReadPackageManifestDigest(zip.value, files.Value());
+        if (packageManifestDigest.HasError()) {
+            return Result<ValidatedPackageArchive>::Failure(packageManifestDigest.ErrorValue());
+        }
         const auto digest = ComputeSha256(snapshot);
-        return Result<ValidatedPackageArchive>::Success(ValidatedPackageArchive{std::move(snapshot), std::move(manifest).Value(), digest});
+        return Result<ValidatedPackageArchive>::Success(
+            ValidatedPackageArchive{std::move(snapshot), std::move(manifest).Value(), digest, packageManifestDigest.Value()});
     }
 
     /** @copydoc ValidatedPackageArchive::ValidatedPackageArchive */
     ValidatedPackageArchive::ValidatedPackageArchive(std::vector<std::byte> bytes, ValidatedPackageFileManifestV1 manifest,
-                                                     const Sha256Digest &digest)
-        : m_bytes(std::move(bytes)), m_manifest(std::move(manifest)), m_digest(digest) {}
+                                                     const Sha256Digest &digest, const Sha256Digest &packageManifestDigest)
+        : m_bytes(std::move(bytes)), m_manifest(std::move(manifest)), m_digest(digest), m_packageManifestDigest(packageManifestDigest) {}
 
     /** @copydoc ValidatedPackageArchive::Manifest */
     const ValidatedPackageFileManifestV1 &ValidatedPackageArchive::Manifest() const noexcept {
@@ -268,5 +284,10 @@ namespace Horo::Packages {
     /** @copydoc ValidatedPackageArchive::Digest */
     const Sha256Digest &ValidatedPackageArchive::Digest() const noexcept {
         return m_digest;
+    }
+
+    /** @copydoc ValidatedPackageArchive::PackageManifestDigest */
+    const Sha256Digest &ValidatedPackageArchive::PackageManifestDigest() const noexcept {
+        return m_packageManifestDigest;
     }
 }  // namespace Horo::Packages

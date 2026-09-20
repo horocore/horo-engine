@@ -68,7 +68,8 @@ device backend.
 | `HoroCliHost` (`HoroEngine::CliHost`) | Always | Owns inert CLI descriptors, bounded host-policy validation, immutable command registration, deterministic discovery/help, and the bounded typed pre-dispatch parser under `Cli/**`. Parsing consumes only explicit argv, resolved configuration snapshots, path-normalizer seams, and selected stdin; dispatch, presentation, and adapter execution are not yet part of this target. | Foundation (public), nlohmann_json (private) |
 | `HoroOpenTelemetry` (`HoroEngine::OpenTelemetry`) | `HORO_ENABLE_OPENTELEMETRY` | Owns the optional OTLP sink and `Foundation/Telemetry/OpenTelemetrySink.h`; the concrete exporter dependencies are private. | Foundation (public) |
 | `HoroPlatform` (`HoroEngine::Platform`) | Always | Owns `Platform/**` dynamic-library and process contracts plus POSIX/Windows implementations. OS headers and `dl` are private. | Foundation (public) |
-| `HoroPackages` (`HoroEngine::Packages`) | Always | Owns canonical package paths, the typed file inventory, immutable archive verification, and content-addressed cache/quarantine under `Packages/**`. JSON, miniz and Unicode normalization remain private; install/trust/semantic package-manifest services are not implemented by this target yet. | Foundation (public) |
+| `HoroPackages` (`HoroEngine::Packages`) | Always | Owns canonical package paths, the typed file inventory, immutable archive verification, and content-addressed cache/quarantine under `Packages/**`. JSON, miniz and Unicode normalization remain private. | Foundation (public) |
+| `HoroPackageSecurity` (`HoroEngine::PackageSecurity`) | Always | Owns publisher verification and the cancellable package restore orchestration under `Packages/**`; restore composes exact lockfile validation, verified cache/quarantine, optional publisher policy, and atomic graph publication without executing package code. | Foundation, Packages, Security (public) |
 | `HoroApplication` (`HoroEngine::Application`) | Always | Owns project version, compatibility, migration planning/execution, and host observability contracts in `Application/**`, except gameplay build. Generated compatibility data is private. | Foundation (public) |
 | `HoroProjectMigrations` (`HoroEngine::ProjectMigrations`) | Always | Owns generated concrete migration catalog composition. It intentionally exposes the Application migration contract rather than a separate header family. | Application (public) |
 | `HoroRuntime` (`HoroEngine::Runtime`) | Always | Owns frame scheduling, runtime lifecycle, and runtime host contracts in `Runtime/FrameScheduler.h`, `Runtime/RuntimeLifecycle.h`, and `Runtime/RuntimeHost.h`. | Foundation (public) |
@@ -144,7 +145,7 @@ There are 388 non-placeholder headers under `include/Horo/` at this snapshot:
 | `Math/` | 2 | Foundation |
 | `Navigation/` | 13 | NavigationApi and NavigationRuntime |
 | `Network/` | 19 | NetworkApi and NetworkRuntime |
-| `Packages/` | 5 | Packages |
+| `Packages/` | 10 | Packages and PackageSecurity |
 | `PCG/` | 8 | PcgApi and PcgRuntime |
 | `Physics/` | 23 | Physics |
 | `Platform/` | 6 | Platform |

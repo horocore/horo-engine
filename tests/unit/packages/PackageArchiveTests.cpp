@@ -70,6 +70,8 @@ namespace {
         REQUIRE(result.HasValue());
         CHECK(result.Value().Manifest().Entries().size() == 3);
         CHECK(result.Value().Digest() == digest);
+        constexpr std::string_view packageManifest = "schemaVersion = 1\n";
+        CHECK(result.Value().PackageManifestDigest() == Horo::ComputeSha256(std::as_bytes(std::span{packageManifest})));
         CHECK(std::ranges::equal(result.Value().Bytes(), archive));
         std::ranges::fill(archive, std::byte{0});
         CHECK(Horo::ComputeSha256(result.Value().Bytes()) == digest);

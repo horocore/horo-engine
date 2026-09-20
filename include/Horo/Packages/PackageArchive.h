@@ -33,12 +33,21 @@ namespace Horo::Packages {
         /** @brief Returns the exact archive digest for later signature binding. @return Archive SHA-256 digest. */
         [[nodiscard]] const Sha256Digest &Digest() const noexcept;
 
+        /**
+         * @brief Returns the digest of the exact package-intent manifest inside the archive.
+         * @return SHA-256 digest of `horo-package.toml` bytes.
+         * @note The manifest bytes were included in the complete archive validation and are immutable.
+         */
+        [[nodiscard]] const Sha256Digest &PackageManifestDigest() const noexcept;
+
     private:
         /** @brief Constructs only after checking the complete inventory and every file's actual content. */
-        ValidatedPackageArchive(std::vector<std::byte> bytes, ValidatedPackageFileManifestV1 manifest, const Sha256Digest &digest);
+        ValidatedPackageArchive(std::vector<std::byte> bytes, ValidatedPackageFileManifestV1 manifest, const Sha256Digest &digest,
+                                const Sha256Digest &packageManifestDigest);
 
         std::vector<std::byte> m_bytes;
         ValidatedPackageFileManifestV1 m_manifest;
         Sha256Digest m_digest;
+        Sha256Digest m_packageManifestDigest;
     };
 }  // namespace Horo::Packages
