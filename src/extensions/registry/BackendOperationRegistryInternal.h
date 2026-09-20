@@ -56,8 +56,6 @@ namespace Horo::Extensions {
     };
 
     namespace BackendOperationRegistryDetail {
-        using namespace BackendOperationValidation;
-
         [[nodiscard]] const BackendOperationTypeDescriptor *FindType(const BackendOperationProviderState &provider,
                                                                      const BackendOperationTypeId &type) noexcept {
             const auto found = std::ranges::find(provider.descriptor.operationTypes, type, &BackendOperationTypeDescriptor::type);
