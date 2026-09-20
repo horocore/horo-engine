@@ -957,6 +957,7 @@
     "workspace.inspector.audio_source_kind_native_clip": {"text": "Native Clip"},
     "workspace.inspector.audio_source_kind_middleware_event": {"text": "Middleware Event"},
     "workspace.inspector.audio_source_gain": {"text": "Gain"},
+    "workspace.inspector.audio_source_pitch": {"text": "Pitch"},
     "workspace.inspector.audio_source_spatial": {"text": "Spatial"},
     "workspace.inspector.audio_source_invalid": {"text": "Audio source gain must be a finite non-negative value."},
     "workspace.inspector.name_invalid": {"text": "Object name must contain 1 to 128 bytes."},

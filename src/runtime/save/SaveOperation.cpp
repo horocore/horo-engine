@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveOperation.h"
 
+#include "Horo/Foundation/MathUtils.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <array>
@@ -7,7 +8,6 @@
 #include <mutex>
 #include <new>
 #include <system_error>
-#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -221,31 +221,12 @@ namespace Horo::Runtime {
             return progress.totalUnits != 0 && progress.completedUnits <= progress.totalUnits;
         }
 
-        struct WideProduct final {
-            std::uint64_t high{};
-            std::uint64_t low{};
-        };
-
-        [[nodiscard]] constexpr WideProduct MultiplyWide(const std::uint64_t left, const std::uint64_t right) noexcept {
-            constexpr std::uint64_t lowerMask = 0xffffffffULL;
-            const std::uint64_t leftLow = left & lowerMask;
-            const std::uint64_t leftHigh = left >> 32U;
-            const std::uint64_t rightLow = right & lowerMask;
-            const std::uint64_t rightHigh = right >> 32U;
-            const std::uint64_t lowProduct = leftLow * rightLow;
-            const std::uint64_t firstCross = leftHigh * rightLow + (lowProduct >> 32U);
-            const std::uint64_t secondCross = leftLow * rightHigh + (firstCross & lowerMask);
-            return {.high = leftHigh * rightHigh + (firstCross >> 32U) + (secondCross >> 32U),
-                    .low = (secondCross << 32U) + (lowProduct & lowerMask)};
-        }
-
         [[nodiscard]] bool IsProgressRegression(const SaveOperationSnapshot &snapshot, const SaveOperationStage stage,
                                                 const SaveOperationProgress progress) noexcept {
             if (snapshot.stage != stage)
                 return false;
-            const WideProduct next = MultiplyWide(progress.completedUnits, snapshot.progress.totalUnits);
-            const WideProduct current = MultiplyWide(snapshot.progress.completedUnits, progress.totalUnits);
-            return std::tie(next.high, next.low) < std::tie(current.high, current.low);
+            return Horo::Foundation::Math::IsProgressRegression(snapshot.progress.completedUnits, snapshot.progress.totalUnits,
+                                                                progress.completedUnits, progress.totalUnits);
         }
 
         [[nodiscard]] bool IsValidProgressTransition(const SharedState &state, const TransitionRequest &request) noexcept {

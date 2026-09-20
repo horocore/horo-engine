@@ -449,6 +449,19 @@ unbounded decompression. Metadata encoding is deterministic UTF-8 with stable ke
 order and duplicate-key rejection. Verification hashes the **stored bytes**, not
 JSON reserialized by the reader.
 
+The headless `SaveArchiveReader` admits the v1 payload with one additional fixed
+wire boundary: a 32-byte `HSCTNR1` container header declares a v1 container, zero
+flags, an entry count, and a fixed 188-byte entry-record size. Each record carries
+an entry kind, raw storage codec, stable record bytes, a bounded participant owner,
+relative offset, stored/decoded lengths, alignment and decoded SHA-256. Header and
+manifest records are first, followed by manifest-owned chunk records in stable
+record order; their data ranges must be contiguous from the first data byte through
+the exact payload end. v1 rejects extension records and codecs other than raw before
+any decompression or participant decode. The reader verifies the finalized envelope
+hash first, then uses the existing metadata and chunk-directory validators and
+returns only an immutable detached view; it owns no filesystem, module callback or
+gameplay activation authority.
+
 | Logical payload entry | Content |
 |---|---|
 | header.json | Logical slot ID, `SlotGenerationId`, optional parent generation, producing `ProductSaveCompatibilityVersion`, project/world/account scope, baseSceneAsset and bounded provenance timestamps |

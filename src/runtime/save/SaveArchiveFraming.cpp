@@ -115,7 +115,11 @@ namespace Horo::Runtime {
         /** @brief Validates the complete contiguous entry sequence and ownership mapping. */
         [[nodiscard]] bool HasValidEntries(const SaveChunkDirectory &directory, const SaveGameManifest &manifest,
                                            const SaveChunkDirectoryLimits &limits) noexcept {
-            std::uint64_t expectedOffset = 0;
+            const std::uint64_t dataLength = directory.dataByteLength == 0 ? directory.payloadByteLength : directory.dataByteLength;
+            if (directory.dataByteOffset > directory.payloadByteLength ||
+                dataLength > directory.payloadByteLength - directory.dataByteOffset)
+                return false;
+            std::uint64_t expectedOffset = directory.dataByteOffset;
             const SaveRecordId *previousRecord = nullptr;
             for (const SaveChunkDirectoryEntry &entry : directory.entries) {
                 const bool layoutValid = HasValidEntryLayout(entry, expectedOffset, directory.payloadByteLength, limits);
@@ -126,7 +130,7 @@ namespace Horo::Runtime {
                 expectedOffset += entry.storedByteLength;
                 previousRecord = &entry.record;
             }
-            return expectedOffset == directory.payloadByteLength;
+            return expectedOffset == directory.dataByteOffset + dataLength;
         }
     }  // namespace
 
@@ -195,8 +199,18 @@ namespace Horo::Runtime {
     /** @copydoc VerifySaveArchiveIntegrity */
     Result<void> VerifySaveArchiveIntegrity(const SaveArchiveIntegrityManifest &integrity, const std::span<const std::byte> archive,
                                             const ValidatedSaveChunkDirectory &directory) {
+        if (const auto valid = VerifySaveArchiveIntegrity(integrity, archive); valid.HasError())
+            return valid;
         if (const auto valid = ValidateIntegrityContract(integrity, directory); valid.HasError())
             return valid;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VerifySaveArchiveIntegrity */
+    Result<void> VerifySaveArchiveIntegrity(const SaveArchiveIntegrityManifest &integrity, const std::span<const std::byte> archive) {
+        if (!IsSupported(integrity.algorithm) || integrity.preambleByteLength != SaveArchivePreambleByteLength ||
+            !IsSupportedTrailerLength(integrity.trailerByteLength))
+            return Result<void>::Failure(MakeError(SaveErrors::ArchiveIntegrityCoverageInvalid));
         if (const auto valid = ValidateArchiveLength(integrity, archive); valid.HasError())
             return valid;
 

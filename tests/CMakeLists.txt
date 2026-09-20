@@ -113,8 +113,9 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackagePathTests.cpp
     unit/packages/PackageArchiveTests.cpp
     unit/packages/PackageCacheTests.cpp
-    unit/packages/PackageFileManifestTests.cpp)
-target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+    unit/packages/PackageFileManifestTests.cpp
+    unit/packages/PackagePublisherVerificationTests.cpp)
+target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPackageValidationTests LABELS "packages;headless")
 
 if (HORO_ENABLE_IMGUI_UI_TESTS)
@@ -225,7 +226,9 @@ target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
 add_executable(HoroAudioApiTests
+        support/AllocationProbe.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp
+        unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
@@ -236,8 +239,12 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/AudioIdentityTests.cpp
         unit/runtime/audio/AudioResamplerPlanTests.cpp
         unit/runtime/audio/AudioPlanarBlockTests.cpp
+        unit/runtime/audio/AudioVoiceStateMachineTests.cpp
 )
-target_include_directories(HoroAudioApiTests PRIVATE ${PROJECT_SOURCE_DIR}/src/audio/api)
+target_include_directories(HoroAudioApiTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/audio/api
+        ${PROJECT_SOURCE_DIR}/tests/support
+)
 target_compile_features(HoroAudioApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioApiTests PRIVATE HoroEngine::AudioApi)
 horo_register_catch_test(HoroAudioApiTests LABELS "unit;audio;headless")
@@ -271,6 +278,7 @@ if(HORO_BUILD_AUDIO_SDL3)
             PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
 endif()
 add_executable(HoroAudioDspTests
+    unit/runtime/audio/AudioDSPNodeTests.cpp
     unit/runtime/audio/ResamplerKernelTests.cpp
     unit/runtime/audio/AudioResamplerTests.cpp
 )
@@ -319,6 +327,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsHandleRegistryTests.cpp
         unit/runtime/physics/PhysicsIdentityTests.cpp
         unit/runtime/physics/PhysicsMetricsTests.cpp
+        unit/runtime/physics/PhysicsMaterialAssetTests.cpp
         unit/runtime/physics/PhysicsPoseTests.cpp
         unit/runtime/physics/PhysicsQueryTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
@@ -494,6 +503,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/OriginRebaseTransactionTests.cpp
         unit/runtime/world_streaming/OriginShiftPolicyTests.cpp
         unit/runtime/world_streaming/RuntimeEntityCellExitOperationTests.cpp
+        unit/runtime/world_streaming/WorldEntityReferenceFixupTests.cpp
         unit/runtime/world_streaming/CookedWorldIndexManifestTests.cpp
         unit/runtime/world_streaming/FallbackStreamingProviderTests.cpp
         unit/runtime/world_streaming/StreamingBudgetModelTests.cpp
@@ -1501,6 +1511,11 @@ add_executable(HoroRuntimeSaveArchiveFinalizationTests
 )
 target_compile_features(HoroRuntimeSaveArchiveFinalizationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveArchiveFinalizationTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveArchiveReaderTests
+        unit/runtime/save/SaveArchiveReaderTests.cpp
+)
+target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveArchiveReaderTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCanonicalCodecTests
         unit/runtime/save/SaveCanonicalCodecTests.cpp
 )
@@ -1767,6 +1782,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationTransactionTests.cpp
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
+        unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ExtensionModuleResolutionTests.cpp
@@ -1870,6 +1886,13 @@ add_executable(HoroBackendServiceRegistryTests
 target_compile_features(HoroBackendServiceRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendServiceRegistryTests PRIVATE HoroBackendServiceReference Catch2::Catch2WithMain)
 add_test(NAME HoroBackendServiceRegistryTests COMMAND HoroBackendServiceRegistryTests)
+
+add_executable(HoroBackendOperationRegistryTests
+        unit/extensions/BackendOperationRegistryTests.cpp
+)
+target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests
@@ -2169,6 +2192,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests
+        HoroRuntimeSaveArchiveReaderTests
         HoroRuntimeSaveCanonicalCodecTests
         HoroRuntimeSaveReferenceTests
         HoroRuntimeSaveSlotMetadataTests
