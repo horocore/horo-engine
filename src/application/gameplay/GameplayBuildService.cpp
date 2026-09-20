@@ -766,6 +766,16 @@ namespace Horo::Application {
             return PublishValidatedState(state, candidate, local, std::format("{}\n", buildState.dump(2)));
         }
 
+        [[nodiscard]] std::string ReadExternalLockOwner(const std::filesystem::path &lockPath) {
+            std::ifstream metadata{lockPath, std::ios::binary};
+            if (!metadata)
+                return {};
+            std::array<char, 512> ownerBuffer{};
+            metadata.read(ownerBuffer.data(), static_cast<std::streamsize>(ownerBuffer.size()));
+            const std::streamsize bytesRead = metadata.gcount();
+            return bytesRead > 0 ? std::string{ownerBuffer.data(), static_cast<std::size_t>(bytesRead)} : std::string{};
+        }
+
         [[nodiscard]] Result<ExclusiveFileLock> AcquireBuildLock(GameplayBuildService::State &state,
                                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session) {
             Update(session, GameplayBuildState::AcquiringLock, "lock");
@@ -794,15 +804,7 @@ namespace Horo::Application {
                     return Result<ExclusiveFileLock>::Failure(acquired.ErrorValue());
 
                 Update(session, GameplayBuildState::WaitingForExternalBuild, "waiting_external_build");
-                std::ifstream metadata{lockPath, std::ios::binary};
-                std::array<char, 512> ownerBuffer{};
-                std::string externalOwner;
-                if (metadata) {
-                    metadata.read(ownerBuffer.data(), static_cast<std::streamsize>(ownerBuffer.size()));
-                    const std::streamsize bytesRead = metadata.gcount();
-                    if (bytesRead > 0)
-                        externalOwner.assign(ownerBuffer.data(), static_cast<std::size_t>(bytesRead));
-                }
+                const std::string externalOwner = ReadExternalLockOwner(lockPath);
                 const std::string waitingMessage = externalOwner.empty()
                                                        ? "Waiting for external gameplay build lock held by an unknown owner."
                                                        : std::format("Waiting for external gameplay build lock held by {}.", externalOwner);
