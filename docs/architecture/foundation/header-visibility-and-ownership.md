@@ -134,6 +134,12 @@ source root to its listed consumers while their historical `editor/...` include
 spellings remain. New tests should prefer a narrower test-private include path;
 do not link this interface from production or SDK examples.
 
+The new `Horo/Navigation/NavigationDynamicRegistry.h` contract is owned by
+`HoroEngine::NavigationRuntime`, with `NavigationApi` providing its neutral
+identity, area, math, and result dependencies. It introduces no caller migration;
+consumers include the header through the runtime target and are covered by the
+generated `HoroNavigationRuntimePublicHeaderConsumer` target.
+
 `HoroGui` currently exposes Dear ImGui types in several established public
 headers, so `HoroThirdParty::ImGui` remains a truthful public usage requirement.
 It may become private only after those signatures migrate to Horo-owned types.
