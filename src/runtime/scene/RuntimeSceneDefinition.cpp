@@ -71,7 +71,8 @@ namespace Horo::Runtime {
                 return false;
             if (components.light && !ValidLight(*components.light))
                 return false;
-            if (components.audioSource && (!std::isfinite(components.audioSource->gain) || components.audioSource->gain < 0))
+            if (components.audioSource && (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
+                                           Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError()))
                 return false;
             if (components.uiCanvas && Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasError())
                 return false;

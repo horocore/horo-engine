@@ -5,6 +5,7 @@
  * @brief Backend-neutral value types for core authored scene-object components.
  */
 
+#include "Horo/Audio/AudioSoundReference.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Ui/UiDocument.h"
 
@@ -65,17 +66,15 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr auto operator<=>(const TriggerVolumeComponent &) const noexcept = default;
     };
 
-    /** @brief Source kind recorded before an audio asset or middleware event is assigned. */
-    enum class AudioSourceKind : std::uint8_t {
-        NativeClip,
-        MiddlewareEvent,
-    };
-
-    /** @brief Backend-neutral authored audio-emitter defaults. */
+    /**
+     * @brief Backend-neutral authored audio emitter.
+     *
+     * The reference is persistent Audio-owned data; the playback defaults contain no runtime voice or backend
+     * state. An unassigned reference is allowed while an editor creates the component.
+     */
     struct AudioSourceComponent {
-        AudioSourceKind kind{AudioSourceKind::NativeClip};
-        float gain{1.0F};
-        bool spatial{true};
+        Audio::AudioSoundReference sound;
+        Audio::AudioSoundPlaybackDefaults playback;
         bool enabled{true}; /**< Whether runtime audio emission is active. */
 
         [[nodiscard]] constexpr auto operator<=>(const AudioSourceComponent &) const noexcept = default;

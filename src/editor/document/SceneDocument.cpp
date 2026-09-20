@@ -50,7 +50,8 @@ namespace Horo::Editor {
 
     /** @copydoc IsValidAudioSourceComponent */
     bool IsValidAudioSourceComponent(const Runtime::AudioSourceComponent &audioSource) noexcept {
-        return std::isfinite(audioSource.gain) && audioSource.gain >= 0.0F;
+        return Audio::ValidateAudioSoundReference(audioSource.sound).HasValue() &&
+               Audio::ValidateAudioSoundPlaybackDefaults(audioSource.playback).HasValue();
     }
 
     /** @copydoc ResolveSceneObjectEditorState */
@@ -324,9 +325,11 @@ namespace Horo::Editor {
                         MakeDocumentError(SceneDocumentErrors::InvalidLight, "Light authoring values are invalid."));
                 }
             }
-            if (components.audioSource.has_value() && !std::isfinite(components.audioSource->gain)) {
+            if (components.audioSource.has_value() &&
+                (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
+                 Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError())) {
                 return Result<void>::Failure(
-                    MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source gain must be finite."));
+                    MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source values are invalid."));
             }
             std::vector<Gameplay::BehaviorInstanceId> behaviorIds;
             behaviorIds.reserve(components.behaviors.size());
@@ -1578,7 +1581,7 @@ namespace Horo::Editor {
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioSourceCommand &command) {
         if (!IsValidAudioSourceComponent(command.audioSource)) {
             return Result<SceneCommandResult>::Failure(
-                MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source gain must be finite and non-negative."));
+                MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source reference or playback values are invalid."));
         }
         const auto object = FindObject(m_document.m_objects, command.object);
         if (object == m_document.m_objects.end()) {

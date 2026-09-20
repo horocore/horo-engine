@@ -86,6 +86,33 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor SoundReferenceInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.sound_reference.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The authored audio sound reference is invalid.",
+        .remediationHint = "Provide exactly one valid Audio-owned sound identity and contribution binding.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SoundDefinitionInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.sound_definition.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The authored audio sound definition is invalid.",
+        .remediationHint = "Use a supported sound reference and finite backend-neutral playback defaults.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor SoundDefinitionVersionUnsupported{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.sound_definition.version_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The authored audio sound definition schema version is unsupported.",
+        .remediationHint = "Migrate the sound definition through an Audio-owned supported schema path before use.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor FormatRegistryInvalid{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.format_registry.invalid"},
