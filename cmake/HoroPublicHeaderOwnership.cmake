@@ -313,6 +313,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsQuery.h
     Horo/Physics/PhysicsShapeDescriptor.h
     Horo/Physics/PhysicsStepPolicy.h
+    Horo/Physics/PhysicsTransformAuthority.h
     Horo/Physics/PhysicsTickPipeline.h
     Horo/Physics/PhysicsTriangleMeshCook.h
     Horo/Physics/PhysicsWorld.h

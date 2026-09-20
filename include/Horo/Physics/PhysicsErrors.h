@@ -23,6 +23,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor CapabilityUnavailable;
     /** @brief An operation is not supported by the selected qualified Physics profile. */
     extern const ErrorCodeDescriptor OperationUnsupported;
+    /** @brief A transform write conflicts with the registered body's authority contract. */
+    extern const ErrorCodeDescriptor TransformAuthorityViolation;
     /** @brief The world lifecycle phase cannot admit the requested operation. */
     extern const ErrorCodeDescriptor InvalidState;
     /** @brief A mutable Physics operation was attempted outside its owning thread. */

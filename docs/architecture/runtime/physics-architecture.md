@@ -383,6 +383,27 @@ Conflicting writes are rejected or ordered by an explicit controller contract.
 A dynamic body cannot also be silently overwritten by an arbitrary transform
 system after the physics step.
 
+The backend-neutral `PhysicsBodyTransformAuthority` contract keeps the authored
+seed, runtime pose and completed solver evidence as separate values. It retains
+copied scene data only; it never owns a `SceneDocument` pointer and dynamic
+publication never mutates the authored seed. Rendered transforms are a
+presentation projection and are not an additional authority.
+
+Static scene updates and kinematic targets are tick-addressed commands. Static
+updates apply once at `ApplyDeferredPreStep`, before broadphase work, and carry
+an explicit `UpdateBroadphase` or `Rebuild` policy. Kinematic targets apply once
+at `CopyKinematicTargets`; the command is consumed by its exact fixed tick and
+is never sampled from render cadence. A direct host transform write is rejected
+with `physics.transform.authority_violation` for every active body. Dynamic
+motion can cross that boundary only as an explicit `Teleport` or `Reset`
+command at the pre-step safe point.
+
+Dynamic poses are accepted only as `PhysicsDynamicTransformSnapshot` values
+whose tick has completed. Publication updates runtime evidence after the
+solver boundary and leaves the authored seed unchanged. A missing or stale
+snapshot remains a typed read failure; no caller can infer a partially stepped
+body as an authoritative transform.
+
 ## Dynamic Body Inputs
 
 `PhysicsBodyDynamicsCommand` is the backend-neutral fixed-tick contract for dynamic

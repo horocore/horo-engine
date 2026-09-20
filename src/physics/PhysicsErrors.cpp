@@ -71,6 +71,16 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor TransformAuthorityViolation{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.transform.authority_violation"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A transform write conflicts with the body's declared Physics authority.",
+        .remediationHint =
+            "Submit a static update or kinematic target at the pre-step safe point, or use an explicit dynamic teleport/reset.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor InvalidState{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.state.invalid"},
@@ -272,6 +282,7 @@ namespace Horo::Physics::PhysicsErrors {
             &GenerationExhausted,
             &CapabilityUnavailable,
             &OperationUnsupported,
+            &TransformAuthorityViolation,
             &InvalidState,
             &ThreadAffinityViolation,
             &SolverDeadlineExceeded,
