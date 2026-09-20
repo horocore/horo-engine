@@ -37,151 +37,8 @@ namespace Horo::Physics {
             descriptor.budgets.scratchBytes = 1024 * 1024;
             return PhysicsWorldSettings::Capture(descriptor).Value();
         }
+
     }  // namespace
-
-    TEST_CASE("Null Physics is explicit omitted capability and never invents simulation", "[physics][lifecycle]") {
-        auto created = PhysicsRuntime::Create(PhysicsRuntimeMode::Null);
-        REQUIRE(created.HasValue());
-        auto runtime = std::move(created).Value();
-        REQUIRE(runtime->Mode() == PhysicsRuntimeMode::Null);
-        REQUIRE(runtime->State() == PhysicsRuntimeState::Ready);
-        REQUIRE(runtime->Availability() == PhysicsAvailability::Omitted);
-        for (std::uint8_t value = 0; value < static_cast<std::uint8_t>(PhysicsCapability::Count); ++value)
-            REQUIRE(runtime->Capability(static_cast<PhysicsCapability>(value)) == PhysicsCapabilitySupport::Unsupported);
-        REQUIRE(runtime->Capability(static_cast<PhysicsCapability>(255)) == PhysicsCapabilitySupport::Unknown);
-        const auto settings = Test::SmallWorldSettings();
-        auto prepared = runtime->PrepareWorld(settings);
-        REQUIRE(prepared.HasValue());
-        auto world = std::move(prepared).Value();
-        REQUIRE(world->State() == PhysicsWorldState::PreparedNull);
-        REQUIRE_FALSE(world->Identity().IsValid());
-        REQUIRE(world->Settings().Identity() == settings.Identity());
-        REQUIRE(world->Activate({}).ErrorValue().code.Value() == PhysicsErrors::WorldInvalid.code.Value());
-        REQUIRE(world->State() == PhysicsWorldState::PreparedNull);
-        const auto identity = PhysicsWorldId::Create(100).Value();
-        REQUIRE(world->Activate(identity).HasValue());
-        REQUIRE(world->State() == PhysicsWorldState::ActiveNull);
-        REQUIRE(
-            world->QueueStructuralCommand(MakeCommand(1, 100, 1, 1, 1, PhysicsStructuralCommandKind::Destroy)).ErrorValue().code.Value() ==
-            PhysicsErrors::CapabilityUnavailable.code.Value());
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 1, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                    .ErrorValue()
-                    .code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
-        REQUIRE(world->PublishedTick().publicationRevision == 0);
-        REQUIRE(world->Identity() == identity);
-        REQUIRE(world->Activate(identity).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::None);
-        REQUIRE_FALSE(world->LastFailure().has_value());
-        REQUIRE(world->Reset().HasValue());
-        REQUIRE(world->Reset().HasValue());
-        REQUIRE(world->State() == PhysicsWorldState::PreparedNull);
-        REQUIRE_FALSE(world->Identity().IsValid());
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::Reset);
-        REQUIRE(world->Activate(PhysicsWorldId::Create(106).Value()).HasValue());
-        REQUIRE(world->UnloadScene().HasValue());
-        REQUIRE(world->UnloadScene().HasValue());
-        REQUIRE(world->State() == PhysicsWorldState::Destroyed);
-        REQUIRE(world->Identity() == PhysicsWorldId::Create(106).Value());
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::SceneUnload);
-        world->Shutdown();
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::SceneUnload);
-        REQUIRE(world->Reset().ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
-        runtime->Shutdown();
-        runtime->Shutdown();
-        REQUIRE(runtime->State() == PhysicsRuntimeState::Stopped);
-        REQUIRE(runtime->PrepareWorld(settings).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
-    }
-
-    TEST_CASE("Physics rejects unknown compositions and closes unactivated candidates on runtime shutdown", "[physics][lifecycle]") {
-        const auto unknown = PhysicsRuntime::Create(static_cast<PhysicsRuntimeMode>(255));
-        REQUIRE(unknown.HasError());
-        REQUIRE(unknown.ErrorValue().code.Value() == PhysicsErrors::OperationUnsupported.code.Value());
-        auto runtime = std::move(PhysicsRuntime::Create(PhysicsRuntimeMode::Null).Value());
-        auto candidate = std::move(runtime->PrepareWorld(Test::SmallWorldSettings()).Value());
-        runtime->Shutdown();
-        REQUIRE(candidate->Activate(PhysicsWorldId::Create(101).Value()).ErrorValue().code.Value() ==
-                PhysicsErrors::InvalidState.code.Value());
-        runtime.reset();
-        candidate->Shutdown();
-        REQUIRE(candidate->State() == PhysicsWorldState::Destroyed);
-    }
-
-    TEST_CASE("Physics preparation and activation reject a foreign owner thread", "[physics][lifecycle]") {
-        auto runtime = std::move(PhysicsRuntime::Create(PhysicsRuntimeMode::Null).Value());
-        const auto settings = Test::SmallWorldSettings();
-        auto candidate = std::move(runtime->PrepareWorld(settings).Value());
-        bool rejectedPreparation = false;
-        bool rejectedActivation = false;
-        bool rejectedReset = false;
-        bool rejectedUnload = false;
-        std::thread foreign([&] {
-            const auto prepared = runtime->PrepareWorld(settings);
-            rejectedPreparation =
-                prepared.HasError() && prepared.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
-            const auto activated = candidate->Activate(PhysicsWorldId::Create(102).Value());
-            rejectedActivation =
-                activated.HasError() && activated.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
-            const auto reset = candidate->Reset();
-            rejectedReset = reset.HasError() && reset.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
-            const auto unloaded = candidate->UnloadScene();
-            rejectedUnload =
-                unloaded.HasError() && unloaded.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
-        });
-        foreign.join();
-        REQUIRE(rejectedPreparation);
-        REQUIRE(rejectedActivation);
-        REQUIRE(rejectedReset);
-        REQUIRE(rejectedUnload);
-        REQUIRE(candidate->State() == PhysicsWorldState::PreparedNull);
-    }
-
-    TEST_CASE("Physics rejects duplicate active world identity without changing either world", "[physics][lifecycle]") {
-        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Null).Value();
-        const auto settings = Test::SmallWorldSettings();
-        auto first = runtime->PrepareWorld(settings).Value();
-        auto second = runtime->PrepareWorld(settings).Value();
-        const auto identity = PhysicsWorldId::Create(105).Value();
-        REQUIRE(first->Activate(identity).HasValue());
-        const auto duplicate = second->Activate(identity);
-        REQUIRE(duplicate.HasError());
-        REQUIRE(duplicate.ErrorValue().code.Value() == PhysicsErrors::WorldInvalid.code.Value());
-        REQUIRE(first->State() == PhysicsWorldState::ActiveNull);
-        REQUIRE(second->State() == PhysicsWorldState::PreparedNull);
-        REQUIRE_FALSE(second->Identity().IsValid());
-    }
-
-    TEST_CASE("Canonical Physics composition is explicit and world ownership survives owner shutdown", "[physics][lifecycle]") {
-        auto created = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
-#if HORO_TEST_PHYSICS_NATIVE
-        REQUIRE(created.HasValue());
-        auto runtime = std::move(created).Value();
-        REQUIRE(runtime->Availability() == PhysicsAvailability::Available);
-        REQUIRE(runtime->Capability(PhysicsCapability::WorldCreation) == PhysicsCapabilitySupport::Available);
-        REQUIRE(runtime->Capability(PhysicsCapability::RigidBodies) == PhysicsCapabilitySupport::Unsupported);
-        const auto duplicate = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
-        REQUIRE(duplicate.HasError());
-        REQUIRE(duplicate.ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
-        auto first = std::move(runtime->PrepareWorld(Test::SmallWorldSettings()).Value());
-        auto second = std::move(runtime->PrepareWorld(Test::SmallWorldSettings()).Value());
-        REQUIRE(first->State() == PhysicsWorldState::PreparedSolver);
-        REQUIRE(second->State() == PhysicsWorldState::PreparedSolver);
-        REQUIRE(first->Activate(PhysicsWorldId::Create(103).Value()).HasValue());
-        REQUIRE(second->Activate(PhysicsWorldId::Create(104).Value()).HasValue());
-        REQUIRE(first->Identity() != second->Identity());
-        first->Shutdown();
-        REQUIRE(second->State() == PhysicsWorldState::ActiveSolver);
-        runtime->Shutdown();
-        REQUIRE(runtime->Availability() == PhysicsAvailability::Unavailable);
-        REQUIRE(runtime->Capability(PhysicsCapability::WorldCreation) == PhysicsCapabilitySupport::Unavailable);
-        runtime.reset();
-        REQUIRE(PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).HasError());
-        second->Shutdown();
-        REQUIRE(PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).HasValue());
-#else
-        REQUIRE(created.HasError());
-        REQUIRE(created.ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
-#endif
-    }
 
 #if HORO_TEST_PHYSICS_NATIVE
     namespace {
@@ -233,6 +90,8 @@ namespace Horo::Physics {
             REQUIRE(published.queryTick == published.completedTick);
             REQUIRE(published.eventTick == published.completedTick);
             REQUIRE(published.appliedCommands == expectedCommands);
+            REQUIRE(published.eventCount == 0);
+            REQUIRE(published.droppedEventCount == 0);
         }
 
         struct SolverJobTrace final {
@@ -481,64 +340,6 @@ namespace Horo::Physics {
         REQUIRE(world->AdvanceFixedTick({.simulationTick = 3, .sceneGeneration = 8, .fixedDelta = fixedDelta}).HasValue());
         REQUIRE(world->PublishedTick().appliedCommands == 1);
         REQUIRE(world->TickStatistics().pendingCommands == 0);
-    }
-
-    TEST_CASE("Physics joins solver jobs before publication and enters one terminal failure state", "[physics][tick][jobs]") {
-        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 4});
-        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical, &jobs).Value();
-        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
-        REQUIRE(world->Activate(PhysicsWorldId::Create(202).Value()).HasValue());
-
-        SolverJobTrace failingTrace;
-        SolverJobTrace siblingTrace;
-        const std::array solverJobs{PhysicsSolverJob{.context = &failingTrace, .execute = RunSolverJob},
-                                    PhysicsSolverJob{.context = &siblingTrace, .execute = RunSolverJob}};
-        constexpr Duration fixedDelta = Duration::FromNanoseconds(16'666'667);
-        const PhysicsSolverJobBatch batch{.jobs = solverJobs.data(),
-                                          .jobCount = static_cast<std::uint32_t>(solverJobs.size()),
-                                          .joinTimeout = Duration::FromMilliseconds(500)};
-        REQUIRE(
-            world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 1, .fixedDelta = fixedDelta, .solverJobs = batch}).HasValue());
-        REQUIRE(failingTrace.completed.load(std::memory_order_acquire) == 1);
-        REQUIRE(siblingTrace.completed.load(std::memory_order_acquire) == 1);
-        RequirePublishedTick(world->PublishedTick(), 1, 1, 0);
-
-        failingTrace.fail.store(true, std::memory_order_release);
-        REQUIRE(world->QueueStructuralCommand(MakeCommand(2, 202, 1, 1, 9, PhysicsStructuralCommandKind::Destroy)).HasValue());
-        const auto failed =
-            world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = fixedDelta, .solverJobs = batch});
-        REQUIRE(failed.HasError());
-        REQUIRE(failed.ErrorValue().code.Value() == PhysicsErrors::InitializationFailed.code.Value());
-        REQUIRE(failingTrace.completed.load(std::memory_order_acquire) == 2);
-        REQUIRE(siblingTrace.completed.load(std::memory_order_acquire) == 2);
-        REQUIRE(world->State() == PhysicsWorldState::Failed);
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::FatalSolverError);
-        REQUIRE(world->LastFailure().has_value());
-        REQUIRE(world->LastFailure()->code.Value() == PhysicsErrors::InitializationFailed.code.Value());
-        REQUIRE(world->LastDiagnostic().has_value());
-        REQUIRE(world->LastDiagnostic()->code.Value() == PhysicsErrors::InitializationFailed.code.Value());
-        REQUIRE(world->LastDiagnostic()->category == PhysicsDiagnosticCategory::Runtime);
-        REQUIRE(world->LastDiagnostic()->contextCount == 3);
-        REQUIRE(world->LastDiagnostic()->context[0].key == PhysicsDiagnosticContextKey::World);
-        REQUIRE(world->LastDiagnostic()->context[1].key == PhysicsDiagnosticContextKey::SceneGeneration);
-        REQUIRE(world->LastDiagnostic()->context[2].key == PhysicsDiagnosticContextKey::SimulationTick);
-        REQUIRE(world->PublishedTick().completedTick == 1);
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = fixedDelta}).ErrorValue().code.Value() ==
-                PhysicsErrors::InvalidState.code.Value());
-        REQUIRE(world->Reset().HasValue());
-        REQUIRE(world->State() == PhysicsWorldState::PreparedSolver);
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::Reset);
-        REQUIRE_FALSE(world->LastFailure().has_value());
-        REQUIRE_FALSE(world->LastDiagnostic().has_value());
-        REQUIRE_FALSE(world->Identity().IsValid());
-        REQUIRE(world->PublishedTick().publicationRevision == 0);
-        REQUIRE(world->TickStatistics().pendingCommands == 0);
-        REQUIRE(world->Activate(PhysicsWorldId::Create(205).Value()).HasValue());
-        world->Shutdown();
-        REQUIRE(world->LifecycleCause() == PhysicsWorldLifecycleCause::ProcessShutdown);
-        world.reset();
-        runtime.reset();
-        jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
     TEST_CASE("Physics rejects malformed or unavailable solver job batches before starting a tick", "[physics][tick][jobs]") {

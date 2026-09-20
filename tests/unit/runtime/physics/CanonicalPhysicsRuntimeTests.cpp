@@ -1,6 +1,7 @@
 #include "CanonicalPhysicsRuntime.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "PhysicsEventProjection.h"
 #include "PhysicsTestUtils.h"
 
 #include <Jolt/Jolt.h>
@@ -8,6 +9,7 @@
 // Jolt subsidiary headers require its root definitions first.
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Memory.h>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 #include <thread>
@@ -38,6 +40,24 @@ namespace Horo::Physics::Detail {
             REQUIRE(JPH::Free == nullptr);
             REQUIRE(JPH::AlignedAllocate == nullptr);
             REQUIRE(JPH::AlignedFree == nullptr);
+        }
+
+        bool CaptureProjection(PhysicsEventProjection *projection, const PhysicsContactObservation &observation) noexcept {
+            return projection != nullptr && projection->TryCapture(observation);
+        }
+
+        [[nodiscard]] PhysicsQueryFixtureDescriptor ContactFixture(const Math::Vec3 translation) {
+            constexpr std::array<std::uint8_t, 16> layerBytes{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+            constexpr std::array<std::uint8_t, 16> profileBytes{2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
+            constexpr std::array<std::uint8_t, 16> channelBytes{3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3};
+            return {.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                    .pose = {.translation = translation, .rotation = Math::Quaternion::Identity()},
+                    .layer = CollisionLayerId::FromBytes(layerBytes),
+                    .profile = CollisionProfileId::FromBytes(profileBytes),
+                    .channel = PhysicsQueryChannelId::FromBytes(channelBytes),
+                    .response = PhysicsQueryFixtureResponse::Block,
+                    .trigger = false,
+                    .subshape = PhysicsShapeSubresourceId::FromValue(11)};
         }
     }  // namespace
 
@@ -200,6 +220,45 @@ namespace Horo::Physics::Detail {
         REQUIRE(StepCanonicalWorld({}, 1.0F / 60.0F).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
         SubmitCanonicalDiagnosticForTesting({}, CanonicalDiagnosticKind::Fatal, "ignored after retirement");
         InvokeCanonicalDiagnosticCallbackForTesting({}, CanonicalDiagnosticKind::Validation, "ignored after retirement");
+    }
+
+    TEST_CASE("Canonical contact callbacks copy stable evidence before native route retirement", "[physics][native][events]") {
+        const auto created = CreateCanonicalRuntime();
+        REQUIRE(created.HasValue());
+        const RuntimeOwner runtime{created.Value()};
+        const auto prepared = CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings());
+        REQUIRE(prepared.HasValue());
+        const WorldOwner world{prepared.Value()};
+
+        auto firstDescriptor = ContactFixture({0.0F, 0.0F, 0.0F});
+        firstDescriptor.material = PhysicsQueryMaterial{Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 4,
+                                                        PhysicsMaterialSlotId::FromValue(7)};
+        const auto first = CreateCanonicalQueryFixture(world.handle, PhysicsWorldId::Create(901).Value(), firstDescriptor);
+        const auto second =
+            CreateCanonicalQueryFixture(world.handle, PhysicsWorldId::Create(901).Value(), ContactFixture({2.0F, 0.0F, 0.0F}));
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
+        projection.BeginTick(1);
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, false, sink));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, true, sink));
+        const auto completed = projection.CompleteTick(1);
+        REQUIRE(completed.HasValue());
+        REQUIRE(completed.Value().publishedRecordCount == 1);
+
+        const auto &record = projection.PublishedEvents().front();
+        REQUIRE(record.kind == PhysicsEventKind::ContactBegin);
+        REQUIRE(record.pair.first.body == first.Value().body);
+        REQUIRE(record.pair.second.body == second.Value().body);
+        REQUIRE(record.firstMaterial.has_value());
+        REQUIRE(record.firstMaterial->assetGeneration == 4);
+        REQUIRE(record.firstMaterial->slot == PhysicsMaterialSlotId::FromValue(7));
+        REQUIRE_FALSE(record.secondMaterial.has_value());
+        REQUIRE(record.contact.position == Math::Vec3{0.0F, 0.0F, 0.0F});
+        REQUIRE(record.contact.normal == Math::Vec3{0.0F, 1.0F, 0.0F});
+        REQUIRE(record.contact.penetrationDepthMeters == 0.1F);
     }
 
     TEST_CASE("Canonical diagnostic callbacks are restored after runtime shutdown", "[physics][native][diagnostics][shutdown]") {

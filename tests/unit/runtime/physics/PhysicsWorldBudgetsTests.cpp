@@ -16,6 +16,18 @@ namespace Horo::Physics {
         }
     }
 
+    TEST_CASE("World event overflow policy is explicit and closed", "[physics][settings][budget]") {
+        PhysicsWorldBudgets budgets;
+        for (const auto policy : {PhysicsEventOverflowPolicy::DropNewest, PhysicsEventOverflowPolicy::FailTick}) {
+            budgets.eventOverflow = policy;
+            REQUIRE(ValidatePhysicsWorldBudgets(budgets).HasValue());
+        }
+        budgets.eventOverflow = static_cast<PhysicsEventOverflowPolicy>(255);
+        const auto result = ValidatePhysicsWorldBudgets(budgets);
+        REQUIRE(result.HasError());
+        REQUIRE(result.ErrorValue().code.Value() == PhysicsErrors::OperationUnsupported.code.Value());
+    }
+
     TEST_CASE("World budget defaults and exact ceilings are admitted", "[physics][settings][budget]") {
         REQUIRE(ValidatePhysicsWorldBudgets({}).HasValue());
         const PhysicsWorldBudgets maximum{.maximumShapes = MaximumPhysicsResourceRecords,

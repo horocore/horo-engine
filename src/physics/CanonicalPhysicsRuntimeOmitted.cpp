@@ -42,9 +42,16 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc StepCanonicalWorld */
-    Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle, const float) {
+    Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle, const float, const std::uint64_t,
+                                                    const CanonicalContactSink) {
         return Result<CanonicalStepOutcome>::Failure(
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc InvokeCanonicalContactCallbackForTesting */
+    bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle, const PhysicsQueryFixture &, const PhysicsQueryFixture &,
+                                                  const std::uint64_t, const bool, const bool, const CanonicalContactSink) {
+        return false;
     }
 
     /** @copydoc SubmitCanonicalDiagnosticForTesting */

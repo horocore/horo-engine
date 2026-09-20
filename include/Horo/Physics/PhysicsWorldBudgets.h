@@ -24,6 +24,12 @@ namespace Horo::Physics {
         FailTick      /**< Requires a future qualified recoverable allocator/solver path; currently unsupported. */
     };
 
+    /** @brief Policy applied after canonical lifecycle ordering when the published event buffer is full. */
+    enum class PhysicsEventOverflowPolicy : std::uint8_t {
+        DropNewest, /**< Retain the canonical prefix, count the omitted records and keep lifecycle state coherent. */
+        FailTick    /**< Suppress this tick and fail the world before publishing a partial event batch. */
+    };
+
     /**
      * @brief Requested per-world limits, not allocations or estimates of native resident memory.
      *
@@ -32,10 +38,11 @@ namespace Horo::Physics {
      * Capacities are independent, never added using unchecked arithmetic. Bodies, collider slots,
      * constraints and scene-plan bytes are separately owned by PhysicsWorldCapacity.
      *
-     * Admission that would exceed shape/command/query capacity rejects before mutation. Exhausting
-     * required contact/event work during a tick fails that tick and suppresses publication. Scratch
-     * exhaustion follows the explicit policy below: the pinned allocator terminates the process.
-     * No truncation, fallback heap growth or partial tick is permitted. Resident shape bytes include
+     * Admission that would exceed shape/command/query capacity rejects before mutation. Event evidence
+     * and publication overflow follows eventOverflow: DropNewest retains a canonical prefix and
+     * advances a coherent reduced lifecycle; FailTick suppresses publication and fails the world.
+     * Scratch exhaustion follows the explicit policy below: the pinned allocator terminates the process.
+     * No fallback heap growth or unbounded callback buffer is permitted. Resident shape bytes include
      * the world's share of retained leases, not just handles. Native overhead and whole-process
      * budgets still require allocation accounting; these bounds do not promise allocation success.
      */
@@ -52,6 +59,7 @@ namespace Horo::Physics {
         std::uint64_t scratchBytes{64ULL * 1024 * 1024};
         std::uint64_t residentShapeBytes{256ULL * 1024 * 1024};
         PhysicsScratchExhaustionPolicy scratchExhaustion{PhysicsScratchExhaustionPolicy::FatalProcess};
+        PhysicsEventOverflowPolicy eventOverflow{PhysicsEventOverflowPolicy::DropNewest};
         bool operator==(const PhysicsWorldBudgets &) const noexcept = default;
     };
 
