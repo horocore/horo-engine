@@ -44,18 +44,31 @@ namespace Horo::Character::CharacterErrors {
     const ErrorCodeDescriptor GenerationExhausted =
         Descriptor("character.generation.exhausted", "Every Character controller slot reached its generation ceiling.",
                    "Replace the Character world with a fresh process-local world generation.", true);
+    const ErrorCodeDescriptor PublicationRevisionExhausted =
+        Descriptor("character.publication_revision.exhausted", "A Character transform publication reached its revision ceiling.",
+                   "Replace the Character world before publishing another transform.", true);
     const ErrorCodeDescriptor InvalidState =
         Descriptor("character.state.invalid", "The Character world lifecycle cannot admit this operation.",
                    "Submit work only during the declared fixed-tick owner phase.");
     const ErrorCodeDescriptor OperationUnsupported =
         Descriptor("character.operation.unsupported", "The Character operation contains an unknown typed value.",
                    "Use a stance, collision flag or operation supported by this contract version.", true);
+    const ErrorCodeDescriptor PlacementInvalid =
+        Descriptor("character.placement.invalid", "The Character placement or transform is invalid.",
+                   "Provide finite placement evidence and a coherent normalized Character root.", true);
+    const ErrorCodeDescriptor OverlapRecoveryFailed =
+        Descriptor("character.overlap.recovery_failed", "Character overlap recovery could not find a clear placement.",
+                   "Move the spawn point or increase the qualified recovery iteration budget.", true);
+    const ErrorCodeDescriptor QuerySnapshotStale =
+        Descriptor("character.query.snapshot_stale", "The Character Physics query snapshot is stale.",
+                   "Capture the current scene, filter, origin, tick and Physics snapshot generations again.");
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static const std::array descriptors{
-            &WorldInvalid,        &HandleMalformed,  &HandleWorldMismatch, &HandleStale,  &DescriptorInvalid,    &RequestInvalid,
-            &CommandOrderInvalid, &CapacityExceeded, &GenerationExhausted, &InvalidState, &OperationUnsupported,
+            &WorldInvalid,   &HandleMalformed,      &HandleWorldMismatch, &HandleStale,           &DescriptorInvalid,
+            &RequestInvalid, &CommandOrderInvalid,  &CapacityExceeded,    &GenerationExhausted,   &PublicationRevisionExhausted,
+            &InvalidState,   &OperationUnsupported, &PlacementInvalid,    &OverlapRecoveryFailed, &QuerySnapshotStale,
         };
         return descriptors;
     }

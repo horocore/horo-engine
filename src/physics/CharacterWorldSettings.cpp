@@ -67,12 +67,11 @@ namespace Horo::Character {
 
         /** @brief Checks basic work-budget representation before ceilings or cross-field policy. */
         [[nodiscard]] Result<void> ValidateWorkValues(const CharacterWorldWorkBudgets &work) {
-            if (const std::array<std::uint64_t, 6> values{
+            if (const std::array<std::uint64_t, 5> values{
                     work.maximumCommandsPerTick,
                     work.maximumQueriesPerTick,
                     work.maximumContactsPerMovement,
                     work.maximumMovementIterations,
-                    work.maximumRecoveryIterations,
                     work.scratchBytes,
                 };
                 !AreNonZero(values) || !std::isfinite(work.maximumDisplacementMetersPerTick) ||
@@ -84,19 +83,19 @@ namespace Horo::Character {
 
         /** @brief Checks work against retained storage and canonical schema ceilings. */
         [[nodiscard]] Result<void> ValidateWorkLimits(const CharacterWorldWorkBudgets &work, const CharacterWorldCapacities &capacities) {
-            const std::array<std::uint64_t, 6> values{
-                work.maximumCommandsPerTick,    work.maximumQueriesPerTick,     work.maximumContactsPerMovement,
-                work.maximumMovementIterations, work.maximumRecoveryIterations, work.scratchBytes,
+            const std::array<std::uint64_t, 5> values{
+                work.maximumCommandsPerTick,    work.maximumQueriesPerTick, work.maximumContactsPerMovement,
+                work.maximumMovementIterations, work.scratchBytes,
             };
-            if (const std::array<std::uint64_t, 6> limits{
+            if (const std::array<std::uint64_t, 5> limits{
                     capacities.maximumQueuedCommands,
                     capacities.maximumQueuedQueries,
                     MaximumCharacterContacts,
                     CharacterWorldSettingLimits::MaximumMovementIterations,
-                    CharacterWorldSettingLimits::MaximumRecoveryIterations,
                     CharacterWorldSettingLimits::MaximumScratchBytes,
                 };
                 !AreWithinLimits(values, limits) ||
+                work.maximumRecoveryIterations > CharacterWorldSettingLimits::MaximumRecoveryIterations ||
                 work.maximumDisplacementMetersPerTick > CharacterWorldSettingLimits::MaximumDisplacementMetersPerTick) {
                 return Exceeded("Character fixed-tick work exceeds retained storage or a schema-1 hard ceiling.");
             }
