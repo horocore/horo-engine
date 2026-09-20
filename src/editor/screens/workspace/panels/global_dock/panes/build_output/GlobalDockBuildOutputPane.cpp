@@ -390,11 +390,6 @@ namespace Horo::Editor {
     void GlobalDockBuildOutputPane::DrawTableRows(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
                                                   const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
                                                   const bool snapshotChanged) {
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const float levelX = regions.contentOrigin.x + metrics.contentPadding;
-        const float lineX = levelX + 68.0F * scale + metrics.columnGap;
-        const float fileX = lineX + 74.0F * scale + metrics.columnGap;
-        const float messageX = fileX + 96.0F * scale + metrics.columnGap;
         const float rowsHeight = std::max(1.0F, regions.contentHeight - metrics.tableHeaderHeight);
         const ImVec2 rowsOrigin{regions.contentOrigin.x, regions.contentOrigin.y + metrics.tableHeaderHeight};
         ImGui::SetCursorScreenPos(rowsOrigin);
