@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/PresentMode.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
+#include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderMemoryTypes.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/Texture.h"
@@ -123,6 +124,8 @@ namespace Horo::Render {
         bool supportsMeshResources{false};
         bool supportsTextureResources{false};
         bool supportsRenderTargetResources{false};
+        /** @brief Modern immutable feature, queue, limit, and format support snapshot. */
+        RenderCapabilitySnapshot support;
     };
 
     /** @brief Describes one host frame before backend work begins. */

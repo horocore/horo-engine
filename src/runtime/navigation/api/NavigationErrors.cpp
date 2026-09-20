@@ -450,4 +450,44 @@ namespace Horo::Navigation::NavigationErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor SourceEnvelopeInvalid =
+        MakeNavMeshArtifactError("navigation.source.envelope_invalid", ErrorSeverity::Error,
+                                 "The navigation source envelope framing or reserved fields are invalid.",
+                                 "Regenerate the source with the canonical navigation serializer and preserve complete envelope bytes.",
+                                 true);
+    const ErrorCodeDescriptor SourceUnsupportedVersion =
+        MakeNavMeshArtifactError("navigation.source.unsupported_version", ErrorSeverity::Error,
+                                 "The navigation source schema version is not supported by this consumer.",
+                                 "Use an explicit reviewed migration step or open the source with a compatible engine version.", true);
+    const ErrorCodeDescriptor SourceDuplicateIdentity =
+        MakeNavMeshArtifactError("navigation.source.duplicate_identity", ErrorSeverity::Error,
+                                 "Navigation source records contain a duplicate stable identity.",
+                                 "Assign one stable identity to each authored source record before serialization.", true);
+    const ErrorCodeDescriptor SourceChecksumMismatch =
+        MakeNavMeshArtifactError("navigation.source.checksum_mismatch", ErrorSeverity::Error,
+                                 "The navigation source envelope checksum does not match its encoded bytes.",
+                                 "Discard the corrupt candidate and reload or regenerate the complete source envelope.", true);
+    const ErrorCodeDescriptor SourceSerializationCapacityExceeded =
+        MakeNavMeshArtifactError("navigation.source.serialization_capacity_exceeded", ErrorSeverity::Error,
+                                 "The navigation source envelope exceeds a qualified serialization bound.",
+                                 "Reduce the source payload or use an explicitly qualified parser limit without truncating records.", true);
+    const ErrorCodeDescriptor SourceUnknownAuthoredRecord =
+        MakeNavMeshArtifactError("navigation.source.unknown_authored_record", ErrorSeverity::Error,
+                                 "An authored navigation record is unknown or cannot be safely retained.",
+                                 "Install the owning record provider or preserve only an optional opaque record under an explicit policy.",
+                                 true);
+    const ErrorCodeDescriptor GeneratedPayloadQuarantined =
+        MakeNavMeshArtifactError("navigation.source.generated_payload_quarantined", ErrorSeverity::Warning,
+                                 "A generated navigation payload was retained for inspection but quarantined from activation.",
+                                 "Use a provider supporting the exact generated payload or regenerate derived navigation data.", true);
+    const ErrorCodeDescriptor SourceMigrationMissing =
+        MakeNavMeshArtifactError("navigation.source.migration_missing", ErrorSeverity::Error,
+                                 "No explicit navigation source migration edge exists for the requested transition.",
+                                 "Supply the reviewed version-to-version migration chain; schema ordering alone is not migration policy.",
+                                 true);
+    const ErrorCodeDescriptor SourceMigrationInvalid =
+        MakeNavMeshArtifactError("navigation.source.migration_invalid", ErrorSeverity::Error,
+                                 "The explicit navigation source migration catalog is invalid or ambiguous.",
+                                 "Provide distinct forward migration edges with non-null transformations and bounded output records.",
+                                 true);
 }  // namespace Horo::Navigation::NavigationErrors
