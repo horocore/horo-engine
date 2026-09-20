@@ -4,8 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <optional>
 #include <queue>
+#include <unordered_map>
 #include <utility>
 
 namespace Horo::Audio {
@@ -70,14 +70,6 @@ namespace Horo::Audio {
                     return true;
             }
             return false;
-        }
-
-        [[nodiscard]] std::optional<std::size_t> FindBus(const std::vector<MixerBusDescriptor> &buses, const AudioBusId id) {
-            for (std::size_t index = 0; index < buses.size(); ++index) {
-                if (buses[index].id == id)
-                    return index;
-            }
-            return std::nullopt;
         }
 
         [[nodiscard]] bool IsFinite(const float value) noexcept {
@@ -197,19 +189,20 @@ namespace Horo::Audio {
             std::vector<std::size_t> primaryDestinations;
             std::vector<std::vector<std::size_t>> adjacency;
             std::vector<std::size_t> indegree;
+            std::unordered_map<std::uint64_t, std::size_t> busIndexById;
         };
 
-        [[nodiscard]] bool ResolveRouteEndpoints(const MixerAssetSchema &asset, const MixerRouteDescriptor &route,
+        [[nodiscard]] bool ResolveRouteEndpoints(const MixerRouteDescriptor &route, const RouteValidationState &state,
                                                  const std::size_t masterIndex, std::size_t &sourceIndex, std::size_t &destinationIndex) {
             if (!route.source.IsValid() || !route.destination.IsValid() || route.source == route.destination || !IsKnown(route.kind) ||
                 !IsKnown(route.tap) || !IsFinite(route.gainDb))
                 return false;
-            const auto source = FindBus(asset.buses, route.source);
-            const auto destination = FindBus(asset.buses, route.destination);
-            if (!source.has_value() || !destination.has_value() || *source == masterIndex)
+            const auto source = state.busIndexById.find(route.source.Value());
+            const auto destination = state.busIndexById.find(route.destination.Value());
+            if (source == state.busIndexById.end() || destination == state.busIndexById.end() || source->second == masterIndex)
                 return false;
-            sourceIndex = *source;
-            destinationIndex = *destination;
+            sourceIndex = source->second;
+            destinationIndex = destination->second;
             return true;
         }
 
@@ -233,7 +226,7 @@ namespace Horo::Audio {
             std::size_t sourceIndex{};
             std::size_t destinationIndex{};
             if (!route.id.IsValid() || HasDuplicateIdentity(routeIds, route.id) ||
-                !ResolveRouteEndpoints(asset, route, masterIndex, sourceIndex, destinationIndex))
+                !ResolveRouteEndpoints(route, state, masterIndex, sourceIndex, destinationIndex))
                 return Invalid();
             routeIds.push_back(route.id);
             if (const Result<void> valid = RecordRouteKind(asset, route, sourceIndex, destinationIndex, state); valid.HasError())
@@ -303,7 +296,11 @@ namespace Horo::Audio {
                                        .returnSendCounts = std::vector<std::size_t>(asset.buses.size()),
                                        .primaryDestinations = std::vector<std::size_t>(asset.buses.size(), asset.buses.size()),
                                        .adjacency = std::vector<std::vector<std::size_t>>(asset.buses.size()),
-                                       .indegree = std::vector<std::size_t>(asset.buses.size())};
+                                       .indegree = std::vector<std::size_t>(asset.buses.size()),
+                                       .busIndexById = {}};
+            state.busIndexById.reserve(asset.buses.size());
+            for (std::size_t index = 0; index < asset.buses.size(); ++index)
+                state.busIndexById.emplace(asset.buses[index].id.Value(), index);
             for (const MixerRouteDescriptor &route : asset.routes) {
                 if (const Result<void> valid = ValidateAndRecordRoute(asset, route, masterIndex, routeIds, state); valid.HasError())
                     return valid;

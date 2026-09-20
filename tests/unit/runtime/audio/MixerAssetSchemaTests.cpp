@@ -277,6 +277,26 @@ namespace Horo::Audio {
         RequireError(ValidateMixerAssetSchemaLimits(limits), AudioErrors::MixerAssetSchemaLimitExceeded);
     }
 
+    TEST_CASE("Mixer validation handles the maximum dense acyclic topology", "[unit][audio][mixer-schema]") {
+        MixerAssetSchema asset;
+        asset.buses.reserve(MaximumMixerAssetBuses);
+        asset.routes.reserve(MaximumMixerAssetRoutes);
+        const AudioChannelLayout stereo = MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo);
+        asset.buses.push_back({Stable<AudioBusId>(1), MixerBusRole::MasterOutput, "Master", stereo, {}, {}});
+        for (std::size_t index = 1; index < MaximumMixerAssetBuses; ++index) {
+            const std::uint64_t busId = static_cast<std::uint64_t>(index + 1);
+            asset.buses.push_back({Stable<AudioBusId>(busId), MixerBusRole::Bus, "Bus", stereo, {}, {}});
+            asset.routes.push_back(Primary(static_cast<std::uint64_t>(index), busId, 1));
+        }
+        for (std::uint64_t routeId = static_cast<std::uint64_t>(asset.routes.size() + 1); asset.routes.size() < MaximumMixerAssetRoutes;
+             ++routeId)
+            asset.routes.push_back(Send(routeId, 2, 1));
+
+        REQUIRE(asset.buses.size() == MaximumMixerAssetBuses);
+        REQUIRE(asset.routes.size() == MaximumMixerAssetRoutes);
+        REQUIRE(ValidateMixerAssetSchema(asset).HasValue());
+    }
+
     TEST_CASE("Mixer schema compatibility distinguishes exact migration and unknown versions", "[unit][audio][mixer-schema]") {
         CHECK(ClassifyMixerAssetSchemaCompatibility(CurrentMixerAssetSchemaVersion) == MixerAssetSchemaCompatibility::Exact);
         CHECK(ClassifyMixerAssetSchemaCompatibility({1, 0}) == MixerAssetSchemaCompatibility::MigrationRequired);
