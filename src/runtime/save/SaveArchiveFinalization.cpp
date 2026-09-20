@@ -85,9 +85,9 @@ namespace Horo::Runtime {
         if (payload_.size() > std::numeric_limits<std::size_t>::max() - bytes.size())
             return Result<void>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
         const auto nextPayloadByteLength = static_cast<std::uint64_t>(payload_.size() + bytes.size());
-        const auto maximumArchivePayloadBytes =
-            limits_.maximumArchiveBytes - SaveArchivePreambleByteLength - SaveArchiveUnsignedTrailerByteLength;
-        if (nextPayloadByteLength > limits_.directory.maximumPayloadBytes || nextPayloadByteLength > maximumArchivePayloadBytes)
+        if (const auto maximumArchivePayloadBytes =
+                limits_.maximumArchiveBytes - SaveArchivePreambleByteLength - SaveArchiveUnsignedTrailerByteLength;
+            nextPayloadByteLength > limits_.directory.maximumPayloadBytes || nextPayloadByteLength > maximumArchivePayloadBytes)
             return Result<void>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
         try {
             payload_.insert(payload_.end(), bytes.begin(), bytes.end());
