@@ -602,6 +602,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/AIErrors.cpp
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
+        runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
         runtime/ai/api/NullAIRuntime.cpp

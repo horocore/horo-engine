@@ -270,4 +270,58 @@ namespace Horo::AI::AIErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor BehaviorTreeSchemaInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.behavior_tree.schema_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The behavior-tree schema or typed node/property contract is malformed.",
+        .remediationHint = "Use the current schema version and valid stable identities, kinds, versions, and bounded values.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BehaviorTreeLimitExceeded{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.behavior_tree.limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The behavior-tree source exceeds a finite asset bound.",
+        .remediationHint = "Reduce nodes, edges, pins, properties, children, or opaque payload bytes before capture.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BehaviorTreeIdentityConflict{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.behavior_tree.identity_conflict"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A behavior-tree stable identity is duplicated within its graph domain.",
+        .remediationHint = "Issue a distinct stable identity; display names and layout positions are not identity.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BehaviorTreeTopologyInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.behavior_tree.topology_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A behavior-tree root, edge, pin, child, or service relationship is invalid.",
+        .remediationHint = "Connect valid pins, give each non-root node one structural parent, and honor node child bounds.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BehaviorTreeCycle{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.behavior_tree.cycle"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The behavior-tree structural graph contains a directed cycle.",
+        .remediationHint = "Remove the cyclic child or service relationship before publishing the asset.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor BehaviorTreeStorageUnavailable{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.behavior_tree.storage_unavailable"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "Storage for an immutable behavior-tree asset is unavailable.",
+        .remediationHint = "Release memory pressure and retry behavior-tree capture before activation.",
+        .retryable = true,
+        .userActionable = false,
+    };
 }  // namespace Horo::AI::AIErrors

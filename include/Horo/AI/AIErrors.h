@@ -68,4 +68,16 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionCapabilityUnavailable;
     /** @brief Storage for an immutable perception descriptor snapshot is unavailable. */
     extern const ErrorCodeDescriptor PerceptionRegistryStorageUnavailable;
+    /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
+    extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
+    /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */
+    extern const ErrorCodeDescriptor BehaviorTreeLimitExceeded;
+    /** @brief Stable behavior-tree graph, node, edge, pin, or property identity is duplicated. */
+    extern const ErrorCodeDescriptor BehaviorTreeIdentityConflict;
+    /** @brief A behavior-tree edge, root, child, service, or pin relationship is invalid. */
+    extern const ErrorCodeDescriptor BehaviorTreeTopologyInvalid;
+    /** @brief A behavior-tree topology contains a directed cycle. */
+    extern const ErrorCodeDescriptor BehaviorTreeCycle;
+    /** @brief Immutable behavior-tree asset storage is unavailable. */
+    extern const ErrorCodeDescriptor BehaviorTreeStorageUnavailable;
 }  // namespace Horo::AI::AIErrors

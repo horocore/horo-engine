@@ -328,6 +328,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AIErrors.h
     Horo/AI/AIIdentity.h
     Horo/AI/AITaskLifecycle.h
+    Horo/AI/BehaviorTree.h
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/NullAIRuntime.h
