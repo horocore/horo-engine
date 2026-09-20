@@ -126,6 +126,21 @@ namespace {
                      "release.distribution.identity_invalid");
     }
 
+    TEST_CASE("Canonical semantic versions round-trip through distribution admission",
+              "[unit][application][release][distribution][headless]") {
+        auto engine = Artifact();
+        engine.version = EngineProductVersion{Version("3.2.1-rc.2+build.7")};
+        const auto selectedEngine = ValidateDistributionPackageSelection(engine, DistributionPackageFormat::WindowsMsi);
+        REQUIRE(selectedEngine.HasValue());
+        CHECK(selectedEngine.Value().artifact.version == engine.version);
+
+        auto game = Artifact(DistributionProductKind::GameRuntime, DistributionPlatform::MacOS);
+        game.version = GameProductVersion{Version("4.0.0-preview.1+store.8")};
+        const auto selectedGame = ValidateDistributionPackageSelection(game, DistributionPackageFormat::StorePackage);
+        REQUIRE(selectedGame.HasValue());
+        CHECK(selectedGame.Value().artifact.version == game.version);
+    }
+
     TEST_CASE("Symbols and diagnostics cannot impersonate ordinary installations", "[unit][application][release][distribution][headless]") {
         auto symbols = Artifact();
         symbols.artifactClass = DistributionArtifactClass::Symbols;
@@ -140,6 +155,9 @@ namespace {
         symbols.installation = DistributionInstallationId{"ordinary-installation"};
         RequireError(ValidateDistributionPackageSelection(symbols, DistributionPackageFormat::ZipArchive),
                      "release.distribution.combination_unsupported");
+        symbols.installation = DistributionInstallationId{"Installation Invalid"};
+        RequireError(ValidateDistributionPackageSelection(symbols, DistributionPackageFormat::ZipArchive),
+                     "release.distribution.identity_invalid");
         diagnostics.installation.reset();
         RequireError(ValidateDistributionPackageSelection(diagnostics, DistributionPackageFormat::LinuxDeb),
                      "release.distribution.combination_unsupported");
@@ -201,5 +219,16 @@ namespace {
         server.version = GameProductVersion{Version()};
         RequireError(ValidateDistributionPackageSelection(server, DistributionPackageFormat::LinuxAppImage),
                      "release.distribution.combination_unsupported");
+    }
+
+    TEST_CASE("Malformed semantic version payloads fail distribution admission", "[unit][application][release][distribution][headless]") {
+        auto artifact = Artifact();
+        artifact.version = EngineProductVersion{ReleaseSemanticVersion{1, 2, 3, "01", {}}};
+        RequireError(ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::WindowsMsi),
+                     "release.distribution.identity_invalid");
+
+        artifact.version = EngineProductVersion{ReleaseSemanticVersion{1, 2, 3, {}, "build value"}};
+        RequireError(ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::WindowsMsi),
+                     "release.distribution.identity_invalid");
     }
 }  // namespace

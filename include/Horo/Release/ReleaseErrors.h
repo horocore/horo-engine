@@ -20,7 +20,7 @@ namespace Horo::Release::ReleaseErrors {
     extern const ErrorCodeDescriptor ProductKindMismatch;
     /** @brief Engine core or prerelease conflicts with durable compatibility metadata. */
     extern const ErrorCodeDescriptor PersistentContractMismatch;
-    /** @brief A distribution product, build, package, or installation identity is malformed. */
+    /** @brief A distribution product, version, build, package, or installation identity is malformed. */
     extern const ErrorCodeDescriptor DistributionIdentityInvalid;
     /** @brief A product, platform, artifact class, and package format combination is unsupported. */
     extern const ErrorCodeDescriptor DistributionCombinationUnsupported;
