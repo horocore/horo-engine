@@ -67,8 +67,7 @@ namespace Horo::Runtime {
     }
 
     SaveArchiveFinalizer::SaveArchiveFinalizer(std::vector<std::byte> preamble, SaveGameManifest manifest,
-                                               ValidatedSaveChunkDirectory directory,
-                                               const SaveArchiveFinalizationLimits &limits) noexcept
+                                               ValidatedSaveChunkDirectory directory, const SaveArchiveFinalizationLimits &limits) noexcept
         : preamble_(std::move(preamble)), manifest_(std::move(manifest)), directory_(std::move(directory)), limits_(limits) {}
 
     /** @copydoc SaveArchiveFinalizer::AppendChunk */
@@ -78,11 +77,17 @@ namespace Horo::Runtime {
         const auto entries = directory_.Entries();
         if (nextEntry_ >= entries.size() || entries[nextEntry_].record != record)
             return Result<void>::Failure(InvalidFinalization("Save archive chunks must be appended in validated record order."));
-        if (const SaveChunkDirectoryEntry &entry = entries[nextEntry_];
-            bytes.size() != entry.storedByteLength || entry.codec != SaveChunkCodec::Raw || ComputeSha256(bytes) != entry.decodedHash)
+        const SaveChunkDirectoryEntry &entry = entries[nextEntry_];
+        if (bytes.size() != entry.storedByteLength)
+            return Result<void>::Failure(MakeError(SaveErrors::ArchivePayloadTruncated));
+        if (entry.codec != SaveChunkCodec::Raw || ComputeSha256(bytes) != entry.decodedHash)
             return Result<void>::Failure(MakeError(SaveErrors::ArchiveChunkHashMismatch));
-        if (payload_.size() > std::numeric_limits<std::size_t>::max() - bytes.size() ||
-            payload_.size() + bytes.size() > limits_.directory.maximumPayloadBytes)
+        if (payload_.size() > std::numeric_limits<std::size_t>::max() - bytes.size())
+            return Result<void>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
+        const auto nextPayloadByteLength = static_cast<std::uint64_t>(payload_.size() + bytes.size());
+        const auto maximumArchivePayloadBytes =
+            limits_.maximumArchiveBytes - SaveArchivePreambleByteLength - SaveArchiveUnsignedTrailerByteLength;
+        if (nextPayloadByteLength > limits_.directory.maximumPayloadBytes || nextPayloadByteLength > maximumArchivePayloadBytes)
             return Result<void>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
         try {
             payload_.insert(payload_.end(), bytes.begin(), bytes.end());

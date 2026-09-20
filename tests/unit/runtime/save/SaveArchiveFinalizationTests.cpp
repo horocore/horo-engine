@@ -95,6 +95,17 @@ namespace {
                                  .codec = SaveChunkCodec::Raw,
                                  .decodedHash = ComputeSha256(std::array<std::byte, 1>{std::byte{6}})}}};
         }
+
+        SaveArchiveFinalizer CreatePopulatedFinalizer(SaveArchiveFinalizationLimits limits = {}) const {
+            auto created = SaveArchiveFinalizer::Create(preamble, manifest, Directory(), limits);
+            REQUIRE(created.HasValue());
+            auto finalizer = std::move(created).Value();
+            REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(20), first).HasValue());
+            REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(21), second).HasValue());
+            const std::array last{std::byte{6}};
+            REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(22), last).HasValue());
+            return finalizer;
+        }
     };
 
     TEST_CASE("Save archive finalization admits only complete ordered chunks", "[runtime][save][finalization]") {
@@ -128,12 +139,12 @@ namespace {
         CHECK(finalizer.Finalize().ErrorValue().code.Value() == SaveErrors::CaptureAlreadySealed.code.Value());
     }
 
-    TEST_CASE("Save archive finalization rejects chunk hash mismatches", "[runtime][save][finalization]") {
+    TEST_CASE("Save archive finalization rejects chunk length and SHA-256 mismatches", "[runtime][save][finalization]") {
         Fixture fixture;
         auto finalizer = std::move(SaveArchiveFinalizer::Create(fixture.preamble, fixture.manifest, fixture.Directory())).Value();
         const std::array tooShort{std::byte{9}, std::byte{9}};
         CHECK(finalizer.AppendChunk(Id<SaveRecordId>(20), tooShort).ErrorValue().code.Value() ==
-              SaveErrors::ArchiveChunkHashMismatch.code.Value());
+              SaveErrors::ArchivePayloadTruncated.code.Value());
         const std::array wrong{std::byte{9}, std::byte{9}, std::byte{9}};
         CHECK(finalizer.AppendChunk(Id<SaveRecordId>(20), wrong).ErrorValue().code.Value() ==
               SaveErrors::ArchiveChunkHashMismatch.code.Value());
@@ -160,27 +171,27 @@ namespace {
         Fixture fixture;
         SaveArchiveFinalizationLimits limits;
         limits.directory.maximumPayloadBytes = fixture.Directory().payloadByteLength;
-        limits.maximumArchiveBytes = SaveArchivePreambleByteLength + fixture.Directory().payloadByteLength + SaveArchiveUnsignedTrailerByteLength;
-        auto created = SaveArchiveFinalizer::Create(fixture.preamble, fixture.manifest, fixture.Directory(), limits);
-        REQUIRE(created.HasValue());
-        auto finalizer = std::move(created).Value();
-
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(20), fixture.first).HasValue());
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(21), fixture.second).HasValue());
-        const std::array last{std::byte{6}};
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(22), last).HasValue());
+        limits.maximumArchiveBytes =
+            SaveArchivePreambleByteLength + fixture.Directory().payloadByteLength + SaveArchiveUnsignedTrailerByteLength;
+        auto finalizer = fixture.CreatePopulatedFinalizer(limits);
         const auto finalized = finalizer.Finalize();
         REQUIRE(finalized.HasValue());
         CHECK(finalized.Value().Bytes().size() == limits.maximumArchiveBytes);
     }
 
+    TEST_CASE("Save archive finalization rejects a trailer beyond the archive size budget", "[runtime][save][finalization]") {
+        Fixture fixture;
+        SaveArchiveFinalizationLimits limits;
+        limits.maximumArchiveBytes =
+            SaveArchivePreambleByteLength + fixture.Directory().payloadByteLength + SaveArchiveUnsignedTrailerByteLength;
+        auto finalizer = fixture.CreatePopulatedFinalizer(limits);
+        CHECK(finalizer.Finalize(SaveArchiveSignedTrailerByteLength).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveFramingLimitExceeded.code.Value());
+    }
+
     TEST_CASE("Save archive finalization writes and removes only its operation temporary", "[runtime][save][finalization]") {
         Fixture fixture;
-        auto finalizer = std::move(SaveArchiveFinalizer::Create(fixture.preamble, fixture.manifest, fixture.Directory())).Value();
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(20), fixture.first).HasValue());
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(21), fixture.second).HasValue());
-        const std::array last{std::byte{6}};
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(22), last).HasValue());
+        auto finalizer = fixture.CreatePopulatedFinalizer();
 
         DurableFileSystemStub files;
         const auto temporary = std::filesystem::path{"save-operation.tmp"};
@@ -192,11 +203,7 @@ namespace {
 
     TEST_CASE("Save archive finalization removes a failed write when possible", "[runtime][save][finalization]") {
         Fixture fixture;
-        auto finalizer = std::move(SaveArchiveFinalizer::Create(fixture.preamble, fixture.manifest, fixture.Directory())).Value();
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(20), fixture.first).HasValue());
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(21), fixture.second).HasValue());
-        const std::array last{std::byte{6}};
-        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(22), last).HasValue());
+        auto finalizer = fixture.CreatePopulatedFinalizer();
 
         DurableFileSystemStub files;
         files.failWrite = true;
