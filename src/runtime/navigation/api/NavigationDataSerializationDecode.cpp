@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Navigation/NavigationDataSerialization.h"
 #include "Horo/Navigation/NavigationErrors.h"
+#include "NavigationDataSerializationInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -14,80 +15,7 @@
 
 namespace Horo::Navigation {
     namespace {
-        constexpr std::array<std::uint8_t, 4> EnvelopeMagic{'H', 'N', 'A', 'V'};
-        constexpr std::size_t EnvelopeHeaderBytes = 28;
-        constexpr std::size_t AuthoredRecordHeaderBytes = 26;
-        constexpr std::size_t GeneratedPayloadHeaderBytes = 18;
-        constexpr std::size_t ChecksumBytes = 32;
-        constexpr std::uint8_t RequiredRecordFlag = 0x01U;
-        constexpr std::uint8_t OpaqueRecordFlag = 0x02U;
-        constexpr std::uint8_t QuarantinedGeneratedFlag = 0x01U;
-        constexpr std::uint8_t UnsupportedGeneratedVersionFlag = 0x02U;
-
-        template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
-            return Result<T>::Failure(MakeError(descriptor));
-        }
-
-        [[nodiscard]] constexpr bool IsSupportedEnvelopeVersion(const NavigationSourceSchemaVersion version) noexcept {
-            return version.major == CurrentNavigationSourceSchemaVersion.major &&
-                   version.minor <= CurrentNavigationSourceSchemaVersion.minor;
-        }
-
-        [[nodiscard]] constexpr bool IsValidRecordVersion(const NavigationSourceSchemaVersion version) noexcept {
-            return version.major != 0;
-        }
-
-        [[nodiscard]] bool IsValidEnvelopeLimit(const NavigationSerializationLimits &limits) noexcept {
-            return limits.maximumEnvelopeBytes >= EnvelopeHeaderBytes + ChecksumBytes &&
-                   limits.maximumEnvelopeBytes <= NavigationSerializationLimits::MaximumEnvelopeBytes;
-        }
-
-        [[nodiscard]] bool IsValidLimits(const NavigationSerializationLimits &limits) noexcept {
-            return IsValidEnvelopeLimit(limits) && limits.maximumAuthoredRecords <= NavigationSerializationLimits::MaximumAuthoredRecords &&
-                   limits.maximumGeneratedPayloads <= NavigationSerializationLimits::MaximumGeneratedPayloads &&
-                   limits.maximumRecordPayloadBytes <= NavigationSerializationLimits::MaximumRecordPayloadBytes &&
-                   limits.maximumGeneratedPayloadBytes <= NavigationSerializationLimits::MaximumGeneratedPayloadBytes &&
-                   limits.maximumTotalPayloadBytes <= NavigationSerializationLimits::MaximumTotalPayloadBytes;
-        }
-
-        [[nodiscard]] bool IsValidSupportTable(const std::span<const NavigationAuthoredRecordSupport> supports) noexcept {
-            for (std::size_t index = 0; index < supports.size(); ++index) {
-                const auto &support = supports[index];
-                if (!support.type.IsValid() || !IsValidRecordVersion(support.minimum) || !IsValidRecordVersion(support.maximum) ||
-                    support.minimum > support.maximum)
-                    return false;
-                for (std::size_t previous = 0; previous < index; ++previous) {
-                    if (supports[previous].type == support.type)
-                        return false;
-                }
-            }
-            return true;
-        }
-
-        [[nodiscard]] constexpr bool IsValidUnknownRecordPolicy(const NavigationUnknownRecordPolicy policy) noexcept {
-            return static_cast<std::uint8_t>(policy) < static_cast<std::uint8_t>(NavigationUnknownRecordPolicy::Count);
-        }
-
-        [[nodiscard]] const NavigationAuthoredRecordSupport *FindSupport(const std::span<const NavigationAuthoredRecordSupport> supports,
-                                                                         const NavigationAuthoredRecordTypeId type) noexcept {
-            for (const auto &support : supports) {
-                if (support.type == type)
-                    return &support;
-            }
-            return nullptr;
-        }
-
-        [[nodiscard]] bool IsSupported(const NavigationAuthoredRecordSupport *support,
-                                       const NavigationSourceSchemaVersion version) noexcept {
-            return support != nullptr && version >= support->minimum && version <= support->maximum;
-        }
-
-        [[nodiscard]] bool CheckedAdd(const std::size_t left, const std::size_t right, std::size_t &result) noexcept {
-            if (right > std::numeric_limits<std::size_t>::max() - left)
-                return false;
-            result = left + right;
-            return true;
-        }
+        using namespace SerializationInternal;
 
         struct Reader final {
             std::span<const std::byte> bytes;
@@ -142,13 +70,6 @@ namespace Horo::Navigation {
                 return true;
             }
         };
-
-        [[nodiscard]] Result<void> ValidateContext(const NavigationSourceLoadContext &context) {
-            if (!IsValidLimits(context.limits) || !IsValidSupportTable(context.supportedRecords) ||
-                !IsValidSupportTable(context.supportedGeneratedPayloads) || !IsValidUnknownRecordPolicy(context.unknownPolicy))
-                return Result<void>::Failure(MakeError(NavigationErrors::SourceEnvelopeInvalid));
-            return Result<void>::Success();
-        }
 
         [[nodiscard]] bool ChecksumMatches(const std::span<const std::byte> bytes) noexcept {
             const auto body = bytes.first(bytes.size() - ChecksumBytes);

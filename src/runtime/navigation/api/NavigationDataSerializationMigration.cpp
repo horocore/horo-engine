@@ -1,5 +1,6 @@
 #include "Horo/Navigation/NavigationDataSerialization.h"
 #include "Horo/Navigation/NavigationErrors.h"
+#include "NavigationDataSerializationInternal.h"
 
 #include <cstddef>
 #include <span>
@@ -8,14 +9,7 @@
 
 namespace Horo::Navigation {
     namespace {
-        template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
-            return Result<T>::Failure(MakeError(descriptor));
-        }
-
-        [[nodiscard]] constexpr bool IsSupportedEnvelopeVersion(const NavigationSourceSchemaVersion version) noexcept {
-            return version.major == CurrentNavigationSourceSchemaVersion.major &&
-                   version.minor <= CurrentNavigationSourceSchemaVersion.minor;
-        }
+        using namespace SerializationInternal;
 
         [[nodiscard]] Result<void> ValidateMigrationSteps(const std::span<const NavigationSourceMigrationStep> steps) {
             for (const auto &step : steps) {
