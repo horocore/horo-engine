@@ -102,6 +102,10 @@ horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageCache.h
     Horo/Packages/PackageFileManifest.h
 )
+horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
+    Horo/Packages/PackagePublisherVerification.h
+    Horo/Packages/PackagePublisherVerificationErrors.h
+)
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/FrameScheduler.h
