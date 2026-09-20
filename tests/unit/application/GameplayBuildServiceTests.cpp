@@ -7,9 +7,11 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -102,6 +104,18 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
             std::this_thread::sleep_for(std::chrono::milliseconds{10});
         }
         FAIL("Gameplay build session did not become terminal.");
+    }
+
+    std::optional<BuildOutputSnapshot> AwaitTerminalOutput(BuildOutputStore &output, const GameplayBuildSnapshot &terminal) {
+        for (std::size_t attempt = 0; attempt < 3000; ++attempt) {
+            if (const std::optional<BuildOutputSnapshot> snapshot = output.SnapshotIfChanged(0);
+                snapshot.has_value() && std::ranges::count_if(snapshot->records, [&](const BuildOutputRecord &record) {
+                return record.operationId == terminal.operationId && record.result != BuildOutputResult::None;
+            }) == 1)
+                return snapshot;
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
+        FAIL("Gameplay build terminal output was not published.");
     }
 
     std::optional<BuildOutputSessionId> AssertSuccessfulBuildOutput(const BuildOutputSnapshot &output,
@@ -204,13 +218,23 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
 
         Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &) override {
             calls.fetch_add(1, std::memory_order_relaxed);
+            callCondition_.notify_one();
             return Result<ExternalProcessResult>::Success({reason_, reason_ == ProcessTerminationReason::Exited ? 0 : 1});
+        }
+
+        [[nodiscard]] bool WaitForCall(const std::chrono::milliseconds timeout) {
+            std::unique_lock lock{callMutex_};
+            return callCondition_.wait_for(lock, timeout, [this] {
+                return calls.load(std::memory_order_relaxed) != 0U;
+            });
         }
 
         std::atomic<std::size_t> calls{};
 
     private:
         ProcessTerminationReason reason_;
+        std::condition_variable callCondition_;
+        std::mutex callMutex_;
     };
 
     template <typename ProcessRunner> class GameplayBuildFixture final {
@@ -447,14 +471,13 @@ TEST_CASE("Gameplay build service maps cancellation to one correlated terminal r
 
     const auto started = fixture.service.Start(fixture.Request(std::chrono::seconds{1}));
     REQUIRE(started.HasValue());
-    for (std::size_t attempt = 0; attempt < 100 && processes.calls.load(std::memory_order_relaxed) == 0U; ++attempt)
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    REQUIRE(processes.WaitForCall(std::chrono::seconds{30}));
     REQUIRE((processes.calls.load(std::memory_order_relaxed) == 1U));
     REQUIRE(fixture.service.RequestCancel(started.Value()));
     const GameplayBuildSnapshot terminal = AwaitTerminal(fixture.service, started.Value());
     REQUIRE(terminal.state == GameplayBuildState::Cancelled);
     REQUIRE(terminal.operationId.has_value());
-    const auto snapshot = fixture.output.SnapshotIfChanged(0);
+    const auto snapshot = AwaitTerminalOutput(fixture.output, terminal);
     REQUIRE(snapshot.has_value());
     AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
     AssertTerminalOperation(fixture.operations, terminal, OperationState::Cancelled);
