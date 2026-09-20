@@ -426,6 +426,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/OriginRebaseTransaction.h
     Horo/WorldStreaming/OriginShiftPolicy.h
     Horo/WorldStreaming/RuntimeEntityCellExitOperation.h
+    Horo/WorldStreaming/WorldEntityReferenceFixup.h
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h

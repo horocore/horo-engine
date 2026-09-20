@@ -503,6 +503,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/OriginRebaseTransactionTests.cpp
         unit/runtime/world_streaming/OriginShiftPolicyTests.cpp
         unit/runtime/world_streaming/RuntimeEntityCellExitOperationTests.cpp
+        unit/runtime/world_streaming/WorldEntityReferenceFixupTests.cpp
         unit/runtime/world_streaming/CookedWorldIndexManifestTests.cpp
         unit/runtime/world_streaming/FallbackStreamingProviderTests.cpp
         unit/runtime/world_streaming/StreamingBudgetModelTests.cpp

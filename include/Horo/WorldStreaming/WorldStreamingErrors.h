@@ -264,6 +264,22 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor DependencyPlanHardTargetMissing;
     /** @brief A soft reference contradicts the transitive hard co-load policy for the same objects. */
     extern const ErrorCodeDescriptor DependencyPlanAmbiguous;
+    /** @brief A stable entity-reference fixup request, mapping, or result is malformed. */
+    extern const ErrorCodeDescriptor EntityFixupInvalid;
+    /** @brief A fixup policy or result value is unsupported by this contract version. */
+    extern const ErrorCodeDescriptor EntityFixupUnsupported;
+    /** @brief A fixup owner, revision, or activation mapping is stale. */
+    extern const ErrorCodeDescriptor EntityFixupStale;
+    /** @brief A fixup repeats a stable endpoint or runtime mapping identity. */
+    extern const ErrorCodeDescriptor EntityFixupIdentityConflict;
+    /** @brief A fixup batch or pending-reference ledger exceeds its explicit ceiling. */
+    extern const ErrorCodeDescriptor EntityFixupCapacityExceeded;
+    /** @brief Fixup admission or activation is unavailable during cancellation or shutdown. */
+    extern const ErrorCodeDescriptor EntityFixupLifecycleUnavailable;
+    /** @brief The source entity is not active in the exact activation mapping. */
+    extern const ErrorCodeDescriptor EntityFixupSourceUnavailable;
+    /** @brief A hard-reference target is not active in the exact activation mapping. */
+    extern const ErrorCodeDescriptor EntityFixupTargetUnavailable;
     /** @brief A streaming source descriptor or admission context is structurally invalid. */
     extern const ErrorCodeDescriptor SourceDescriptorInvalid;
     /** @brief A streaming source intent is not supported by this contract version. */
