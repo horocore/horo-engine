@@ -47,6 +47,7 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] RenderCapabilitySnapshot MakeCapabilitySnapshot(const MetalDeviceFacts &facts) {
+            using enum RenderCapability;
             RenderCapabilitySnapshot support{
                 .deviceIncarnation = 1,
                 .capabilityRevision = 1,
@@ -61,11 +62,10 @@ namespace Horo::Render::Detail {
                 .formats = {},
             };
             for (const RenderCapability capability :
-                 {RenderCapability::OffscreenTargets, RenderCapability::BufferResources, RenderCapability::MeshResources,
-                  RenderCapability::TextureResources, RenderCapability::RenderTargetResources})
+                 {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources})
                 support.features.Enable(capability);
             if (facts.adapter.supportsPresentation)
-                support.features.Enable(RenderCapability::Presentation);
+                support.features.Enable(Presentation);
             support.formats.usages = facts.formats.usages;
             support.formats.sampleCountMask = facts.formats.sampleCountMask;
             return support;

@@ -150,6 +150,9 @@ namespace Horo::Render {
 
         [[nodiscard]] RenderCapabilitySnapshot MakeOpenGLCapabilitySnapshot(const OpenGLContextFacts &facts,
                                                                             const bool resourcesAvailable) noexcept {
+            using enum RenderCapability;
+            using enum RenderTextureFormat;
+            using enum RenderTextureUsage;
             RenderCapabilitySnapshot snapshot{
                 .deviceIncarnation = 1,
                 .capabilityRevision = 1,
@@ -163,18 +166,14 @@ namespace Horo::Render {
                            .maxFramesInFlight = 8},
                 .formats = {},
             };
-            snapshot.features.Enable(RenderCapability::Presentation);
+            snapshot.features.Enable(Presentation);
             if (resourcesAvailable) {
                 for (const RenderCapability capability :
-                     {RenderCapability::OffscreenTargets, RenderCapability::BufferResources, RenderCapability::MeshResources,
-                      RenderCapability::TextureResources, RenderCapability::RenderTargetResources})
+                     {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources})
                     snapshot.features.Enable(capability);
-                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Rgba8Unorm)] =
-                    RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
-                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth24Stencil8)] =
-                    RenderTextureUsage::RenderAttachment;
-                snapshot.formats.usages[static_cast<std::size_t>(RenderTextureFormat::Depth32Float)] =
-                    RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment;
+                snapshot.formats.usages[static_cast<std::size_t>(Rgba8Unorm)] = Sampled | RenderAttachment;
+                snapshot.formats.usages[static_cast<std::size_t>(Depth24Stencil8)] = RenderAttachment;
+                snapshot.formats.usages[static_cast<std::size_t>(Depth32Float)] = Sampled | RenderAttachment;
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
             }
             return snapshot;

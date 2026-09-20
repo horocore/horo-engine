@@ -21,6 +21,8 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] RenderCapabilitySnapshot NullCapabilitySnapshot() noexcept {
+            using enum RenderCapability;
+            using enum RenderTextureUsage;
             RenderCapabilitySnapshot snapshot{
                 .deviceIncarnation = 1,
                 .capabilityRevision = 1,
@@ -35,13 +37,10 @@ namespace Horo::Render {
                 .formats = {},
             };
             for (const RenderCapability capability :
-                 {RenderCapability::OffscreenTargets, RenderCapability::BufferResources, RenderCapability::MeshResources,
-                  RenderCapability::TextureResources, RenderCapability::RenderTargetResources}) {
+                 {OffscreenTargets, BufferResources, MeshResources, TextureResources, RenderTargetResources}) {
                 snapshot.features.Enable(capability);
             }
-            const RenderTextureUsage allUsages = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment |
-                                                 RenderTextureUsage::CopySource | RenderTextureUsage::CopyDestination |
-                                                 RenderTextureUsage::Storage;
+            const RenderTextureUsage allUsages = Sampled | RenderAttachment | CopySource | CopyDestination | Storage;
             snapshot.formats.usages.fill(allUsages);
             for (const std::uint32_t sampleCount : {1U, 2U, 4U, 8U, 16U, 32U})
                 snapshot.formats.sampleCountMask |= std::uint64_t{1} << sampleCount;
