@@ -23,6 +23,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/Logging/LogLevel.h
     Horo/Foundation/Logging/Logger.h
     Horo/Foundation/Logging/StructuredLogStore.h
+    Horo/Foundation/MathUtils.h
     Horo/Foundation/ModuleDescriptor.h
     Horo/Foundation/ModuleHost.h
     Horo/Foundation/OperationStore.h
@@ -101,6 +102,10 @@ horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageArchive.h
     Horo/Packages/PackageCache.h
     Horo/Packages/PackageFileManifest.h
+)
+horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
+    Horo/Packages/PackagePublisherVerification.h
+    Horo/Packages/PackagePublisherVerificationErrors.h
 )
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
@@ -250,6 +255,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioErrors.h
     Horo/Audio/AudioIdentity.h
     Horo/Audio/MixerAssetSchema.h
+    Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
 )
 
@@ -257,6 +263,7 @@ horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
     Horo/Audio/AudioSourceImporter.h
 )
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
+    Horo/Audio/AudioDSPNode.h
     Horo/Audio/AudioResampler.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
@@ -604,11 +611,13 @@ horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ApplicationCapabilityRegistry.h
     Horo/Extensions/AssetCookerRegistry.h
+    Horo/Extensions/BackendOperationRegistry.h
     Horo/Extensions/BackendServiceRegistry.h
     Horo/Extensions/ExtensionAbi.h
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
+    Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h

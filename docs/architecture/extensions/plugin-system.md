@@ -597,6 +597,28 @@ headless composition without editor or renderer construction. External module C
 function tables remain behind a host-owned typed adapter and do not cross this C++
 boundary directly.
 
+`BackendOperationRegistry` is the host-owned asynchronous lifecycle boundary for
+backend capabilities that need polling rather than callback transport. A provider
+generation registers one or more typed operation contracts, each bound to its
+expected typed result identity and the existing
+`ApplicationCapabilityProviderIdentity`. A move-only registration owns publication
+and revocation; it never invokes provider code while holding the registry lock.
+`Begin` returns a move-only producer and a copyable handle. The producer owns
+progress, bounded Foundation diagnostics, optional bounded result bytes, and the
+single terminal transition; the handle only snapshots and requests caller
+cancellation. The registry is the sole operation authority for this extension
+point and does not mirror records into Foundation `OperationStore`.
+
+Operation snapshots use a monotonic revision and stage-local exact work units.
+Progress cannot regress within one phase, while a new typed phase resets its
+stage-local counters. Completion, failure, abandonment, cancellation, provider
+revocation, and host shutdown all compete under one operation mutex; the first
+terminal transition wins and every later producer transition returns
+`AlreadyTerminal`. Parent and caller cancellation are observable through the
+producer's token. Provider reset and registry shutdown request that token before
+forcibly publishing `Cancelled` so backend work can stop without a callback or
+wait during teardown.
+
 Provider operations do not own host lifecycle, but a defensive re-entrant shutdown
 request cannot wait on its own call. That provider is marked revoked and cancelled
 immediately; its final call guard wakes one registry-owned retirement coordinator

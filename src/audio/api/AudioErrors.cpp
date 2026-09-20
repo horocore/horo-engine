@@ -32,6 +32,33 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor DspContractInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.dsp.contract_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio DSP node contract is structurally invalid.",
+        .remediationHint = "Declare valid bounded ports, parameters, formats and real-time guarantees before activation.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor DspContractLimitExceeded{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.dsp.contract_limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio DSP node exceeds an admitted processing limit.",
+        .remediationHint = "Reduce ports, state, scratch, latency, tail or block size to the active audio profile.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor DspPreparationStorageInsufficient{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.dsp.preparation_storage_insufficient"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio DSP node has not been given its complete prepared storage.",
+        .remediationHint = "Reserve the descriptor's state and scratch bytes before activation.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor AssetSchemaInvalid{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.asset_schema.invalid"},
@@ -281,6 +308,24 @@ namespace Horo::Audio::AudioErrors {
         .defaultSeverity = ErrorSeverity::Critical,
         .summary = "Every remaining audio handle slot exhausted its generation range.",
         .remediationHint = "Replace the audio runtime; exhausted slots are never reused.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor VoiceInvalidTransition{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.voice.invalid_transition"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio voice cannot enter the requested lifecycle state.",
+        .remediationHint = "Follow the admitted voice lifecycle and use Cancel only before a terminal state.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor VoiceAdmissionClosed{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.voice.admission_closed"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The audio voice registry has closed admission.",
+        .remediationHint = "Finish or release existing terminal voices, then create a new audio runtime generation.",
         .retryable = false,
         .userActionable = false,
     };

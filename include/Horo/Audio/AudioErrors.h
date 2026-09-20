@@ -12,6 +12,9 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor EventQueueInvalid;
     extern const ErrorCodeDescriptor ResamplerInvalid;
     extern const ErrorCodeDescriptor ResamplerBudgetExceeded;
+    extern const ErrorCodeDescriptor DspContractInvalid;
+    extern const ErrorCodeDescriptor DspContractLimitExceeded;
+    extern const ErrorCodeDescriptor DspPreparationStorageInsufficient;
     extern const ErrorCodeDescriptor AssetSchemaInvalid;
     extern const ErrorCodeDescriptor AssetSchemaVersionUnsupported;
     extern const ErrorCodeDescriptor AssetSchemaLimitExceeded;
@@ -40,6 +43,8 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor HandleStale;
     extern const ErrorCodeDescriptor HandleCapacityExhausted;
     extern const ErrorCodeDescriptor HandleGenerationExhausted;
+    extern const ErrorCodeDescriptor VoiceInvalidTransition;
+    extern const ErrorCodeDescriptor VoiceAdmissionClosed;
     extern const ErrorCodeDescriptor CapabilityUnavailable;
     extern const ErrorCodeDescriptor OperationUnsupported;
     extern const ErrorCodeDescriptor OperationCancelled;
