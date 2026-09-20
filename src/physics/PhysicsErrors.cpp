@@ -243,6 +243,24 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor MaterialDescriptorInvalid{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.material.descriptor_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The reusable Physics material asset descriptor is invalid.",
+        .remediationHint = "Provide the supported schema, stable asset identity, finite bounded SI values and non-zero revision.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor MaterialCombineUnsupported{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.material.combine_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The Physics material combine mode is unsupported.",
+        .remediationHint = "Use Average, Minimum, Multiply or Maximum for each physical contact coefficient.",
+        .retryable = false,
+        .userActionable = true,
+    };
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
@@ -273,6 +291,8 @@ namespace Horo::Physics::PhysicsErrors {
             &ShapeCookCancelled,
             &ShapeMotionUnsupported,
             &ShapeArtifactInvalid,
+            &MaterialDescriptorInvalid,
+            &MaterialCombineUnsupported,
         };
         return descriptors;
     }
