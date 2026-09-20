@@ -147,6 +147,14 @@ add_library(HoroEngine::Packages ALIAS HoroPackages)
 target_compile_features(HoroPackages PUBLIC cxx_std_20)
 target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
+add_library(HoroPackageSecurity STATIC
+        packages/verification/PackagePublisherVerification.cpp
+        packages/verification/PackagePublisherVerificationErrors.cpp
+)
+add_library(HoroEngine::PackageSecurity ALIAS HoroPackageSecurity)
+target_compile_features(HoroPackageSecurity PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageSecurity PUBLIC HoroEngine::Foundation HoroPackages HoroEngine::Security)
+
 add_library(HoroApplication STATIC
         application/observability/HostObservability.cpp
         application/project/ProjectErrors.cpp
@@ -489,6 +497,7 @@ if(HORO_BUILD_AUDIO_SDL3)
 endif()
 
 add_library(HoroAudioDsp STATIC
+        audio/api/AudioDSPNode.cpp
         audio/resampling/AudioResampler.cpp
         audio/resampling/ResamplerSimd.cpp
         audio/resampling/ResamplerSimd.h
@@ -1373,8 +1382,12 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionAbiConformance.cpp
         extensions/registry/ApplicationCapabilityRegistry.cpp
         extensions/registry/BackendServiceRegistry.cpp
+        extensions/registry/BackendOperationRegistry.cpp
+        extensions/registry/BackendOperationRegistryInternal.h
+        extensions/registry/BackendOperationValidation.h
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
+        extensions/manifest/EditorSurfaceDescriptor.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ExtensionInventory.cpp

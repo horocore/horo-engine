@@ -12,6 +12,9 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor EventQueueInvalid;
     extern const ErrorCodeDescriptor ResamplerInvalid;
     extern const ErrorCodeDescriptor ResamplerBudgetExceeded;
+    extern const ErrorCodeDescriptor DspContractInvalid;
+    extern const ErrorCodeDescriptor DspContractLimitExceeded;
+    extern const ErrorCodeDescriptor DspPreparationStorageInsufficient;
     extern const ErrorCodeDescriptor AssetSchemaInvalid;
     extern const ErrorCodeDescriptor AssetSchemaVersionUnsupported;
     extern const ErrorCodeDescriptor AssetSchemaLimitExceeded;

@@ -113,8 +113,9 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackagePathTests.cpp
     unit/packages/PackageArchiveTests.cpp
     unit/packages/PackageCacheTests.cpp
-    unit/packages/PackageFileManifestTests.cpp)
-target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+    unit/packages/PackageFileManifestTests.cpp
+    unit/packages/PackagePublisherVerificationTests.cpp)
+target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPackageValidationTests LABELS "packages;headless")
 
 if (HORO_ENABLE_IMGUI_UI_TESTS)
@@ -276,6 +277,7 @@ if(HORO_BUILD_AUDIO_SDL3)
             PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
 endif()
 add_executable(HoroAudioDspTests
+    unit/runtime/audio/AudioDSPNodeTests.cpp
     unit/runtime/audio/ResamplerKernelTests.cpp
     unit/runtime/audio/AudioResamplerTests.cpp
 )
@@ -1767,6 +1769,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationTransactionTests.cpp
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
+        unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ExtensionModuleResolutionTests.cpp
@@ -1870,6 +1873,13 @@ add_executable(HoroBackendServiceRegistryTests
 target_compile_features(HoroBackendServiceRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendServiceRegistryTests PRIVATE HoroBackendServiceReference Catch2::Catch2WithMain)
 add_test(NAME HoroBackendServiceRegistryTests COMMAND HoroBackendServiceRegistryTests)
+
+add_executable(HoroBackendOperationRegistryTests
+        unit/extensions/BackendOperationRegistryTests.cpp
+)
+target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests
