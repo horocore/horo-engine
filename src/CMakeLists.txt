@@ -488,6 +488,7 @@ if(HORO_BUILD_AUDIO_SDL3)
 endif()
 
 add_library(HoroAudioDsp STATIC
+        audio/api/AudioDSPNode.cpp
         audio/resampling/AudioResampler.cpp
         audio/resampling/ResamplerSimd.cpp
         audio/resampling/ResamplerSimd.h
