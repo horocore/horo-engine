@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorSettingsStore.h"
 
+#include "EditorSettingsStoreInternal.h"
 #include "Horo/Editor/Localization/LocalizationTypes.h"
 #include "Horo/Foundation/Logging/Logger.h"
 
@@ -46,34 +47,6 @@ namespace Horo::Editor {
             std::ostringstream ss;
             ss << in.rdbuf();
             return ss.str();
-        }
-
-        [[nodiscard]] std::string EscapeJsonString(std::string_view value) {
-            std::string out;
-            out.reserve(value.size() + 8);
-            for (const char c : value) {
-                switch (c) {
-                    case '\\':
-                        out += R"(\\)";
-                        break;
-                    case '"':
-                        out += R"(\")";
-                        break;
-                    case '\n':
-                        out += "\\n";
-                        break;
-                    case '\r':
-                        out += "\\r";
-                        break;
-                    case '\t':
-                        out += "\\t";
-                        break;
-                    default:
-                        out += c;
-                        break;
-                }
-            }
-            return out;
         }
 
         [[nodiscard]] std::string UnescapeJsonString(std::string_view value) {
@@ -174,19 +147,6 @@ namespace Horo::Editor {
             return WelcomeScreen;
         }
 
-        [[nodiscard]] const char *ToString(const EditorStartupBehavior value) {
-            using enum EditorStartupBehavior;
-            switch (value) {
-                case LastProject:
-                    return "last_project";
-                case ProjectBrowser:
-                    return "project_browser";
-                case WelcomeScreen:
-                default:
-                    return "welcome_screen";
-            }
-        }
-
         [[nodiscard]] EditorThemePreset ParseThemePreset(std::string_view value) {
             using enum EditorThemePreset;
             if (value == "midnight")
@@ -194,19 +154,6 @@ namespace Horo::Editor {
             if (value == "light")
                 return Light;
             return HoroDark;
-        }
-
-        [[nodiscard]] const char *ToString(const EditorThemePreset value) {
-            using enum EditorThemePreset;
-            switch (value) {
-                case Midnight:
-                    return "midnight";
-                case Light:
-                    return "light";
-                case HoroDark:
-                default:
-                    return "horo_dark";
-            }
         }
 
         [[nodiscard]] EditorViewportMode ParseViewportMode(std::string_view value) {
@@ -220,21 +167,6 @@ namespace Horo::Editor {
             return Shaded;
         }
 
-        [[nodiscard]] const char *ToString(const EditorViewportMode value) {
-            using enum EditorViewportMode;
-            switch (value) {
-                case Wireframe:
-                    return "wireframe";
-                case Lit:
-                    return "lit";
-                case Unlit:
-                    return "unlit";
-                case Shaded:
-                default:
-                    return "shaded";
-            }
-        }
-
         [[nodiscard]] EditorRenderingTier ParseRenderingTier(std::string_view value) {
             using enum EditorRenderingTier;
             if (value == "dx12_vulkan")
@@ -246,21 +178,6 @@ namespace Horo::Editor {
             return HighEnd;
         }
 
-        [[nodiscard]] const char *ToString(const EditorRenderingTier value) {
-            using enum EditorRenderingTier;
-            switch (value) {
-                case Dx12Vulkan:
-                    return "dx12_vulkan";
-                case Dx11:
-                    return "dx11";
-                case Es3:
-                    return "es3";
-                case HighEnd:
-                default:
-                    return "high_end";
-            }
-        }
-
         [[nodiscard]] EditorAudioOutputDevice ParseAudioDevice(std::string_view value) {
             using enum EditorAudioOutputDevice;
             if (value == "headphones")
@@ -268,19 +185,6 @@ namespace Horo::Editor {
             if (value == "speakers")
                 return Speakers;
             return SystemDefault;
-        }
-
-        [[nodiscard]] const char *ToString(const EditorAudioOutputDevice value) {
-            using enum EditorAudioOutputDevice;
-            switch (value) {
-                case Headphones:
-                    return "headphones";
-                case Speakers:
-                    return "speakers";
-                case SystemDefault:
-                default:
-                    return "system_default";
-            }
         }
 
         [[nodiscard]] EditorConsoleLogLevel ParseLogLevel(std::string_view value) {
@@ -292,21 +196,6 @@ namespace Horo::Editor {
             if (value == "error")
                 return Error;
             return Warning;
-        }
-
-        [[nodiscard]] const char *ToString(const EditorConsoleLogLevel value) {
-            using enum EditorConsoleLogLevel;
-            switch (value) {
-                case Debug:
-                    return "debug";
-                case Info:
-                    return "info";
-                case Error:
-                    return "error";
-                case Warning:
-                default:
-                    return "warning";
-            }
         }
 
         void ApplyEditorGroup(const std::string &json, EditorSettings &s) {
@@ -367,11 +256,19 @@ namespace Horo::Editor {
             if (auto v = FindBoolValue(json, "audioEnabled"); v.has_value())
                 s.audioEnabled = *v;
             if (auto v = FindIntValue(json, "maxPreviewClients"); v.has_value())
-                s.maxPreviewClients = *v;
+                s.networkPreviewPreferences.maxPreviewClients = static_cast<std::uint32_t>(std::max(*v, 0));
             if (auto v = FindIntValue(json, "simulatedLatencyMs"); v.has_value())
-                s.simulatedLatencyMs = *v;
+                s.networkPreviewPreferences.simulatedLatencyMilliseconds = static_cast<std::uint32_t>(std::max(*v, 0));
+        }
+
+        void ApplyPackageGroup(const std::string &json, EditorSettings &s) {
+            if (auto v = FindIntValue(json, "downloadThreads"); v.has_value()) {
+                s.packages.downloadThreads = *v;
+                return;
+            }
+            // Preserve the pre-1172 key during load; WriteSettings emits the canonical packages group.
             if (auto v = FindIntValue(json, "packageDownloadThreads"); v.has_value())
-                s.packageDownloadThreads = *v;
+                s.packages.downloadThreads = *v;
         }
 
         void ApplyDiagnosticsPluginsGroups(const std::string &json, EditorSettings &s) {
@@ -391,80 +288,10 @@ namespace Horo::Editor {
             ApplyInputGroup(json, s);
             ApplyRenderingGroup(json, s);
             ApplyAudioNetworkGroups(json, s);
+            ApplyPackageGroup(json, s);
             ApplyDiagnosticsPluginsGroups(json, s);
         }
 
-        void WriteSettings(std::ofstream &out, const EditorSettings &s) {
-            // Numeric fields are re-clamped to their validated bounds here so only
-            // sanitized values ever reach the output stream, even if a caller skips
-            // ValidateEditorSettings.
-            const auto bounded = [](const int value, const int minValue, const int maxValue) {
-                return std::clamp(value, minValue, maxValue);
-            };
-            const auto boundedFloat = [](const float value, const float minValue, const float maxValue) {
-                return std::isfinite(value) ? std::clamp(value, minValue, maxValue) : minValue;
-            };
-            const int autoSaveIntervalMinutes = bounded(s.autoSaveIntervalMinutes, 0, 30);
-            const int uiScalePercent = bounded(s.uiScalePercent, 75, 200);
-            const int codeFontSizePx = bounded(s.codeFontSizePx, 14, 24);
-            const int orbitSensitivity = bounded(s.orbitSensitivity, 10, 300);
-            const int panSensitivity = bounded(s.panSensitivity, 10, 300);
-            const int masterVolume = bounded(s.masterVolume, 0, 100);
-            const int maxPreviewClients = bounded(s.maxPreviewClients, 1, 16);
-            const int simulatedLatencyMs = bounded(s.simulatedLatencyMs, 0, 500);
-            const int packageDownloadThreads = bounded(s.packageDownloadThreads, 1, 32);
-            const float stutterThresholdMs = boundedFloat(s.stutterThresholdMs, 1.0F, 1000.0F);
-            const auto boolStr = [](const bool v) {
-                return v ? "true" : "false";
-            };
-            out << "{\n";
-            out << "  \"editor\": {\n";
-            out << R"(    "startupBehavior": ")" << ToString(s.startupBehavior) << "\",\n";
-            out << R"(    "autoSaveIntervalMinutes": )" << autoSaveIntervalMinutes << ",\n";
-            out << R"(    "confirmExitWithUnsavedChanges": )" << boolStr(s.confirmExitWithUnsavedChanges) << ",\n";
-            out << R"(    "restoreWorkspaceLayout": )" << boolStr(s.restoreWorkspaceLayout) << ",\n";
-            out << R"(    "defaultSceneOnProjectOpen": ")" << EscapeJsonString(s.defaultSceneOnProjectOpen) << "\",\n";
-            out << R"(    "languageTag": ")" << EscapeJsonString(s.languageTag) << "\",\n";
-            out << "  },\n";
-            out << "  \"appearance\": {\n";
-            out << R"(    "themePreset": ")" << ToString(s.themePreset) << "\",\n";
-            out << R"(    "accentColorHex": ")" << EscapeJsonString(s.accentColorHex) << "\",\n";
-            out << R"(    "uiScalePercent": )" << uiScalePercent << ",\n";
-            out << R"(    "codeFontSizePx": )" << codeFontSizePx << ",\n";
-            out << R"(    "uiFontFamily": ")" << EscapeJsonString(s.uiFontFamily) << "\",\n";
-            out << R"(    "codeFontFamily": ")" << EscapeJsonString(s.codeFontFamily) << "\"\n";
-            out << "  },\n";
-            out << "  \"input\": {\n";
-            out << R"(    "orbitSensitivity": )" << orbitSensitivity << ",\n";
-            out << R"(    "panSensitivity": )" << panSensitivity << ",\n";
-            out << R"(    "invertOrbitY": )" << boolStr(s.invertOrbitY) << "\n";
-            out << "  },\n";
-            out << "  \"rendering\": {\n";
-            out << R"(    "viewportMode": ")" << ToString(s.viewportMode) << "\",\n";
-            out << R"(    "gridOverlay": )" << boolStr(s.gridOverlay) << ",\n";
-            out << R"(    "renderingTier": ")" << ToString(s.renderingTier) << "\",\n";
-            out << R"(    "textureStreamingBudget": ")" << EscapeJsonString(s.textureStreamingBudget) << "\"\n";
-            out << "  },\n";
-            out << "  \"audio\": {\n";
-            out << R"(    "masterVolume": )" << masterVolume << ",\n";
-            out << R"(    "audioOutputDevice": ")" << ToString(s.audioOutputDevice) << "\",\n";
-            out << R"(    "audioEnabled": )" << boolStr(s.audioEnabled) << "\n";
-            out << "  },\n";
-            out << "  \"network\": {\n";
-            out << R"(    "maxPreviewClients": )" << maxPreviewClients << ",\n";
-            out << R"(    "simulatedLatencyMs": )" << simulatedLatencyMs << ",\n";
-            out << R"(    "packageDownloadThreads": )" << packageDownloadThreads << "\n";
-            out << "  },\n";
-            out << "  \"diagnostics\": {\n";
-            out << R"(    "consoleLogLevel": ")" << ToString(s.consoleLogLevel) << "\",\n";
-            out << R"(    "writeLogToFile": )" << boolStr(s.writeLogToFile) << ",\n";
-            out << R"(    "autoCaptureOnStutter": )" << boolStr(s.autoCaptureOnStutter) << ",\n";
-            out << std::format(R"(    "stutterThresholdMs": {:.1f}
-)",
-                               stutterThresholdMs);
-            out << "  }\n";
-            out << "}\n";
-        }
     }  // namespace
 
     /** @copydoc ResolveEditorSettingsHomeDirectory */
@@ -499,60 +326,88 @@ namespace Horo::Editor {
         return out;
     }
 
+    namespace {
+        template <typename MarkInvalid> void ValidateCoreEditorSettings(EditorSettings &settings, MarkInvalid &markInvalid) {
+            const auto clampInt = [&markInvalid](int &value, const int minValue, const int maxValue, const char *message) {
+                if (value < minValue || value > maxValue) {
+                    markInvalid(message);
+                    value = std::clamp(value, minValue, maxValue);
+                }
+            };
+            clampInt(settings.autoSaveIntervalMinutes, 0, 30, "Auto-save interval must be between 0 and 30 minutes.");
+            if (!LocaleTag::Parse(settings.languageTag).has_value()) {
+                markInvalid("Language must be a valid BCP 47 locale tag.");
+                settings.languageTag = "en-US";
+            }
+            clampInt(settings.uiScalePercent, 75, 200, "UI scale must be between 75 and 200 percent.");
+            clampInt(settings.codeFontSizePx, 14, 24, "Code font size must be between 14 and 24 px.");
+            clampInt(settings.orbitSensitivity, 10, 300, "Orbit sensitivity must be between 10 and 300.");
+            clampInt(settings.panSensitivity, 10, 300, "Pan sensitivity must be between 10 and 300.");
+            clampInt(settings.masterVolume, 0, 100, "Master volume must be between 0 and 100.");
+        }
+
+        template <typename MarkInvalid> void ValidateNetworkAndPackages(EditorSettings &settings, MarkInvalid &markInvalid) {
+            const auto clampUnsigned = [&markInvalid](std::uint32_t &value, const std::uint32_t minValue, const std::uint32_t maxValue,
+                                                      const char *message) {
+                if (value < minValue || value > maxValue) {
+                    markInvalid(message);
+                    value = std::clamp(value, minValue, maxValue);
+                }
+            };
+            clampUnsigned(settings.networkPreviewPreferences.maxPreviewClients, Network::NetworkPreviewPreferences::MinimumPreviewClients,
+                          Network::NetworkPreviewPreferences::MaximumPreviewClients, "Max preview clients must be between 1 and 16.");
+            clampUnsigned(settings.networkPreviewPreferences.simulatedLatencyMilliseconds, 0,
+                          Network::NetworkPreviewPreferences::MaximumSimulatedLatencyMilliseconds,
+                          "Simulated latency must be between 0 and 500 ms.");
+            if (settings.packages.downloadThreads < 1 || settings.packages.downloadThreads > 32) {
+                markInvalid("Package download threads must be between 1 and 32.");
+                settings.packages.downloadThreads = std::clamp(settings.packages.downloadThreads, 1, 32);
+            }
+        }
+
+        template <typename MarkInvalid> void ValidateStutterThreshold(EditorSettings &settings, MarkInvalid &markInvalid) {
+            if (!std::isfinite(settings.stutterThresholdMs) || settings.stutterThresholdMs < 1.0F ||
+                settings.stutterThresholdMs > 1000.0F) {
+                markInvalid("Stutter threshold must be between 1 and 1000 ms.");
+                settings.stutterThresholdMs = std::isfinite(settings.stutterThresholdMs)
+                                                  ? std::clamp(settings.stutterThresholdMs, 1.0F, 1000.0F)
+                                                  : EditorSettings{}.stutterThresholdMs;
+            }
+        }
+
+        template <typename MarkInvalid> void ValidateAppearanceAndPaths(EditorSettings &settings, MarkInvalid &markInvalid) {
+            if (!IsHexColor(settings.accentColorHex)) {
+                markInvalid("Accent color must be a #RRGGBB hex color.");
+                settings.accentColorHex = "#04A5FC";
+            }
+            if (settings.defaultSceneOnProjectOpen.empty()) {
+                markInvalid("Default scene cannot be empty.");
+                settings.defaultSceneOnProjectOpen = "Assets/Scenes/Main";
+            }
+            if (settings.textureStreamingBudget.empty()) {
+                markInvalid("Texture streaming budget cannot be empty.");
+                settings.textureStreamingBudget = "2048 MB";
+            }
+        }
+    }  // namespace
+
     /** @copydoc ValidateEditorSettings */
     bool ValidateEditorSettings(EditorSettings &settings, std::string *outError) {
         if (outError) {
             outError->clear();
         }
         bool valid = true;
-        auto markInvalid = [&](const char *message) {
+        auto markInvalid = [&valid, outError](const char *message) {
             valid = false;
             if (outError && outError->empty()) {
                 *outError = message;
             }
         };
 
-        auto clampInt = [&](int &value, const int minValue, const int maxValue, const char *message) {
-            if (value < minValue || value > maxValue) {
-                markInvalid(message);
-                value = std::clamp(value, minValue, maxValue);
-            }
-        };
-
-        clampInt(settings.autoSaveIntervalMinutes, 0, 30, "Auto-save interval must be between 0 and 30 minutes.");
-        if (!LocaleTag::Parse(settings.languageTag).has_value()) {
-            markInvalid("Language must be a valid BCP 47 locale tag.");
-            settings.languageTag = "en-US";
-        }
-        clampInt(settings.uiScalePercent, 75, 200, "UI scale must be between 75 and 200 percent.");
-        clampInt(settings.codeFontSizePx, 14, 24, "Code font size must be between 14 and 24 px.");
-        clampInt(settings.orbitSensitivity, 10, 300, "Orbit sensitivity must be between 10 and 300.");
-        clampInt(settings.panSensitivity, 10, 300, "Pan sensitivity must be between 10 and 300.");
-        clampInt(settings.masterVolume, 0, 100, "Master volume must be between 0 and 100.");
-        clampInt(settings.maxPreviewClients, 1, 16, "Max preview clients must be between 1 and 16.");
-        clampInt(settings.simulatedLatencyMs, 0, 500, "Simulated latency must be between 0 and 500 ms.");
-        clampInt(settings.packageDownloadThreads, 1, 32, "Package download threads must be between 1 and 32.");
-
-        if (!std::isfinite(settings.stutterThresholdMs) || settings.stutterThresholdMs < 1.0F || settings.stutterThresholdMs > 1000.0F) {
-            markInvalid("Stutter threshold must be between 1 and 1000 ms.");
-            settings.stutterThresholdMs = std::isfinite(settings.stutterThresholdMs)
-                                              ? std::clamp(settings.stutterThresholdMs, 1.0F, 1000.0F)
-                                              : EditorSettings{}.stutterThresholdMs;
-        }
-
-        if (!IsHexColor(settings.accentColorHex)) {
-            markInvalid("Accent color must be a #RRGGBB hex color.");
-            settings.accentColorHex = "#04A5FC";
-        }
-
-        if (settings.defaultSceneOnProjectOpen.empty()) {
-            markInvalid("Default scene cannot be empty.");
-            settings.defaultSceneOnProjectOpen = "Assets/Scenes/Main";
-        }
-        if (settings.textureStreamingBudget.empty()) {
-            markInvalid("Texture streaming budget cannot be empty.");
-            settings.textureStreamingBudget = "2048 MB";
-        }
+        ValidateCoreEditorSettings(settings, markInvalid);
+        ValidateNetworkAndPackages(settings, markInvalid);
+        ValidateStutterThreshold(settings, markInvalid);
+        ValidateAppearanceAndPaths(settings, markInvalid);
         return valid;
     }
 
@@ -633,7 +488,7 @@ namespace Horo::Editor {
         }
 
         const auto &s = doc->settings;
-        WriteSettings(out, s);
+        SettingsStoreInternal::WriteSettings(out, s);
 
         if (!out.good()) {
             LOG_ERROR("editor.settings", "I/O error while writing editor_settings.json to '%s'.", doc->path.string().c_str());

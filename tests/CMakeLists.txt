@@ -197,6 +197,7 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/NetworkFailureTests.cpp
         unit/runtime/networking/NetworkIoServiceTests.cpp
         unit/runtime/networking/NetworkLifecycleTests.cpp
+        unit/runtime/networking/NetworkProjectSettingsTests.cpp
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
@@ -708,6 +709,7 @@ add_executable(HoroEditorWelcomeControllerTests
 )
 
 target_compile_features(HoroEditorWelcomeControllerTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorWelcomeControllerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroEditorWelcomeControllerTests
         PRIVATE
         HoroEngine::EditorServices
@@ -732,6 +734,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/SettingsModalLifecycleTests.cpp
     )
     target_compile_features(HoroSettingsModalLifecycleTests PRIVATE cxx_std_20)
+    target_include_directories(HoroSettingsModalLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
     target_link_libraries(HoroSettingsModalLifecycleTests
             PRIVATE
             HoroEngine::Gui
@@ -753,6 +756,7 @@ if (HORO_BUILD_EDITOR_GUI)
             PRIVATE
             HoroEngine::Gui
             HoroEngine::EditorServices
+            HoroEngine::Extensions
             HoroThirdParty::ImGui
     )
     add_executable(HoroAssetImportModalLifecycleTests

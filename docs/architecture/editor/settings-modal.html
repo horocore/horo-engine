@@ -1109,6 +1109,15 @@ aside.horo-drawer.drawer-closed > * { opacity:0; pointer-events:none; }
         </span>
         Network
       </div>
+      <div class="nav-item" data-tab="packages">
+        <span class="nav-icon">
+          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.35">
+            <path d="M2 4.5 7 2l5 2.5v5L7 12l-5-2.5z"/>
+            <path d="M2 4.5 7 7l5-2.5M7 7v5"/>
+          </svg>
+        </span>
+        Packages
+      </div>
       <div class="nav-group-label" style="margin-top:8px;">Tools</div>
       <div class="nav-item" data-tab="diagnostics">
         <span class="nav-icon">
@@ -1436,8 +1445,15 @@ aside.horo-drawer.drawer-closed > * { opacity:0; pointer-events:none; }
           </div>
         </div>
 
+      </div>
+
+      <!-- Packages -->
+      <div id="tab-packages" class="tab-pane">
+        <div class="section-title">Packages</div>
+        <div class="setting-group">Package Acquisition</div>
+
         <div class="setting-row">
-          <div class="setting-info"><label>Package Download Threads</label></div>
+          <div class="setting-info"><label>Download Threads</label><p>Parallel workers for template and asset package downloads.</p></div>
           <div class="setting-control"><input type="number" value="8" min="1" max="32"></div>
         </div>
       </div>

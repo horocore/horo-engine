@@ -245,6 +245,8 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/NetworkIoService.cpp
         runtime/networking/api/NetworkLifecycle.cpp
         runtime/networking/api/NetworkObjectIdentity.cpp
+        runtime/networking/api/NetworkProjectSettings.cpp
+        runtime/networking/api/NetworkProjectSettingsErrors.cpp
         runtime/networking/api/PacketBuffer.cpp
         runtime/networking/api/PacketQueue.cpp
         runtime/networking/api/ProtocolIdentityRegistry.cpp
@@ -1208,6 +1210,7 @@ add_library(HoroEditorServices STATIC
         editor/settings/EditorConfiguration.cpp
         editor/settings/EditorSettingsService.cpp
         editor/settings/EditorSettingsStore.cpp
+        editor/settings/EditorSettingsStoreSerialization.cpp
         editor/localization/LocalizationService.cpp
         editor/menu/EditorMenuModel.cpp
         editor/status_bar/EditorStatusBarModel.cpp
@@ -1237,6 +1240,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::NetworkApi
         HoroEngine::Application
         HoroEngine::Platform
         HoroEngine::EditorModel
@@ -1303,7 +1307,13 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp
+            editor/modals/settings/SettingsModalExtensions.cpp
+            editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
+            editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalPluginDetails.cpp
+            editor/modals/settings/SettingsModalPluginList.cpp
+            editor/modals/settings/SettingsModalPluginShared.cpp
             editor/modals/settings/SettingsModalState.cpp
             editor/modals/asset_import/AssetImportModal.cpp
             editor/modals/asset_import/AssetImportModalLifecycle.cpp

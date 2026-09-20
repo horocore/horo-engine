@@ -202,6 +202,15 @@ namespace Horo::Tests::FullEditorActions {
             });
         }
 
+        void ExerciseSettingsNetworkAndPackages(ImGuiTestContext &ui) {
+            ui.ItemClick("//**/Network/nav");
+            ui.Yield();
+            ui.ItemInputValue("//**/##max-clients", "6");
+            ui.ItemClick("//**/Packages/nav");
+            ui.Yield();
+            ui.ItemInputValue("//**/##download-threads", "3");
+        }
+
         void AddSettingsStep(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
             pipeline.Step("Exercise editor settings sections", [&editor](ImGuiTestContext &ui) {
                 editor.Screens().DispatchMenuInvocation(
@@ -233,10 +242,7 @@ namespace Horo::Tests::FullEditorActions {
                 ui.ItemClick("//**/###audio-device");
                 ui.ItemClick("//**/###combo_option_1");
                 ui.ItemClick("//**/audio-enabled/toggle");
-                ui.ItemClick("//**/Network/nav");
-                ui.Yield();
-                ui.ItemInputValue("//**/##max-clients", "6");
-                ui.ItemInputValue("//**/##download-threads", "3");
+                ExerciseSettingsNetworkAndPackages(ui);
                 ui.ItemClick("//**/Diagnostics/nav");
                 ui.Yield();
                 ui.ItemClick("//**/###log-level");

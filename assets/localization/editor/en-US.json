@@ -467,6 +467,9 @@
     "settings.nav.network": {
       "text": "Network"
     },
+    "settings.nav.packages": {
+      "text": "Packages"
+    },
     "settings.nav.plugins": {
       "text": "Extensions"
     },
@@ -475,12 +478,6 @@
     },
     "settings.nav.tools": {
       "text": "Tools"
-    },
-    "settings.network.download_threads": {
-      "text": "Package Download Threads"
-    },
-    "settings.network.download_threads.description": {
-      "text": "Parallel download workers for template and asset packages."
     },
     "settings.network.max_preview_clients": {
       "text": "Max Preview Clients"
@@ -496,6 +493,15 @@
     },
     "settings.network.simulate_latency.description": {
       "text": "Artificial one-way delay injected on loopback (ms)."
+    },
+    "settings.packages.download_group": {
+      "text": "PACKAGE ACQUISITION"
+    },
+    "settings.packages.download_threads": {
+      "text": "Download Threads"
+    },
+    "settings.packages.download_threads.description": {
+      "text": "Parallel workers for template and asset package downloads."
     },
     "settings.plugins.action.disable": {
       "text": "Disable"
