@@ -134,6 +134,23 @@ namespace Horo::Navigation {
     /** @brief Detached Scene candidate owned until aggregate publication or rollback. */
     class NavigationAgentSceneCandidate final {
     public:
+        /** @brief Registry-only capability required to construct a detached candidate. */
+        class CreationKey final {
+        private:
+            friend class NavigationAgentRegistry;
+            constexpr CreationKey() noexcept = default;
+        };
+
+        /**
+         * @brief Creates a detached candidate with a registry-authorized creation key.
+         * @param key Registry-only capability proving that the owning registry authorized construction.
+         * @param registry Owning registry that will validate and publish the candidate.
+         * @param binding Exact world, runtime Scene, and Scene-generation fence.
+         * @param state Fully prepared detached registry state.
+         * @param publicationToken Registry publication generation assigned to this candidate.
+         */
+        NavigationAgentSceneCandidate(CreationKey key, NavigationAgentRegistry &registry, NavigationAgentSceneBinding binding,
+                                      std::unique_ptr<Detail::NavigationAgentRegistryState> state, std::uint64_t publicationToken) noexcept;
         NavigationAgentSceneCandidate(const NavigationAgentSceneCandidate &) = delete;
         NavigationAgentSceneCandidate &operator=(const NavigationAgentSceneCandidate &) = delete;
         ~NavigationAgentSceneCandidate();
@@ -151,10 +168,6 @@ namespace Horo::Navigation {
         }
 
     private:
-        friend class NavigationAgentRegistry;
-        NavigationAgentSceneCandidate(NavigationAgentRegistry &registry, NavigationAgentSceneBinding binding,
-                                      std::unique_ptr<Detail::NavigationAgentRegistryState> state, std::uint64_t publicationToken) noexcept;
-
         NavigationAgentRegistry *registry_{};
         NavigationAgentSceneBinding binding_;
         std::unique_ptr<Detail::NavigationAgentRegistryState> state_;

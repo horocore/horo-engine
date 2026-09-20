@@ -91,8 +91,7 @@ namespace Horo::Editor {
             const std::optional<Runtime::NavigationSurfaceComponent> *surface,
             const std::optional<Runtime::NavigationRegionComponent> *region,
             const std::optional<Runtime::NavigationModifierComponent> *modifier,
-            const std::optional<Runtime::NavigationLinkComponent> *link,
-            const std::optional<Runtime::NavigationAgentComponent> *agent) {
+            const std::optional<Runtime::NavigationLinkComponent> *link, const std::optional<Runtime::NavigationAgentComponent> *agent) {
             SceneObjectComponentSet candidate = object.components;
             if (surface != nullptr)
                 candidate.navigationSurface = *surface;

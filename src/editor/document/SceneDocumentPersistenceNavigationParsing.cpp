@@ -1,6 +1,5 @@
-#include "editor/document/SceneDocumentPersistenceInternal.h"
-
 #include "editor/document/NavigationAgentJson.h"
+#include "editor/document/SceneDocumentPersistenceInternal.h"
 
 #include <algorithm>
 #include <limits>

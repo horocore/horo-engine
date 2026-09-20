@@ -112,7 +112,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationAgentSceneCandidate::NavigationAgentSceneCandidate */
-    NavigationAgentSceneCandidate::NavigationAgentSceneCandidate(NavigationAgentRegistry &registry,
+    NavigationAgentSceneCandidate::NavigationAgentSceneCandidate(const CreationKey, NavigationAgentRegistry &registry,
                                                                  const NavigationAgentSceneBinding binding,
                                                                  std::unique_ptr<Detail::NavigationAgentRegistryState> state,
                                                                  const std::uint64_t publicationToken) noexcept
@@ -206,9 +206,9 @@ namespace Horo::Navigation {
             if (nextPublicationToken_ == std::numeric_limits<std::uint64_t>::max())
                 return Result<std::unique_ptr<NavigationAgentSceneCandidate>>::Failure(MakeError(NavigationErrors::GenerationExhausted));
             const std::uint64_t token = nextPublicationToken_++;
-            return Result<std::unique_ptr<NavigationAgentSceneCandidate>>::Success(std::unique_ptr<NavigationAgentSceneCandidate>(
-                new NavigationAgentSceneCandidate(*this, binding, std::move(state),
-                                                  token)));  // NOSONAR(cpp:S5950) Registry-private constructor cannot use make_unique.
+            return Result<std::unique_ptr<NavigationAgentSceneCandidate>>::Success(
+                std::make_unique<NavigationAgentSceneCandidate>(NavigationAgentSceneCandidate::CreationKey{}, *this, binding,
+                                                                std::move(state), token));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<NavigationAgentSceneCandidate>>::Failure(
                 MakeError(NavigationErrors::AgentRegistryCapacityExceeded));
