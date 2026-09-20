@@ -87,6 +87,8 @@ namespace Horo::Audio {
     struct AudioClipIdentityTag;
     struct AudioSoundIdentityTag;
     struct AudioBusIdentityTag;
+    struct AudioRouteIdentityTag;
+    struct AudioEffectIdentityTag;
     struct AudioParameterIdentityTag;
     struct AudioEventIdentityTag;
     struct AudioRuntimeIdentityTag;
@@ -97,6 +99,10 @@ namespace Horo::Audio {
     using AudioSoundId = AudioAssetIdentity<AudioSoundIdentityTag>;
     /** @brief Stable identity of one mixer bus; display names and positions are not identity. */
     using AudioBusId = AudioStableIdentity<AudioBusIdentityTag>;
+    /** @brief Stable identity of one persisted mixer route. */
+    using AudioRouteId = AudioStableIdentity<AudioRouteIdentityTag>;
+    /** @brief Stable identity of one persisted mixer effect descriptor. */
+    using AudioEffectId = AudioStableIdentity<AudioEffectIdentityTag>;
     /** @brief Stable parameter identity resolved before callback submission. */
     using AudioParameterId = AudioStableIdentity<AudioParameterIdentityTag>;
     /** @brief Stable event identity resolved before callback submission. */

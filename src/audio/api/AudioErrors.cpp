@@ -59,6 +59,42 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor MixerAssetSchemaInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.mixer_asset_schema.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The persisted mixer asset schema is structurally invalid.",
+        .remediationHint = "Correct stable identities, bus hierarchy, routes, effect descriptors and finite defaults before cooking.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor MixerAssetSchemaVersionUnsupported{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.mixer_asset_schema.version_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The persisted mixer asset schema version is unsupported.",
+        .remediationHint = "Migrate the mixer asset through an Audio-owned supported schema path before cooking.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor MixerAssetSchemaLimitExceeded{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.mixer_asset_schema.limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The persisted mixer asset exceeds an admitted bound.",
+        .remediationHint = "Reduce buses, routes, effects or display-label bytes to the active validated profile.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor MixerAssetSchemaMigrationFailed{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.mixer_asset_schema.migration_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The mixer asset could not be migrated to the current schema.",
+        .remediationHint = "Repair the older mixer topology or provide an explicit supported migration before cooking.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor FormatRegistryInvalid{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.format_registry.invalid"},
