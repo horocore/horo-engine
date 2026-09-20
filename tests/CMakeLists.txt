@@ -319,6 +319,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsHandleRegistryTests.cpp
         unit/runtime/physics/PhysicsIdentityTests.cpp
         unit/runtime/physics/PhysicsMetricsTests.cpp
+        unit/runtime/physics/PhysicsMaterialAssetTests.cpp
         unit/runtime/physics/PhysicsPoseTests.cpp
         unit/runtime/physics/PhysicsQueryTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp

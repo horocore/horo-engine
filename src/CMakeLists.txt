@@ -544,6 +544,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsHandleRegistry.h
         physics/PhysicsIdentity.cpp
         physics/PhysicsMetrics.cpp
+        physics/PhysicsMaterialAsset.cpp
         physics/PhysicsPose.cpp
         physics/PhysicsQuery.cpp
         physics/PhysicsShapeDescriptor.cpp
