@@ -40,7 +40,7 @@ namespace Horo::Character::Detail {
         if (record.Value()->reservedTeleportTick == request.tick || record.Value()->lastTeleportTick == request.tick)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
-        if (std::ranges::any_of(impl.commands, [&request](const CharacterMovementRequest &queued) {
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&request](const CharacterMovementRequest &queued) {
             return ConflictsWithQueuedCommand(queued, request);
         }))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
@@ -74,8 +74,8 @@ namespace Horo::Character::Detail {
 
     /** @brief Validates a frozen frame completely before queue or controller publication changes. */
     [[nodiscard]] Result<void> ValidateFrozenCommands(auto &impl) {
-        for (std::size_t index = 0; index < impl.scratch.size(); ++index) {
-            const CharacterMovementRequest &command = impl.scratch[index];
+        for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
+            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index];
             if (const auto valid = ValidateCharacterMovementRequest(command, impl.descriptor.sceneGeneration, impl.descriptor.identity);
                 valid.HasError())
                 return valid;
@@ -84,8 +84,8 @@ namespace Horo::Character::Detail {
                 return Result<void>::Failure(record.ErrorValue());
             if (command.sequence <= record.Value()->lastSequence)
                 return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
-            if (index != 0 && impl.scratch[index - 1].controller == command.controller &&
-                impl.scratch[index - 1].sequence == command.sequence)
+            if (index != 0 && impl.fastPath.CommandScratch()[index - 1].controller == command.controller &&
+                impl.fastPath.CommandScratch()[index - 1].sequence == command.sequence)
                 return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         }
         return Result<void>::Success();
@@ -94,31 +94,31 @@ namespace Horo::Character::Detail {
     /** @brief Canonicalizes and removes one validated eligible frame while holding queue ownership. */
     [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
         const auto queueLock = impl.synchronization.LockCommands();
-        if (std::ranges::any_of(impl.commands, [&input](const CharacterMovementRequest &command) {
+        if (std::ranges::any_of(impl.fastPath.Commands(), [&input](const CharacterMovementRequest &command) {
             return command.tick < input.tick;
         }))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
-        if (const auto eligible = static_cast<std::size_t>(std::ranges::count_if(impl.commands,
+        if (const auto eligible = static_cast<std::size_t>(std::ranges::count_if(impl.fastPath.Commands(),
                                                                                  [&input](const CharacterMovementRequest &command) {
             return command.tick == input.tick;
         }));
             eligible > impl.settings.Values().work.maximumCommandsPerTick)
             return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
 
-        impl.scratch.clear();
-        for (const CharacterMovementRequest &command : impl.commands) {
+        impl.fastPath.CommandScratch().clear();
+        for (const CharacterMovementRequest &command : impl.fastPath.Commands()) {
             if (command.tick == input.tick)
-                impl.scratch.push_back(command);
+                impl.fastPath.CommandScratch().push_back(command);
         }
-        std::ranges::sort(impl.scratch, CommandLess);
+        std::ranges::sort(impl.fastPath.CommandScratch(), CommandLess);
         if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
             return valid;
-        for (const CharacterMovementRequest &command : impl.scratch)
+        for (const CharacterMovementRequest &command : impl.fastPath.CommandScratch())
             impl.closedSequences[command.controller.slot.index] = command.sequence;
-        std::erase_if(impl.commands, [&input](const CharacterMovementRequest &command) {
+        std::erase_if(impl.fastPath.Commands(), [&input](const CharacterMovementRequest &command) {
             return command.tick == input.tick;
         });
-        impl.pendingCommands.store(static_cast<std::uint32_t>(impl.commands.size()));
+        impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
         impl.closedTick.store(input.tick);
         return Result<void>::Success();
     }
@@ -126,9 +126,10 @@ namespace Horo::Character::Detail {
     /** @brief Applies only the final replacement for each controller from one frozen canonical frame. */
     [[nodiscard]] std::uint32_t ApplyCommandFrame(auto &impl, const CharacterFixedTickInput &input) noexcept {
         std::uint32_t applied{};
-        for (std::size_t index = 0; index < impl.scratch.size(); ++index) {
-            const CharacterMovementRequest &command = impl.scratch[index];
-            if (index + 1 != impl.scratch.size() && impl.scratch[index + 1].controller == command.controller)
+        for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
+            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index];
+            if (index + 1 != impl.fastPath.CommandScratch().size() &&
+                impl.fastPath.CommandScratch()[index + 1].controller == command.controller)
                 continue;
             auto record = impl.controllers.ResolveMutable(command.controller);
             record.Value()->lastMovement = command;

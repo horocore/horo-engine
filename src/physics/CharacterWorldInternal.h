@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CharacterControllerRegistry.h"
+#include "CharacterFastPathStorage.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
@@ -105,18 +106,14 @@ namespace Horo::Character {
 
         Impl(const CharacterWorldDescriptor &owner, const CharacterWorldSettings &worldSettings,
              Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord> &&controllerRegistry)
-            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)),
+            : descriptor(owner), settings(worldSettings), controllers(std::move(controllerRegistry)), fastPath(settings),
               controllerGenerations(settings.Values().capacities.maximumControllers),
-              closedSequences(settings.Values().capacities.maximumControllers) {
-            commands.reserve(settings.Values().capacities.maximumQueuedCommands);
-            scratch.reserve(settings.Values().work.maximumCommandsPerTick);
-        }
+              closedSequences(settings.Values().capacities.maximumControllers) {}
 
         CharacterWorldDescriptor descriptor;
         CharacterWorldSettings settings;
         Detail::CharacterControllerRegistry<Detail::CharacterControllerRecord> controllers;
-        std::vector<CharacterMovementRequest> commands;
-        std::vector<CharacterMovementRequest> scratch;
+        Detail::CharacterFastPathStorage fastPath;
         std::vector<std::uint32_t> controllerGenerations;
         std::vector<std::uint64_t> closedSequences;
         Detail::CharacterWorldSynchronization synchronization;
@@ -125,6 +122,7 @@ namespace Horo::Character {
         std::atomic<bool> acceptingCommands{};
         std::atomic<std::uint64_t> admittedCommands{};
         std::atomic<std::uint64_t> rejectedCommands{};
+        std::atomic<std::uint64_t> commandOverflowCount{};
         std::atomic<std::uint64_t> completedTicks{};
         std::atomic<std::uint32_t> pendingCommands{};
         std::atomic<std::uint32_t> maximumCommandDepth{};

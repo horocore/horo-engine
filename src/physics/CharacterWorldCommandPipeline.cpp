@@ -18,11 +18,13 @@ namespace Horo::Character {
                 impl_->rejectedCommands.fetch_add(1);
                 return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
             }
-            if (impl_->commands.size() == impl_->settings.Values().capacities.maximumQueuedCommands)
+            if (impl_->fastPath.Commands().size() >= impl_->settings.Values().capacities.maximumQueuedCommands) {
+                impl_->commandOverflowCount.fetch_add(1);
                 return rejected(CharacterCommandAdmissionStatus::RejectedFull);
+            }
 
-            impl_->commands.push_back(request);
-            const auto depth = static_cast<std::uint32_t>(impl_->commands.size());
+            impl_->fastPath.Commands().push_back(request);
+            const auto depth = static_cast<std::uint32_t>(impl_->fastPath.Commands().size());
             impl_->pendingCommands.store(depth);
             impl_->maximumCommandDepth.store(std::max(depth, impl_->maximumCommandDepth.load()));
             impl_->admittedCommands.fetch_add(1);
@@ -42,6 +44,7 @@ namespace Horo::Character {
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
 
         Detail::TickGuard ticking{*impl_};
+        impl_->fastPath.ResetTransient();
         if (const auto frozen = Detail::FreezeCommandFrame(*impl_, input); frozen.HasError())
             return frozen;
 
@@ -51,6 +54,7 @@ namespace Horo::Character {
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         Detail::ObservePhase(input, CharacterTickPhase::ResolveMovement);
 
+        impl_->fastPath.Canonicalize();
         Detail::PublishTick(*impl_, input, applied);
         impl_->completedTicks.fetch_add(1);
         Detail::ObservePhase(input, CharacterTickPhase::PublishCompletedTick);
@@ -65,10 +69,23 @@ namespace Horo::Character {
 
     /** @copydoc CharacterWorld::TickStatistics */
     CharacterTickStatistics CharacterWorld::TickStatistics() const noexcept {
-        return {
-            impl_->completedTicks.load(),  impl_->admittedCommands.load(),    impl_->rejectedCommands.load(),
-            impl_->pendingCommands.load(), impl_->maximumCommandDepth.load(),
-        };
+        const auto fastPath = impl_->fastPath.Snapshot();
+        return {.completedTicks = impl_->completedTicks.load(),
+                .admittedCommands = impl_->admittedCommands.load(),
+                .rejectedCommands = impl_->rejectedCommands.load(),
+                .pendingCommands = impl_->pendingCommands.load(),
+                .maximumCommandDepth = impl_->maximumCommandDepth.load(),
+                .commandOverflowCount = impl_->commandOverflowCount.load(),
+                .contactOverflowCount = fastPath.contactOverflowCount,
+                .hitOverflowCount = fastPath.hitOverflowCount,
+                .eventOverflowCount = fastPath.eventOverflowCount,
+                .impulseOverflowCount = fastPath.impulseOverflowCount,
+                .scratchOverflowCount = fastPath.scratchOverflowCount,
+                .invalidInputCount = fastPath.invalidInputCount,
+                .retainedContacts = fastPath.retainedContacts,
+                .queuedHits = fastPath.queuedHits,
+                .queuedEvents = fastPath.queuedEvents,
+                .scratchBytesUsed = fastPath.scratchBytesUsed};
     }
 
     /** @copydoc CharacterWorld::Shutdown */
