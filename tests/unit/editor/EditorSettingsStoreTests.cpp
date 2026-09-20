@@ -10,8 +10,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace {
     void SetHomeForTest(const std::filesystem::path &home) {
@@ -20,6 +23,19 @@ namespace {
 #else
         setenv("HOME", home.string().c_str(), 1);
 #endif
+    }
+
+    template <typename T> void RequireSettingValue(const Horo::ConfigurationSnapshot &snapshot, const char *key, const T &expected) {
+        REQUIRE((std::get<T>(snapshot.Get(Horo::SettingKey{key})) == expected));
+    }
+
+    void RequireChangedKeys(const Horo::ConfigurationChangedEvent &event, const std::initializer_list<std::string_view> keys) {
+        REQUIRE((event.changedKeys.size() == keys.size()));
+        for (const std::string_view key : keys) {
+            REQUIRE((std::any_of(event.changedKeys.begin(), event.changedKeys.end(), [key](const Horo::SettingKey &candidate) {
+                return candidate.Value() == key;
+            })));
+        }
     }
 
     TEST_CASE("Save And Load Round Trip", "[unit][editor]") {
@@ -39,6 +55,9 @@ namespace {
         doc.settings.uiFontFamily = "Avenir Next";
         doc.settings.codeFontFamily = "SF Mono";
         doc.settings.consoleLogLevel = EditorConsoleLogLevel::Debug;
+        doc.settings.networkPreviewPreferences.maxPreviewClients = 6;
+        doc.settings.networkPreviewPreferences.simulatedLatencyMilliseconds = 42;
+        doc.settings.packages.downloadThreads = 12;
 
         std::string error;
         REQUIRE((SaveEditorSettingsDocument(&doc, &error)));
@@ -57,6 +76,53 @@ namespace {
         REQUIRE((loaded.settings.uiFontFamily == "Avenir Next"));
         REQUIRE((loaded.settings.codeFontFamily == "SF Mono"));
         REQUIRE((loaded.settings.consoleLogLevel == EditorConsoleLogLevel::Debug));
+        REQUIRE((loaded.settings.networkPreviewPreferences.maxPreviewClients == 6));
+        REQUIRE((loaded.settings.networkPreviewPreferences.simulatedLatencyMilliseconds == 42));
+        REQUIRE((loaded.settings.packages.downloadThreads == 12));
+    }
+
+    TEST_CASE("Legacy network package setting migrates to the user package group", "[unit][editor][settings][migration]") {
+        using namespace Horo::Editor;
+
+        const std::filesystem::path home = std::filesystem::temp_directory_path() / "horo_editor_settings_store_legacy_network";
+        std::filesystem::remove_all(home);
+        SetHomeForTest(home);
+        std::filesystem::create_directories(home / ".horo");
+        {
+            std::ofstream out(home / ".horo" / "editor_settings.json");
+            out << R"({"network":{"maxPreviewClients":7,"simulatedLatencyMs":123,"packageDownloadThreads":13}})";
+        }
+
+        EditorSettingsDocument loaded = LoadEditorSettingsDocument();
+        REQUIRE(loaded.loadedFromDisk);
+        REQUIRE_FALSE(loaded.parseError);
+        REQUIRE(loaded.settings.networkPreviewPreferences.maxPreviewClients == 7);
+        REQUIRE(loaded.settings.networkPreviewPreferences.simulatedLatencyMilliseconds == 123);
+        REQUIRE(loaded.settings.packages.downloadThreads == 13);
+
+        std::string error;
+        REQUIRE(SaveEditorSettingsDocument(&loaded, &error));
+        REQUIRE(error.empty());
+        std::ifstream saved(loaded.path);
+        const std::string canonical{std::istreambuf_iterator<char>{saved}, std::istreambuf_iterator<char>{}};
+        REQUIRE(canonical.find("\"packages\": {") != std::string::npos);
+        REQUIRE(canonical.find("\"downloadThreads\": 13") != std::string::npos);
+        REQUIRE(canonical.find("packageDownloadThreads") == std::string::npos);
+    }
+
+    TEST_CASE("Network preview and package preferences clamp independently", "[unit][editor][settings]") {
+        using namespace Horo::Editor;
+
+        EditorSettings settings = DefaultEditorSettings();
+        settings.networkPreviewPreferences.maxPreviewClients = 99;
+        settings.networkPreviewPreferences.simulatedLatencyMilliseconds = 999;
+        settings.packages.downloadThreads = -4;
+
+        std::string error;
+        REQUIRE_FALSE(ValidateEditorSettings(settings, &error));
+        REQUIRE(settings.networkPreviewPreferences.maxPreviewClients == 16);
+        REQUIRE(settings.networkPreviewPreferences.simulatedLatencyMilliseconds == 500);
+        REQUIRE(settings.packages.downloadThreads == 1);
     }
 
     TEST_CASE("Invalid Values Are Rejected On Save", "[unit][editor]") {
@@ -146,28 +212,17 @@ namespace {
         const ConfigurationSnapshot after = configuration.Snapshot();
         REQUIRE((before.Revision() == 0));
         REQUIRE((after.Revision() == 1));
-        REQUIRE((std::get<std::string>(before.Get(SettingKey{"editor.theme.active"})) == "horo_dark"));
-        REQUIRE((std::get<std::string>(before.Get(SettingKey{"editor.appearance.accent_color"})) == "#04A5FC"));
-        REQUIRE((std::get<std::int64_t>(before.Get(SettingKey{"editor.appearance.ui_scale_percent"})) == 100));
-        REQUIRE((std::get<std::int64_t>(before.Get(SettingKey{"editor.appearance.code_font_size_px"})) == 14));
-        REQUIRE((std::get<std::string>(after.Get(SettingKey{"editor.theme.active"})) == "light"));
-        REQUIRE((std::get<std::string>(after.Get(SettingKey{"editor.appearance.accent_color"})) == "#112233"));
-        REQUIRE((std::get<std::int64_t>(after.Get(SettingKey{"editor.appearance.ui_scale_percent"})) == 125));
-        REQUIRE((std::get<std::int64_t>(after.Get(SettingKey{"editor.appearance.code_font_size_px"})) == 16));
+        RequireSettingValue<std::string>(before, "editor.theme.active", "horo_dark");
+        RequireSettingValue<std::string>(before, "editor.appearance.accent_color", "#04A5FC");
+        RequireSettingValue<std::int64_t>(before, "editor.appearance.ui_scale_percent", 100);
+        RequireSettingValue<std::int64_t>(before, "editor.appearance.code_font_size_px", 14);
+        RequireSettingValue<std::string>(after, "editor.theme.active", "light");
+        RequireSettingValue<std::string>(after, "editor.appearance.accent_color", "#112233");
+        RequireSettingValue<std::int64_t>(after, "editor.appearance.ui_scale_percent", 125);
+        RequireSettingValue<std::int64_t>(after, "editor.appearance.code_font_size_px", 16);
         REQUIRE((observed.revision == after.Revision()));
-        REQUIRE((observed.changedKeys.size() == 4));
-        REQUIRE((std::any_of(observed.changedKeys.begin(), observed.changedKeys.end(), [](const SettingKey &key) {
-            return key.Value() == "editor.theme.active";
-        })));
-        REQUIRE((std::any_of(observed.changedKeys.begin(), observed.changedKeys.end(), [](const SettingKey &key) {
-            return key.Value() == "editor.appearance.accent_color";
-        })));
-        REQUIRE((std::any_of(observed.changedKeys.begin(), observed.changedKeys.end(), [](const SettingKey &key) {
-            return key.Value() == "editor.appearance.ui_scale_percent";
-        })));
-        REQUIRE((std::any_of(observed.changedKeys.begin(), observed.changedKeys.end(), [](const SettingKey &key) {
-            return key.Value() == "editor.appearance.code_font_size_px";
-        })));
+        RequireChangedKeys(observed, {"editor.theme.active", "editor.appearance.accent_color", "editor.appearance.ui_scale_percent",
+                                      "editor.appearance.code_font_size_px"});
     }
 
     TEST_CASE("Failed Or Stale Authority Commit Retains Committed Snapshot And Does Not Publish", "[unit][editor]") {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Network/NetworkProjectSettings.h"
+
 #include <filesystem>
 #include <string>
 
@@ -50,6 +52,13 @@ namespace Horo::Editor {
         Light,
     };
 
+    /** @brief User-only package acquisition preferences, independent of network project authority. */
+    struct EditorPackageSettings final {
+        int downloadThreads = 8; /**< Parallel template and asset package download workers. */
+
+        bool operator==(const EditorPackageSettings &) const = default;
+    };
+
     /** @brief User-level editor settings persisted in the user configuration directory. */
     struct EditorSettings {  // NOSONAR(cpp:S1820)
         EditorStartupBehavior startupBehavior = EditorStartupBehavior::WelcomeScreen;
@@ -80,9 +89,8 @@ namespace Horo::Editor {
         EditorAudioOutputDevice audioOutputDevice = EditorAudioOutputDevice::SystemDefault;
         bool audioEnabled = true;
 
-        int maxPreviewClients = 4;
-        int simulatedLatencyMs = 0;
-        int packageDownloadThreads = 8;
+        Network::NetworkPreviewPreferences networkPreviewPreferences{}; /**< User-only local network preview controls. */
+        EditorPackageSettings packages{};                               /**< User-only package acquisition controls. */
 
         EditorConsoleLogLevel consoleLogLevel = EditorConsoleLogLevel::Warning;
         bool writeLogToFile = true;

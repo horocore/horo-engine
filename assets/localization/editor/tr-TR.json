@@ -467,6 +467,9 @@
     "settings.nav.network": {
       "text": "Ağ"
     },
+    "settings.nav.packages": {
+      "text": "Paketler"
+    },
     "settings.nav.plugins": {
       "text": "Uzantılar"
     },
@@ -475,12 +478,6 @@
     },
     "settings.nav.tools": {
       "text": "Araçlar"
-    },
-    "settings.network.download_threads": {
-      "text": "Paket İndirme İş Parçacıkları"
-    },
-    "settings.network.download_threads.description": {
-      "text": "Şablon ve varlık paketleri için paralel indirme işçileri."
     },
     "settings.network.max_preview_clients": {
       "text": "Maksimum Önizleme İstemcisi"
@@ -496,6 +493,15 @@
     },
     "settings.network.simulate_latency.description": {
       "text": "Loopback üzerine eklenen yapay tek yönlü gecikme (ms)."
+    },
+    "settings.packages.download_group": {
+      "text": "PAKET EDİNİMİ"
+    },
+    "settings.packages.download_threads": {
+      "text": "İndirme İş Parçacıkları"
+    },
+    "settings.packages.download_threads.description": {
+      "text": "Şablon ve varlık paketlerini indirmek için paralel işçiler."
     },
     "settings.plugins.action.disable": {
       "text": "Devre Dışı Bırak"
@@ -947,7 +953,6 @@
     "workspace.inspector.light_inner_cone": {"text": "İç koni"},
     "workspace.inspector.light_outer_cone": {"text": "Dış koni"},
     "workspace.inspector.light_invalid": {"text": "Işık rengi, yoğunluğu, menzili ve koni değerleri geçerli ve sonlu olmalıdır."},
-    "workspace.inspector.trigger_volume": {"text": "Tetikleyici Hacim"},
     "workspace.inspector.trigger_volume_shape": {"text": "Şekil"},
     "workspace.inspector.trigger_volume_shape_box": {"text": "Kutu"},
     "workspace.inspector.trigger_volume_shape_sphere": {"text": "Küre"},

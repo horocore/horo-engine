@@ -46,6 +46,14 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor PacketQueueFull;
     /** @brief A stable network identity uses its reserved zero representation. */
     extern const ErrorCodeDescriptor IdentityInvalid;
+    /** @brief Network project settings contain an unknown, malformed, or incoherent typed value. */
+    extern const ErrorCodeDescriptor NetworkProjectSettingsInvalid;
+    /** @brief Network project settings exceed an explicit finite profile or queue bound. */
+    extern const ErrorCodeDescriptor NetworkProjectSettingsCapacityExceeded;
+    /** @brief A project-settings replacement was based on an older immutable revision. */
+    extern const ErrorCodeDescriptor NetworkProjectSettingsStale;
+    /** @brief Project-settings publication is closed and rejects late commands. */
+    extern const ErrorCodeDescriptor NetworkProjectSettingsShuttingDown;
     /** @brief Replication descriptor metadata is malformed or exceeds its declared bounds. */
     extern const ErrorCodeDescriptor ReplicationDescriptorInvalid;
     /** @brief Schema, field, or tombstone identities collide in one candidate snapshot. */

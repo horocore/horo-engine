@@ -1,5 +1,6 @@
 #include "Horo/Navigation/NavigationProjectProfiles.h"
 
+#include "Horo/Foundation/StableHash.h"
 #include "Horo/Navigation/NavigationErrors.h"
 
 #include <algorithm>
@@ -7,7 +8,6 @@
 #include <cstddef>
 #include <limits>
 #include <ranges>
-#include <type_traits>
 
 namespace Horo::Navigation {
     namespace {
@@ -47,40 +47,26 @@ namespace Horo::Navigation {
                    queryWork <= capacities.maximumWorkUnitsPerTick;
         }
 
-        void HashByte(std::uint64_t &hash, const std::uint8_t value) noexcept {
-            constexpr std::uint64_t Prime = 1'099'511'628'211ULL;
-            hash ^= value;
-            hash *= Prime;
-        }
-
-        template <typename T> void HashInteger(std::uint64_t &hash, const T value) noexcept {
-            using Unsigned = std::make_unsigned_t<T>;
-            const auto unsignedValue = static_cast<Unsigned>(value);
-            for (std::size_t index = 0; index < sizeof(T); ++index)
-                HashByte(hash, static_cast<std::uint8_t>(unsignedValue >> (index * 8U)));
-        }
-
         NavigationProjectProfileFingerprint ComputeFingerprint(const NavigationProjectProfileInput &input) {
-            std::uint64_t hash = 14'695'981'039'346'656'037ULL;
-            HashInteger(hash, input.id.Value());
-            HashInteger(hash, input.revision.Value());
-            HashInteger(hash, input.capacities.maximumAgents);
-            HashInteger(hash, input.capacities.maximumSurfaces);
-            HashInteger(hash, input.capacities.maximumResidentTiles);
-            HashInteger(hash, input.capacities.maximumConcurrentQueries);
-            HashInteger(hash, input.capacities.maximumBytesPerResidentTile);
-            HashInteger(hash, input.capacities.maximumResidentMemoryBytes);
-            HashInteger(hash, input.capacities.maximumWorkUnitsPerTick);
-            HashInteger(hash, static_cast<std::uint8_t>(input.maximumQuery.query));
-            HashInteger(hash, static_cast<std::uint8_t>(input.maximumQuery.quality));
-            HashInteger(hash, input.maximumQuery.limits.maximumNodeExpansions);
-            HashInteger(hash, input.maximumQuery.limits.maximumResultPoints);
-            HashInteger(hash, std::bit_cast<std::uint32_t>(input.maximumQuery.limits.maximumSearchDistanceMeters));
+            Foundation::StableHash64 hash;
+            hash.AddInteger(input.id.Value());
+            hash.AddInteger(input.revision.Value());
+            hash.AddInteger(input.capacities.maximumAgents);
+            hash.AddInteger(input.capacities.maximumSurfaces);
+            hash.AddInteger(input.capacities.maximumResidentTiles);
+            hash.AddInteger(input.capacities.maximumConcurrentQueries);
+            hash.AddInteger(input.capacities.maximumBytesPerResidentTile);
+            hash.AddInteger(input.capacities.maximumResidentMemoryBytes);
+            hash.AddInteger(input.capacities.maximumWorkUnitsPerTick);
+            hash.AddInteger(static_cast<std::uint8_t>(input.maximumQuery.query));
+            hash.AddInteger(static_cast<std::uint8_t>(input.maximumQuery.quality));
+            hash.AddInteger(input.maximumQuery.limits.maximumNodeExpansions);
+            hash.AddInteger(input.maximumQuery.limits.maximumResultPoints);
+            hash.AddInteger(std::bit_cast<std::uint32_t>(input.maximumQuery.limits.maximumSearchDistanceMeters));
             for (const auto requirement : input.capabilities)
-                HashInteger(hash, static_cast<std::uint8_t>(requirement));
-            if (hash == 0)
-                hash = 1;
-            return NavigationProjectProfileFingerprint::Create(hash).Value();
+                hash.AddInteger(static_cast<std::uint8_t>(requirement));
+            const auto value = hash.Value() == 0 ? 1 : hash.Value();
+            return NavigationProjectProfileFingerprint::Create(value).Value();
         }
 
         NavigationCapacityLimits Clamp(const NavigationCapacityLimits &requested, const NavigationCapacityLimits &authority) noexcept {

@@ -33,6 +33,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/Progress.h
     Horo/Foundation/Result.h
     Horo/Foundation/Sha256.h
+    Horo/Foundation/StableHash.h
     Horo/Foundation/StrongId.h
     Horo/Foundation/String.h
     Horo/Foundation/Telemetry/Operation.h
@@ -162,6 +163,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/NetworkLifecycle.h
     Horo/Network/NetworkHandles.h
     Horo/Network/NetworkObjectIdentity.h
+    Horo/Network/NetworkProjectSettings.h
     Horo/Network/PacketBuffer.h
     Horo/Network/PacketQueue.h
     Horo/Network/ProtocolIdentity.h
