@@ -70,6 +70,24 @@ namespace Horo::Audio {
         CHECK(invalid.ErrorValue().code.Value() == AudioErrors::SoundReferenceInvalid.code.Value());
     }
 
+    TEST_CASE("Audio sound reference factories reject invalid identities", "[unit][audio][sound-reference]") {
+        const auto validSound = IdentityValue<AudioSoundId>(7);
+        const auto validContribution = IdentityValue<AudioContributionId>(8);
+        const auto invalidCode = AudioErrors::SoundReferenceInvalid.code.Value();
+        const auto requireInvalid = [&](const auto &result) {
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == invalidCode);
+        };
+
+        requireInvalid(AudioSoundReference::ForClip(AudioClipId{}));
+        requireInvalid(AudioSoundReference::ForVariation(AudioSoundId{}));
+        requireInvalid(AudioSoundReference::ForStream(AudioSoundId{}));
+        requireInvalid(AudioSoundReference::ForMusic(AudioSoundId{}));
+        requireInvalid(AudioSoundReference::ForExtension(AudioContributionId{}, validSound));
+        requireInvalid(AudioSoundReference::ForExtension(validContribution, AudioSoundId{}));
+        requireInvalid(AudioSoundReference::ForExtension(validContribution, validSound, {0, 1}));
+    }
+
     TEST_CASE("Audio sound definitions validate backend-neutral playback defaults", "[unit][audio][sound-reference]") {
         const auto source = AudioSoundReference::ForStream(IdentityValue<AudioSoundId>(1));
         REQUIRE(source.HasValue());

@@ -313,4 +313,11 @@ TEST_CASE("Inspector edit session validates typed TriggerVolume and AudioSource 
     REQUIRE((!session.IsAudioSourceValid()));
     REQUIRE((session.ApplyAudioSourceEdit(InspectorAudioSourceEdit{.committed = true}, object, true).command ==
              EditorWorkspaceViewCommand::None));
+
+    session.Draft().audioSource->playback.gain = 1.0F;
+    session.Draft().audioSource->sound =
+        Horo::Audio::AudioSoundReference{.kind = Horo::Audio::AudioSoundReferenceKind::Clip, .target = Horo::Audio::AudioSoundId{}};
+    REQUIRE((!session.IsAudioSourceValid()));
+    REQUIRE((session.ApplyAudioSourceEdit(InspectorAudioSourceEdit{.committed = true}, object, true).command ==
+             EditorWorkspaceViewCommand::None));
 }

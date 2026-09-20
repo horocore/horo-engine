@@ -501,8 +501,17 @@ void RequireAudioSourceRoundTrip(const std::span<const Audio::AudioSoundReferenc
     objects.reserve(references.size());
     for (std::size_t index = 0; index < references.size(); ++index) {
         Runtime::AudioSourceComponent audioSource{.sound = references[index]};
-        if (index == 0)
-            audioSource.playback = {.gain = 0.75F, .pitch = 1.25F};
+        if (index == 0) {
+            const auto bus = Audio::AudioBusId::Create(9);
+            REQUIRE(bus.HasValue());
+            audioSource.playback = {.gain = 0.75F,
+                                    .pitch = 1.25F,
+                                    .bus = bus.Value(),
+                                    .loop = true,
+                                    .spatial = false,
+                                    .enableDoppler = true,
+                                    .playOnStart = false};
+        }
         objects.push_back(SceneObjectSnapshot{.id = SceneObjectId{static_cast<std::uint64_t>(index + 1)},
                                               .name = "AudioSource",
                                               .components = SceneObjectComponentSet{.audioSource = audioSource}});
@@ -565,8 +574,8 @@ TEST_CASE("Audio source migration clears legacy native and middleware references
     project.WriteScene(R"({
         "schemaVersion": 1,
         "objects": [
-            {"id": 1, "parent": null, "name": "Native Clip", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"sound": {"kind": "native_clip"}, "gain": 1.0, "spatial": true}}},
-            {"id": 2, "parent": null, "name": "Middleware Event", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"sound": {"kind": "middleware_event"}, "gain": 1.0, "spatial": true}}}
+            {"id": 1, "parent": null, "name": "Native Clip", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"kind": "native_clip", "gain": 1.0, "spatial": true}}},
+            {"id": 2, "parent": null, "name": "Middleware Event", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"kind": "middleware_event", "gain": 1.0, "spatial": true}}}
         ]
     })");
 

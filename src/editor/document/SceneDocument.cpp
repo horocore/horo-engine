@@ -50,9 +50,8 @@ namespace Horo::Editor {
 
     /** @copydoc IsValidAudioSourceComponent */
     bool IsValidAudioSourceComponent(const Runtime::AudioSourceComponent &audioSource) noexcept {
-        return std::isfinite(audioSource.playback.gain) && audioSource.playback.gain >= 0.0F && std::isfinite(audioSource.playback.pitch) &&
-               audioSource.playback.pitch > 0.0F && audioSource.playback.pitch <= 8.0F &&
-               (!audioSource.playback.bus.has_value() || audioSource.playback.bus->IsValid());
+        return Audio::ValidateAudioSoundReference(audioSource.sound).HasValue() &&
+               Audio::ValidateAudioSoundPlaybackDefaults(audioSource.playback).HasValue();
     }
 
     /** @copydoc ResolveSceneObjectEditorState */
@@ -1582,7 +1581,7 @@ namespace Horo::Editor {
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioSourceCommand &command) {
         if (!IsValidAudioSourceComponent(command.audioSource)) {
             return Result<SceneCommandResult>::Failure(
-                MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source gain must be finite and non-negative."));
+                MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source reference or playback values are invalid."));
         }
         const auto object = FindObject(m_document.m_objects, command.object);
         if (object == m_document.m_objects.end()) {
