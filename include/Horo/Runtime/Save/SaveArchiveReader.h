@@ -96,11 +96,20 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<std::optional<std::span<const std::byte>>> SelectChunk(SaveRecordId record) const;
 
     private:
+        struct Contents final {
+            std::span<const std::byte> archive;
+            std::shared_ptr<const std::vector<std::byte>> ownedArchive;
+            SaveArchivePreamble preamble;
+            SaveArchiveIntegrityManifest integrity;
+            SaveArchiveSignatureInfo signature;
+            SaveArchiveHeader header;
+            SaveGameManifest manifest;
+            ValidatedSaveChunkDirectory directory;
+        };
+
         friend class SaveArchiveReader;
         friend struct SaveArchiveReaderDetail::Reader;
-        ValidatedSaveArchive(std::span<const std::byte> archive, std::shared_ptr<const std::vector<std::byte>> ownedArchive,
-                             SaveArchivePreamble preamble, SaveArchiveIntegrityManifest integrity, SaveArchiveSignatureInfo signature,
-                             SaveArchiveHeader header, SaveGameManifest manifest, ValidatedSaveChunkDirectory directory) noexcept;
+        explicit ValidatedSaveArchive(Contents contents) noexcept;
 
         std::span<const std::byte> archive_;
         std::shared_ptr<const std::vector<std::byte>> ownedArchive_;

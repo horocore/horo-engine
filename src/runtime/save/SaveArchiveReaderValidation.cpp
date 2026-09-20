@@ -3,30 +3,29 @@
 #include "SaveArchiveReaderInternal.h"
 
 #include <algorithm>
-#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
 
 namespace Horo::Runtime::SaveArchiveReaderDetail {
     namespace {
-        [[nodiscard]] Error ReaderError(const ErrorCodeDescriptor &descriptor, const std::size_t offset,
-                                        const std::string_view path = "archive") {
-            Error error = MakeError(descriptor);
-            error.diagnostics.push_back(
-                {DiagnosticCode{"save.archive.reader.location"},
-                 DiagnosticSeverity::Error,
-                 std::string{descriptor.summary},
-                 {"archive", 0,
-                  static_cast<std::uint32_t>(std::min(offset, static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())))},
-                 std::string{path}});
-            return error;
-        }
-
         [[nodiscard]] bool IsSafeLinkText(const std::string_view text) noexcept {
-            return IsValidUtf8ScalarSequence(text) && text.find('/') == std::string_view::npos &&
+            return IsValidUtf8ScalarSequence(text) &&
+                   !std::ranges::any_of(text,
+                                        [](const char value) {
+                return static_cast<unsigned char>(value) < 0x20U || value == '\x7f';
+            }) && text.find('/') == std::string_view::npos &&
                    text.find('\\') == std::string_view::npos && text.find("..") == std::string_view::npos &&
                    text.find("://") == std::string_view::npos;
+        }
+
+        /** @brief Copies bounded byte-oriented metadata into the text decoder's character view. */
+        [[nodiscard]] std::string CopyByteText(const std::span<const std::byte> bytes) {
+            std::string text(bytes.size(), '\0');
+            std::ranges::transform(bytes, text.begin(), [](const std::byte value) {
+                return static_cast<char>(std::to_integer<unsigned char>(value));
+            });
+            return text;
         }
     }  // namespace
 
@@ -51,14 +50,16 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
         const RawEntry &manifestEntry = entries[1];
         const auto headerBytes = payload.subspan(headerEntry.absoluteOffset, static_cast<std::size_t>(headerEntry.storedByteLength));
         const auto manifestBytes = payload.subspan(manifestEntry.absoluteOffset, static_cast<std::size_t>(manifestEntry.storedByteLength));
-        auto header = DecodeSaveArchiveHeader(std::string_view{reinterpret_cast<const char *>(headerBytes.data()), headerBytes.size()},
-                                              limits);  // NOSONAR(cpp:S6022) -- validated byte payload is passed to the text decoder.
+        if (headerBytes.size() > limits.maximumHeaderBytes || manifestBytes.size() > limits.maximumManifestBytes)
+            return Result<DecodedMetadata>::Failure(MakeError(SaveErrors::ArchiveMetadataLimitExceeded));
+        const auto headerText = CopyByteText(headerBytes);
+        auto header = DecodeSaveArchiveHeader(headerText, limits);
         if (header.HasError())
-            return Result<DecodedMetadata>::Failure(std::move(header).ErrorValue());
-        auto manifest = DecodeSaveGameManifest(std::string_view{reinterpret_cast<const char *>(manifestBytes.data()), manifestBytes.size()},
-                                               limits);  // NOSONAR(cpp:S6022) -- validated byte payload is passed to the text decoder.
+            return Result<DecodedMetadata>::Failure(header.ErrorValue());
+        const auto manifestText = CopyByteText(manifestBytes);
+        auto manifest = DecodeSaveGameManifest(manifestText, limits);
         if (manifest.HasError())
-            return Result<DecodedMetadata>::Failure(std::move(manifest).ErrorValue());
+            return Result<DecodedMetadata>::Failure(manifest.ErrorValue());
         return Result<DecodedMetadata>::Success({std::move(header).Value(), std::move(manifest).Value()});
     }
 
@@ -74,7 +75,7 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
             const RawEntry &raw = entries[index];
             auto owner = DecodeOwner(raw);
             if (owner.HasError())
-                return Result<ValidatedSaveChunkDirectory>::Failure(std::move(owner).ErrorValue());
+                return Result<ValidatedSaveChunkDirectory>::Failure(owner.ErrorValue());
             auto record = SaveRecordId::FromBytes(raw.record);
             if (record.HasError())
                 return Result<ValidatedSaveChunkDirectory>::Failure(
@@ -91,17 +92,4 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
         return ValidateSaveChunkDirectory(std::move(directory), manifest, limits.chunks);
     }
 
-    Result<void> VerifyDecodedChunks(const std::span<const std::byte> payload, const ValidatedSaveChunkDirectory &directory,
-                                     const SaveArchiveReaderLimits &limits) {
-        std::uint64_t selectedBytes = 0;
-        for (const auto &entry : directory.Entries()) {
-            if (selectedBytes > limits.maximumDecodedBytes - entry.decodedByteLength)
-                return Result<void>::Failure(MakeError(SaveErrors::ArchiveDecompressionLimitExceeded));
-            selectedBytes += entry.decodedByteLength;
-            auto selected = SelectSaveChunkPayload(payload, directory, entry.record);
-            if (selected.HasError())
-                return Result<void>::Failure(std::move(selected).ErrorValue());
-        }
-        return Result<void>::Success();
-    }
 }  // namespace Horo::Runtime::SaveArchiveReaderDetail

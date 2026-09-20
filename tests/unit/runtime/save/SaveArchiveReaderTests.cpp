@@ -211,6 +211,11 @@ namespace {
         CHECK(SaveArchiveReader{}.Read(fixture.bytes).ErrorValue().code.Value() == SaveErrors::ArchiveUnsafeReference.code.Value());
 
         fixture = MakeArchive();
+        fixture.bytes[fixture.chunkEntryOffset + 28] = std::byte{0x1f};
+        Rehash(fixture);
+        CHECK(SaveArchiveReader{}.Read(fixture.bytes).ErrorValue().code.Value() == SaveErrors::ArchiveUnsafeReference.code.Value());
+
+        fixture = MakeArchive();
         auto limits = SaveArchiveReaderLimits{};
         limits.metadata.maximumNestingDepth = 1;
         CHECK(SaveArchiveReader{limits}.Read(fixture.bytes).HasError());
@@ -241,5 +246,24 @@ namespace {
         fixture.bytes[absoluteHeader] = std::byte{static_cast<unsigned char>(0xc0)};
         Rehash(fixture);
         CHECK(SaveArchiveReader{}.Read(fixture.bytes).HasError());
+    }
+
+    TEST_CASE("Bounded reader defers chunk checksum verification until selection", "[runtime][save][archive-reader]") {
+        auto fixture = MakeArchive();
+        std::uint64_t relativeOffset = 0;
+        for (std::size_t index = 0; index < sizeof(relativeOffset); ++index)
+            relativeOffset |=
+                static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(fixture.bytes[fixture.chunkEntryOffset + 124 + index]))
+                << (index * 8U);
+        const auto absoluteChunk = SaveArchivePreambleByteLength + SaveArchiveContainerHeaderByteLength +
+                                   3 * SaveArchiveContainerEntryByteLength + static_cast<std::size_t>(relativeOffset);
+        fixture.bytes[absoluteChunk] = static_cast<std::byte>(std::to_integer<std::uint8_t>(fixture.bytes[absoluteChunk]) ^ 1U);
+        Rehash(fixture);
+
+        auto admitted = SaveArchiveReader{}.Read(fixture.bytes);
+        REQUIRE(admitted.HasValue());
+        const auto selected = admitted.Value().SelectChunk(Id<SaveRecordId>(20));
+        REQUIRE(selected.HasError());
+        CHECK(selected.ErrorValue().code.Value() == SaveErrors::ArchiveChunkHashMismatch.code.Value());
     }
 }  // namespace

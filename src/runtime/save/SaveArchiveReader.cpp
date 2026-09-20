@@ -25,19 +25,7 @@ namespace Horo::Runtime {
         constexpr std::size_t SignatureDescriptorByteLength = 20;
         constexpr std::size_t MaximumContainerNestingDepth = 32;
         using SaveArchiveReaderDetail::RawEntry;
-
-        [[nodiscard]] Error ReaderError(const ErrorCodeDescriptor &descriptor, const std::size_t offset,
-                                        const std::string_view path = "archive") {
-            Error error = MakeError(descriptor);
-            error.diagnostics.push_back(
-                {DiagnosticCode{"save.archive.reader.location"},
-                 DiagnosticSeverity::Error,
-                 std::string{descriptor.summary},
-                 {"archive", 0,
-                  static_cast<std::uint32_t>(std::min(offset, static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())))},
-                 std::string{path}});
-            return error;
-        }
+        using SaveArchiveReaderDetail::ReaderError;
 
         template <typename Value>
         [[nodiscard]] bool ReadLittleEndian(const std::span<const std::byte> bytes, std::size_t &offset, Value &value) noexcept {
@@ -65,12 +53,6 @@ namespace Horo::Runtime {
             const std::span<const std::uint8_t> bytes) noexcept {  // NOSONAR(cpp:S1144) -- identity fields use uint8_t storage.
             return std::ranges::all_of(bytes, [](const std::uint8_t value) {
                 return value == 0;
-            });
-        }
-
-        [[nodiscard]] bool IsZero(const std::span<const std::byte> bytes) noexcept {
-            return std::ranges::all_of(bytes, [](const std::byte value) {
-                return value == std::byte{};
             });
         }
 
@@ -171,7 +153,7 @@ namespace Horo::Runtime {
                     ReaderError(SaveErrors::ArchiveEnvelopeInvalid, trailerOffsetInArchive, "trailer/fields"));
             const auto algorithm = static_cast<SaveArchiveSignatureAlgorithm>(signatureAlgorithmValue);
             if (auto valid = ValidateSignatureDescriptor(algorithm, trailer.size(), signatureByteLength, keyId, offset); valid.HasError())
-                return Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>>::Failure(std::move(valid).ErrorValue());
+                return Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>>::Failure(valid.ErrorValue());
             return Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>>::Success(
                 {{.algorithm = algorithm, .signerKeyId = keyId, .signatureByteLength = signatureByteLength}, {.bytes = digestBytes}});
         }
@@ -183,17 +165,17 @@ namespace Horo::Runtime {
                     ReaderError(SaveErrors::ArchiveFramingLimitExceeded, 0, "envelope/archiveBytes"));
             auto fields = ReadEnvelopeHeader(archive);
             if (fields.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(std::move(fields).ErrorValue());
+                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(fields.ErrorValue());
             if (auto valid = ValidateEnvelopeHeader(fields.Value(), limits); valid.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(std::move(valid).ErrorValue());
+                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(valid.ErrorValue());
             auto lengths = ValidateEnvelopeLength(fields.Value(), archive);
             if (lengths.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(std::move(lengths).ErrorValue());
+                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(lengths.ErrorValue());
             const auto [payloadSize, trailerSize] = lengths.Value();
             auto trailer = ReadTrailer(archive.subspan(SaveArchivePreambleByteLength + payloadSize, trailerSize),
                                        SaveArchivePreambleByteLength + payloadSize);
             if (trailer.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(std::move(trailer).ErrorValue());
+                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(trailer.ErrorValue());
             auto [trailerSignature, trailerDigest] = std::move(trailer).Value();
             auto version = ArchiveFormatVersion::Create(fields.Value().archiveVersion);
             if (version.HasError())
@@ -266,9 +248,9 @@ namespace Horo::Runtime {
                                                               const SaveArchiveReaderLimits &limits) {
             auto header = ReadContainerHeader(payload);
             if (header.HasError())
-                return Result<ContainerInfo>::Failure(std::move(header).ErrorValue());
+                return Result<ContainerInfo>::Failure(header.ErrorValue());
             if (auto valid = ValidateContainerHeader(header.Value(), limits); valid.HasError())
-                return Result<ContainerInfo>::Failure(std::move(valid).ErrorValue());
+                return Result<ContainerInfo>::Failure(valid.ErrorValue());
             return MakeContainerInfo(header.Value(), payload);
         }
 
@@ -308,15 +290,15 @@ namespace Horo::Runtime {
             std::size_t offset = recordOffset;
             auto prefix = ReadRawEntryPrefix(payload, offset, recordOffset);
             if (prefix.HasError())
-                return Result<RawEntry>::Failure(std::move(prefix).ErrorValue());
+                return Result<RawEntry>::Failure(prefix.ErrorValue());
             std::uint16_t ownerReserved{};
             std::uint32_t reserved{};
             RawEntry entry;
             entry.codec = prefix.Value().codec;
             if (auto valid = ReadRawEntryIdentity(payload, offset, entry, ownerReserved, recordOffset); valid.HasError())
-                return Result<RawEntry>::Failure(std::move(valid).ErrorValue());
+                return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ReadRawEntryRange(payload, offset, entry, recordOffset); valid.HasError())
-                return Result<RawEntry>::Failure(std::move(valid).ErrorValue());
+                return Result<RawEntry>::Failure(valid.ErrorValue());
             if (!ReadLittleEndian(payload, offset, reserved) || !ReadArray(payload, offset, entry.decodedHash.bytes))
                 return Result<RawEntry>::Failure(ReaderError(SaveErrors::ArchiveEntryInvalid, recordOffset, "entry/integrity"));
             if (prefix.Value().flags != 0 || ownerReserved != 0 || reserved != 0)
@@ -388,19 +370,19 @@ namespace Horo::Runtime {
             const std::size_t recordOffset = SaveArchiveContainerHeaderByteLength + index * SaveArchiveContainerEntryByteLength;
             auto entry = ReadRawEntry(payload, recordOffset);
             if (entry.HasError())
-                return Result<RawEntry>::Failure(std::move(entry).ErrorValue());
+                return Result<RawEntry>::Failure(entry.ErrorValue());
             auto parsedEntry = std::move(entry).Value();
             if (auto valid = ValidateEntryKindValue(parsedEntry, recordOffset); valid.HasError())
-                return Result<RawEntry>::Failure(std::move(valid).ErrorValue());
+                return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateEntryIdentity(parsedEntry, recordOffset, sawChunk); valid.HasError())
-                return Result<RawEntry>::Failure(std::move(valid).ErrorValue());
+                return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateStoredEntrySize(parsedEntry, limits, payload, info.dataOffset, recordOffset); valid.HasError())
-                return Result<RawEntry>::Failure(std::move(valid).ErrorValue());
+                return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateEntryExpansion(parsedEntry, limits, recordOffset); valid.HasError())
-                return Result<RawEntry>::Failure(std::move(valid).ErrorValue());
+                return Result<RawEntry>::Failure(valid.ErrorValue());
             auto validatedRange = ValidateEntryRange(parsedEntry, payload, info.dataOffset, expectedRelativeOffset, recordOffset);
             if (validatedRange.HasError())
-                return Result<RawEntry>::Failure(std::move(validatedRange).ErrorValue());
+                return Result<RawEntry>::Failure(validatedRange.ErrorValue());
             expectedRelativeOffset = std::move(validatedRange).Value();
             sawChunk |= parsedEntry.kind == SaveArchiveEntryKind::Chunk;
             if (decodedTotal > limits.maximumDecodedBytes - parsedEntry.decodedByteLength)
@@ -414,7 +396,7 @@ namespace Horo::Runtime {
                                                                   const SaveArchiveReaderLimits &limits) {
             auto info = ReadContainerInfo(payload, limits);
             if (info.HasError())
-                return Result<std::vector<RawEntry>>::Failure(std::move(info).ErrorValue());
+                return Result<std::vector<RawEntry>>::Failure(info.ErrorValue());
             std::vector<RawEntry> entries;
             entries.reserve(info.Value().entryCount);
             std::uint64_t decodedTotal = 0;
@@ -423,7 +405,7 @@ namespace Horo::Runtime {
             for (std::size_t index = 0; index < info.Value().entryCount; ++index) {
                 auto entry = ReadContainerEntry(payload, limits, info.Value(), index, expectedRelativeOffset, sawChunk, decodedTotal);
                 if (entry.HasError())
-                    return Result<std::vector<RawEntry>>::Failure(std::move(entry).ErrorValue());
+                    return Result<std::vector<RawEntry>>::Failure(entry.ErrorValue());
                 entries.push_back(std::move(entry).Value());
             }
             if (expectedRelativeOffset != payload.size() - info.Value().dataOffset || entries.size() < 3 ||
@@ -446,30 +428,34 @@ namespace Horo::Runtime {
                     SaveArchiveSignatureInfo signature;
                     auto envelope = ReadEnvelope(archive, limits, signature);
                     if (envelope.HasError())
-                        return Result<ValidatedSaveArchive>::Failure(std::move(envelope).ErrorValue());
+                        return Result<ValidatedSaveArchive>::Failure(envelope.ErrorValue());
                     auto [preamble, integrity] = std::move(envelope).Value();
                     if (auto verified = VerifySaveArchiveIntegrity(integrity, archive); verified.HasError())
-                        return Result<ValidatedSaveArchive>::Failure(std::move(verified).ErrorValue());
+                        return Result<ValidatedSaveArchive>::Failure(verified.ErrorValue());
 
                     const auto payload =
                         archive.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble.payloadByteLength));
                     auto rawEntries = ReadContainer(payload, limits);
                     if (rawEntries.HasError())
-                        return Result<ValidatedSaveArchive>::Failure(std::move(rawEntries).ErrorValue());
+                        return Result<ValidatedSaveArchive>::Failure(rawEntries.ErrorValue());
                     const auto &entries = rawEntries.Value();
                     auto metadata = DecodeMetadata(payload, entries, limits.metadata);
                     if (metadata.HasError())
-                        return Result<ValidatedSaveArchive>::Failure(std::move(metadata).ErrorValue());
+                        return Result<ValidatedSaveArchive>::Failure(metadata.ErrorValue());
                     auto metadataValue = std::move(metadata).Value();
                     auto validatedDirectory = BuildDirectory(payload, entries, metadataValue.manifest, limits);
                     if (validatedDirectory.HasError())
-                        return Result<ValidatedSaveArchive>::Failure(std::move(validatedDirectory).ErrorValue());
+                        return Result<ValidatedSaveArchive>::Failure(validatedDirectory.ErrorValue());
                     auto validated = std::move(validatedDirectory).Value();
-                    if (auto chunks = VerifyDecodedChunks(payload, validated, limits); chunks.HasError())
-                        return Result<ValidatedSaveArchive>::Failure(std::move(chunks).ErrorValue());
                     return Result<ValidatedSaveArchive>::Success(
-                        ValidatedSaveArchive{archive, std::move(ownedArchive), std::move(preamble), std::move(integrity), signature,
-                                             std::move(metadataValue.header), std::move(metadataValue.manifest), std::move(validated)});
+                        ValidatedSaveArchive{ValidatedSaveArchive::Contents{.archive = archive,
+                                                                            .ownedArchive = std::move(ownedArchive),
+                                                                            .preamble = std::move(preamble),
+                                                                            .integrity = std::move(integrity),
+                                                                            .signature = signature,
+                                                                            .header = std::move(metadataValue.header),
+                                                                            .manifest = std::move(metadataValue.manifest),
+                                                                            .directory = std::move(validated)}});
                 } catch (const std::bad_alloc &) {
                     return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
                 }
@@ -477,13 +463,10 @@ namespace Horo::Runtime {
         };
     }  // namespace SaveArchiveReaderDetail
 
-    ValidatedSaveArchive::ValidatedSaveArchive(  // NOSONAR(cpp:S107) -- construction owns all validated archive components as one
-                                                 // invariant.
-        std::span<const std::byte> archive, std::shared_ptr<const std::vector<std::byte>> ownedArchive, SaveArchivePreamble preamble,
-        SaveArchiveIntegrityManifest integrity, SaveArchiveSignatureInfo signature, SaveArchiveHeader header, SaveGameManifest manifest,
-        ValidatedSaveChunkDirectory directory) noexcept
-        : archive_(archive), ownedArchive_(std::move(ownedArchive)), preamble_(std::move(preamble)), integrity_(std::move(integrity)),
-          signature_(std::move(signature)), header_(std::move(header)), manifest_(std::move(manifest)), directory_(std::move(directory)),
+    ValidatedSaveArchive::ValidatedSaveArchive(Contents contents) noexcept
+        : archive_(contents.archive), ownedArchive_(std::move(contents.ownedArchive)), preamble_(std::move(contents.preamble)),
+          integrity_(std::move(contents.integrity)), signature_(std::move(contents.signature)), header_(std::move(contents.header)),
+          manifest_(std::move(contents.manifest)), directory_(std::move(contents.directory)),
           payload_(archive_.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble_.payloadByteLength))) {}
 
     const SaveArchivePreamble &ValidatedSaveArchive::Preamble() const noexcept {

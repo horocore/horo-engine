@@ -62,7 +62,7 @@ namespace Horo::Runtime {
                 return static_cast<unsigned char>(value) < 0x20U || value == '\x7f';
             }) && text.find('/') == std::string_view::npos &&
                    text.find('\\') == std::string_view::npos && text.find("..") == std::string_view::npos &&
-                   text.find("://") == std::string_view::npos && text.front() != ':';
+                   text.find("://") == std::string_view::npos && !text.starts_with(':');
         }
 
         /** @brief Validates the scalar and collection limits for untrusted metadata. */
