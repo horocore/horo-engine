@@ -100,6 +100,35 @@ cannot discover endpoints by hierarchy or name. This remains inert admission; na
 planning, resource resolution, activation, rollback and retirement stay with the
 solver-bearing Physics scene participant defined by ADR-087 and PHY-006.3.
 
+### Legacy trigger-volume schema migration
+
+`TriggerVolumeComponent` is an authoring-only compatibility value for scene files
+written before the canonical Physics producer schema. At the editor-to-runtime
+boundary, an enabled legacy value is normalized into exactly one explicit static
+`RigidBodyComponent` and one enabled sensor `ColliderComponent` on the same
+`SceneObjectId`. The collider uses the matching analytic shape, an identity
+body-local pose, unit scale, and the canonical Physics schema version. A disabled
+legacy value produces no Physics producers.
+
+The projection uses stable local body/collider slots and derived compatibility
+filter/material identities only; those identities are not persisted, are not
+project defaults, and never cross into native solver code. The project collision
+and material authorities own their eventual replacement. This keeps old scene
+files loadable while making the runtime handoff explicit and backend-neutral.
+
+Migration never merges ambiguous sources: an enabled legacy trigger beside an
+explicit rigid body, collider, or constraint returns a stable conversion error.
+Unknown shape values and canonical component schema versions are rejected rather
+than guessed, clamped, or silently dropped. The authored document remains the
+source of truth until an editor transaction can replace the convenience component
+with project-owned canonical IDs.
+
+The persistence reader therefore keeps the existing scene-file version and legacy
+authoring field lossless; it does not write derived body/collider IDs back into the
+file. Shape values outside the legacy enum, malformed enabled flags, unsupported
+scene versions, and canonical Physics schema-version mismatches fail at their
+owning parser or conversion boundary with no partial runtime candidate.
+
 ```text
 SceneRuntime
   +-- PhysicsWorld
