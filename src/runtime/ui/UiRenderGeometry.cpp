@@ -46,72 +46,64 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] std::array<FloatPoint, 4> RectangleCorners(const float x, const float y, const float width,
-                                                                  const float height) noexcept {
-            return {FloatPoint{x, y}, FloatPoint{x + width, y}, FloatPoint{x + width, y + height},
-                    FloatPoint{x, y + height}};
+                                                                 const float height) noexcept {
+            return {FloatPoint{x, y}, FloatPoint{x + width, y}, FloatPoint{x + width, y + height}, FloatPoint{x, y + height}};
         }
 
-        [[nodiscard]] Result<UiRenderGeometryBatchKey> MakeBatchKey(const UiRenderSnapshot &snapshot,
-                                                                     const UiDrawCommand &command) {
+        [[nodiscard]] Result<UiRenderGeometryBatchKey> MakeBatchKey(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
             UiRenderGeometryBatchKey key{.resource = NoUiRenderIndex,
                                          .transform = command.transform,
                                          .clip = command.clip,
                                          .mask = command.mask};
-            const auto result = std::visit(
-                [&key, &snapshot](const auto &draw) -> Result<void> {
-                    using Draw = std::decay_t<decltype(draw)>;
-                    if constexpr (std::is_same_v<Draw, UiSolidDraw>)
-                        key.primitive = UiRenderGeometryPrimitive::SolidRectangle;
-                    else if constexpr (std::is_same_v<Draw, UiBorderDraw>)
-                        key.primitive = UiRenderGeometryPrimitive::BorderRectangle;
-                    else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
-                        key.primitive = UiRenderGeometryPrimitive::ImageRectangle;
-                        key.resource = draw.resource;
-                    } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
-                        key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
-                        key.resource = draw.resource;
-                    } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
-                        if (draw.run >= snapshot.TextRuns().size())
-                            return Failure(UiErrors::RenderGeometryInvalid);
-                        key.primitive = UiRenderGeometryPrimitive::TextGlyphs;
-                        key.resource = snapshot.TextRuns()[draw.run].fontResource;
-                    }
-                    return Result<void>::Success();
-                },
-                command.payload);
+            const auto result = std::visit([&key, &snapshot](const auto &draw) -> Result<void> {
+                using Draw = std::decay_t<decltype(draw)>;
+                if constexpr (std::is_same_v<Draw, UiSolidDraw>)
+                    key.primitive = UiRenderGeometryPrimitive::SolidRectangle;
+                else if constexpr (std::is_same_v<Draw, UiBorderDraw>)
+                    key.primitive = UiRenderGeometryPrimitive::BorderRectangle;
+                else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
+                    key.primitive = UiRenderGeometryPrimitive::ImageRectangle;
+                    key.resource = draw.resource;
+                } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
+                    key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
+                    key.resource = draw.resource;
+                } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
+                    if (draw.run >= snapshot.TextRuns().size())
+                        return Failure(UiErrors::RenderGeometryInvalid);
+                    key.primitive = UiRenderGeometryPrimitive::TextGlyphs;
+                    key.resource = snapshot.TextRuns()[draw.run].fontResource;
+                }
+                return Result<void>::Success();
+            }, command.payload);
             return result.HasError() ? Result<UiRenderGeometryBatchKey>::Failure(result.ErrorValue())
                                      : Result<UiRenderGeometryBatchKey>::Success(key);
         }
 
-        [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometry(const UiRenderSnapshot &snapshot,
-                                                                           const UiDrawCommand &command) {
-            return std::visit(
-                [&snapshot, &command](const auto &draw) -> Result<std::array<std::size_t, 2>> {
-                    using Draw = std::decay_t<decltype(draw)>;
-                    if constexpr (std::is_same_v<Draw, UiSolidDraw> || std::is_same_v<Draw, UiImageDraw> ||
-                                  std::is_same_v<Draw, UiSpriteDraw>) {
-                        return Result<std::array<std::size_t, 2>>::Success({4, 6});
-                    } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
-                        const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
-                        return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
-                                                                                : std::array<std::size_t, 2>{0, 0});
-                    } else {
-                        if (draw.run >= snapshot.TextRuns().size())
-                            return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
-                        const auto &run = snapshot.TextRuns()[draw.run];
-                        if (run.firstGlyph > snapshot.Glyphs().size() ||
-                            run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
-                            return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
-                        return Result<std::array<std::size_t, 2>>::Success(
-                            {static_cast<std::size_t>(run.glyphCount) * 4U, static_cast<std::size_t>(run.glyphCount) * 6U});
-                    }
-                },
-                command.payload);
+        [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometry(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
+            return std::visit([&snapshot, &command](const auto &draw) -> Result<std::array<std::size_t, 2>> {
+                using Draw = std::decay_t<decltype(draw)>;
+                if constexpr (std::is_same_v<Draw, UiSolidDraw> || std::is_same_v<Draw, UiImageDraw> ||
+                              std::is_same_v<Draw, UiSpriteDraw>) {
+                    return Result<std::array<std::size_t, 2>>::Success({4, 6});
+                } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
+                    const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
+                    return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
+                                                                               : std::array<std::size_t, 2>{0, 0});
+                } else {
+                    if (draw.run >= snapshot.TextRuns().size())
+                        return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
+                    const auto &run = snapshot.TextRuns()[draw.run];
+                    if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
+                        return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
+                    return Result<std::array<std::size_t, 2>>::Success(
+                        {static_cast<std::size_t>(run.glyphCount) * 4U, static_cast<std::size_t>(run.glyphCount) * 6U});
+                }
+            }, command.payload);
         }
 
-        void AppendQuad(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices,
-                        const UiLogicalTransform &transform, const float x, const float y, const float width,
-                        const float height, const std::array<float, 4> &uv, const UiLinearColor color) {
+        void AppendQuad(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const UiLogicalTransform &transform,
+                        const float x, const float y, const float width, const float height, const std::array<float, 4> &uv,
+                        const UiLinearColor color) {
             const auto corners = RectangleCorners(x, y, width, height);
             const std::array<FloatPoint, 4> transformed{
                 TransformPoint(transform, corners[0].x, corners[0].y),
@@ -127,9 +119,8 @@ namespace Horo::Runtime::Ui {
             indices.insert(indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
         }
 
-        void AppendBorder(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices,
-                          const UiLogicalTransform &transform, const UiLogicalRect rect, const std::int32_t width,
-                          const UiLinearColor color) {
+        void AppendBorder(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const UiLogicalTransform &transform,
+                          const UiLogicalRect rect, const std::int32_t width, const UiLinearColor color) {
             const float x = static_cast<float>(rect.origin.x);
             const float y = static_cast<float>(rect.origin.y);
             const float extentX = static_cast<float>(rect.extent.width);
@@ -150,8 +141,7 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<void> ValidateGenerated(const std::span<const UiRenderVertex> vertices,
                                                      const std::span<const std::uint32_t> indices,
-                                                     const std::span<const UiRenderGeometryBatch> batches,
-                                                     const std::size_t commandCount) {
+                                                     const std::span<const UiRenderGeometryBatch> batches, const std::size_t commandCount) {
             if (!std::ranges::all_of(vertices, &UiRenderVertex::IsValid))
                 return Failure(UiErrors::RenderGeometryInvalid);
             for (const auto index : indices)
@@ -177,8 +167,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRenderVertex::IsValid */
     bool UiRenderVertex::IsValid() const noexcept {
-        return std::isfinite(x) && std::isfinite(y) && std::isfinite(u) && std::isfinite(v) && u >= 0.0F && u <= 1.0F &&
-               v >= 0.0F && v <= 1.0F && color.IsValid();
+        return std::isfinite(x) && std::isfinite(y) && std::isfinite(u) && std::isfinite(v) && u >= 0.0F && u <= 1.0F && v >= 0.0F &&
+               v <= 1.0F && color.IsValid();
     }
 
     /** @copydoc UiRenderGeometryBatchKey::IsValid */
@@ -186,23 +176,21 @@ namespace Horo::Runtime::Ui {
         if (!IsKnown(primitive))
             return false;
         const bool textured = primitive == UiRenderGeometryPrimitive::ImageRectangle ||
-                              primitive == UiRenderGeometryPrimitive::SpriteRectangle ||
-                              primitive == UiRenderGeometryPrimitive::TextGlyphs;
+                              primitive == UiRenderGeometryPrimitive::SpriteRectangle || primitive == UiRenderGeometryPrimitive::TextGlyphs;
         return textured ? resource != NoUiRenderIndex : resource == NoUiRenderIndex;
     }
 
     /** @copydoc UiRenderGeometryBatch::IsValid */
     bool UiRenderGeometryBatch::IsValid(const std::size_t vertexCount, const std::size_t indexCount,
-                                       const std::size_t commandCount) const noexcept {
-        return key.IsValid() && commandCount > 0 && this->commandCount > 0 &&
-               FitsRange(firstVertex, this->vertexCount, vertexCount) && FitsRange(firstIndex, this->indexCount, indexCount) &&
-               FitsRange(firstCommand, this->commandCount, commandCount);
+                                        const std::size_t commandCount) const noexcept {
+        return key.IsValid() && commandCount > 0 && this->commandCount > 0 && FitsRange(firstVertex, this->vertexCount, vertexCount) &&
+               FitsRange(firstIndex, this->indexCount, indexCount) && FitsRange(firstCommand, this->commandCount, commandCount);
     }
 
     /** @copydoc UiRenderGeometryLimits::IsValid */
     bool UiRenderGeometryLimits::IsValid() const noexcept {
-        return vertices > 0 && vertices <= MaximumUiRenderGeometryVertices && indices > 0 &&
-               indices <= MaximumUiRenderGeometryIndices && batches > 0 && batches <= MaximumUiRenderGeometryBatches;
+        return vertices > 0 && vertices <= MaximumUiRenderGeometryVertices && indices > 0 && indices <= MaximumUiRenderGeometryIndices &&
+               batches > 0 && batches <= MaximumUiRenderGeometryBatches;
     }
 
     /** @copydoc UiRenderGeometryArenaDescriptor::IsValid */
@@ -215,6 +203,7 @@ namespace Horo::Runtime::Ui {
         class PublishLease final {
         public:
             explicit PublishLease(Storage &storage) noexcept : storage_(&storage) {}
+
             PublishLease(const PublishLease &) = delete;
             PublishLease &operator=(const PublishLease &) = delete;
 
@@ -253,8 +242,7 @@ namespace Horo::Runtime::Ui {
             descriptor = {};
         }
 
-        [[nodiscard]] Result<UiRenderGeometryBatch *> BeginBatch(const UiRenderGeometryBatchKey key,
-                                                                  const std::uint32_t commandIndex) {
+        [[nodiscard]] Result<UiRenderGeometryBatch *> BeginBatch(const UiRenderGeometryBatchKey key, const std::uint32_t commandIndex) {
             if (!batches.empty() && batches.back().key == key &&
                 static_cast<std::uint64_t>(batches.back().firstCommand) + batches.back().commandCount == commandIndex) {
                 ++batches.back().commandCount;
@@ -262,8 +250,8 @@ namespace Horo::Runtime::Ui {
             }
             if (batches.size() >= limits.batches)
                 return Failure<UiRenderGeometryBatch *>(UiErrors::RenderGeometryCapacityExceeded);
-            batches.push_back({key, static_cast<std::uint32_t>(vertices.size()), 0, static_cast<std::uint32_t>(indices.size()),
-                               0, commandIndex, 1});
+            batches.push_back(
+                {key, static_cast<std::uint32_t>(vertices.size()), 0, static_cast<std::uint32_t>(indices.size()), 0, commandIndex, 1});
             return Result<UiRenderGeometryBatch *>::Success(&batches.back());
         }
 
@@ -292,43 +280,39 @@ namespace Horo::Runtime::Ui {
                 const auto firstIndex = indices.size();
                 const auto &command = commands[commandIndex];
                 const auto &transform = snapshot.Transforms()[command.transform];
-                const auto appendResult = std::visit(
-                    [this, &command, &snapshot, &transform](const auto &draw) -> Result<void> {
-                        using Draw = std::decay_t<decltype(draw)>;
-                        const auto color = [&draw, &command](const UiLinearColor value) {
-                            return WithOpacity(value, command.opacity);
-                        };
-                        const auto appendRectangle = [this, &command, &transform](const std::array<float, 4> &uv,
-                                                                                    const UiLinearColor value) {
-                            AppendQuad(vertices, indices, transform, static_cast<float>(command.rect.origin.x),
-                                       static_cast<float>(command.rect.origin.y), static_cast<float>(command.rect.extent.width),
-                                       static_cast<float>(command.rect.extent.height), uv, value);
-                        };
-                        if constexpr (std::is_same_v<Draw, UiSolidDraw>) {
-                            appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, color(draw.color));
-                        } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
-                            AppendBorder(vertices, indices, transform, command.rect, draw.width, color(draw.color));
-                        } else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
-                            appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, color(draw.tint));
-                        } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
-                            appendRectangle(draw.uv, color(draw.tint));
-                        } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
-                            if (draw.run >= snapshot.TextRuns().size())
-                                return Failure(UiErrors::RenderGeometryInvalid);
-                            const auto &run = snapshot.TextRuns()[draw.run];
-                            if (run.firstGlyph > snapshot.Glyphs().size() ||
-                                run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
-                                return Failure(UiErrors::RenderGeometryInvalid);
-                            for (std::uint32_t glyphOffset = 0; glyphOffset < run.glyphCount; ++glyphOffset) {
-                                const auto &glyph = snapshot.Glyphs()[run.firstGlyph + glyphOffset];
-                                AppendQuad(vertices, indices, transform, static_cast<float>(glyph.origin.x),
-                                           static_cast<float>(glyph.origin.y), static_cast<float>(glyph.extent.width),
-                                           static_cast<float>(glyph.extent.height), glyph.uv, color(run.color));
-                            }
+                const auto appendResult = std::visit([this, &command, &snapshot, &transform](const auto &draw) -> Result<void> {
+                    using Draw = std::decay_t<decltype(draw)>;
+                    const auto color = [&draw, &command](const UiLinearColor value) {
+                        return WithOpacity(value, command.opacity);
+                    };
+                    const auto appendRectangle = [this, &command, &transform](const std::array<float, 4> &uv, const UiLinearColor value) {
+                        AppendQuad(vertices, indices, transform, static_cast<float>(command.rect.origin.x),
+                                   static_cast<float>(command.rect.origin.y), static_cast<float>(command.rect.extent.width),
+                                   static_cast<float>(command.rect.extent.height), uv, value);
+                    };
+                    if constexpr (std::is_same_v<Draw, UiSolidDraw>) {
+                        appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, color(draw.color));
+                    } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
+                        AppendBorder(vertices, indices, transform, command.rect, draw.width, color(draw.color));
+                    } else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
+                        appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, color(draw.tint));
+                    } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
+                        appendRectangle(draw.uv, color(draw.tint));
+                    } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
+                        if (draw.run >= snapshot.TextRuns().size())
+                            return Failure(UiErrors::RenderGeometryInvalid);
+                        const auto &run = snapshot.TextRuns()[draw.run];
+                        if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
+                            return Failure(UiErrors::RenderGeometryInvalid);
+                        for (std::uint32_t glyphOffset = 0; glyphOffset < run.glyphCount; ++glyphOffset) {
+                            const auto &glyph = snapshot.Glyphs()[run.firstGlyph + glyphOffset];
+                            AppendQuad(vertices, indices, transform, static_cast<float>(glyph.origin.x), static_cast<float>(glyph.origin.y),
+                                       static_cast<float>(glyph.extent.width), static_cast<float>(glyph.extent.height), glyph.uv,
+                                       color(run.color));
                         }
-                        return Result<void>::Success();
-                    },
-                    command.payload);
+                    }
+                    return Result<void>::Success();
+                }, command.payload);
                 if (appendResult.HasError())
                     return appendResult;
                 batch->vertexCount += static_cast<std::uint32_t>(vertices.size() - firstVertex);

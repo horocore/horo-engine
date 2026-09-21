@@ -35,11 +35,11 @@ namespace Horo::Runtime::Ui {
 
         UiElementTree MakeTree() {
             const UiElementTreeDescriptor descriptor{.instance = {Owner(), 1, 1},
-                                                      .canvas = {Owner(), 2, 1},
-                                                      .document = Document(),
-                                                      .documentRevision = UiDocumentRevision::Create(4).Value(),
-                                                      .treeRevision = UiRuntimeTreeRevision::Create(6).Value(),
-                                                      .limits = {2, 2, 2}};
+                                                     .canvas = {Owner(), 2, 1},
+                                                     .document = Document(),
+                                                     .documentRevision = UiDocumentRevision::Create(4).Value(),
+                                                     .treeRevision = UiRuntimeTreeRevision::Create(6).Value(),
+                                                     .limits = {2, 2, 2}};
             auto allocatorResult = UiElementSlotAllocator::Create(Owner());
             REQUIRE(allocatorResult.HasValue());
             auto allocator = std::move(allocatorResult).Value();
@@ -59,9 +59,9 @@ namespace Horo::Runtime::Ui {
             auto extractor = std::move(extractorResult).Value();
 
             const std::array resources{UiRenderResourceReference{Asset(1), UiRenderResourceRevision::Create(3).Value(),
-                                                                   UiRenderResourceRole::Image},
+                                                                 UiRenderResourceRole::Image},
                                        UiRenderResourceReference{Asset(2), UiRenderResourceRevision::Create(3).Value(),
-                                                                   UiRenderResourceRole::FontFace}};
+                                                                 UiRenderResourceRole::FontFace}};
             const std::array transforms{UiLogicalTransform{}};
             const std::array glyphs{UiPositionedGlyph{17, 0, {320, 0}, {32, 16}, {0.0F, 0.0F, 0.5F, 1.0F}},
                                     UiPositionedGlyph{18, 1, {352, 0}, {32, 16}, {0.5F, 0.0F, 1.0F, 1.0F}}};
@@ -69,17 +69,41 @@ namespace Horo::Runtime::Ui {
             const std::array<UiClip, 0> clips{};
             const std::array<UiMask, 0> masks{};
             const std::array commands{
-                UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F,
-                              UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}},
-                UiDrawCommand{root, {{100, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F,
+                UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}},
+                UiDrawCommand{root,
+                              {{100, 0}, {100, 50}},
+                              0,
+                              NoUiRenderIndex,
+                              NoUiRenderIndex,
+                              1.0F,
                               UiSolidDraw{{0.4F, 0.5F, 0.6F, 1.0F}}},
-                UiDrawCommand{root, {{0, 0}, {200, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F,
+                UiDrawCommand{root,
+                              {{0, 0}, {200, 50}},
+                              0,
+                              NoUiRenderIndex,
+                              NoUiRenderIndex,
+                              1.0F,
                               UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, 4}},
-                UiDrawCommand{child, {{0, 64}, {64, 64}}, 0, NoUiRenderIndex, NoUiRenderIndex, 0.75F,
+                UiDrawCommand{child,
+                              {{0, 64}, {64, 64}},
+                              0,
+                              NoUiRenderIndex,
+                              NoUiRenderIndex,
+                              0.75F,
                               UiImageDraw{0, {1.0F, 1.0F, 1.0F, 1.0F}}},
-                UiDrawCommand{child, {{64, 64}, {64, 64}}, 0, NoUiRenderIndex, NoUiRenderIndex, 0.75F,
+                UiDrawCommand{child,
+                              {{64, 64}, {64, 64}},
+                              0,
+                              NoUiRenderIndex,
+                              NoUiRenderIndex,
+                              0.75F,
                               UiImageDraw{0, {0.8F, 0.8F, 0.8F, 1.0F}}},
-                UiDrawCommand{child, {{128, 64}, {64, 64}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F,
+                UiDrawCommand{child,
+                              {{128, 64}, {64, 64}},
+                              0,
+                              NoUiRenderIndex,
+                              NoUiRenderIndex,
+                              1.0F,
                               UiSpriteDraw{0, {0.25F, 0.0F, 0.75F, 1.0F}, {1.0F, 1.0F, 1.0F, 1.0F}}},
                 UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}},
             };
@@ -92,8 +116,7 @@ namespace Horo::Runtime::Ui {
                                                         .snapshotRevision = UiRenderSnapshotRevision::Create(revision).Value(),
                                                         .view = {Owner(), 9, 1},
                                                         .limits = limits};
-            auto snapshot = extractor.Extract(tree, descriptor,
-                                              {commands, textRuns, glyphs, clips, masks, transforms, resources});
+            auto snapshot = extractor.Extract(tree, descriptor, {commands, textRuns, glyphs, clips, masks, transforms, resources});
             REQUIRE(snapshot.HasValue());
             return std::move(snapshot).Value();
         }

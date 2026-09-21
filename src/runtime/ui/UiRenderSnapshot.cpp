@@ -35,10 +35,11 @@ namespace Horo::Runtime::Ui {
         }
 
         bool ValidUvRect(const std::array<float, 4> &uv) noexcept {
-            return std::ranges::all_of(uv, [](const float value) {
-                       return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
-                   }) &&
-                   uv[0] <= uv[2] && uv[1] <= uv[3];
+            return std::ranges::all_of(uv,
+                                       [](const float value) {
+                return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+            }) && uv[0] <= uv[2] &&
+                   uv[1] <= uv[3];
         }
 
         bool ValidPaintLimits(const UiRenderSnapshotLimits &limits) noexcept {
@@ -158,8 +159,7 @@ namespace Horo::Runtime::Ui {
                                      const std::span<const UiRenderResourceReference> resources) {
             if (!PresentIndex(draw.resource, resources.size()) || resources[draw.resource].role != UiRenderResourceRole::Image)
                 return Failure(UiErrors::RenderResourceReferenceInvalid);
-            return draw.tint.IsValid() && ValidUvRect(draw.uv) ? Result<void>::Success()
-                                                               : Failure(UiErrors::RenderCommandInvalid);
+            return draw.tint.IsValid() && ValidUvRect(draw.uv) ? Result<void>::Success() : Failure(UiErrors::RenderCommandInvalid);
         }
 
         Result<void> ValidatePayload(const UiTextDraw &draw, const std::span<const UiTextRun> runs,
