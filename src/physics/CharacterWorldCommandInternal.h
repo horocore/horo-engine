@@ -173,10 +173,13 @@ namespace Horo::Character::Detail {
                                                                         const CharacterTransformPublication &previous,
                                                                         const CharacterFixedTickInput &input,
                                                                         const CharacterControllerDescriptor &descriptor) {
-        Result<CharacterMovementResult> resolved =
-            input.observer.movementResult ? input.observer.movementResult(input.observer.context, command, previous)
-            : input.query.sweep           ? BuildCapsuleSweepMovementResult(impl, command, previous, input, descriptor)
-                                          : BuildBaselineMovementResult(impl, command, previous, input);
+        Result<CharacterMovementResult> resolved = [&]() -> Result<CharacterMovementResult> {
+            if (input.observer.movementResult)
+                return input.observer.movementResult(input.observer.context, command, previous);
+            if (input.query.sweep)
+                return BuildCapsuleSweepMovementResult(impl, command, previous, input, descriptor);
+            return BuildBaselineMovementResult(impl, command, previous, input);
+        }();
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult result = std::move(resolved).Value();

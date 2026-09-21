@@ -99,24 +99,25 @@ namespace Horo::Character::Detail {
 
     /** @brief Classifies one blocking normal without changing the controller's up basis. */
     [[nodiscard]] CharacterCollisionFlags CollisionFlagForNormal(const Math::Vec3 normal, const CharacterControllerDescriptor &descriptor) {
+        using enum CharacterCollisionFlags;
         const float upDot = Math::Dot(normal, descriptor.up);
         const float slopeRadians = descriptor.maximumSlopeDegrees * Math::Pi / 180.0F;
         const float walkableCosine = std::cos(slopeRadians);
         if (upDot > 0.0F && upDot >= walkableCosine)
-            return CharacterCollisionFlags::Ground;
+            return Ground;
         if (upDot < 0.0F && -upDot >= walkableCosine)
-            return CharacterCollisionFlags::Ceiling;
-        return CharacterCollisionFlags::Sides;
+            return Ceiling;
+        return Sides;
     }
 
     /** @brief Retains one stable contact and reports overflow without allocating or reordering state. */
     void RetainSweepContact(CharacterMovementResult &result, const CharacterSweepHit &hit,
                             const CharacterControllerDescriptor &descriptor) {
-        const auto duplicate = std::ranges::find_if(result.contacts.begin(), result.contacts.begin() + result.contactCount,
-                                                    [&hit](const CharacterSurfaceContact &contact) {
+        if (const auto duplicate = std::ranges::find_if(result.contacts.begin(), result.contacts.begin() + result.contactCount,
+                                                        [&hit](const CharacterSurfaceContact &contact) {
             return contact.body == hit.body && contact.shape == hit.shape && contact.normal == hit.normal;
         });
-        if (duplicate != result.contacts.begin() + result.contactCount)
+            duplicate != result.contacts.begin() + result.contactCount)
             return;
         if (result.contactCount >= descriptor.maximumContacts) {
             result.truncated = true;
@@ -134,6 +135,11 @@ namespace Horo::Character::Detail {
     struct SweepBlockSelection final {
         float nearest{};
         bool blocked{};
+    };
+
+    struct SweepMotionState final {
+        Math::Vec3 position{};
+        Math::Vec3 remaining{};
     };
 
     /** @brief Selects the canonical nearest blocking hit from one sorted response prefix. */
@@ -191,26 +197,25 @@ namespace Horo::Character::Detail {
     /** @brief Resolves one bounded sweep query and returns whether another iteration may continue. */
     [[nodiscard]] Result<bool> ResolveCapsuleSweepIteration(auto &impl, CharacterMovementResult &result,
                                                             const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
-                                                            const CharacterControllerDescriptor &descriptor, Math::Vec3 &position,
-                                                            Math::Vec3 &remaining, const std::uint32_t iteration) {
-        constexpr float NormalEpsilon = 1.0e-5F;
-        const float distance = Math::Length(remaining);
+                                                            const CharacterControllerDescriptor &descriptor, SweepMotionState &motion,
+                                                            const std::uint32_t iteration) {
+        const float distance = Math::Length(motion.remaining);
         if (!std::isfinite(distance) || distance <= descriptor.minimumMoveDistanceMeters)
             return Result<bool>::Success(false);
-        const Math::Vec3 direction = remaining / distance;
+        const Math::Vec3 direction = motion.remaining / distance;
         const CharacterSweepProbeRequest request{command.controller,
                                                  impl.descriptor.sceneGeneration,
                                                  impl.descriptor.identity,
                                                  impl.descriptor.physicsWorld,
                                                  descriptor.capsule,
-                                                 position,
+                                                 motion.position,
                                                  descriptor.up,
                                                  direction,
                                                  distance,
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  iteration};
-        const auto probe = input.query.sweep(input.query.context, request);
+        auto probe = input.query.sweep(input.query.context, request);
         if (impl.state.load() != CharacterWorldState::Active)
             return Result<bool>::Failure(MakeError(CharacterErrors::InvalidState));
         if (probe.HasError())
@@ -221,11 +226,11 @@ namespace Horo::Character::Detail {
         std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
         const auto selection = SelectNearestSweepBlock(evidence, direction, distance);
         if (!selection.blocked) {
-            position += remaining;
-            remaining = {};
+            motion.position += motion.remaining;
+            motion.remaining = {};
             return Result<bool>::Success(false);
         }
-        ApplySweepBlock(result, evidence, descriptor, direction, selection.nearest, position, remaining);
+        ApplySweepBlock(result, evidence, descriptor, direction, selection.nearest, motion.position, motion.remaining);
         return Result<bool>::Success(true);
     }
 
@@ -263,22 +268,21 @@ namespace Horo::Character::Detail {
         if (!std::isfinite(seconds) || seconds <= 0.0 || seconds > static_cast<double>(std::numeric_limits<float>::max()))
             return Result<CharacterMovementResult>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Character fixed-tick delta cannot produce a finite movement result."));
-        const float elapsedSeconds = static_cast<float>(seconds);
-        Math::Vec3 remaining = *command.desiredVelocityMetersPerSecond * elapsedSeconds;
-        if (!Math::IsFinite(remaining))
+        const auto elapsedSeconds = static_cast<float>(seconds);
+        SweepMotionState motion{previous.position, *command.desiredVelocityMetersPerSecond * elapsedSeconds};
+        if (!Math::IsFinite(motion.remaining))
             return Result<CharacterMovementResult>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Character desired displacement is not finite."));
 
-        Math::Vec3 position = previous.position;
         for (std::uint32_t iteration{}; iteration < impl.settings.Values().work.maximumMovementIterations; ++iteration) {
-            const auto resolved = ResolveCapsuleSweepIteration(impl, result, command, input, descriptor, position, remaining, iteration);
+            const auto resolved = ResolveCapsuleSweepIteration(impl, result, command, input, descriptor, motion, iteration);
             if (resolved.HasError())
                 return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
             if (!resolved.Value())
                 break;
         }
-        result.finalPosition = position;
-        result.achievedVelocityMetersPerSecond = (position - previous.position) / elapsedSeconds;
+        result.finalPosition = motion.position;
+        result.achievedVelocityMetersPerSecond = (motion.position - previous.position) / elapsedSeconds;
         std::ranges::sort(result.contacts.begin(), result.contacts.begin() + result.contactCount, ContactLess);
         return Result<CharacterMovementResult>::Success(std::move(result));
     }
