@@ -201,11 +201,6 @@ namespace Horo::Extensions {
                                                                        const std::shared_ptr<ScriptInvocationProviderState> &provider,
                                                                        ScriptInvocationRequest request,
                                                                        ScriptExportInvocationMode invocationMode) {
-            if (request.timeout.has_value() &&
-                (*request.timeout < std::chrono::milliseconds::zero() || *request.timeout > registry->limits.maximumTimeout))
-                return InvocationFailure<std::shared_ptr<ScriptInvocationState>>(ScriptInvocationInvalid,
-                                                                                 "Script invocation timeout is outside host bounds.");
-
             std::shared_ptr<ScriptInvocationState> invocation;
             {
                 std::lock_guard registryLock(registry->mutex);

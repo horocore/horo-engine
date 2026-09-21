@@ -4,6 +4,34 @@
 #include <utility>
 
 namespace Horo::Extensions {
+    namespace {
+        [[nodiscard]] bool EqualMaps(const ScriptValue &left, const ScriptValue &right) noexcept {
+            if (left.AsMap().size() != right.AsMap().size())
+                return false;
+            for (const auto &entry : left.AsMap()) {
+                const auto found = std::find_if(right.AsMap().begin(), right.AsMap().end(), [&entry](const auto &candidate) {
+                    return entry.first == candidate.first;
+                });
+                if (found == right.AsMap().end() || entry.second != found->second)
+                    return false;
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool EqualStructs(const ScriptValue &left, const ScriptValue &right) noexcept {
+            if (left.StructType() != right.StructType() || left.AsStruct().size() != right.AsStruct().size())
+                return false;
+            for (const auto &field : left.AsStruct()) {
+                const auto found = std::find_if(right.AsStruct().begin(), right.AsStruct().end(), [&field](const auto &candidate) {
+                    return field.first == candidate.first;
+                });
+                if (found == right.AsStruct().end() || field.second != found->second)
+                    return false;
+            }
+            return true;
+        }
+    }  // namespace
+
     /** @copydoc ScriptHandle::IsValid */
     bool ScriptHandle::IsValid() const noexcept {
         return context.IsValid() && providerGeneration != 0 && value != 0 && generation != 0 && !type.empty();
@@ -195,27 +223,9 @@ namespace Horo::Extensions {
             case Array:
                 return std::equal(AsArray().begin(), AsArray().end(), other.AsArray().begin(), other.AsArray().end());
             case Map:
-                if (AsMap().size() != other.AsMap().size())
-                    return false;
-                for (const auto &left : AsMap()) {
-                    const auto found = std::find_if(other.AsMap().begin(), other.AsMap().end(), [&left](const MapEntry &right) {
-                        return left.first == right.first;
-                    });
-                    if (found == other.AsMap().end() || left.second != found->second)
-                        return false;
-                }
-                return true;
+                return EqualMaps(*this, other);
             case Struct:
-                if (StructType() != other.StructType() || AsStruct().size() != other.AsStruct().size())
-                    return false;
-                for (const auto &left : AsStruct()) {
-                    const auto found = std::find_if(other.AsStruct().begin(), other.AsStruct().end(), [&left](const StructField &right) {
-                        return left.first == right.first;
-                    });
-                    if (found == other.AsStruct().end() || left.second != found->second)
-                        return false;
-                }
-                return true;
+                return EqualStructs(*this, other);
             case Count:
                 return false;
         }

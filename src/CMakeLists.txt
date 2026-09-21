@@ -1457,8 +1457,11 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptValue.cpp
         extensions/script/ScriptValueValidation.cpp
         extensions/script/ScriptValueCodec.cpp
+        extensions/script/ScriptValueCodecInternal.h
+        extensions/script/ScriptValueWire.cpp
         extensions/script/ScriptInvocationInternal.cpp
         extensions/script/ScriptInvocationInternal.h
+        extensions/script/ScriptInvocationRegistration.cpp
         extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/ExtensionErrors.cpp
