@@ -182,6 +182,12 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotCommitOutcomeUnknown;
     /** @brief Journal replay could not prove or converge to a safe old-or-new generation. */
     extern const ErrorCodeDescriptor SlotCommitRecoveryFailed;
+    /** @brief A last-known-good recovery request, artifact, or promotion policy is malformed. */
+    extern const ErrorCodeDescriptor SlotRecoveryInvalid;
+    /** @brief Last-known-good recovery artifacts exceed a trusted retention or observation bound. */
+    extern const ErrorCodeDescriptor SlotRecoveryLimitExceeded;
+    /** @brief Last-known-good recovery bookkeeping storage could not be allocated. */
+    extern const ErrorCodeDescriptor SlotRecoveryAllocationFailed;
     /** @brief Storage capacity or failure-policy evidence is malformed or exceeds a bound. */
     extern const ErrorCodeDescriptor StoragePolicyInvalid;
     /** @brief Physical storage lacks the additional peak bytes required by the mutation. */
