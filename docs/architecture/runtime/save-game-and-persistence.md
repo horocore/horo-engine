@@ -661,6 +661,13 @@ integrity-mismatched or contradictory data is `Corrupt`, and unsupported reader 
 compatibility policy is `Incompatible`. Corrupt and incompatible evidence is retained
 as different quarantine diagnostics; neither can become a promotion candidate.
 
+A catalog/archive pair that is internally consistent but addresses a different
+requested logical slot is also `Incompatible`: it is wrong-scope input, not damaged
+bytes, and must not be silently offered as a recovery source. A mismatch between the
+archive and the trusted catalog for the same requested slot is `Corrupt`. This keeps
+wrong-scope current data on the explicit-confirmation path while preserving automatic
+corrupt-current recovery for genuinely damaged evidence.
+
 The default recovery policy retains three valid backups and eight quarantine artifacts
 within a bounded observation budget. Retention is deterministic across enumeration
 orders: newest valid backups are kept first, invalid evidence is ordered by retention
