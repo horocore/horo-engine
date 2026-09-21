@@ -9,6 +9,7 @@
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <limits>
 #include <thread>
 
 namespace Horo::Navigation {
@@ -30,6 +31,51 @@ namespace Horo::Navigation {
             };
         }
 
+        struct NullSpatialRequests final {
+            NavigationPointProjectionRequest projection;
+            NavigationSamplePositionRequest sample;
+            NavigationRaycastRequest raycast;
+            NavigationPolygonQueryRequest polygons;
+        };
+
+        [[nodiscard]] NullSpatialRequests MakeNullSpatialRequests() {
+            const auto world = NavigationWorldId::Create(1).Value();
+            const auto topology = NavigationGeneration::Create(1).Value();
+            const NavigationQueryLimits limits{.maximumNodeExpansions = 32,
+                                               .maximumResultPoints = 8,
+                                               .maximumSearchDistanceMeters = 100.0F};
+            return {
+                .projection = {.world = world,
+                               .topology = topology,
+                               .point = {1.0F, 0.0F, 1.0F},
+                               .halfExtents = {1.0F, 1.0F, 1.0F},
+                               .requirement = {.query = NavigationQueryKind::NearestPoint,
+                                               .quality = NavigationQualityLevel::Balanced,
+                                               .limits = limits}},
+                .sample = {.world = world,
+                           .topology = topology,
+                           .center = {1.0F, 0.0F, 1.0F},
+                           .radiusMeters = 2.0F,
+                           .requirement = {.query = NavigationQueryKind::SamplePosition,
+                                           .quality = NavigationQualityLevel::Balanced,
+                                           .limits = limits}},
+                .raycast = {.world = world,
+                            .topology = topology,
+                            .start = {0.0F, 0.0F, 0.0F},
+                            .destination = {3.0F, 0.0F, 4.0F},
+                            .requirement = {.query = NavigationQueryKind::Raycast,
+                                            .quality = NavigationQualityLevel::Balanced,
+                                            .limits = limits}},
+                .polygons = {.world = world,
+                             .topology = topology,
+                             .center = {1.0F, 0.0F, 1.0F},
+                             .halfExtents = {1.0F, 1.0F, 1.0F},
+                             .requirement = {.query = NavigationQueryKind::PolygonQuery,
+                                             .quality = NavigationQualityLevel::Balanced,
+                                             .limits = limits}},
+            };
+        }
+
     }  // namespace
 
     TEST_CASE("Null navigation provider reports explicit absence without plausible paths", "[unit][navigation][headless]") {
@@ -44,6 +90,64 @@ namespace Horo::Navigation {
         RequireError(provider->FindPath(Request({1.0F, 2.0F, 3.0F}, {7.0F, 2.0F, 9.0F}), {}), NavigationErrors::NoNavigationData);
         TestSupport::RequireNavigationProviderContract(*provider, Request(),
                                                        TestSupport::NavigationProviderFixtureOutcome::NoNavigationData);
+
+        auto malformed = Request();
+        malformed.start.x = std::numeric_limits<float>::quiet_NaN();
+        RequireError(provider->FindPath(malformed, {}), NavigationErrors::CapabilityDescriptorInvalid);
+        RequireError(provider->FindPath(Request(), {}), NavigationErrors::NoNavigationData);
+    }
+
+    TEST_CASE("Null navigation provider reports grounded spatial query absence", "[unit][navigation][headless]") {
+        auto created = CreateNullNavigationQueryBackend();
+        REQUIRE(created.HasValue());
+        auto provider = std::move(created).Value();
+        auto requests = MakeNullSpatialRequests();
+
+        RequireError(provider->ProjectPoint(requests.projection, {}), NavigationErrors::NoNavigationData);
+        RequireError(provider->SamplePosition(requests.sample, {}), NavigationErrors::NoNavigationData);
+        RequireError(provider->Raycast(requests.raycast, {}), NavigationErrors::NoNavigationData);
+        RequireError(provider->QueryPolygons(requests.polygons, {}), NavigationErrors::NoNavigationData);
+
+        CancellationSource cancellation;
+        cancellation.RequestCancellation();
+        RequireError(provider->ProjectPoint(requests.projection, cancellation.Token()), NavigationErrors::QueryCancelled);
+        RequireError(provider->SamplePosition(requests.sample, cancellation.Token()), NavigationErrors::QueryCancelled);
+        RequireError(provider->Raycast(requests.raycast, cancellation.Token()), NavigationErrors::QueryCancelled);
+        RequireError(provider->QueryPolygons(requests.polygons, cancellation.Token()), NavigationErrors::QueryCancelled);
+    }
+
+    TEST_CASE("Null navigation provider rejects malformed and out-of-bound spatial requests", "[unit][navigation][headless]") {
+        auto created = CreateNullNavigationQueryBackend();
+        REQUIRE(created.HasValue());
+        auto provider = std::move(created).Value();
+        auto requests = MakeNullSpatialRequests();
+
+        requests.projection.point.x = std::numeric_limits<float>::quiet_NaN();
+        RequireError(provider->ProjectPoint(requests.projection, {}), NavigationErrors::CapabilityDescriptorInvalid);
+        requests.sample.center.x = std::numeric_limits<float>::quiet_NaN();
+        RequireError(provider->SamplePosition(requests.sample, {}), NavigationErrors::CapabilityDescriptorInvalid);
+        requests.raycast.destination.x = std::numeric_limits<float>::quiet_NaN();
+        RequireError(provider->Raycast(requests.raycast, {}), NavigationErrors::CapabilityDescriptorInvalid);
+        requests.polygons.halfExtents.x = 0.0F;
+        RequireError(provider->QueryPolygons(requests.polygons, {}), NavigationErrors::CapabilityDescriptorInvalid);
+
+        requests = MakeNullSpatialRequests();
+        requests.projection.halfExtents.x = 101.0F;
+        RequireError(provider->ProjectPoint(requests.projection, {}), NavigationErrors::QueryLimitExceeded);
+        requests.sample.radiusMeters = 101.0F;
+        RequireError(provider->SamplePosition(requests.sample, {}), NavigationErrors::QueryLimitExceeded);
+        requests.raycast.destination = {200.0F, 0.0F, 0.0F};
+        RequireError(provider->Raycast(requests.raycast, {}), NavigationErrors::QueryLimitExceeded);
+        requests.polygons.halfExtents = {101.0F, 1.0F, 1.0F};
+        RequireError(provider->QueryPolygons(requests.polygons, {}), NavigationErrors::QueryLimitExceeded);
+
+        requests = MakeNullSpatialRequests();
+        requests.projection.world = {};
+        RequireError(provider->ProjectPoint(requests.projection, {}), NavigationErrors::InvalidWorld);
+        requests.sample.topology = {};
+        RequireError(provider->SamplePosition(requests.sample, {}), NavigationErrors::StaleSnapshot);
+        requests.raycast.requirement.query = NavigationQueryKind::Path;
+        RequireError(provider->Raycast(requests.raycast, {}), NavigationErrors::CapabilityDescriptorInvalid);
     }
 
     TEST_CASE("Deterministic navigation fixture returns exact declared path bits", "[unit][navigation][headless]") {

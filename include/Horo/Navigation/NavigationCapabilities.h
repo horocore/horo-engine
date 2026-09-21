@@ -45,7 +45,12 @@ namespace Horo::Navigation {
     enum class NavigationQueryKind : std::uint8_t {
         Path,
         NearestPoint,
+        ProjectPoint = NearestPoint,
         Raycast,
+        SamplePosition,
+        Sample = SamplePosition,
+        PolygonQuery,
+        Polygon = PolygonQuery,
         Count
     };
 
@@ -60,7 +65,7 @@ namespace Horo::Navigation {
     /** @brief Finite hard ceilings for one supported query-quality pair, not a per-request reservation. */
     struct NavigationQueryLimits final {
         std::uint32_t maximumNodeExpansions{}; /**< Maximum provider work units admitted for one query. */
-        std::uint32_t maximumResultPoints{};   /**< Maximum provider-neutral points returned by one query. */
+        std::uint32_t maximumResultPoints{};   /**< Maximum provider-neutral points or spatial result entries returned by one query. */
         float maximumSearchDistanceMeters{};   /**< Maximum finite world-space search distance in metres. */
 
         constexpr auto operator<=>(const NavigationQueryLimits &) const noexcept = default;
@@ -106,6 +111,17 @@ namespace Horo::Navigation {
     [[nodiscard]] NavigationProviderCapabilities MakeAvailablePathQueryCapabilities(std::uint64_t revision,
                                                                                     const NavigationQueryLimits &limits,
                                                                                     std::uint32_t maximumConcurrentQueries) noexcept;
+
+    /**
+     * @brief Builds available evidence for the grounded path and bounded spatial-query families.
+     * @param revision Non-zero revision for the immutable capability snapshot.
+     * @param limits Positive finite limits advertised for every grounded query-quality level.
+     * @param maximumConcurrentQueries Positive provider concurrency ceiling.
+     * @return Provider-neutral capability evidence suitable for a grounded query provider.
+     */
+    [[nodiscard]] NavigationProviderCapabilities MakeAvailableGroundedQueryCapabilities(std::uint64_t revision,
+                                                                                        const NavigationQueryLimits &limits,
+                                                                                        std::uint32_t maximumConcurrentQueries) noexcept;
 
     /**
      * @brief Validates every field, support state, query-quality limit, and cross-field invariant.

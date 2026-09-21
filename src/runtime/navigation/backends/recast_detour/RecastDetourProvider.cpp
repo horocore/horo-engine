@@ -1,6 +1,7 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 
 #include "Horo/Navigation/NavigationErrors.h"
+#include "runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h"
 #include "runtime/navigation/backends/recast_detour/RecastDetourProviderValidation.h"
 
 #include <DetourAlloc.h>
@@ -8,11 +9,13 @@
 #include <DetourNavMeshBuilder.h>
 #include <DetourNavMeshQuery.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <new>
+#include <span>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -27,26 +30,12 @@ namespace Horo::Navigation {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
-        struct NavMeshDeleter final {
-            void operator()(dtNavMesh *mesh) const noexcept {
-                dtFreeNavMesh(mesh);
-            }
-        };
-
-        struct QueryDeleter final {
-            void operator()(dtNavMeshQuery *query) const noexcept {
-                dtFreeNavMeshQuery(query);
-            }
-        };
-
         struct TileDataDeleter final {
             void operator()(unsigned char *data) const noexcept {
                 dtFree(data);
             }
         };
 
-        using NavMeshPtr = std::unique_ptr<dtNavMesh, NavMeshDeleter>;
-        using QueryPtr = std::unique_ptr<dtNavMeshQuery, QueryDeleter>;
         using TileDataPtr = std::unique_ptr<unsigned char, TileDataDeleter>;
 
         struct NativeTopologyInput final {
@@ -64,55 +53,6 @@ namespace Horo::Navigation {
             std::uint32_t polygon{};
             std::uint8_t edge{};
             bool ascending{};
-        };
-
-        struct QuerySlot final {
-            QuerySlot() = default;
-
-            ~QuerySlot() {
-                leased.store(false);
-            }
-
-            QuerySlot(const QuerySlot &) = delete;
-            QuerySlot &operator=(const QuerySlot &) = delete;
-
-            QuerySlot(QuerySlot &&other) noexcept
-                : query(std::move(other.query)), polygonPath(std::move(other.polygonPath)), straightPoints(std::move(other.straightPoints)),
-                  straightFlags(std::move(other.straightFlags)), straightPolygons(std::move(other.straightPolygons)),
-                  leased(other.leased.load()) {
-                other.leased.store(false);
-            }
-
-            QuerySlot &operator=(QuerySlot &&) = delete;
-
-            QueryPtr query;
-            std::vector<dtPolyRef> polygonPath;
-            std::vector<float> straightPoints;
-            std::vector<unsigned char> straightFlags;
-            std::vector<dtPolyRef> straightPolygons;
-            std::atomic<bool> leased{false};
-        };
-
-        class QueryLease final {
-        public:
-            explicit QueryLease(QuerySlot *slot) noexcept : slot_(slot) {}
-
-            QueryLease(const QueryLease &) = delete;
-            QueryLease &operator=(const QueryLease &) = delete;
-            QueryLease(QueryLease &&) = delete;
-            QueryLease &operator=(QueryLease &&) = delete;
-
-            ~QueryLease() {
-                if (slot_ != nullptr)
-                    slot_->leased.store(false);
-            }
-
-            [[nodiscard]] QuerySlot *Get() const noexcept {
-                return slot_;
-            }
-
-        private:
-            QuerySlot *slot_{};
         };
 
         [[nodiscard]] Result<void> ValidateCreateInfo(const RecastDetourProviderCreateInfo &info) {
@@ -243,14 +183,29 @@ namespace Horo::Navigation {
                 const GroundedNavigationPolygon &polygon = info.polygons[polygonIndex];
                 const std::size_t offset = polygonIndex * MaximumVerticesPerPolygon * 2U;
                 for (std::uint8_t vertexIndex = 0; vertexIndex < polygon.vertexCount; ++vertexIndex)
-                    translated.polygons[offset + vertexIndex] = static_cast<unsigned short>(polygon.vertexIndices[vertexIndex]);
+                    // Detour's segment clipper expects clockwise XZ polygons; preserve the public canonical CCW contract and
+                    // reverse only the adapter-owned native vertex order.
+                    translated.polygons[offset + vertexIndex] =
+                        static_cast<unsigned short>(polygon.vertexIndices[polygon.vertexCount - 1U - vertexIndex]);
                 translated.polygonAreas[polygonIndex] =
                     static_cast<unsigned char>(std::ranges::lower_bound(areas, polygon.area.Value()) - areas.begin());
             }
             return Result<void>::Success();
         }
 
-        void LinkPolygonNeighbors(const std::vector<PolygonEdge> &edges, NativeTopologyInput &translated) {
+        /**
+         * @brief Maps a canonical edge index to the edge index after reversing polygon winding for Detour.
+         * @param vertexCount Active vertex count of the validated polygon.
+         * @param canonicalEdge Edge index in the canonical counter-clockwise polygon.
+         * @return Corresponding edge index in the reversed native polygon.
+         */
+        [[nodiscard]] constexpr std::uint8_t DetourEdgeForReversedWinding(const std::uint8_t vertexCount,
+                                                                          const std::uint8_t canonicalEdge) noexcept {
+            return static_cast<std::uint8_t>((vertexCount + vertexCount - 2U - canonicalEdge) % vertexCount);
+        }
+
+        void LinkPolygonNeighbors(const RecastDetourProviderCreateInfo &info, const std::vector<PolygonEdge> &edges,
+                                  NativeTopologyInput &translated) {
             std::size_t index{};
             while (index + 1U < edges.size()) {
                 const PolygonEdge &first = edges[index];
@@ -259,9 +214,10 @@ namespace Horo::Navigation {
                     ++index;
                     continue;
                 }
-                const std::size_t firstOffset = (first.polygon * MaximumVerticesPerPolygon * 2U) + MaximumVerticesPerPolygon + first.edge;
-                const std::size_t secondOffset =
-                    (second.polygon * MaximumVerticesPerPolygon * 2U) + MaximumVerticesPerPolygon + second.edge;
+                const std::size_t firstOffset = (first.polygon * MaximumVerticesPerPolygon * 2U) + MaximumVerticesPerPolygon +
+                                                DetourEdgeForReversedWinding(info.polygons[first.polygon].vertexCount, first.edge);
+                const std::size_t secondOffset = (second.polygon * MaximumVerticesPerPolygon * 2U) + MaximumVerticesPerPolygon +
+                                                 DetourEdgeForReversedWinding(info.polygons[second.polygon].vertexCount, second.edge);
                 translated.polygons[firstOffset] = static_cast<unsigned short>(second.polygon);
                 translated.polygons[secondOffset] = static_cast<unsigned short>(first.polygon);
                 index += 2U;
@@ -278,8 +234,34 @@ namespace Horo::Navigation {
                 return Result<NativeTopologyInput>::Failure(vertices.ErrorValue());
             if (auto polygons = TranslatePolygonData(info, translated); polygons.HasError())
                 return Result<NativeTopologyInput>::Failure(polygons.ErrorValue());
-            LinkPolygonNeighbors(validatedEdges.Value(), translated);
+            LinkPolygonNeighbors(info, validatedEdges.Value(), translated);
             return Result<NativeTopologyInput>::Success(std::move(translated));
+        }
+
+        /**
+         * @brief Limits Detour BV traversal to the nodes actually written by its recursive builder.
+         * @param mesh Initialized single-tile mesh whose section pointers must already be fixed.
+         * @param polygonCount Number of grounded polygons used to build the tile.
+         * @return Success after trimming the in-memory traversal count, or a provider failure for an unexpected tile layout.
+         * @note Detour reserves a 2*N-node BV section but writes a full binary tree with 2*N-1 nodes. The header must retain 2*N
+         *       through init/addTile because those functions derive following section offsets from it; only the initialized header's
+         *       traversal count is narrowed afterward, leaving the owned blob layout and lifetime unchanged.
+         */
+        [[nodiscard]] Result<void> NormalizeBoundingVolumeTraversalCount(const dtNavMesh &mesh, const std::size_t polygonCount) {
+            if (const auto maximumPolygonCount = (static_cast<std::size_t>(std::numeric_limits<int>::max()) + 1U) / 2U;
+                mesh.getMaxTiles() != 1 || polygonCount == 0 || polygonCount > maximumPolygonCount)
+                return Failure<void>(NavigationErrors::ProviderFailed);
+
+            const dtMeshTile *tile = mesh.getTile(0);
+            if (tile == nullptr || tile->header == nullptr || tile->bvTree == nullptr ||
+                tile->header->polyCount != static_cast<int>(polygonCount))
+                return Failure<void>(NavigationErrors::ProviderFailed);
+
+            const auto reservedNodeCount = polygonCount * 2U;
+            if (tile->header->bvNodeCount != static_cast<int>(reservedNodeCount))
+                return Failure<void>(NavigationErrors::ProviderFailed);
+            tile->header->bvNodeCount = static_cast<int>(reservedNodeCount - 1U);
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<NavMeshPtr> BuildNavMesh(const RecastDetourProviderCreateInfo &info, const NativeTopologyInput &input) {
@@ -318,19 +300,22 @@ namespace Horo::Navigation {
                                                                                          : NavigationErrors::ProviderFailed);
             if (tileData.release() != rawTileData)
                 return Failure<NavMeshPtr>(NavigationErrors::ProviderFailed);
+            if (const auto normalized = NormalizeBoundingVolumeTraversalCount(*mesh, info.polygons.size()); normalized.HasError())
+                return Result<NavMeshPtr>::Failure(normalized.ErrorValue());
             return Result<NavMeshPtr>::Success(std::move(mesh));
         }
 
         [[nodiscard]] Result<std::vector<QuerySlot>> BuildQuerySlots(const RecastDetourProviderCreateInfo &info, const dtNavMesh &mesh) {
             std::vector<QuerySlot> slots;
             slots.reserve(info.maximumConcurrentQueries);
+            const auto polygonScratch = std::max(info.maximumQueryNodes, info.maximumResultPoints);
             for (std::uint32_t index = 0; index < info.maximumConcurrentQueries; ++index) {
                 slots.emplace_back();
                 QuerySlot &slot = slots.back();
                 slot.query.reset(dtAllocNavMeshQuery());
                 if (!slot.query || dtStatusFailed(slot.query->init(&mesh, static_cast<int>(info.maximumQueryNodes))))
                     return Failure<std::vector<QuerySlot>>(NavigationErrors::CapacityExceeded);
-                slot.polygonPath.resize(info.maximumQueryNodes);
+                slot.polygonPath.resize(polygonScratch);
                 slot.straightPoints.resize(static_cast<std::size_t>(info.maximumResultPoints) * 3U);
                 slot.straightFlags.resize(info.maximumResultPoints);
                 slot.straightPolygons.resize(info.maximumResultPoints);
@@ -338,180 +323,6 @@ namespace Horo::Navigation {
             return Result<std::vector<QuerySlot>>::Success(std::move(slots));
         }
 
-        [[nodiscard]] QuerySlot *TryLease(std::vector<QuerySlot> &slots) noexcept {
-            for (QuerySlot &slot : slots) {
-                bool expected = false;
-                if (slot.leased.compare_exchange_strong(expected, true))
-                    return &slot;
-            }
-            return nullptr;
-        }
-
-        [[nodiscard]] Result<void> ValidateRequest(const NavigationPathRequest &request, const NavigationWorldId world,
-                                                   const NavigationGeneration topology,
-                                                   const NavigationProviderCapabilities &capabilities) {
-            if (!request.world.IsValid() || request.world != world)
-                return Failure<void>(NavigationErrors::InvalidWorld);
-            if (!request.topology.IsValid() || request.topology != topology)
-                return Failure<void>(NavigationErrors::StaleSnapshot);
-            if (!Math::IsFinite(request.start) || !Math::IsFinite(request.destination))
-                return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
-            if (const auto admitted = AdmitNavigationQuery(capabilities, capabilities.revision, request.requirement); admitted.HasError())
-                return admitted;
-            if (const double distance = std::hypot(static_cast<double>(request.destination.x) - request.start.x,
-                                                   static_cast<double>(request.destination.y) - request.start.y,
-                                                   static_cast<double>(request.destination.z) - request.start.z);
-                !std::isfinite(distance) || distance > request.requirement.limits.maximumSearchDistanceMeters)
-                return Failure<void>(NavigationErrors::QueryLimitExceeded);
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<float> PathLength(const std::vector<Math::Vec3> &points) {
-            double length{};
-            for (std::size_t index = 1; index < points.size(); ++index) {
-                const Math::Vec3 &current = points[index];
-                const Math::Vec3 &previous = points[index - 1U];
-                length += std::hypot(static_cast<double>(current.x) - previous.x, static_cast<double>(current.y) - previous.y,
-                                     static_cast<double>(current.z) - previous.z);
-            }
-            if (!std::isfinite(length) || length > std::numeric_limits<float>::max())
-                return Failure<float>(NavigationErrors::ProviderFailed);
-            return Result<float>::Success(static_cast<float>(length));
-        }
-
-        struct QueryEndpoints final {
-            dtPolyRef startPolygon{};
-            dtPolyRef destinationPolygon{};
-            std::array<float, 3> start{};
-            std::array<float, 3> destination{};
-        };
-
-        [[nodiscard]] Result<QueryEndpoints> ResolveEndpoints(const QuerySlot &slot, const NavigationPathRequest &request,
-                                                              const Math::Vec3 halfExtents, const dtQueryFilter &filter) {
-            const std::array<float, 3> start{request.start.x, request.start.y, request.start.z};
-            const std::array<float, 3> destination{request.destination.x, request.destination.y, request.destination.z};
-            const std::array<float, 3> extents{halfExtents.x, halfExtents.y, halfExtents.z};
-            QueryEndpoints endpoints;
-            if (const dtStatus status =
-                    slot.query->findNearestPoly(start.data(), extents.data(), &filter, &endpoints.startPolygon, endpoints.start.data());
-                dtStatusFailed(status))
-                return Failure<QueryEndpoints>(NavigationErrors::ProviderFailed);
-            if (const dtStatus status = slot.query->findNearestPoly(destination.data(), extents.data(), &filter,
-                                                                    &endpoints.destinationPolygon, endpoints.destination.data());
-                dtStatusFailed(status))
-                return Failure<QueryEndpoints>(NavigationErrors::ProviderFailed);
-            if (endpoints.startPolygon == 0 || endpoints.destinationPolygon == 0)
-                return Failure<QueryEndpoints>(NavigationErrors::NoNavigationData);
-            return Result<QueryEndpoints>::Success(endpoints);
-        }
-
-        [[nodiscard]] Result<int> FindCorridor(QuerySlot &slot, const QueryEndpoints &endpoints, const dtQueryFilter &filter,
-                                               const std::uint32_t maximumNodes) {
-            int polygonCount{};
-            const auto scratchCapacity = static_cast<std::uint32_t>(slot.polygonPath.size());
-            const auto boundedNodes = static_cast<int>(std::min(maximumNodes, scratchCapacity));
-            if (const dtStatus status =
-                    slot.query->findPath(endpoints.startPolygon, endpoints.destinationPolygon, endpoints.start.data(),
-                                         endpoints.destination.data(), &filter, slot.polygonPath.data(), &polygonCount, boundedNodes);
-                dtStatusFailed(status))
-                return Failure<int>(dtStatusDetail(status, DT_OUT_OF_NODES) || dtStatusDetail(status, DT_BUFFER_TOO_SMALL)
-                                        ? NavigationErrors::CapacityExceeded
-                                        : NavigationErrors::ProviderFailed);
-            if (polygonCount == 0 || slot.polygonPath[polygonCount - 1] != endpoints.destinationPolygon)
-                return Failure<int>(NavigationErrors::NoNavigationData);
-            return Result<int>::Success(polygonCount);
-        }
-
-        [[nodiscard]] Result<NavigationPath> BuildPath(QuerySlot &slot, const QueryEndpoints &endpoints,
-                                                       const NavigationPathRequest &request, const int polygonCount) {
-            int pointCount{};
-            const auto scratchCapacity = static_cast<std::uint32_t>(slot.straightPoints.size() / 3U);
-            const auto boundedPoints = static_cast<int>(std::min(request.requirement.limits.maximumResultPoints, scratchCapacity));
-            if (const dtStatus status =
-                    slot.query->findStraightPath(endpoints.start.data(), endpoints.destination.data(), slot.polygonPath.data(),
-                                                 polygonCount, slot.straightPoints.data(), slot.straightFlags.data(),
-                                                 slot.straightPolygons.data(), &pointCount, boundedPoints);
-                dtStatusFailed(status) || dtStatusDetail(status, DT_BUFFER_TOO_SMALL))
-                return Failure<NavigationPath>(dtStatusDetail(status, DT_BUFFER_TOO_SMALL) ? NavigationErrors::CapacityExceeded
-                                                                                           : NavigationErrors::ProviderFailed);
-            try {
-                NavigationPath path;
-                path.points.reserve(static_cast<std::size_t>(pointCount));
-                for (int index = 0; index < pointCount; ++index) {
-                    const std::size_t offset = static_cast<std::size_t>(index) * 3U;
-                    path.points.push_back(
-                        {slot.straightPoints[offset], slot.straightPoints[offset + 1U], slot.straightPoints[offset + 2U]});
-                }
-                if (path.points.empty())
-                    return Failure<NavigationPath>(NavigationErrors::NoNavigationData);
-                path.points.front() = request.start;
-                path.points.back() = request.destination;
-                auto length = PathLength(path.points);
-                if (length.HasError())
-                    return Result<NavigationPath>::Failure(length.ErrorValue());
-                path.lengthMeters = length.Value();
-                return Result<NavigationPath>::Success(std::move(path));
-            } catch (const std::bad_alloc &) {
-                return Failure<NavigationPath>(NavigationErrors::CapacityExceeded);
-            }
-        }
-
-        class RecastDetourNavigationQueryBackend final : public INavigationQueryBackend {
-        public:
-            RecastDetourNavigationQueryBackend(const RecastDetourProviderCreateInfo &info, NavMeshPtr mesh,
-                                               std::vector<QuerySlot> slots) noexcept
-                : world_(info.world), topology_(info.topology), nearestPointHalfExtents_(info.nearestPointHalfExtents),
-                  capabilities_(MakeAvailablePathQueryCapabilities(info.capabilityRevision,
-                                                                   {.maximumNodeExpansions = info.maximumQueryNodes,
-                                                                    .maximumResultPoints = info.maximumResultPoints,
-                                                                    .maximumSearchDistanceMeters = info.maximumSearchDistanceMeters},
-                                                                   info.maximumConcurrentQueries)),
-                  mesh_(std::move(mesh)), slots_(std::move(slots)) {}
-
-            [[nodiscard]] NavigationProviderCapabilities Capabilities() const noexcept override {
-                return capabilities_;
-            }
-
-            [[nodiscard]] Result<NavigationPath> FindPath(const NavigationPathRequest &request,
-                                                          const CancellationToken &cancellation) const override {
-                if (const auto validated = ValidateRequest(request, world_, topology_, capabilities_); validated.HasError())
-                    return Result<NavigationPath>::Failure(validated.ErrorValue());
-                if (cancellation.IsCancellationRequested())
-                    return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
-                QueryLease lease{TryLease(slots_)};
-                if (lease.Get() == nullptr)
-                    return Failure<NavigationPath>(NavigationErrors::AdmissionRejected);
-
-                QuerySlot &slot = *lease.Get();
-                dtQueryFilter filter;
-                filter.setIncludeFlags(TraversablePolygonFlag);
-                auto endpoints = ResolveEndpoints(slot, request, nearestPointHalfExtents_, filter);
-                if (endpoints.HasError())
-                    return Result<NavigationPath>::Failure(endpoints.ErrorValue());
-                if (cancellation.IsCancellationRequested())
-                    return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
-
-                auto corridor = FindCorridor(slot, endpoints.Value(), filter, request.requirement.limits.maximumNodeExpansions);
-                if (corridor.HasError())
-                    return Result<NavigationPath>::Failure(corridor.ErrorValue());
-                if (cancellation.IsCancellationRequested())
-                    return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
-                auto path = BuildPath(slot, endpoints.Value(), request, corridor.Value());
-                if (path.HasError())
-                    return path;
-                if (cancellation.IsCancellationRequested())
-                    return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
-                return path;
-            }
-
-        private:
-            NavigationWorldId world_;
-            NavigationGeneration topology_;
-            Math::Vec3 nearestPointHalfExtents_;
-            NavigationProviderCapabilities capabilities_;
-            NavMeshPtr mesh_;
-            mutable std::vector<QuerySlot> slots_;
-        };
     }  // namespace
 
     /** @copydoc CreateRecastDetourNavigationQueryBackend */
@@ -528,8 +339,10 @@ namespace Horo::Navigation {
             auto slots = BuildQuerySlots(info, *mesh.Value());
             if (slots.HasError())
                 return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(slots.ErrorValue());
-            auto provider = std::make_unique<RecastDetourNavigationQueryBackend>(info, std::move(mesh).Value(), std::move(slots).Value());
-            return Result<std::unique_ptr<INavigationQueryBackend>>::Success(std::move(provider));
+            std::vector<Math::Vec3> vertices{info.vertices.begin(), info.vertices.end()};
+            std::vector<GroundedNavigationPolygon> polygons{info.polygons.begin(), info.polygons.end()};
+            return MakeRecastDetourNavigationQueryBackend(info, std::move(mesh).Value(), std::move(slots).Value(), std::move(vertices),
+                                                          std::move(polygons));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
         }
