@@ -72,7 +72,7 @@ TEST_CASE("Render capability bitsets cover every public capability and reject re
         CHECK(capabilities.Supports(static_cast<RenderCapability>(value)));
     }
 
-    const auto invalid = static_cast<RenderCapability>(RenderCapabilitySet::CapabilityCount);
+    const auto invalid = RenderCapability::Count;
     CHECK(RenderCapabilitySet::Bit(invalid) == 0);
     CHECK_FALSE(capabilities.Supports(invalid));
     capabilities.Enable(invalid);

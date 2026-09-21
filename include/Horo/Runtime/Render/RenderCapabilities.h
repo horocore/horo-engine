@@ -25,6 +25,7 @@ namespace Horo::Render {
         MeshResources,
         TextureResources,
         RenderTargetResources,
+        Count, /**< Number of defined capabilities; not itself a capability bit. */
     };
 
     /** @brief Bounded bitset of backend-neutral renderer capabilities. */
@@ -32,7 +33,7 @@ namespace Horo::Render {
         std::uint16_t bits{0}; /**< Enabled capability bits. */
 
         /** @brief Number of capability values currently defined by the public contract. */
-        static constexpr std::uint16_t CapabilityCount = static_cast<std::uint16_t>(RenderCapability::RenderTargetResources) + 1U;
+        static constexpr std::uint16_t CapabilityCount = static_cast<std::uint16_t>(RenderCapability::Count);
 
         static_assert(CapabilityCount <= std::numeric_limits<std::uint16_t>::digits,
                       "Render capability count exceeds the capability bitset width.");
