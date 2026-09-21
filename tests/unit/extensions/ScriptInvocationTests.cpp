@@ -23,6 +23,40 @@ namespace Horo::Extensions::Tests {
             return {.primitive = ScriptExportPrimitiveKind::Count, .namedType = std::move(id), .nullability = nullability};
         }
 
+        ScriptExportTypeDescriptor MakeRequestType() {
+            return {
+                .id = "com.example.request",
+                .kind = ScriptExportNamedTypeKind::Struct,
+                .introducedVersion = {1, 0, 0},
+                .fields =
+                    {
+                        {.id = "name", .type = Primitive(ScriptExportPrimitiveKind::String), .introducedVersion = {1, 0, 0}},
+                        {.id = "note",
+                         .type = Primitive(ScriptExportPrimitiveKind::String, ScriptExportNullability::Nullable),
+                         .introducedVersion = {1, 0, 0},
+                         .requirement = ScriptExportParameterRequirement::Optional,
+                         .canonicalDefault = std::vector<std::byte>{std::byte{0}}},
+                    },
+            };
+        }
+
+        ScriptExportFunctionDescriptor MakeFetchFunction() {
+            return {
+                .id = "fetch",
+                .introducedVersion = {1, 0, 0},
+                .invocation = ScriptExportInvocationMode::Asynchronous,
+                .parameters =
+                    {
+                        {.id = "request", .type = Named("com.example.request"), .introducedVersion = {1, 0, 0}},
+                    },
+                .results =
+                    {
+                        {.id = "answer", .type = Primitive(ScriptExportPrimitiveKind::String), .introducedVersion = {1, 0, 0}},
+                    },
+                .errorIds = {"com.example.failed"},
+            };
+        }
+
         ScriptExportDescriptor MakeDescriptor() {
             ScriptExportDescriptor descriptor{
                 .moduleId = "com.example.module",
@@ -38,38 +72,8 @@ namespace Horo::Extensions::Tests {
                         .minimumVersion = {1, 0, 0},
                     },
             };
-            descriptor.types = {
-                {
-                    .id = "com.example.request",
-                    .kind = ScriptExportNamedTypeKind::Struct,
-                    .introducedVersion = {1, 0, 0},
-                    .fields =
-                        {
-                            {.id = "name", .type = Primitive(ScriptExportPrimitiveKind::String), .introducedVersion = {1, 0, 0}},
-                            {.id = "note",
-                             .type = Primitive(ScriptExportPrimitiveKind::String, ScriptExportNullability::Nullable),
-                             .introducedVersion = {1, 0, 0},
-                             .requirement = ScriptExportParameterRequirement::Optional,
-                             .canonicalDefault = std::vector<std::byte>{std::byte{0}}},
-                        },
-                },
-            };
-            descriptor.functions = {
-                {
-                    .id = "fetch",
-                    .introducedVersion = {1, 0, 0},
-                    .invocation = ScriptExportInvocationMode::Asynchronous,
-                    .parameters =
-                        {
-                            {.id = "request", .type = Named("com.example.request"), .introducedVersion = {1, 0, 0}},
-                        },
-                    .results =
-                        {
-                            {.id = "answer", .type = Primitive(ScriptExportPrimitiveKind::String), .introducedVersion = {1, 0, 0}},
-                        },
-                    .errorIds = {"com.example.failed"},
-                },
-            };
+            descriptor.types = {MakeRequestType()};
+            descriptor.functions = {MakeFetchFunction()};
             descriptor.errors = {
                 {.id = "com.example.failed", .introducedVersion = {1, 0, 0}},
             };
