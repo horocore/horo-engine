@@ -1,11 +1,11 @@
-#include "Horo/Runtime/Ui/UiErrors.h"
-#include "UiDiagnosticsInternal.h"
+#include "UiDiagnosticDescriptors.h"
 
+#include <algorithm>
 #include <array>
 
-namespace Horo::Runtime::Ui::Detail {
+namespace Horo::Runtime::Ui::DiagnosticsInternal {
     namespace {
-        const std::array descriptors{
+        const std::array core{
             &UiErrors::IdentityInvalid,
             &UiErrors::OwnershipGenerationInvalid,
             &UiErrors::HandleMalformed,
@@ -44,10 +44,6 @@ namespace Horo::Runtime::Ui::Detail {
             &UiErrors::RenderResourceReferenceInvalid,
             &UiErrors::RenderSnapshotStorageExhausted,
             &UiErrors::RenderSnapshotLifecycleUnavailable,
-            &UiErrors::RenderGeometryInvalid,
-            &UiErrors::RenderGeometryCapacityExceeded,
-            &UiErrors::RenderGeometryStorageExhausted,
-            &UiErrors::RenderGeometryLifecycleUnavailable,
             &UiErrors::RenderCompositionCapacityExceeded,
             &UiErrors::RenderCompositionInvalid,
             &UiErrors::RenderPresentationInvalid,
@@ -60,12 +56,10 @@ namespace Horo::Runtime::Ui::Detail {
             &UiErrors::EventDispatchReentrant,
             &UiErrors::EventDispatchHandlerFailed,
             &UiErrors::EventDispatchLifecycleUnavailable,
-            &UiErrors::PointerCaptureInvalid,
-            &UiErrors::PointerCaptureSourceStale,
-            &UiErrors::PointerCaptureInteractionStale,
-            &UiErrors::PointerCaptureBusy,
-            &UiErrors::PointerCaptureCapacityExceeded,
-            &UiErrors::PointerCaptureLifecycleUnavailable,
+            &UiErrors::DiagnosticInvalid,
+            &UiErrors::DiagnosticUnsupported,
+        };
+        const std::array actions{
             &UiErrors::ActionInvalid,
             &UiErrors::ActionPayloadInvalid,
             &UiErrors::ActionPayloadCapacityExceeded,
@@ -77,14 +71,17 @@ namespace Horo::Runtime::Ui::Detail {
             &UiErrors::ActionHandlerFailed,
             &UiErrors::ActionLifecycleUnavailable,
             &UiErrors::NavigationInvalid,
-            &UiErrors::ControlDescriptorInvalid,
-            &UiErrors::ControlInputInvalid,
-            &UiErrors::ControlSourceStale,
-            &UiErrors::ControlDefaultPending,
-            &UiErrors::ControlDefaultInvalid,
-            &UiErrors::ControlCapacityExceeded,
-            &UiErrors::ControlSequenceInvalid,
-            &UiErrors::ControlLifecycleUnavailable,
+        };
+        const std::array pointerCapture{
+            &UiErrors::PointerCaptureInvalid, &UiErrors::PointerCaptureSourceStale,      &UiErrors::PointerCaptureInteractionStale,
+            &UiErrors::PointerCaptureBusy,    &UiErrors::PointerCaptureCapacityExceeded, &UiErrors::PointerCaptureLifecycleUnavailable,
+        };
+        const std::array controls{
+            &UiErrors::ControlDescriptorInvalid, &UiErrors::ControlInputInvalid,         &UiErrors::ControlSourceStale,
+            &UiErrors::ControlDefaultPending,    &UiErrors::ControlDefaultInvalid,       &UiErrors::ControlCapacityExceeded,
+            &UiErrors::ControlSequenceInvalid,   &UiErrors::ControlLifecycleUnavailable,
+        };
+        const std::array focus{
             &UiErrors::FocusInvalid,
             &UiErrors::FocusSourceStale,
             &UiErrors::FocusTargetUnavailable,
@@ -94,12 +91,40 @@ namespace Horo::Runtime::Ui::Detail {
             &UiErrors::FocusModalStale,
             &UiErrors::FocusScopeMismatch,
             &UiErrors::FocusLifecycleUnavailable,
-            &UiErrors::DiagnosticInvalid,
-            &UiErrors::DiagnosticUnsupported,
         };
+        const std::array renderGeometry{
+            &UiErrors::RenderGeometryInvalid,
+            &UiErrors::RenderGeometryCapacityExceeded,
+            &UiErrors::RenderGeometryStorageExhausted,
+            &UiErrors::RenderGeometryLifecycleUnavailable,
+        };
+        const std::array accessibility{
+            &UiErrors::AccessibilitySchemaInvalid,        &UiErrors::AccessibilityRoleInvalid,
+            &UiErrors::AccessibilityStateInvalid,         &UiErrors::AccessibilityValueInvalid,
+            &UiErrors::AccessibilityRangeInvalid,         &UiErrors::AccessibilitySelectionInvalid,
+            &UiErrors::AccessibilityTextInvalid,          &UiErrors::AccessibilityNameMissing,
+            &UiErrors::AccessibilityRelationInvalid,      &UiErrors::AccessibilityActionInvalid,
+            &UiErrors::AccessibilityContributorInvalid,   &UiErrors::AccessibilitySnapshotInvalid,
+            &UiErrors::AccessibilitySnapshotSourceStale,  &UiErrors::AccessibilitySnapshotStorageExhausted,
+            &UiErrors::AccessibilityLifecycleUnavailable, &UiErrors::AccessibilityActionStale,
+            &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
+        };
+        const auto descriptors = [] {
+            std::array<const ErrorCodeDescriptor *, core.size() + pointerCapture.size() + actions.size() + controls.size() + focus.size() +
+                                                        renderGeometry.size() + accessibility.size()>
+                combined{};
+            auto output = std::ranges::copy(core, combined.begin()).out;
+            output = std::ranges::copy(pointerCapture, output).out;
+            output = std::ranges::copy(actions, output).out;
+            output = std::ranges::copy(controls, output).out;
+            output = std::ranges::copy(focus, output).out;
+            output = std::ranges::copy(renderGeometry, output).out;
+            std::ranges::copy(accessibility, output);
+            return combined;
+        }();
     }  // namespace
 
-    std::span<const ErrorCodeDescriptor *const> DiagnosticDescriptors() noexcept {
+    std::span<const ErrorCodeDescriptor *const> ErrorDescriptors() noexcept {
         return descriptors;
     }
-}  // namespace Horo::Runtime::Ui::Detail
+}  // namespace Horo::Runtime::Ui::DiagnosticsInternal

@@ -281,12 +281,16 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
         runtime/ui/UiFocusErrors.cpp
+        runtime/ui/UiAccessibilityErrors.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiDiagnosticDescriptors.cpp
+        runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityPolicy.cpp
+        runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
         runtime/ui/UiPointerCapture.cpp
@@ -1264,6 +1268,8 @@ add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
         editor/EditorSurfaceIdentity.cpp
         editor/SourceFileOpenService.cpp
+        editor/UiCanvasDocument.cpp
+        editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceCommon.cpp
@@ -1325,6 +1331,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::NetworkApi
         HoroEngine::Application
         HoroEngine::Platform
+        HoroEngine::RuntimeUi
         HoroEngine::EditorModel
         HoroEngine::GameplayLua
         HoroEngine::GameplayModuleHost

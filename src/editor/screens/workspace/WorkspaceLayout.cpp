@@ -340,6 +340,19 @@ namespace Horo::Editor {
         TransparentStringSet nodeIds;
         TransparentStringSet panelIds;
         ValidateNode(root, issues, nodeIds, panelIds);
+        for (std::size_t index = 0; index < openDocuments.size(); ++index) {
+            const SerializedDocumentOpenKey &document = openDocuments[index];
+            if (DeserializeDocumentOpenKey(document).HasError()) {
+                issues.emplace_back(WorkspaceLayoutIssueCode::InvalidDocumentTab, "workspace.documents", document.source);
+                continue;
+            }
+            for (std::size_t previous = 0; previous < index; ++previous) {
+                if (openDocuments[previous] == document) {
+                    issues.emplace_back(WorkspaceLayoutIssueCode::DuplicateDocumentTab, "workspace.documents", document.source);
+                    break;
+                }
+            }
+        }
         return issues;
     }
 }  // namespace Horo::Editor

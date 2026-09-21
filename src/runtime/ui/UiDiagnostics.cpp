@@ -1,7 +1,7 @@
 #include "Horo/Runtime/Ui/UiDiagnostics.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
-#include "UiDiagnosticsInternal.h"
+#include "UiDiagnosticDescriptors.h"
 
 #include <algorithm>
 #include <limits>
@@ -88,7 +88,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiDiagnosticErrorDescriptors */
     std::span<const ErrorCodeDescriptor *const> UiDiagnosticErrorDescriptors() noexcept {
-        return Detail::DiagnosticDescriptors();
+        return DiagnosticsInternal::ErrorDescriptors();
     }
 
     /** @copydoc MakeUiDiagnosticRecord */
