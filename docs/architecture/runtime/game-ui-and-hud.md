@@ -397,6 +397,23 @@ the input/context owner decides the declared handled or rejected policy. Queue
 storage is reserved at router creation, so frame-hot admission and dispatch do
 not allocate, block, perform I/O, or invoke another subsystem synchronously.
 
+[ADR-180](../../adr/180-runtime-ui-interactive-control-state-machines-and-default-actions.md) owns
+the semantic state machine for core interactive controls. `Button`, `Toggle`,
+`Slider` and `TextInput` use closed typed descriptor/state variants with exact
+owner and presented-element evidence. Pointer press/release and normalized
+keyboard/gamepad submit edges share one pressed transition contract; disabled
+controls cannot acquire focus, focus/capture loss and cancellation clear
+transient press/repeat/editing state, and text cancellation restores the
+edit-session value.
+
+Control handling is a two-step default-action boundary. `Handle` may stage a
+`DefaultPending` result, but checked values, scalar values and submitted text do
+not commit until the route owner calls `ApplyDefault`; a prevented route calls
+`SuppressDefault`. New input is rejected until that decision is made. Repeat is
+driven by bounded owner ticks, emits at most one default per admitted tick, and
+does not catch up through an unbounded burst. Control descriptors contain no
+callbacks, renderer/style state, native handles or gameplay references.
+
 Retirement closes new admission, reload creates a new owner/revision generation,
 and shutdown discards queued requests without invoking a consumer. Late results
 from an old request or operation are stale and cannot affect a replacement UI
