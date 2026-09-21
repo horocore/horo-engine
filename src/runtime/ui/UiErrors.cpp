@@ -446,12 +446,12 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                     false};
     /** @copydoc AccessibilitySchemaInvalid */
     const ErrorCodeDescriptor AccessibilitySchemaInvalid{UiDomain,
-                                                        ErrorCode{"runtime_ui.accessibility.schema_invalid"},
-                                                        ErrorSeverity::Error,
-                                                        "The Runtime UI accessibility schema is invalid or unsupported.",
-                                                        "Use the current closed accessibility schema and bounded typed records.",
-                                                        false,
-                                                        true};
+                                                         ErrorCode{"runtime_ui.accessibility.schema_invalid"},
+                                                         ErrorSeverity::Error,
+                                                         "The Runtime UI accessibility schema is invalid or unsupported.",
+                                                         "Use the current closed accessibility schema and bounded typed records.",
+                                                         false,
+                                                         true};
     /** @copydoc AccessibilityRoleInvalid */
     const ErrorCodeDescriptor AccessibilityRoleInvalid{UiDomain,
                                                        ErrorCode{"runtime_ui.accessibility.role_invalid"},
@@ -509,13 +509,14 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                        false,
                                                        true};
     /** @copydoc AccessibilityRelationInvalid */
-    const ErrorCodeDescriptor AccessibilityRelationInvalid{UiDomain,
-                                                           ErrorCode{"runtime_ui.accessibility.relation_invalid"},
-                                                           ErrorSeverity::Error,
-                                                           "The Runtime UI accessibility relation is invalid.",
-                                                           "Reference a node in the same semantic generation exactly once and avoid cycles.",
-                                                           false,
-                                                           true};
+    const ErrorCodeDescriptor
+        AccessibilityRelationInvalid{UiDomain,
+                                     ErrorCode{"runtime_ui.accessibility.relation_invalid"},
+                                     ErrorSeverity::Error,
+                                     "The Runtime UI accessibility relation is invalid.",
+                                     "Reference a node in the same semantic generation exactly once and avoid cycles.",
+                                     false,
+                                     true};
     /** @copydoc AccessibilityActionInvalid */
     const ErrorCodeDescriptor AccessibilityActionInvalid{UiDomain,
                                                          ErrorCode{"runtime_ui.accessibility.action_invalid"},
@@ -534,58 +535,64 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                               true};
     /** @copydoc AccessibilitySnapshotInvalid */
     const ErrorCodeDescriptor AccessibilitySnapshotInvalid{UiDomain,
-                                                          ErrorCode{"runtime_ui.accessibility.snapshot_invalid"},
-                                                          ErrorSeverity::Error,
-                                                          "The immutable Runtime UI accessibility snapshot is invalid.",
-                                                          "Publish one complete bounded semantic projection with exact source evidence.",
-                                                          false,
-                                                          false};
+                                                           ErrorCode{"runtime_ui.accessibility.snapshot_invalid"},
+                                                           ErrorSeverity::Error,
+                                                           "The immutable Runtime UI accessibility snapshot is invalid.",
+                                                           "Publish one complete bounded semantic projection with exact source evidence.",
+                                                           false,
+                                                           false};
     /** @copydoc AccessibilitySnapshotSourceStale */
-    const ErrorCodeDescriptor AccessibilitySnapshotSourceStale{UiDomain,
-                                                               ErrorCode{"runtime_ui.accessibility.snapshot_source_stale"},
-                                                               ErrorSeverity::Error,
-                                                               "The Runtime UI accessibility snapshot source is stale or mismatched.",
-                                                               "Rebuild the candidate from the active tree and current interaction generation.",
-                                                               true,
-                                                               false};
+    const ErrorCodeDescriptor
+        AccessibilitySnapshotSourceStale{UiDomain,
+                                         ErrorCode{"runtime_ui.accessibility.snapshot_source_stale"},
+                                         ErrorSeverity::Error,
+                                         "The Runtime UI accessibility snapshot source is stale or mismatched.",
+                                         "Rebuild the candidate from the active tree and current interaction generation.",
+                                         true,
+                                         false};
     /** @copydoc AccessibilitySnapshotStorageExhausted */
-    const ErrorCodeDescriptor AccessibilitySnapshotStorageExhausted{UiDomain,
-                                                                    ErrorCode{"runtime_ui.accessibility_snapshot.storage_exhausted"},
-                                                                    ErrorSeverity::Error,
-                                                                    "Every bounded Runtime UI accessibility snapshot slot is leased.",
-                                                                    "Retire an in-flight semantic snapshot before retrying; never allocate fallback storage.",
-                                                                    true,
-                                                                    false};
+    const ErrorCodeDescriptor
+        AccessibilitySnapshotStorageExhausted{UiDomain,
+                                              ErrorCode{"runtime_ui.accessibility_snapshot.storage_exhausted"},
+                                              ErrorSeverity::Error,
+                                              "Every bounded Runtime UI accessibility snapshot slot is leased.",
+                                              "Retire an in-flight semantic snapshot before retrying; never allocate fallback storage.",
+                                              true,
+                                              false};
     /** @copydoc AccessibilityLifecycleUnavailable */
-    const ErrorCodeDescriptor AccessibilityLifecycleUnavailable{UiDomain,
-                                                                ErrorCode{"runtime_ui.accessibility.lifecycle_unavailable"},
-                                                                ErrorSeverity::Error,
-                                                                "The Runtime UI accessibility snapshot store is closed.",
-                                                                "Create a store for the current Runtime UI owner generation before publishing.",
-                                                                false,
-                                                                false};
+    const ErrorCodeDescriptor
+        AccessibilityLifecycleUnavailable{UiDomain,
+                                          ErrorCode{"runtime_ui.accessibility.lifecycle_unavailable"},
+                                          ErrorSeverity::Error,
+                                          "The Runtime UI accessibility snapshot store is closed.",
+                                          "Create a store for the current Runtime UI owner generation before publishing.",
+                                          false,
+                                          false};
     /** @copydoc AccessibilityActionStale */
-    const ErrorCodeDescriptor AccessibilityActionStale{UiDomain,
-                                                       ErrorCode{"runtime_ui.accessibility.action_stale"},
-                                                       ErrorSeverity::Error,
-                                                       "The Runtime UI accessibility action targets a stale semantic generation.",
-                                                       "Resynchronize the semantic snapshot and submit the action against its exact revision.",
-                                                       true,
-                                                       false};
+    const ErrorCodeDescriptor
+        AccessibilityActionStale{UiDomain,
+                                 ErrorCode{"runtime_ui.accessibility.action_stale"},
+                                 ErrorSeverity::Error,
+                                 "The Runtime UI accessibility action targets a stale semantic generation.",
+                                 "Resynchronize the semantic snapshot and submit the action against its exact revision.",
+                                 true,
+                                 false};
     /** @copydoc AccessibilityActionRejected */
-    const ErrorCodeDescriptor AccessibilityActionRejected{UiDomain,
-                                                          ErrorCode{"runtime_ui.accessibility.action_rejected"},
-                                                          ErrorSeverity::Error,
-                                                          "The Runtime UI accessibility action is not currently admissible.",
-                                                          "Respect node visibility, enabled state, declared action and typed argument policy.",
-                                                          false,
-                                                          false};
+    const ErrorCodeDescriptor
+        AccessibilityActionRejected{UiDomain,
+                                    ErrorCode{"runtime_ui.accessibility.action_rejected"},
+                                    ErrorSeverity::Error,
+                                    "The Runtime UI accessibility action is not currently admissible.",
+                                    "Respect node visibility, enabled state, declared action and typed argument policy.",
+                                    false,
+                                    false};
     /** @copydoc AccessibilityFocusConflict */
-    const ErrorCodeDescriptor AccessibilityFocusConflict{UiDomain,
-                                                         ErrorCode{"runtime_ui.accessibility.focus_conflict"},
-                                                         ErrorSeverity::Error,
-                                                         "The Runtime UI accessibility snapshot contains conflicting semantic focus.",
-                                                         "Publish at most one focused node for the exact audience and interaction generation.",
-                                                         false,
-                                                         true};
+    const ErrorCodeDescriptor
+        AccessibilityFocusConflict{UiDomain,
+                                   ErrorCode{"runtime_ui.accessibility.focus_conflict"},
+                                   ErrorSeverity::Error,
+                                   "The Runtime UI accessibility snapshot contains conflicting semantic focus.",
+                                   "Publish at most one focused node for the exact audience and interaction generation.",
+                                   false,
+                                   true};
 }  // namespace Horo::Runtime::Ui::UiErrors
