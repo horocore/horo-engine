@@ -533,4 +533,111 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                     "Use a declared Runtime UI category and canonical horo.runtime_ui error descriptor.",
                                                     false,
                                                     false};
+    /** @copydoc BindingDescriptorInvalid */
+    const ErrorCodeDescriptor BindingDescriptorInvalid{UiDomain,
+                                                       ErrorCode{"runtime_ui.binding.descriptor_invalid"},
+                                                       ErrorSeverity::Error,
+                                                       "The Runtime UI binding descriptor is malformed.",
+                                                       "Provide valid typed endpoints, direction, requirement, and update policy.",
+                                                       false,
+                                                       true};
+    /** @copydoc BindingSchemaInvalid */
+    const ErrorCodeDescriptor BindingSchemaInvalid{UiDomain,
+                                                   ErrorCode{"runtime_ui.binding.schema_invalid"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI binding provider schema is malformed.",
+                                                   "Use canonical identities, a valid schema fingerprint, and bounded property metadata.",
+                                                   false,
+                                                   true};
+    /** @copydoc BindingSchemaIncompatible */
+    const ErrorCodeDescriptor BindingSchemaIncompatible{UiDomain,
+                                                        ErrorCode{"runtime_ui.binding.schema_incompatible"},
+                                                        ErrorSeverity::Error,
+                                                        "The Runtime UI binding requires an incompatible provider schema.",
+                                                        "Recook the binding against the active provider schema generation.",
+                                                        false,
+                                                        true};
+    /** @copydoc BindingProviderUnknown */
+    const ErrorCodeDescriptor
+        BindingProviderUnknown{UiDomain,
+                               ErrorCode{"runtime_ui.binding.provider_unknown"},
+                               ErrorSeverity::Error,
+                               "The Runtime UI binding provider type is unavailable.",
+                               "Resolve the exact admitted provider type; do not fall back to reflection or a nearby scope.",
+                               true,
+                               true};
+    /** @copydoc BindingPropertyUnknown */
+    const ErrorCodeDescriptor
+        BindingPropertyUnknown{UiDomain,
+                               ErrorCode{"runtime_ui.binding.property_unknown"},
+                               ErrorSeverity::Error,
+                               "The Runtime UI binding property is unavailable.",
+                               "Recook the binding against the provider property schema or apply an explicit migration.",
+                               false,
+                               true};
+    /** @copydoc BindingPropertySignatureMismatch */
+    const ErrorCodeDescriptor
+        BindingPropertySignatureMismatch{UiDomain,
+                                         ErrorCode{"runtime_ui.binding.property_signature_mismatch"},
+                                         ErrorSeverity::Error,
+                                         "The Runtime UI binding property signature is stale.",
+                                         "Reject the candidate and recook it against the current typed property contract.",
+                                         false,
+                                         true};
+    /** @copydoc BindingDescriptorConflict */
+    const ErrorCodeDescriptor BindingDescriptorConflict{UiDomain,
+                                                        ErrorCode{"runtime_ui.binding.descriptor_conflict"},
+                                                        ErrorSeverity::Error,
+                                                        "Runtime UI binding descriptors contain a duplicate identity or target.",
+                                                        "Assign unique binding identities and one owner for each UI semantic target.",
+                                                        false,
+                                                        true};
+    /** @copydoc BindingAccessInvalid */
+    const ErrorCodeDescriptor BindingAccessInvalid{UiDomain,
+                                                   ErrorCode{"runtime_ui.binding.access_invalid"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI binding direction exceeds provider access authority.",
+                                                   "Use read access for reads and an explicit typed write-command capability for writes.",
+                                                   false,
+                                                   true};
+    /** @copydoc BindingTypeMismatch */
+    const ErrorCodeDescriptor BindingTypeMismatch{UiDomain,
+                                                  ErrorCode{"runtime_ui.binding.type_mismatch"},
+                                                  ErrorSeverity::Error,
+                                                  "Runtime UI binding endpoint types are incompatible.",
+                                                  "Declare an admitted typed converter with matching input and output types.",
+                                                  false,
+                                                  true};
+    /** @copydoc BindingConverterInvalid */
+    const ErrorCodeDescriptor BindingConverterInvalid{UiDomain,
+                                                      ErrorCode{"runtime_ui.binding.converter_invalid"},
+                                                      ErrorSeverity::Error,
+                                                      "The Runtime UI binding converter descriptor is invalid.",
+                                                      "Use a registered semantic converter identity with compatible direction and types.",
+                                                      false,
+                                                      true};
+    /** @copydoc BindingFallbackInvalid */
+    const ErrorCodeDescriptor BindingFallbackInvalid{UiDomain,
+                                                     ErrorCode{"runtime_ui.binding.fallback_invalid"},
+                                                     ErrorSeverity::Error,
+                                                     "The Runtime UI binding fallback is missing or has the wrong type.",
+                                                     "Provide only a bounded fallback matching the typed UI target and optional policy.",
+                                                     false,
+                                                     true};
+    /** @copydoc BindingUpdatePolicyInvalid */
+    const ErrorCodeDescriptor BindingUpdatePolicyInvalid{UiDomain,
+                                                         ErrorCode{"runtime_ui.binding.update_policy_invalid"},
+                                                         ErrorSeverity::Error,
+                                                         "The Runtime UI binding update policy is not supported by the property.",
+                                                         "Use a policy satisfied by the provider's declared publication cadence.",
+                                                         false,
+                                                         true};
+    /** @copydoc BindingCapacityExceeded */
+    const ErrorCodeDescriptor BindingCapacityExceeded{UiDomain,
+                                                      ErrorCode{"runtime_ui.binding.capacity_exceeded"},
+                                                      ErrorSeverity::Error,
+                                                      "A Runtime UI binding schema or descriptor limit was exceeded.",
+                                                      "Reduce the bounded binding contribution or use a host-admitted capacity.",
+                                                      true,
+                                                      true};
 }  // namespace Horo::Runtime::Ui::UiErrors

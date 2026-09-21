@@ -56,6 +56,7 @@ namespace Horo::Runtime::Ui {
     struct UiElementIdentityTag;
     struct UiCanvasIdentityTag;
     struct UiActionIdentityTag;
+    struct UiBindingIdentityTag;
 
     /** @brief Stable authored identity of one Runtime UI document. */
     using UiDocumentId = UiStableId<UiDocumentIdentityTag>;
@@ -65,6 +66,8 @@ namespace Horo::Runtime::Ui {
     using UiCanvasId = UiStableId<UiCanvasIdentityTag>;
     /** @brief Stable authored identity shared by a typed Runtime UI action contract. */
     using UiActionId = UiStableId<UiActionIdentityTag>;
+    /** @brief Stable authored identity of one Runtime UI binding descriptor. */
+    using UiBindingId = UiStableId<UiBindingIdentityTag>;
 
     /** @brief Non-zero process-local service/runtime/scope incarnation that must never be serialized. */
     class UiOwnershipGeneration final {
