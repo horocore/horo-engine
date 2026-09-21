@@ -268,8 +268,8 @@ namespace Horo::Runtime {
         void SelectDecision(SaveSlotRecoveryPlan &plan, const SaveSlotRecoveryRequest &request, const SaveSlotRecoveryPolicy &policy,
                             const std::vector<std::size_t> &validIndices) {
             using enum SaveSlotRecoveryDecisionReason;
-            const bool currentValid = plan.currentValidation && plan.currentValidation->state == SaveSlotRecoveryValidationState::Valid;
-            if (currentValid) {
+            if (const bool currentValid = plan.currentValidation && plan.currentValidation->state == SaveSlotRecoveryValidationState::Valid;
+                currentValid) {
                 plan.cleanup.clear();
                 plan.decision = SaveSlotRecoveryDecision::NoRecovery;
                 plan.decisionReason = CurrentValid;
