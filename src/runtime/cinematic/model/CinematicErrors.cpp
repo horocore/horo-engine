@@ -168,32 +168,35 @@ namespace Horo::Cinematic::CinematicErrors {
                                                          .code = ErrorCode{"cinematic.property.version_unsupported"},
                                                          .defaultSeverity = ErrorSeverity::Error,
                                                          .summary = "The property-track version is unsupported.",
-                                                         .remediationHint =
-                                                             "Migrate or recook the property track for this engine version.",
+                                                         .remediationHint = "Migrate or recook the property track for this engine version.",
                                                          .userActionable = true};
     const ErrorCodeDescriptor PropertyBindingMissing{.domain = CinematicDomain,
                                                      .code = ErrorCode{"cinematic.property.binding_missing"},
                                                      .defaultSeverity = ErrorSeverity::Warning,
                                                      .summary = "The property track binding is not available in the active registry.",
-                                                     .remediationHint = "Revalidate the scene schema and acquire the current binding generation.",
+                                                     .remediationHint =
+                                                         "Revalidate the scene schema and acquire the current binding generation.",
                                                      .retryable = true,
                                                      .userActionable = true};
     const ErrorCodeDescriptor PropertyRegistryUnfrozen{.domain = CinematicDomain,
                                                        .code = ErrorCode{"cinematic.property.registry_unfrozen"},
                                                        .defaultSeverity = ErrorSeverity::Error,
                                                        .summary = "Property activation requires a frozen binding registry.",
-                                                       .remediationHint = "Complete host composition and freeze the binding snapshot before activation.",
+                                                       .remediationHint =
+                                                           "Complete host composition and freeze the binding snapshot before activation.",
                                                        .userActionable = true};
     const ErrorCodeDescriptor PropertyBindingStale{.domain = CinematicDomain,
                                                    .code = ErrorCode{"cinematic.property.binding_stale"},
                                                    .defaultSeverity = ErrorSeverity::Warning,
                                                    .summary = "The property target belongs to a retired scene or component generation.",
-                                                   .remediationHint = "Rebuild the property evaluation plan from the active scene snapshot.",
+                                                   .remediationHint =
+                                                       "Rebuild the property evaluation plan from the active scene snapshot.",
                                                    .retryable = true};
     const ErrorCodeDescriptor PropertyBindingTargetMissing{.domain = CinematicDomain,
                                                            .code = ErrorCode{"cinematic.property.target_missing"},
                                                            .defaultSeverity = ErrorSeverity::Warning,
-                                                           .summary = "The property track target is not present in the active scene snapshot.",
+                                                           .summary =
+                                                               "The property track target is not present in the active scene snapshot.",
                                                            .remediationHint = "Restore the target object or repair the authored binding.",
                                                            .retryable = true,
                                                            .userActionable = true};
@@ -201,7 +204,8 @@ namespace Horo::Cinematic::CinematicErrors {
                                                         .code = ErrorCode{"cinematic.property.component_mismatch"},
                                                         .defaultSeverity = ErrorSeverity::Error,
                                                         .summary = "The property target component type does not match its binding.",
-                                                        .remediationHint = "Resolve the target against the exact component type declared by the binding.",
+                                                        .remediationHint =
+                                                            "Resolve the target against the exact component type declared by the binding.",
                                                         .userActionable = true};
     const ErrorCodeDescriptor PropertyTypeMismatch{.domain = CinematicDomain,
                                                    .code = ErrorCode{"cinematic.property.type_mismatch"},
@@ -213,23 +217,27 @@ namespace Horo::Cinematic::CinematicErrors {
                                                 .code = ErrorCode{"cinematic.property.malformed"},
                                                 .defaultSeverity = ErrorSeverity::Error,
                                                 .summary = "The property-track contract is malformed.",
-                                                .remediationHint = "Repair identities, target metadata, or typed curve channels and recook.",
+                                                .remediationHint =
+                                                    "Repair identities, target metadata, or typed curve channels and recook.",
                                                 .userActionable = true};
     const ErrorCodeDescriptor PropertyLimitExceeded{.domain = CinematicDomain,
                                                     .code = ErrorCode{"cinematic.property.limit_exceeded"},
                                                     .defaultSeverity = ErrorSeverity::Error,
                                                     .summary = "Property evaluation exceeds a bounded capacity.",
-                                                    .remediationHint = "Reduce admitted tracks or provide the required caller output capacity."};
+                                                    .remediationHint =
+                                                        "Reduce admitted tracks or provide the required caller output capacity."};
     const ErrorCodeDescriptor PropertySampleInvalid{.domain = CinematicDomain,
-                                                   .code = ErrorCode{"cinematic.property.sample_invalid"},
-                                                   .defaultSeverity = ErrorSeverity::Error,
-                                                   .summary = "Sampled property channels are invalid for the binding.",
-                                                   .remediationHint = "Repair non-finite curve values or the binding's finite range constraint.",
-                                                   .userActionable = true};
+                                                    .code = ErrorCode{"cinematic.property.sample_invalid"},
+                                                    .defaultSeverity = ErrorSeverity::Error,
+                                                    .summary = "Sampled property channels are invalid for the binding.",
+                                                    .remediationHint =
+                                                        "Repair non-finite curve values or the binding's finite range constraint.",
+                                                    .userActionable = true};
     const ErrorCodeDescriptor PropertyWriteRejected{.domain = CinematicDomain,
                                                     .code = ErrorCode{"cinematic.property.write_rejected"},
                                                     .defaultSeverity = ErrorSeverity::Warning,
                                                     .summary = "The property owner rejected a typed cinematic write.",
-                                                    .remediationHint = "Use the owner's admitted write phase or inspect the surfaced binding diagnostic.",
+                                                    .remediationHint =
+                                                        "Use the owner's admitted write phase or inspect the surfaced binding diagnostic.",
                                                     .retryable = true};
 }  // namespace Horo::Cinematic::CinematicErrors

@@ -20,8 +20,7 @@ namespace Horo::Cinematic {
             bool enabled{};
         };
 
-        [[nodiscard]] constexpr PropertyBindingId Binding(const std::uint64_t value,
-                                                          const std::uint32_t generation = 1) noexcept {
+        [[nodiscard]] constexpr PropertyBindingId Binding(const std::uint64_t value, const std::uint32_t generation = 1) noexcept {
             return {value, generation};
         }
 
@@ -89,8 +88,8 @@ namespace Horo::Cinematic {
             std::array<std::array<ScalarCurveKey, 2>, 3> vec3Keys;
             std::array<ScalarCurveKey, 2> boolKeys;
 
-            CurveFixture(const float floatFrom, const float floatTo, const Math::Vec3 vecFrom = {},
-                         const Math::Vec3 vecTo = {}, const bool boolFrom = false, const bool boolTo = true)
+            CurveFixture(const float floatFrom, const float floatTo, const Math::Vec3 vecFrom = {}, const Math::Vec3 vecTo = {},
+                         const bool boolFrom = false, const bool boolTo = true)
                 : floatKeys{ScalarCurveKey{0, floatFrom}, ScalarCurveKey{10, floatTo}},
                   vec3Keys{std::array{ScalarCurveKey{0, vecFrom.x}, ScalarCurveKey{10, vecTo.x}},
                            std::array{ScalarCurveKey{0, vecFrom.y}, ScalarCurveKey{10, vecTo.y}},
@@ -126,26 +125,29 @@ namespace Horo::Cinematic {
             PropertyBindingId enabled{Binding(12)};
 
             BindingFixture() {
-                REQUIRE(registry.Register({.id = weight,
-                                            .componentType = componentType,
-                                            .property = Property("weight"),
-                                            .type = Runtime::PropertyBindingType::Float,
-                                            .getter = ReadWeight,
-                                            .setter = WriteWeight})
+                REQUIRE(registry
+                            .Register({.id = weight,
+                                       .componentType = componentType,
+                                       .property = Property("weight"),
+                                       .type = Runtime::PropertyBindingType::Float,
+                                       .getter = ReadWeight,
+                                       .setter = WriteWeight})
                             .HasValue());
-                REQUIRE(registry.Register({.id = position,
-                                            .componentType = componentType,
-                                            .property = Property("position"),
-                                            .type = Runtime::PropertyBindingType::Vec3,
-                                            .getter = ReadPosition,
-                                            .setter = WritePosition})
+                REQUIRE(registry
+                            .Register({.id = position,
+                                       .componentType = componentType,
+                                       .property = Property("position"),
+                                       .type = Runtime::PropertyBindingType::Vec3,
+                                       .getter = ReadPosition,
+                                       .setter = WritePosition})
                             .HasValue());
-                REQUIRE(registry.Register({.id = enabled,
-                                            .componentType = componentType,
-                                            .property = Property("enabled"),
-                                            .type = Runtime::PropertyBindingType::Boolean,
-                                            .getter = ReadEnabled,
-                                            .setter = WriteEnabled})
+                REQUIRE(registry
+                            .Register({.id = enabled,
+                                       .componentType = componentType,
+                                       .property = Property("enabled"),
+                                       .type = Runtime::PropertyBindingType::Boolean,
+                                       .getter = ReadEnabled,
+                                       .setter = WriteEnabled})
                             .HasValue());
                 REQUIRE(registry.Freeze().HasValue());
             }
@@ -167,29 +169,33 @@ namespace Horo::Cinematic {
         CHECK(fixture.registry.FindByName(fixture.componentType, "missing") == nullptr);
 
         auto duplicate = fixture.registry.Register({.id = Binding(99),
-                                                     .componentType = fixture.componentType,
-                                                     .property = Property("weight"),
-                                                     .type = Runtime::PropertyBindingType::Float,
-                                                     .getter = ReadWeight,
-                                                     .setter = WriteWeight});
+                                                    .componentType = fixture.componentType,
+                                                    .property = Property("weight"),
+                                                    .type = Runtime::PropertyBindingType::Float,
+                                                    .getter = ReadWeight,
+                                                    .setter = WriteWeight});
         RequireError(duplicate, Runtime::PropertyBindingErrors::RegistryFrozen);
     }
 
-    TEST_CASE("Property tracks sample float vectors and bools through one shared plan",
-              "[unit][cinematic][property-track][typed]") {
+    TEST_CASE("Property tracks sample float vectors and bools through one shared plan", "[unit][cinematic][property-track][typed]") {
         BindingFixture fixture;
         Component component{};
         const CurveFixture curves{0.0F, 10.0F, {0.0F, 2.0F, 4.0F}, {10.0F, 12.0F, 14.0F}, true, false};
         const std::array targets{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 7, &component},
                                  PropertyBindingTargetSnapshot{fixture.position, Object(2), fixture.componentType, 7, &component},
                                  PropertyBindingTargetSnapshot{fixture.enabled, Object(3), fixture.componentType, 7, &component}};
-        const std::array tracks{
-            PropertyTrackDescriptor{.track = Track(3), .targetObject = Object(3), .binding = fixture.enabled, .curves = curves.BoolCurves()},
-            PropertyTrackDescriptor{.track = Track(1), .targetObject = Object(1), .binding = fixture.weight, .curves = curves.FloatCurves()},
-            PropertyTrackDescriptor{.track = Track(2),
-                                    .targetObject = Object(2),
-                                    .binding = fixture.position,
-                                    .curves = curves.Vec3Curves()}};
+        const std::array tracks{PropertyTrackDescriptor{.track = Track(3),
+                                                        .targetObject = Object(3),
+                                                        .binding = fixture.enabled,
+                                                        .curves = curves.BoolCurves()},
+                                PropertyTrackDescriptor{.track = Track(1),
+                                                        .targetObject = Object(1),
+                                                        .binding = fixture.weight,
+                                                        .curves = curves.FloatCurves()},
+                                PropertyTrackDescriptor{.track = Track(2),
+                                                        .targetObject = Object(2),
+                                                        .binding = fixture.position,
+                                                        .curves = curves.Vec3Curves()}};
         constexpr PropertySceneVersion scene{4, 9};
         auto plan = PropertyEvaluationPlan::Create(scene, tracks, targets, fixture.registry);
         REQUIRE(plan.HasValue());
@@ -222,8 +228,10 @@ namespace Horo::Cinematic {
         Component component{};
         const CurveFixture curves{0.0F, 10.0F};
         const std::array targets{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 1, &component}};
-        const std::array tracks{
-            PropertyTrackDescriptor{.track = Track(1), .targetObject = Object(1), .binding = fixture.weight, .curves = curves.FloatCurves()}};
+        const std::array tracks{PropertyTrackDescriptor{.track = Track(1),
+                                                        .targetObject = Object(1),
+                                                        .binding = fixture.weight,
+                                                        .curves = curves.FloatCurves()}};
         constexpr PropertySceneVersion scene{1, 1};
         auto plan = PropertyEvaluationPlan::Create(scene, tracks, targets, fixture.registry);
         REQUIRE(plan.HasValue());
@@ -240,26 +248,26 @@ namespace Horo::Cinematic {
         CHECK(Tests::AllocationProbe::Count() == before);
     }
 
-    TEST_CASE("Property plans fence scene replacement and surface optional binding skips",
-              "[unit][cinematic][property-track][lifecycle]") {
+    TEST_CASE("Property plans fence scene replacement and surface optional binding skips", "[unit][cinematic][property-track][lifecycle]") {
         BindingFixture fixture;
         Component component{};
         const CurveFixture curves{0.0F, 1.0F};
         const std::array targets{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 2, &component}};
-        const std::array tracks{
-            PropertyTrackDescriptor{.track = Track(1), .targetObject = Object(1), .binding = fixture.weight, .curves = curves.FloatCurves()}};
+        const std::array tracks{PropertyTrackDescriptor{.track = Track(1),
+                                                        .targetObject = Object(1),
+                                                        .binding = fixture.weight,
+                                                        .curves = curves.FloatCurves()}};
         constexpr PropertySceneVersion scene{3, 2};
         auto plan = PropertyEvaluationPlan::Create(scene, tracks, targets, fixture.registry);
         REQUIRE(plan.HasValue());
         std::array<PropertyEvaluationValue, 1> values{};
         RequireError(plan.Value().Evaluate(1, PropertyEvaluationContext{{4, 2}, targets}, values), CinematicErrors::PropertyBindingStale);
 
-        const std::array missingTracks{
-            PropertyTrackDescriptor{.track = Track(2),
-                                    .targetObject = Object(9),
-                                    .binding = Binding(999),
-                                    .curves = curves.FloatCurves(),
-                                    .required = false}};
+        const std::array missingTracks{PropertyTrackDescriptor{.track = Track(2),
+                                                               .targetObject = Object(9),
+                                                               .binding = Binding(999),
+                                                               .curves = curves.FloatCurves(),
+                                                               .required = false}};
         auto optional = PropertyEvaluationPlan::Create(scene, missingTracks, {}, fixture.registry);
         REQUIRE(optional.HasValue());
         std::array<PropertyEvaluationDiagnostic, 1> diagnostics{};
@@ -278,10 +286,8 @@ namespace Horo::Cinematic {
         Component component{};
         const CurveFixture curves{0.0F, 1.0F};
         const std::array targets{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 1, &component}};
-        auto mismatch = PropertyTrackDescriptor{.track = Track(1),
-                                                 .targetObject = Object(1),
-                                                 .binding = fixture.weight,
-                                                 .curves = curves.Vec3Curves()};
+        auto mismatch =
+            PropertyTrackDescriptor{.track = Track(1), .targetObject = Object(1), .binding = fixture.weight, .curves = curves.Vec3Curves()};
         RequireError(PropertyEvaluationPlan::Create({1, 1}, std::span{&mismatch, 1}, targets, fixture.registry),
                      CinematicErrors::PropertyTypeMismatch);
 
@@ -297,35 +303,31 @@ namespace Horo::Cinematic {
         const PropertyEvaluationContext staleContext{{1, 1}, staleTargets};
         RequireError(plan.Value().Evaluate(1, staleContext, values), CinematicErrors::PropertyBindingStale);
 
-        const std::array boolTargets{
-            PropertyBindingTargetSnapshot{fixture.enabled, Object(3), fixture.componentType, 1, &component}};
+        const std::array boolTargets{PropertyBindingTargetSnapshot{fixture.enabled, Object(3), fixture.componentType, 1, &component}};
         const std::array badKeys{ScalarCurveKey{0, 0.0F}, ScalarCurveKey{10, 1.0F}};
         PropertyCurveSet badBoolCurves{.type = Runtime::PropertyBindingType::Boolean};
         badBoolCurves.channels[0] = Curve(badKeys);
-        auto badBool = PropertyTrackDescriptor{.track = Track(3),
-                                               .targetObject = Object(3),
-                                               .binding = fixture.enabled,
-                                               .curves = badBoolCurves};
+        auto badBool =
+            PropertyTrackDescriptor{.track = Track(3), .targetObject = Object(3), .binding = fixture.enabled, .curves = badBoolCurves};
         RequireError(PropertyEvaluationPlan::Create({1, 1}, std::span{&badBool, 1}, boolTargets, fixture.registry),
                      CinematicErrors::PropertyMalformed);
     }
 
-    TEST_CASE("Optional property tracks preserve typed diagnostics and require frozen registries",
-              "[unit][cinematic][property-track][diagnostics]") {
+    TEST_CASE("Property activation requires a frozen binding registry", "[unit][cinematic][property-track][diagnostics]") {
         BindingFixture fixture;
         Component component{};
         const CurveFixture curves{0.0F, 1.0F};
         constexpr PropertySceneVersion scene{1, 1};
-        const std::array validTarget{
-            PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 1, &component}};
+        const std::array validTarget{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 1, &component}};
 
         Runtime::PropertyBindingRegistry openRegistry;
-        REQUIRE(openRegistry.Register({.id = fixture.weight,
-                                       .componentType = fixture.componentType,
-                                       .property = Property("weight"),
-                                       .type = Runtime::PropertyBindingType::Float,
-                                       .getter = ReadWeight,
-                                       .setter = WriteWeight})
+        REQUIRE(openRegistry
+                    .Register({.id = fixture.weight,
+                               .componentType = fixture.componentType,
+                               .property = Property("weight"),
+                               .type = Runtime::PropertyBindingType::Float,
+                               .getter = ReadWeight,
+                               .setter = WriteWeight})
                     .HasValue());
         auto validTrack = PropertyTrackDescriptor{.track = Track(1),
                                                   .targetObject = Object(1),
@@ -333,12 +335,19 @@ namespace Horo::Cinematic {
                                                   .curves = curves.FloatCurves()};
         RequireError(PropertyEvaluationPlan::Create(scene, std::span{&validTrack, 1}, validTarget, openRegistry),
                      CinematicErrors::PropertyRegistryUnfrozen);
+    }
 
+    TEST_CASE("Optional property tracks preserve typed diagnostics", "[unit][cinematic][property-track][diagnostics]") {
+        BindingFixture fixture;
+        Component component{};
+        const CurveFixture curves{0.0F, 1.0F};
+        constexpr PropertySceneVersion scene{1, 1};
+        const std::array validTarget{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 1, &component}};
         auto mismatch = PropertyTrackDescriptor{.track = Track(2),
-                                                 .targetObject = Object(1),
-                                                 .binding = fixture.weight,
-                                                 .curves = curves.Vec3Curves(),
-                                                 .required = false};
+                                                .targetObject = Object(1),
+                                                .binding = fixture.weight,
+                                                .curves = curves.Vec3Curves(),
+                                                .required = false};
         auto mismatchPlan = PropertyEvaluationPlan::Create(scene, std::span{&mismatch, 1}, validTarget, fixture.registry);
         REQUIRE(mismatchPlan.HasValue());
         std::array<PropertyEvaluationValue, 1> values{};
@@ -347,7 +356,15 @@ namespace Horo::Cinematic {
         REQUIRE(mismatchResult.HasValue());
         CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::TypeMismatch);
         CHECK(diagnostics[0].error->code.Value() == CinematicErrors::PropertyTypeMismatch.code.Value());
+    }
 
+    TEST_CASE("Optional property tracks preserve target diagnostics", "[unit][cinematic][property-track][diagnostics]") {
+        BindingFixture fixture;
+        Component component{};
+        const CurveFixture curves{0.0F, 1.0F};
+        constexpr PropertySceneVersion scene{1, 1};
+        std::array<PropertyEvaluationValue, 1> values{};
+        std::array<PropertyEvaluationDiagnostic, 1> diagnostics{};
         auto targetMissing = PropertyTrackDescriptor{.track = Track(3),
                                                      .targetObject = Object(9),
                                                      .binding = fixture.weight,
@@ -355,7 +372,6 @@ namespace Horo::Cinematic {
                                                      .required = false};
         auto missingPlan = PropertyEvaluationPlan::Create(scene, std::span{&targetMissing, 1}, {}, fixture.registry);
         REQUIRE(missingPlan.HasValue());
-        diagnostics = {};
         auto missingResult = missingPlan.Value().EvaluateAndApply(5, PropertyEvaluationContext{scene, {}}, values, diagnostics);
         REQUIRE(missingResult.HasValue());
         CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::TargetMissing);
@@ -370,8 +386,8 @@ namespace Horo::Cinematic {
         auto componentPlan = PropertyEvaluationPlan::Create(scene, std::span{&componentMismatch, 1}, wrongTypeTarget, fixture.registry);
         REQUIRE(componentPlan.HasValue());
         diagnostics = {};
-        auto componentResult = componentPlan.Value().EvaluateAndApply(
-            5, PropertyEvaluationContext{scene, wrongTypeTarget}, values, diagnostics);
+        auto componentResult =
+            componentPlan.Value().EvaluateAndApply(5, PropertyEvaluationContext{scene, wrongTypeTarget}, values, diagnostics);
         REQUIRE(componentResult.HasValue());
         CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::ComponentMismatch);
     }

@@ -9,7 +9,8 @@ namespace Horo::Runtime::PropertyBindingErrors {
                                                 .code = ErrorCode{"scene.property_binding.invalid_descriptor"},
                                                 .defaultSeverity = ErrorSeverity::Error,
                                                 .summary = "The property binding descriptor is invalid.",
-                                                .remediationHint = "Provide a stable identity, component/property type, and validating accessors.",
+                                                .remediationHint =
+                                                    "Provide a stable identity, component/property type, and validating accessors.",
                                                 .userActionable = true};
     const ErrorCodeDescriptor DuplicateBinding{.domain = Domain,
                                                .code = ErrorCode{"scene.property_binding.duplicate"},
@@ -26,7 +27,8 @@ namespace Horo::Runtime::PropertyBindingErrors {
                                              .code = ErrorCode{"scene.property_binding.missing"},
                                              .defaultSeverity = ErrorSeverity::Warning,
                                              .summary = "The requested property binding is not available.",
-                                             .remediationHint = "Revalidate the scene/component schema and acquire the current binding generation.",
+                                             .remediationHint =
+                                                 "Revalidate the scene/component schema and acquire the current binding generation.",
                                              .retryable = true,
                                              .userActionable = true};
     const ErrorCodeDescriptor ComponentTypeMismatch{.domain = Domain,

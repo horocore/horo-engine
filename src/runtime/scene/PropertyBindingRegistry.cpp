@@ -50,8 +50,7 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] bool SameComponentProperty(const PropertyBindingDescriptor &left,
-                                                  const PropertyBindingDescriptor &right) noexcept {
+        [[nodiscard]] bool SameComponentProperty(const PropertyBindingDescriptor &left, const PropertyBindingDescriptor &right) noexcept {
             return left.componentType == right.componentType && left.property == right.property;
         }
     }  // namespace
@@ -64,10 +63,9 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(InvalidDescriptor, "The property binding registry capacity was exceeded."));
         if (auto valid = ValidateDescriptor(descriptor); valid.HasError())
             return valid;
-        if (Find(descriptor.id) != nullptr ||
-            std::ranges::any_of(descriptors_, [&descriptor](const PropertyBindingDescriptor &current) {
-                return SameComponentProperty(current, descriptor);
-            }))
+        if (Find(descriptor.id) != nullptr || std::ranges::any_of(descriptors_, [&descriptor](const PropertyBindingDescriptor &current) {
+            return SameComponentProperty(current, descriptor);
+        }))
             return Result<void>::Failure(MakeError(DuplicateBinding));
         descriptors_.push_back(std::move(descriptor));
         return Result<void>::Success();

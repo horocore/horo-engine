@@ -82,7 +82,8 @@ namespace Horo::Cinematic {
         constexpr auto operator<=>(const PropertySceneVersion &) const noexcept = default;
     };
 
-    /** @brief Per-call scene snapshot used to reject stale component storage before a callback is invoked. */
+    /** @brief Per-call scene snapshot used to reject stale component storage before a callback is invoked.
+     * @note Targets preserve the activation snapshot order; index drift is treated as a stale component snapshot. */
     struct PropertyEvaluationContext final {
         PropertySceneVersion scene;
         std::span<const PropertyBindingTargetSnapshot> targets;
@@ -163,6 +164,7 @@ namespace Horo::Cinematic {
          * @param values Values returned by Evaluate for this plan.
          * @param diagnostics Caller storage with at least TrackCount entries.
          * @return Applied/diagnostic counts; binding failures are skipped but never hidden.
+         * @note Values must be the compact, ordered output produced by Evaluate for this plan.
          */
         [[nodiscard]] Result<PropertyEvaluationResult> Apply(const PropertyEvaluationContext &context,
                                                              std::span<const PropertyEvaluationValue> values,
@@ -196,9 +198,9 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] static Result<void> ValidateTargetSnapshots(std::span<const PropertyBindingTargetSnapshot> targets);
         [[nodiscard]] static Result<CompiledTrack> CompileTrack(const PropertyTrackDescriptor &track,
-                                                                 std::span<const PropertyTrackDescriptor> priorTracks,
-                                                                 std::span<const PropertyBindingTargetSnapshot> targets,
-                                                                 const Runtime::PropertyBindingRegistry &registry);
+                                                                std::span<const PropertyTrackDescriptor> priorTracks,
+                                                                std::span<const PropertyBindingTargetSnapshot> targets,
+                                                                const Runtime::PropertyBindingRegistry &registry);
         [[nodiscard]] bool ApplyTrack(const CompiledTrack &compiled, const PropertyEvaluationContext &context,
                                       const PropertyEvaluationValue &value, PropertyEvaluationDiagnostic &diagnostic) const;
 
