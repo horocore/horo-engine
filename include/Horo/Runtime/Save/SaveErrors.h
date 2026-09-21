@@ -20,6 +20,42 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor VersionInvalid;
     /** @brief Input requires a newer schema or format version than the reader supports. */
     extern const ErrorCodeDescriptor VersionUnsupportedNewer;
+    /** @brief A migration definition or support declaration is malformed. */
+    extern const ErrorCodeDescriptor MigrationDefinitionInvalid;
+    /** @brief Migration catalog mutation is closed for the current lifecycle. */
+    extern const ErrorCodeDescriptor MigrationRegistryClosed;
+    /** @brief A migration identity occurs more than once in one catalog. */
+    extern const ErrorCodeDescriptor MigrationDuplicateIdentity;
+    /** @brief Two migration definitions claim the same typed edge. */
+    extern const ErrorCodeDescriptor MigrationDuplicateEdge;
+    /** @brief A migration edge does not advance its typed version axis. */
+    extern const ErrorCodeDescriptor MigrationBackwardEdge;
+    /** @brief No complete migration route covers the requested source version. */
+    extern const ErrorCodeDescriptor MigrationPathMissing;
+    /** @brief A migration route revisits a version and therefore contains a cycle. */
+    extern const ErrorCodeDescriptor MigrationCycle;
+    /** @brief More than one canonical migration route is available. */
+    extern const ErrorCodeDescriptor MigrationAmbiguous;
+    /** @brief A declared checkpoint is missing or contradicts its registered definition. */
+    extern const ErrorCodeDescriptor MigrationCheckpointInvalid;
+    /** @brief A checkpoint is not structurally equivalent to its declared sequential route. */
+    extern const ErrorCodeDescriptor MigrationCheckpointNotEquivalent;
+    /** @brief A source version is newer than the supported writer and cannot be interpreted safely. */
+    extern const ErrorCodeDescriptor MigrationUnsupportedNewer;
+    /** @brief A source version is outside the declared migration support horizon. */
+    extern const ErrorCodeDescriptor MigrationSourceUnsupported;
+    /** @brief A migration plan is malformed or is not bound to one frozen catalog. */
+    extern const ErrorCodeDescriptor MigrationPlanInvalid;
+    /** @brief A migration callback returned an invalid candidate or changed an unrelated axis. */
+    extern const ErrorCodeDescriptor MigrationCandidateInvalid;
+    /** @brief A migration callback failed; the original typed cause is retained. */
+    extern const ErrorCodeDescriptor MigrationStepFailed;
+    /** @brief A migration catalog, route, or candidate exceeded an explicit bound. */
+    extern const ErrorCodeDescriptor MigrationLimitExceeded;
+    /** @brief A migration operation attempted to mutate its source archive. */
+    extern const ErrorCodeDescriptor MigrationSourceMutated;
+    /** @brief Migration catalog or candidate storage could not be allocated. */
+    extern const ErrorCodeDescriptor MigrationAllocationFailed;
     /** @brief A save participant descriptor is incomplete or internally contradictory. */
     extern const ErrorCodeDescriptor ParticipantDescriptorInvalid;
     /** @brief A participant registration omitted its owned adapter lease. */
@@ -182,6 +218,12 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotCommitOutcomeUnknown;
     /** @brief Journal replay could not prove or converge to a safe old-or-new generation. */
     extern const ErrorCodeDescriptor SlotCommitRecoveryFailed;
+    /** @brief A last-known-good recovery request, artifact, or promotion policy is malformed. */
+    extern const ErrorCodeDescriptor SlotRecoveryInvalid;
+    /** @brief Last-known-good recovery artifacts exceed a trusted retention or observation bound. */
+    extern const ErrorCodeDescriptor SlotRecoveryLimitExceeded;
+    /** @brief Last-known-good recovery bookkeeping storage could not be allocated. */
+    extern const ErrorCodeDescriptor SlotRecoveryAllocationFailed;
     /** @brief Storage capacity or failure-policy evidence is malformed or exceeds a bound. */
     extern const ErrorCodeDescriptor StoragePolicyInvalid;
     /** @brief Physical storage lacks the additional peak bytes required by the mutation. */

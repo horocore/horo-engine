@@ -110,6 +110,18 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor EventDispatchHandlerFailed;
     /** @brief The event dispatcher is retiring, stopped, or changing lifecycle during dispatch. */
     extern const ErrorCodeDescriptor EventDispatchLifecycleUnavailable;
+    /** @brief A pointer-capture context, pointer, button, or cancellation reason is malformed. */
+    extern const ErrorCodeDescriptor PointerCaptureInvalid;
+    /** @brief Pointer-capture owner, tree, target, or route evidence is stale or foreign. */
+    extern const ErrorCodeDescriptor PointerCaptureSourceStale;
+    /** @brief Pointer capture was requested against an interaction generation that was not presented. */
+    extern const ErrorCodeDescriptor PointerCaptureInteractionStale;
+    /** @brief The requested pointer is already captured by the same Runtime UI context. */
+    extern const ErrorCodeDescriptor PointerCaptureBusy;
+    /** @brief Every preallocated pointer-capture slot is occupied or retired. */
+    extern const ErrorCodeDescriptor PointerCaptureCapacityExceeded;
+    /** @brief The pointer-capture store is retiring, stopped, or otherwise unavailable. */
+    extern const ErrorCodeDescriptor PointerCaptureLifecycleUnavailable;
     /** @brief A typed Runtime UI action or owner context is malformed. */
     extern const ErrorCodeDescriptor ActionInvalid;
     /** @brief A typed Runtime UI action payload contains an invalid value. */
@@ -132,6 +144,22 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief A typed interactive-control descriptor is malformed or incompatible with its control kind. */
+    extern const ErrorCodeDescriptor ControlDescriptorInvalid;
+    /** @brief A normalized control input has invalid kind, source, sequence, tick, or payload evidence. */
+    extern const ErrorCodeDescriptor ControlInputInvalid;
+    /** @brief A control input belongs to another owner, element, or presented revision. */
+    extern const ErrorCodeDescriptor ControlSourceStale;
+    /** @brief A control input arrived before the staged default action was resolved. */
+    extern const ErrorCodeDescriptor ControlDefaultPending;
+    /** @brief A staged control default action could not be represented by its typed bounded payload. */
+    extern const ErrorCodeDescriptor ControlDefaultInvalid;
+    /** @brief A text input or repeat policy exceeded its fixed representation bound. */
+    extern const ErrorCodeDescriptor ControlCapacityExceeded;
+    /** @brief A control tick or event sequence moved backwards or exhausted its finite domain. */
+    extern const ErrorCodeDescriptor ControlSequenceInvalid;
+    /** @brief The interactive-control state machine is retiring, stopped, or changing lifecycle during input. */
+    extern const ErrorCodeDescriptor ControlLifecycleUnavailable;
     /** @brief Immutable Runtime UI render snapshot evidence or table topology is malformed. */
     extern const ErrorCodeDescriptor RenderSnapshotInvalid;
     /** @brief A Runtime UI draw command contains invalid geometry, paint, or table references. */
@@ -142,6 +170,14 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor RenderSnapshotStorageExhausted;
     /** @brief A Runtime UI render extractor is closed and no longer accepts snapshots. */
     extern const ErrorCodeDescriptor RenderSnapshotLifecycleUnavailable;
+    /** @brief Generated Runtime UI geometry or its batch topology is malformed. */
+    extern const ErrorCodeDescriptor RenderGeometryInvalid;
+    /** @brief Generated Runtime UI geometry exceeds its admitted vertex, index, or batch capacity. */
+    extern const ErrorCodeDescriptor RenderGeometryCapacityExceeded;
+    /** @brief Every preallocated Runtime UI geometry plan slot remains leased by an in-flight frame. */
+    extern const ErrorCodeDescriptor RenderGeometryStorageExhausted;
+    /** @brief A Runtime UI geometry arena is closed and no longer accepts plans. */
+    extern const ErrorCodeDescriptor RenderGeometryLifecycleUnavailable;
     /** @brief A Runtime UI render composition request exceeds its declared bounded pass capacity. */
     extern const ErrorCodeDescriptor RenderCompositionCapacityExceeded;
     /** @brief A Runtime UI render composition pass has invalid view, graph, target, ordering, or space policy. */

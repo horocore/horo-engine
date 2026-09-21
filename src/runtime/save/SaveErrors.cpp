@@ -23,6 +23,65 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor VersionUnsupportedNewer{kDomain, ErrorCode{"save.version.unsupported_newer"}, kError,
                                                       "The save version is newer than this reader supports.",
                                                       "Use a compatible reader or an explicit supported migration."};
+    const ErrorCodeDescriptor
+        MigrationDefinitionInvalid{kDomain, ErrorCode{"save.migration.definition_invalid"}, kError,
+                                   "A save migration definition or support declaration is invalid.",
+                                   "Correct its stable identity, typed axis, range, callback, and checkpoint metadata."};
+    const ErrorCodeDescriptor MigrationRegistryClosed{kDomain, ErrorCode{"save.migration.registry_closed"}, kError,
+                                                      "The save migration registry is closed.",
+                                                      "Register or remove migrations before the owning lifecycle closes the catalog."};
+    const ErrorCodeDescriptor MigrationDuplicateIdentity{kDomain, ErrorCode{"save.migration.duplicate_identity"}, kError,
+                                                         "A save migration identity occurs more than once.",
+                                                         "Assign every registered migration one unique canonical identity."};
+    const ErrorCodeDescriptor MigrationDuplicateEdge{kDomain, ErrorCode{"save.migration.duplicate_edge"}, kError,
+                                                     "Two save migrations claim the same typed edge.",
+                                                     "Keep one definition for each axis, participant, kind, and version range."};
+    const ErrorCodeDescriptor MigrationBackwardEdge{kDomain, ErrorCode{"save.migration.backward_edge"}, kError,
+                                                    "A save migration edge does not advance its version axis.",
+                                                    "Declare a strictly newer destination version; downgrades are not supported."};
+    const ErrorCodeDescriptor MigrationPathMissing{kDomain, ErrorCode{"save.migration.path_missing"}, kError,
+                                                   "The save migration catalog has a gap for the requested source version.",
+                                                   "Register the exact next migration edge or declare a tested equivalent checkpoint."};
+    const ErrorCodeDescriptor MigrationCycle{kDomain, ErrorCode{"save.migration.cycle"}, kError,
+                                             "The save migration graph contains a cycle.",
+                                             "Remove the cycle so every migration route advances toward its target."};
+    const ErrorCodeDescriptor MigrationAmbiguous{kDomain, ErrorCode{"save.migration.ambiguous"}, kError,
+                                                 "More than one save migration route is available.",
+                                                 "Remove competing next hops or select one explicitly through a valid checkpoint."};
+    const ErrorCodeDescriptor MigrationCheckpointInvalid{kDomain, ErrorCode{"save.migration.checkpoint_invalid"}, kError,
+                                                         "A declared save migration checkpoint is missing or contradictory.",
+                                                         "Declare the exact registered checkpoint and its typed source-to-target route."};
+    const ErrorCodeDescriptor
+        MigrationCheckpointNotEquivalent{kDomain, ErrorCode{"save.migration.checkpoint_not_equivalent"}, kError,
+                                         "A save migration checkpoint is not equivalent to its sequential route.",
+                                         "Test and declare every exact sequential edge represented by the checkpoint."};
+    const ErrorCodeDescriptor MigrationUnsupportedNewer{kDomain, ErrorCode{"save.migration.unsupported_newer"}, kError,
+                                                        "The save source requires a newer migration writer than this release provides.",
+                                                        "Use a newer compatible reader; forward input is rejected before restore."};
+    const ErrorCodeDescriptor MigrationSourceUnsupported{kDomain, ErrorCode{"save.migration.source_unsupported"}, kError,
+                                                         "The save source is outside the declared migration support horizon.",
+                                                         "Use a supported save or provide an explicit bounded migration bridge."};
+    const ErrorCodeDescriptor MigrationPlanInvalid{kDomain, ErrorCode{"save.migration.plan_invalid"}, kError,
+                                                   "The save migration plan is malformed or not snapshot-bound.",
+                                                   "Rebuild the plan from one valid frozen migration registry snapshot."};
+    const ErrorCodeDescriptor MigrationCandidateInvalid{kDomain, ErrorCode{"save.migration.candidate_invalid"}, kError,
+                                                        "A save migration produced an invalid detached candidate.",
+                                                        "Return bounded canonical state and change only the axis owned by the step."};
+    const ErrorCodeDescriptor MigrationStepFailed{kDomain, ErrorCode{"save.migration.step_failed"}, kError,
+                                                  "A save migration step failed while transforming detached state.",
+                                                  "Inspect the retained typed cause and repair the step for the declared source range."};
+    const ErrorCodeDescriptor MigrationLimitExceeded{kDomain, ErrorCode{"save.migration.limit_exceeded"}, kError,
+                                                     "Save migration work exceeds an explicit trusted bound.",
+                                                     "Reduce route, catalog, payload, or participant size before retrying."};
+    const ErrorCodeDescriptor MigrationSourceMutated{kDomain, ErrorCode{"save.migration.source_mutated"}, ErrorSeverity::Critical,
+                                                     "A save migration attempted to mutate its source archive.",
+                                                     "Abort the operation and keep the original archive as the last-known-good source."};
+    const ErrorCodeDescriptor MigrationAllocationFailed{kDomain,
+                                                        ErrorCode{"save.migration.allocation_failed"},
+                                                        kError,
+                                                        "Save migration catalog or candidate storage could not be allocated.",
+                                                        "Release migration staging memory and retry under the same finite limits.",
+                                                        true};
     const ErrorCodeDescriptor ParticipantDescriptorInvalid{kDomain, ErrorCode{"save.participant.descriptor_invalid"}, kError,
                                                            "A save participant descriptor is invalid.",
                                                            "Correct its identity, version, roles, dependencies, ownership, and bounds."};
@@ -297,6 +356,22 @@ namespace Horo::Runtime::SaveErrors {
                                                        "Slot-generation recovery could not converge safely.",
                                                        "Quarantine slot mutation and preserve the journal for bounded operator recovery.",
                                                        true};
+    const ErrorCodeDescriptor SlotRecoveryInvalid{kDomain, ErrorCode{"save.slot_recovery.invalid"}, kError,
+                                                  "Last-known-good recovery evidence or policy is invalid.",
+                                                  "Preserve the current evidence and correct the bounded recovery input."};
+    const ErrorCodeDescriptor SlotRecoveryLimitExceeded{kDomain,
+                                                        ErrorCode{"save.slot_recovery.limit_exceeded"},
+                                                        kError,
+                                                        "Last-known-good recovery evidence exceeds a trusted retention bound.",
+                                                        "Preserve the evidence and revise the explicit recovery retention policy.",
+                                                        false,
+                                                        true};
+    const ErrorCodeDescriptor SlotRecoveryAllocationFailed{kDomain,
+                                                           ErrorCode{"save.slot_recovery.allocation_failed"},
+                                                           kError,
+                                                           "Last-known-good recovery bookkeeping could not be allocated.",
+                                                           "Keep the current generation and retry recovery after reducing memory pressure.",
+                                                           true};
     const ErrorCodeDescriptor StoragePolicyInvalid{kDomain, ErrorCode{"save.storage.policy_invalid"}, kError,
                                                    "Save storage capacity or recovery policy evidence is invalid.",
                                                    "Supply bounded ordered capacity evidence and a finite retry policy."};

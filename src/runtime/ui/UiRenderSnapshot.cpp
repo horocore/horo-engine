@@ -34,6 +34,14 @@ namespace Horo::Runtime::Ui {
             return index == NoUiRenderIndex || PresentIndex(index, size);
         }
 
+        bool ValidUvRect(const std::array<float, 4> &uv) noexcept {
+            return std::ranges::all_of(uv,
+                                       [](const float value) {
+                return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
+            }) && uv[0] <= uv[2] &&
+                   uv[1] <= uv[3];
+        }
+
         bool ValidPaintLimits(const UiRenderSnapshotLimits &limits) noexcept {
             return limits.commands <= MaximumUiRenderCommands && limits.textRuns <= MaximumUiRenderTextRuns &&
                    limits.glyphs <= MaximumUiRenderGlyphs && limits.resources <= MaximumUiRenderResources;
@@ -105,6 +113,9 @@ namespace Horo::Runtime::Ui {
                 if (run.firstGlyph > glyphs.size() || run.glyphCount > glyphs.size() - run.firstGlyph || !run.color.IsValid())
                     return Failure(UiErrors::RenderSnapshotInvalid);
             }
+            for (const auto &glyph : glyphs)
+                if (!glyph.extent.IsValid() || !ValidUvRect(glyph.uv))
+                    return Failure(UiErrors::RenderSnapshotInvalid);
             return Result<void>::Success();
         }
 
@@ -142,6 +153,13 @@ namespace Horo::Runtime::Ui {
             if (!PresentIndex(draw.resource, resources.size()) || resources[draw.resource].role != UiRenderResourceRole::Image)
                 return Failure(UiErrors::RenderResourceReferenceInvalid);
             return draw.tint.IsValid() ? Result<void>::Success() : Failure(UiErrors::RenderCommandInvalid);
+        }
+
+        Result<void> ValidatePayload(const UiSpriteDraw &draw, const std::span<const UiTextRun>,
+                                     const std::span<const UiRenderResourceReference> resources) {
+            if (!PresentIndex(draw.resource, resources.size()) || resources[draw.resource].role != UiRenderResourceRole::Image)
+                return Failure(UiErrors::RenderResourceReferenceInvalid);
+            return draw.tint.IsValid() && ValidUvRect(draw.uv) ? Result<void>::Success() : Failure(UiErrors::RenderCommandInvalid);
         }
 
         Result<void> ValidatePayload(const UiTextDraw &draw, const std::span<const UiTextRun> runs,
@@ -369,6 +387,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderSnapshot::Descriptor */
     const UiRenderSnapshotDescriptor &UiRenderSnapshot::Descriptor() const noexcept {
         return storage_->descriptor;
+    }
+
+    /** @copydoc UiRenderSnapshot::IsValid */
+    bool UiRenderSnapshot::IsValid() const noexcept {
+        return static_cast<bool>(storage_);
     }
 
     /** @copydoc UiRenderSnapshot::Commands */
