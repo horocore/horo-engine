@@ -121,6 +121,7 @@ namespace Horo::Editor {
                     .colliders = ActiveComponents(object.components.colliders),
                     .physicsConstraints = ActiveComponents(object.components.physicsConstraints),
                     .behaviors = object.components.behaviors,
+                    .gameplayComponents = object.components.gameplayComponents,
                 };
                 builder.Add(Runtime::RuntimeEntityDefinition{
                     .object = Runtime::SceneObjectId{object.id.value},
