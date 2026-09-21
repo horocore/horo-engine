@@ -8,6 +8,9 @@
 #include <tuple>
 
 namespace Horo::Character::Detail {
+    constexpr float GroundNormalTolerance = 1.0e-5F;
+    constexpr float GroundDistanceTolerance = 1.0e-5F;
+
     /** @brief Provides the stable response rank used by the Character sweep reducer. */
     [[nodiscard]] std::uint8_t SweepResponseRank(const Physics::PhysicsQueryResponse response) noexcept {
         return response == Physics::PhysicsQueryResponse::Block ? 0U : 1U;
@@ -31,7 +34,10 @@ namespace Horo::Character::Detail {
                                         left.point.z,
                                         left.normal.x,
                                         left.normal.y,
-                                        left.normal.z};
+                                        left.normal.z,
+                                        left.relativeVelocityMetersPerSecond.x,
+                                        left.relativeVelocityMetersPerSecond.y,
+                                        left.relativeVelocityMetersPerSecond.z};
         const auto rightKey = std::tuple{right.distanceMeters,
                                          SweepResponseRank(right.response),
                                          right.body.has_value(),
@@ -46,7 +52,10 @@ namespace Horo::Character::Detail {
                                          right.point.z,
                                          right.normal.x,
                                          right.normal.y,
-                                         right.normal.z};
+                                         right.normal.z,
+                                         right.relativeVelocityMetersPerSecond.x,
+                                         right.relativeVelocityMetersPerSecond.y,
+                                         right.relativeVelocityMetersPerSecond.z};
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
         if (left.material.has_value() != right.material.has_value())
@@ -97,13 +106,24 @@ namespace Horo::Character::Detail {
                std::tie(right.material.asset.Bytes(), right.material.assetGeneration, rightSlot);
     }
 
+    /** @brief Reports whether a surface normal is walkable against the controller's explicit up basis. */
+    [[nodiscard]] bool IsWalkableGroundNormal(const Math::Vec3 normal, const Math::Vec3 up, const float walkableCosine) noexcept {
+        return Math::Dot(normal, up) >= walkableCosine - GroundNormalTolerance;
+    }
+
+    /** @brief Computes the stable slope angle for a validated normal and up basis. */
+    [[nodiscard]] float GroundSlopeDegrees(const Math::Vec3 normal, const Math::Vec3 up) noexcept {
+        const float cosine = std::clamp(Math::Dot(normal, up), -1.0F, 1.0F);
+        return std::acos(cosine) * 180.0F / Math::Pi;
+    }
+
     /** @brief Classifies one blocking normal without changing the controller's up basis. */
     [[nodiscard]] CharacterCollisionFlags CollisionFlagForNormal(const Math::Vec3 normal, const Math::Vec3 up, const float walkableCosine) {
         using enum CharacterCollisionFlags;
         const float upDot = Math::Dot(normal, up);
-        if (upDot > 0.0F && upDot >= walkableCosine)
+        if (upDot > 0.0F && IsWalkableGroundNormal(normal, up, walkableCosine))
             return Ground;
-        if (upDot < 0.0F && -upDot >= walkableCosine)
+        if (upDot < 0.0F && -upDot >= walkableCosine - GroundNormalTolerance)
             return Ceiling;
         return Sides;
     }
@@ -197,6 +217,100 @@ namespace Horo::Character::Detail {
             remaining *= std::sqrt(beforeProjection / afterProjection);
     }
 
+    /** @brief Clears all optional support evidence while retaining the explicit up basis. */
+    void ClearGroundEvidence(CharacterMovementResult &result, const Math::Vec3 up) noexcept {
+        result.grounded = false;
+        result.groundSlopeDegrees = 0.0F;
+        result.groundNormal = up;
+        result.groundMaterial.reset();
+        result.groundBody.reset();
+        result.groundShape = {};
+        result.groundDistanceMeters = 0.0F;
+        result.groundRelativeVelocityMetersPerSecond = {};
+        result.platformAttached = false;
+        result.groundingRevalidationRequired = true;
+    }
+
+    /** @brief Returns whether this command is allowed to pull a controller down onto a nearby floor. */
+    [[nodiscard]] bool MaySnapToGround(const CharacterMovementRequest &command, const Math::Vec3 up) noexcept {
+        if (command.jumpRequested)
+            return false;
+        return !command.desiredVelocityMetersPerSecond.has_value() ||
+               Math::Dot(*command.desiredVelocityMetersPerSecond, up) <= GroundNormalTolerance;
+    }
+
+    /** @brief Computes the bounded downward probe length from the controller's snap policy. */
+    [[nodiscard]] float GroundProbeDistance(const CharacterControllerDescriptor &descriptor) noexcept {
+        const float snapDistance = std::max(descriptor.skinWidthMeters, descriptor.maximumStepHeightMeters);
+        return snapDistance + descriptor.skinWidthMeters + GroundDistanceTolerance;
+    }
+
+    /** @brief Finds a stable walkable support hit from one sorted downward probe. */
+    [[nodiscard]] std::optional<CharacterSweepHit> SelectGroundHit(const CharacterSweepProbeResult &evidence,
+                                                                   const CharacterControllerDescriptor &descriptor) {
+        const float slopeRadians = descriptor.maximumSlopeDegrees * Math::Pi / 180.0F;
+        const float walkableCosine = std::cos(slopeRadians);
+        const float snapDistance = std::max(descriptor.skinWidthMeters, descriptor.maximumStepHeightMeters);
+        for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
+            const CharacterSweepHit &hit = evidence.hits[index];
+            if (hit.response != Physics::PhysicsQueryResponse::Block || hit.distanceMeters > snapDistance + GroundDistanceTolerance ||
+                !IsWalkableGroundNormal(hit.normal, descriptor.up, walkableCosine))
+                continue;
+            return hit;
+        }
+        return std::nullopt;
+    }
+
+    /** @brief Resolves bounded floor classification and downward snap after ordinary movement. */
+    [[nodiscard]] Result<void> ResolveGrounding(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
+                                                const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
+                                                Math::Vec3 &position) {
+        ClearGroundEvidence(result, descriptor.up);
+        if (!MaySnapToGround(command, descriptor.up))
+            return Result<void>::Success();
+
+        const Math::Vec3 down = descriptor.up * -1.0F;
+        const CharacterSweepProbeRequest request{command.controller,
+                                                 impl.descriptor.sceneGeneration,
+                                                 impl.descriptor.identity,
+                                                 impl.descriptor.physicsWorld,
+                                                 descriptor.capsule,
+                                                 position,
+                                                 descriptor.up,
+                                                 down,
+                                                 GroundProbeDistance(descriptor),
+                                                 descriptor.collisionProfile,
+                                                 descriptor.queryChannel,
+                                                 impl.settings.Values().work.maximumMovementIterations};
+        auto probe = input.query.sweep(input.query.context, request);
+        if (impl.state.load() != CharacterWorldState::Active)
+            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+        if (probe.HasError())
+            return Result<void>::Failure(probe.ErrorValue());
+        CharacterSweepProbeResult evidence = std::move(probe).Value();
+        if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
+            return valid;
+        std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
+        const auto support = SelectGroundHit(evidence, descriptor);
+        if (!support.has_value())
+            return Result<void>::Success();
+
+        const float snap = std::max(0.0F, support->distanceMeters - descriptor.skinWidthMeters);
+        position += down * snap;
+        result.grounded = true;
+        result.groundSlopeDegrees = GroundSlopeDegrees(support->normal, descriptor.up);
+        result.groundNormal = support->normal;
+        result.groundMaterial = support->material.value_or(descriptor.defaultMaterial);
+        result.groundBody = support->body;
+        result.groundShape = support->shape;
+        result.groundDistanceMeters = support->distanceMeters - snap;
+        result.groundRelativeVelocityMetersPerSecond = support->relativeVelocityMetersPerSecond;
+        result.collisions = result.collisions | CharacterCollisionFlags::Ground;
+        result.groundingRevalidationRequired = false;
+        RetainSweepContact(result, *support, descriptor);
+        return Result<void>::Success();
+    }
+
     /** @brief Resolves one bounded sweep query and returns whether another iteration may continue. */
     [[nodiscard]] Result<bool> ResolveCapsuleSweepIteration(auto &impl, CharacterMovementResult &result,
                                                             const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
@@ -262,17 +376,14 @@ namespace Horo::Character::Detail {
         result.finalPosition = previous.position;
         result.finalHeading = command.desiredHeading.value_or(previous.heading);
         result.up = descriptor.up;
-        result.groundNormal = descriptor.up;
-        result.groundingRevalidationRequired = true;
-        if (!command.desiredVelocityMetersPerSecond.has_value())
-            return Result<CharacterMovementResult>::Success(std::move(result));
+        ClearGroundEvidence(result, descriptor.up);
 
         const double seconds = static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0;
         if (!std::isfinite(seconds) || seconds <= 0.0 || seconds > static_cast<double>(std::numeric_limits<float>::max()))
             return Result<CharacterMovementResult>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Character fixed-tick delta cannot produce a finite movement result."));
         const auto elapsedSeconds = static_cast<float>(seconds);
-        SweepMotionState motion{previous.position, *command.desiredVelocityMetersPerSecond * elapsedSeconds};
+        SweepMotionState motion{previous.position, command.desiredVelocityMetersPerSecond.value_or(Math::Vec3{}) * elapsedSeconds};
         if (!Math::IsFinite(motion.remaining))
             return Result<CharacterMovementResult>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Character desired displacement is not finite."));
@@ -284,6 +395,8 @@ namespace Horo::Character::Detail {
             if (!resolved.Value())
                 break;
         }
+        if (const auto grounded = ResolveGrounding(impl, result, command, input, descriptor, motion.position); grounded.HasError())
+            return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
         result.finalPosition = motion.position;
         result.achievedVelocityMetersPerSecond = (motion.position - previous.position) / elapsedSeconds;
         std::ranges::sort(result.contacts.begin(), result.contacts.begin() + result.contactCount, ContactLess);
