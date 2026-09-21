@@ -66,6 +66,10 @@ namespace Horo::Runtime {
             return true;
         }
 
+        [[nodiscard]] bool ValidGameplayComponents(const std::span<const Gameplay::SerializedComponent> components) noexcept {
+            return Gameplay::ValidateSerializedComponents(components).HasValue();
+        }
+
         [[nodiscard]] bool ValidComponents(const RuntimeComponentSet &components) noexcept {
             if (components.camera && !ValidCamera(*components.camera))
                 return false;
@@ -87,7 +91,9 @@ namespace Horo::Runtime {
                 return false;
             if (components.navigationAgent && ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
                 return false;
-            return ValidBehaviors(components.behaviors);
+            if (!ValidBehaviors(components.behaviors) || !ValidGameplayComponents(components.gameplayComponents))
+                return false;
+            return true;
         }
 
         /** @brief Validates navigation identities and cross-component references across the complete scene. */

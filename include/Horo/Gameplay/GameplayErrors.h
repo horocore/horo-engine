@@ -22,6 +22,9 @@ namespace Horo::Gameplay::GameplayErrors {
     extern const ErrorCodeDescriptor InvalidComponentMigration;
     extern const ErrorCodeDescriptor DuplicateComponentType;
     extern const ErrorCodeDescriptor ComponentRegistryFrozen;
+    extern const ErrorCodeDescriptor ComponentDescriptorMissing;
+    extern const ErrorCodeDescriptor ComponentSchemaIncompatible;
+    extern const ErrorCodeDescriptor GameplayPlayBlocked;
     extern const ErrorCodeDescriptor InvalidSystemId;
     extern const ErrorCodeDescriptor InvalidServiceId;
     extern const ErrorCodeDescriptor InvalidCapabilityId;

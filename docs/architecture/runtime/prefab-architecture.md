@@ -373,6 +373,26 @@ No raw project setting is accepted by a Prefab operation.
 | runtime spawn lineage depth | yes | `8` including the target |
 | object display-name bytes | no; hard safety only | `256` |
 
+The canonical source reader also bounds the encoded UTF-8 JSON document at `32 MiB` and
+limits JSON nesting to `32` containers. These are parser safety ceilings, independent from
+the semantic source payload ceiling above.
+
+### Canonical source representation
+
+Tier 0 source uses one strict JSON representation whose root fields are
+`projectVersion`, `assetId`, `objects`, optional `composition`, and `referencedAssets`.
+`projectVersion` is the unified project version; there is no prefab-local schema counter.
+`assetId` and every external reference are canonical sidecar-owned `AssetId` values, never
+source paths. Object and placement identities are persisted local slots. Component envelopes
+carry `instanceId`, `typeId`, `schemaVersion`, `encoding`, and a bounded `payload.bytes`
+array; the admitted source encoding is `canonicalJson`, and the byte array is retained
+verbatim when the owning provider is unavailable. Behavior fields use explicit typed value
+tags. The parser rejects duplicate or unknown fields, malformed UTF-8, non-finite numbers,
+unsupported project-version expectations, invalid hierarchy/composition, and every bound
+violation before constructing the immutable document candidate. Serialization emits fixed
+field order, parent-before-child hierarchy order, and stable identity order for references,
+components, behaviors, fields, and placements, ending in one newline.
+
 The expansion work limit is derived, not independently configured: checked arithmetic sums
 the accepted object, object-component, dependency, direct-placement, graph-depth,
 override-path, conflict-or-orphan and binding-use maxima. An operation-local `PrefabExpansionBudget`

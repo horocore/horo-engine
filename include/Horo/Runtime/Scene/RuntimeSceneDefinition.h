@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetDependency.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
+#include "Horo/Gameplay/Component.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
@@ -41,6 +42,7 @@ namespace Horo::Runtime {
         std::vector<ColliderComponent> colliders;
         std::vector<PhysicsConstraintComponent> physicsConstraints;
         std::vector<Gameplay::BehaviorComponent> behaviors;
+        std::vector<Gameplay::SerializedComponent> gameplayComponents;
         [[nodiscard]] bool operator==(const RuntimeComponentSet &) const noexcept = default;
     };
 

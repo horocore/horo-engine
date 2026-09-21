@@ -209,6 +209,7 @@ namespace Horo::Editor {
                     .colliders = ActiveComponents(object.components.colliders),
                     .physicsConstraints = ActiveComponents(object.components.physicsConstraints),
                     .behaviors = object.components.behaviors,
+                    .gameplayComponents = object.components.gameplayComponents,
                 };
                 if (const Result<void> migrated = MigrateTriggerVolume(object, components); migrated.HasError())
                     return migrated;

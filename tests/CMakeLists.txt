@@ -401,6 +401,7 @@ add_executable(HoroVfxApiTests
         unit/runtime/vfx/CpuParticleBufferTests.cpp
         unit/runtime/vfx/CpuParticleSpawnPipelineTests.cpp
         unit/runtime/vfx/ParticleSystemDescriptorTests.cpp
+        unit/runtime/vfx/VfxFoundationQualificationTests.cpp
         unit/runtime/vfx/VfxIdentityTests.cpp
         unit/runtime/vfx/VfxQualityPolicyTests.cpp
 )
@@ -565,6 +566,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
+        unit/runtime/prefab/PrefabDocumentSerializationTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
         unit/runtime/prefab/PrefabSceneIdentityRemapTests.cpp
@@ -1230,6 +1232,7 @@ target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExt
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
         unit/editor/SceneDocumentTriggerVolumePersistenceTests.cpp
+        unit/editor/SceneDocumentGameplayPersistenceTests.cpp
         unit/editor/SceneDocumentComparisonPersistenceTests.cpp
         unit/editor/SceneDocumentFileWatchPersistenceTests.cpp
         unit/editor/SceneDocumentPersistenceTestSupport.cpp
