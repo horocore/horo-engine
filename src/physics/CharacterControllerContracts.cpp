@@ -120,41 +120,54 @@ namespace Horo::Character {
             return std::acos(cosine) * 180.0F / Math::Pi;
         }
 
-        /** @brief Checks coherent grounded or airborne surface evidence. */
-        [[nodiscard]] Result<void> ValidateGroundEvidence(const CharacterMovementResult &result,
-                                                          const CharacterControllerDescriptor &descriptor) {
+        /** @brief Checks the support identity, motion and slope evidence of a grounded result. */
+        [[nodiscard]] Result<void> ValidateGroundedState(const CharacterMovementResult &result,
+                                                         const CharacterControllerDescriptor &descriptor) {
             using FlagValue = std::underlying_type_t<CharacterCollisionFlags>;
             const bool hasGroundCollision =
                 (static_cast<FlagValue>(result.collisions) & static_cast<FlagValue>(CharacterCollisionFlags::Ground)) != 0;
+            if (!IsUnit(result.groundNormal) || !result.groundMaterial.has_value() || !IsMaterialValid(*result.groundMaterial) ||
+                !result.groundShape.IsValid() || result.groundShape.world != descriptor.physicsWorld ||
+                !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) || !std::isfinite(result.groundDistanceMeters) ||
+                result.groundDistanceMeters < 0.0F)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks valid surface evidence."));
+            if (result.groundBody.has_value()) {
+                if (const auto owner = Physics::ValidatePhysicsHandleOwner(*result.groundBody, descriptor.physicsWorld); owner.HasError())
+                    return Result<void>::Failure(
+                        MakeError(CharacterErrors::DescriptorInvalid, "Ground support body does not belong to the descriptor world."));
+            }
+            if (!hasGroundCollision)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks ground collision evidence."));
+            const float expectedSlope = GroundSlopeDegrees(result.groundNormal, result.up);
+            if (!std::isfinite(expectedSlope) || expectedSlope > descriptor.maximumSlopeDegrees + GroundSlopeToleranceDegrees ||
+                std::abs(result.groundSlopeDegrees - expectedSlope) > GroundSlopeToleranceDegrees)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Ground slope metadata does not match the support normal."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks that an airborne result does not retain stale support evidence. */
+        [[nodiscard]] Result<void> ValidateAirborneState(const CharacterMovementResult &result) {
+            if (result.groundMaterial.has_value() || result.groundBody.has_value() || result.groundShape.IsValid() ||
+                !std::isfinite(result.groundDistanceMeters) || std::abs(result.groundDistanceMeters) > GroundDistanceToleranceMeters ||
+                !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) ||
+                Math::LengthSquared(result.groundRelativeVelocityMetersPerSecond) >
+                    GroundDistanceToleranceMeters * GroundDistanceToleranceMeters)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Airborne result cannot claim ground support evidence."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks coherent grounded or airborne surface evidence. */
+        [[nodiscard]] Result<void> ValidateGroundEvidence(const CharacterMovementResult &result,
+                                                          const CharacterControllerDescriptor &descriptor) {
             if (result.grounded) {
-                if (!IsUnit(result.groundNormal) || !result.groundMaterial.has_value() || !IsMaterialValid(*result.groundMaterial) ||
-                    !result.groundShape.IsValid() || result.groundShape.world != descriptor.physicsWorld ||
-                    !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) || !std::isfinite(result.groundDistanceMeters) ||
-                    result.groundDistanceMeters < 0.0F || result.groundingRevalidationRequired)
-                    return Result<void>::Failure(
-                        MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks valid surface evidence."));
-                if (result.groundBody.has_value()) {
-                    if (const auto owner = Physics::ValidatePhysicsHandleOwner(*result.groundBody, descriptor.physicsWorld);
-                        owner.HasError())
-                        return Result<void>::Failure(
-                            MakeError(CharacterErrors::DescriptorInvalid, "Ground support body does not belong to the descriptor world."));
-                }
-                if (!hasGroundCollision)
-                    return Result<void>::Failure(
-                        MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks ground collision evidence."));
-                const float expectedSlope = GroundSlopeDegrees(result.groundNormal, result.up);
-                if (!std::isfinite(expectedSlope) || expectedSlope > descriptor.maximumSlopeDegrees + GroundSlopeToleranceDegrees ||
-                    std::abs(result.groundSlopeDegrees - expectedSlope) > GroundSlopeToleranceDegrees)
-                    return Result<void>::Failure(
-                        MakeError(CharacterErrors::DescriptorInvalid, "Ground slope metadata does not match the support normal."));
-            } else {
-                if (result.groundMaterial.has_value() || result.groundBody.has_value() || result.groundShape.IsValid() ||
-                    !std::isfinite(result.groundDistanceMeters) || std::abs(result.groundDistanceMeters) > GroundDistanceToleranceMeters ||
-                    !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) ||
-                    Math::LengthSquared(result.groundRelativeVelocityMetersPerSecond) >
-                        GroundDistanceToleranceMeters * GroundDistanceToleranceMeters)
-                    return Result<void>::Failure(
-                        MakeError(CharacterErrors::DescriptorInvalid, "Airborne result cannot claim ground support evidence."));
+                if (const auto grounded = ValidateGroundedState(result, descriptor); grounded.HasError())
+                    return grounded;
+            } else if (const auto airborne = ValidateAirborneState(result); airborne.HasError()) {
+                return airborne;
             }
             if (result.platformAttached && !result.grounded)
                 return Result<void>::Failure(
