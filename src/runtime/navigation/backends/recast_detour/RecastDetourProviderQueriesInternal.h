@@ -29,5 +29,10 @@ namespace Horo::Navigation::RecastDetourQueries {
         float defaultClearanceMeters{};
     };
 
+    [[nodiscard]] Result<QueryEndpoint> ResolveEndpoint(const QuerySlot &slot, Math::Vec3 point, Math::Vec3 halfExtents,
+                                                        const NavigationPathRequest &request, const NavigationAreaRegistry &areaRegistry,
+                                                        const std::vector<GroundedNavigationPolygon> &polygons,
+                                                        const std::vector<dtPolyRef> &polygonReferences);
+
     [[nodiscard]] Result<NavigationPath> BuildPath(PathBuildContext &context);
 }  // namespace Horo::Navigation::RecastDetourQueries
