@@ -32,6 +32,9 @@ workflows.
   validate project grid, precision, capacity, and package settings without fallback.
 - [World Partition Registry Snapshot Migration](./world-partition-registry-migration.md):
   publish immutable generation-pinned indices and run bounded allocation-free queries.
+- [World Partition Foundation Qualification](./world-partition-foundation-qualification.md):
+  qualify stable identities, deterministic quantization, immutable references, bounded
+  registry snapshots, capability profiles, and the non-streamed fallback composition.
 - [World Streaming Priority Policy Migration](./world-streaming-priority-policy-migration.md):
   rank bounded cell-work snapshots with revision fences, stable ties, and capped age.
 - [World Streaming Cell Stability Migration](./world-streaming-cell-stability-migration.md):
