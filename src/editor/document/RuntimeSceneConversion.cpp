@@ -34,8 +34,39 @@ namespace Horo::Editor {
             .retryable = false,
             .userActionable = true,
         };
+        const ErrorCodeDescriptor TriggerVolumeSchemaUnsupported{
+            .domain = SceneConversionDomain,
+            .code = ErrorCode{"scene_conversion.trigger_volume_schema_unsupported"},
+            .defaultSeverity = ErrorSeverity::Error,
+            .summary = "A legacy trigger volume cannot be represented by the canonical Physics scene schema.",
+            .remediationHint = "Use one of the supported analytic trigger shapes and reload the scene if its schema is stale.",
+            .retryable = false,
+            .userActionable = true,
+        };
+        const ErrorCodeDescriptor TriggerVolumeCanonicalConflict{
+            .domain = SceneConversionDomain,
+            .code = ErrorCode{"scene_conversion.trigger_volume_canonical_conflict"},
+            .defaultSeverity = ErrorSeverity::Error,
+            .summary = "A legacy trigger volume overlaps an explicit Physics component declaration.",
+            .remediationHint = "Keep either the legacy trigger authoring component or the canonical body/collider declaration, then retry.",
+            .retryable = false,
+            .userActionable = true,
+        };
         constexpr std::string_view NavigationAgentPrefabComponentType = "game.horo.navigation_agent";
         using Json = nlohmann::json;
+
+        // These identities are derived-only compatibility values for the shape-only
+        // authoring component. They are never persisted and are not project defaults.
+        // The project collision/material schema owns the eventual replacement IDs.
+        constexpr Physics::CollisionProfileId LegacyTriggerVolumeCollisionProfile = Physics::CollisionProfileId::FromBytes(
+            {0x48, 0x6f, 0x72, 0x6f, 0x50, 0x68, 0x79, 0x73, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00, 0x02});
+        constexpr Assets::AssetId LegacyTriggerVolumeMaterial =
+            Assets::AssetId::FromBytes({0x48, 0x6f, 0x72, 0x6f, 0x50, 0x68, 0x79, 0x73, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00, 0x04});
+        constexpr Physics::PhysicsMaterialSlotId LegacyTriggerVolumeMaterialSlot = Physics::PhysicsMaterialSlotId::FromValue(1);
+        constexpr Runtime::PhysicsComponentId LegacyTriggerVolumeBodyComponent = {1};
+        constexpr Runtime::PhysicsBodySlotId LegacyTriggerVolumeBodySlot = {1};
+        constexpr Runtime::PhysicsComponentId LegacyTriggerVolumeColliderComponent = {2};
+        constexpr Runtime::PhysicsColliderSlotId LegacyTriggerVolumeColliderSlot = {1};
 
         template <typename Component> [[nodiscard]] std::optional<Component> ActiveComponent(const std::optional<Component> &component) {
             return component.has_value() && component->enabled ? component : std::nullopt;
@@ -46,6 +77,64 @@ namespace Horo::Editor {
             active.reserve(components.size());
             std::ranges::copy_if(components, std::back_inserter(active), &Component::enabled);
             return active;
+        }
+
+        /**
+         * @brief Converts one enabled legacy trigger into canonical inert Physics producers.
+         * @param object Immutable authored object whose component set is being projected.
+         * @param components Runtime component set receiving the normalized
+         *                    producers.
+         * @return Success or a stable migration diagnostic; no authored state is mutated.
+         */
+        [[nodiscard]] Result<void> MigrateTriggerVolume(const SceneObjectSnapshot &object, Runtime::RuntimeComponentSet &components) {
+            if (!object.components.triggerVolume)
+                return Result<void>::Success();
+
+            Runtime::PhysicsColliderSource source;
+            using enum Runtime::ColliderShapeType;
+            switch (object.components.triggerVolume->shape) {
+                case Box:
+                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{}};
+                    break;
+                case Sphere:
+                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{}};
+                    break;
+                case Capsule:
+                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsCapsuleCollider{}};
+                    break;
+                case StaticPlane:
+                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsStaticPlaneCollider{}};
+                    break;
+                default:
+                    return Result<void>::Failure(
+                        MakeError(TriggerVolumeSchemaUnsupported,
+                                  std::format("Scene object {} contains an unsupported legacy trigger shape value.", object.id.value)));
+            }
+            if (!object.components.triggerVolume->enabled)
+                return Result<void>::Success();
+
+            if (object.components.rigidBody || !object.components.colliders.empty() || !object.components.physicsConstraints.empty())
+                return Result<void>::Failure(
+                    MakeError(TriggerVolumeCanonicalConflict,
+                              std::format("Scene object {} contains both a legacy trigger volume and canonical Physics producers.",
+                                          object.id.value)));
+
+            components.rigidBody = Runtime::RigidBodyComponent{.id = LegacyTriggerVolumeBodyComponent,
+                                                               .body = LegacyTriggerVolumeBodySlot,
+                                                               .motion = Runtime::AuthoredPhysicsMotionType::Static,
+                                                               .mass = Runtime::AuthoredPhysicsNoMass{}};
+            components.colliders = {Runtime::ColliderComponent{
+                .id = LegacyTriggerVolumeColliderComponent,
+                .collider = LegacyTriggerVolumeColliderSlot,
+                .body = {.object = Runtime::SceneObjectId{object.id.value}, .body = LegacyTriggerVolumeBodySlot},
+                .source = std::move(source),
+                .localPose = {.translation = Math::Vec3{}, .rotation = Math::Quaternion::Identity()},
+                .scale = {1.0F, 1.0F, 1.0F},
+                .collisionProfile = LegacyTriggerVolumeCollisionProfile,
+                .materials = {{.slot = LegacyTriggerVolumeMaterialSlot, .material = LegacyTriggerVolumeMaterial}},
+                .sensor = true,
+            }};
+            return Result<void>::Success();
         }
 
         /** @brief Preserves instance identity while adding scene-conversion context to a resolver failure. */
@@ -107,10 +196,9 @@ namespace Horo::Editor {
             occupied.reserve(document.objects.size());
             for (const SceneObjectSnapshot &object : document.objects) {
                 occupied.emplace_back(object.id.value);
-                const Runtime::RuntimeComponentSet components{
+                Runtime::RuntimeComponentSet components{
                     .camera = ActiveComponent(object.components.camera),
                     .light = ActiveComponent(object.components.light),
-                    .triggerVolume = ActiveComponent(object.components.triggerVolume),
                     .audioSource = ActiveComponent(object.components.audioSource),
                     .navigationSurface = ActiveComponent(object.components.navigationSurface),
                     .navigationRegion = ActiveComponent(object.components.navigationRegion),
@@ -123,6 +211,8 @@ namespace Horo::Editor {
                     .behaviors = object.components.behaviors,
                     .gameplayComponents = object.components.gameplayComponents,
                 };
+                if (const Result<void> migrated = MigrateTriggerVolume(object, components); migrated.HasError())
+                    return migrated;
                 builder.Add(Runtime::RuntimeEntityDefinition{
                     .object = Runtime::SceneObjectId{object.id.value},
                     .parent = object.parent ? std::optional{Runtime::SceneObjectId{object.parent->value}} : std::nullopt,

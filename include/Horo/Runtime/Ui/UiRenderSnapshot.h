@@ -66,9 +66,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief One positioned Horo glyph identity in logical 1/64-DIP units. */
     struct UiPositionedGlyph final {
-        std::uint32_t glyph{};   /**< Horo glyph identity, never an atlas slot. */
-        std::uint32_t cluster{}; /**< Source text cluster index. */
-        UiLogicalPoint origin;   /**< Positioned logical origin. */
+        std::uint32_t glyph{};                           /**< Horo glyph identity, never an atlas slot. */
+        std::uint32_t cluster{};                         /**< Source text cluster index. */
+        UiLogicalPoint origin;                           /**< Positioned logical origin. */
+        UiLogicalExtent extent;                          /**< Bounded logical glyph quad extent. */
+        std::array<float, 4> uv{0.0F, 0.0F, 1.0F, 1.0F}; /**< Normalized atlas/source coordinates. */
     };
 
     /** @brief Immutable glyph range resolved to one exact font resource. */
@@ -109,13 +111,20 @@ namespace Horo::Runtime::Ui {
         UiLinearColor tint;       /**< Resolved linear tint. */
     };
 
+    /** @brief Resolved sprite paint payload naming an image resource and normalized source rectangle. */
+    struct UiSpriteDraw final {
+        std::uint32_t resource{};                        /**< Image resource table index. */
+        std::array<float, 4> uv{0.0F, 0.0F, 1.0F, 1.0F}; /**< Normalized source rectangle [u0, v0, u1, v1]. */
+        UiLinearColor tint;                              /**< Resolved linear tint. */
+    };
+
     /** @brief Resolved text paint payload naming one positioned run. */
     struct UiTextDraw final {
         std::uint32_t run{}; /**< Text run table index. */
     };
 
     /** @brief Closed backend-neutral draw payload vocabulary. */
-    using UiDrawPayload = std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiTextDraw>;
+    using UiDrawPayload = std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw>;
 
     /** @brief One ordered logical draw emitted for an exact retained element. */
     struct UiDrawCommand final {
@@ -204,6 +213,8 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Returns exact extraction evidence. @return Borrowed immutable descriptor. */
         [[nodiscard]] const UiRenderSnapshotDescriptor &Descriptor() const noexcept;
+        /** @brief Reports whether this object still owns a live immutable snapshot lease. @return True for a live snapshot. */
+        [[nodiscard]] bool IsValid() const noexcept;
         /** @brief Returns stable paint-order commands. @return Borrowed span owned by this snapshot. */
         [[nodiscard]] std::span<const UiDrawCommand> Commands() const noexcept;
         /** @brief Returns positioned text runs. @return Borrowed span owned by this snapshot. */

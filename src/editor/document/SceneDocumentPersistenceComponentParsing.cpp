@@ -51,10 +51,12 @@ namespace Horo::Editor::ScenePersistenceDetail {
     }
 
     [[nodiscard]] Result<Runtime::TriggerVolumeComponent> ParseTriggerVolumeComponent(const Json &triggerVolume) {
-        const std::uint8_t shape = triggerVolume.at("shape").get<std::uint8_t>();
-        if (shape > static_cast<std::uint8_t>(Runtime::ColliderShapeType::StaticPlane)) {
+        if (!triggerVolume.is_object() || !triggerVolume.contains("shape") || !triggerVolume["shape"].is_number_unsigned() ||
+            triggerVolume["shape"].get<std::uint64_t>() > static_cast<std::uint8_t>(Runtime::ColliderShapeType::StaticPlane) ||
+            (triggerVolume.contains("enabled") && !triggerVolume["enabled"].is_boolean())) {
             return Result<Runtime::TriggerVolumeComponent>::Failure(PersistenceError(SceneInvalid, "Trigger shape is invalid."));
         }
+        const auto shape = static_cast<std::uint8_t>(triggerVolume["shape"].get<std::uint64_t>());
         return Result<Runtime::TriggerVolumeComponent>::Success(Runtime::TriggerVolumeComponent{
             .shape = static_cast<Runtime::ColliderShapeType>(shape),
             .enabled = triggerVolume.value("enabled", true),
