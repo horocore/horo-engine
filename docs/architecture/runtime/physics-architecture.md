@@ -807,6 +807,13 @@ configured runtime policy.
 
 ## Testing
 
+The versioned [Physics Reference Scene Corpus](../../guides/physics-reference-scene-corpus.md)
+owns the small reproducible fixtures for contact/trigger lifecycle projection,
+query ordering and explicit unsupported capability outcomes. Its comparisons are
+exact for stable Horo identities, event ticks and query float bit patterns; it
+does not claim cross-platform determinism or silently substitute an unsupported
+solver feature.
+
 ### Physics Foundation Qualification Matrix
 
 The Physics foundation contract is qualified in headless CI on Ubuntu 24.04
