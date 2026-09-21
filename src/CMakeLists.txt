@@ -334,6 +334,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/RuntimeSceneDefinition.cpp
         runtime/scene/SavedSceneBootstrap.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneErrors.cpp
 )
 add_library(HoroEngine::RuntimeScene ALIAS HoroRuntimeScene)
@@ -719,6 +720,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationDataSerializationMigration.cpp
         runtime/navigation/api/NavigationDynamicErrors.cpp
         runtime/navigation/api/NavigationErrors.cpp
+        runtime/navigation/api/NavigationErrorsScene.cpp
         runtime/navigation/api/NavigationIdentity.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
         runtime/navigation/api/NavigationProjectProfiles.cpp
@@ -734,12 +736,18 @@ add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationDynamicRegistry.cpp
         runtime/navigation/runtime/NavigationDynamicRegistryCommit.cpp
         runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
+        runtime/navigation/runtime/NavigationAgentRegistry.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
 add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)
 target_compile_features(HoroNavigationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
+
+add_library(HoroNavigationSceneIntegration STATIC runtime/navigation/integration/NavigationSceneActivation.cpp)
+add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
+target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
 
 add_library(HoroXRApi STATIC
         runtime/xr/api/XRCapabilities.cpp
@@ -1092,6 +1100,7 @@ endif ()
 
 add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
+        editor/document/NavigationAgentJson.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
@@ -1116,6 +1125,7 @@ target_link_libraries(HoroEditorModel
         HoroEngine::PrefabAuthoring
         HoroEngine::SceneModel
         HoroEngine::RuntimeScene
+        PRIVATE nlohmann_json::nlohmann_json
 )
 
 add_library(HoroEditorViewportScene STATIC
@@ -1208,6 +1218,7 @@ add_library(HoroEditorServices STATIC
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceCommon.cpp
         editor/document/SceneDocumentPersistenceComponents.cpp
+        editor/document/SceneDocumentPersistencePhysics.cpp
         editor/document/SceneDocumentPersistenceComponentParsing.cpp
         editor/document/SceneDocumentPersistenceNavigationParsing.cpp
         editor/document/SceneDocumentPersistencePhysicsParsing.cpp

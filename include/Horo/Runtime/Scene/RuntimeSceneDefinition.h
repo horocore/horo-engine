@@ -32,6 +32,7 @@ namespace Horo::Runtime {
         std::optional<NavigationRegionComponent> navigationRegion;
         std::optional<NavigationModifierComponent> navigationModifier;
         std::optional<NavigationLinkComponent> navigationLink;
+        std::optional<NavigationAgentComponent> navigationAgent;
         std::optional<RigidBodyComponent> rigidBody;
         std::vector<ColliderComponent> colliders;
         std::vector<PhysicsConstraintComponent> physicsConstraints;

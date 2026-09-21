@@ -1,3 +1,4 @@
+#include "editor/document/NavigationAgentJson.h"
 #include "editor/document/SceneDocumentPersistenceInternal.h"
 
 #include <algorithm>
@@ -288,6 +289,14 @@ namespace Horo::Editor::ScenePersistenceDetail {
         if (Runtime::ValidateNavigationLinkComponent(link).HasError())
             return Result<Runtime::NavigationLinkComponent>::Failure(PersistenceError(SceneInvalid, "Navigation link payload is invalid."));
         return Result<Runtime::NavigationLinkComponent>::Success(std::move(link));
+    }
+
+    [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParseNavigationAgent(const Json &value) {
+        auto parsed = Detail::ParseNavigationAgentJson(value);
+        if (parsed.HasError())
+            return Result<Runtime::NavigationAgentComponent>::Failure(
+                PersistenceError(SceneInvalid, "Navigation agent payload is invalid."));
+        return Result<Runtime::NavigationAgentComponent>::Success(std::move(parsed).Value());
     }
 
 }  // namespace Horo::Editor::ScenePersistenceDetail

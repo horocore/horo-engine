@@ -1,8 +1,9 @@
 # Navigation Scene Components Migration
 
 Scene navigation authoring now uses `NavigationSurfaceComponent`,
-`NavigationRegionComponent`, `NavigationModifierComponent`, and
-`NavigationLinkComponent` from `Horo/Runtime/Scene/NavigationSceneComponents.h`.
+`NavigationRegionComponent`, `NavigationModifierComponent`,
+`NavigationLinkComponent`, and `NavigationAgentComponent` from
+`Horo/Runtime/Scene/NavigationSceneComponents.h`.
 Importers must assign non-zero stable surface, region, modifier, and link identities instead of
 deriving identity from object order, names, paths, entity slots, or pointers.
 
@@ -22,9 +23,14 @@ Link components own ordered finite start/end endpoints, an explicit kind and
 and a bounded unique profile set present on both endpoint surfaces. Coincident
 endpoints are rejected rather than guessed.
 
+Agent components own only provider-neutral intent: a non-zero profile identity,
+query-filter identity, optional finite positive radius override, grounded movement
+capability, schema version, and enabled state. They never persist a runtime crowd
+handle, world identity, entity slot, provider reference, or backend flag.
+
 All mutations go through `SetSceneNavigationSurfaceCommand`,
 `SetSceneNavigationRegionCommand`, `SetSceneNavigationModifierCommand`, or
-`SetSceneNavigationLinkCommand`. These commands validate the complete committed
+`SetSceneNavigationLinkCommand`, or `SetSceneNavigationAgentCommand`. These commands validate the complete committed
 Scene identity/reference set before changing history. Removing a referenced
 surface therefore fails until its regions, modifiers, and link endpoints are
 removed or explicitly retargeted. A malformed command fails atomically and leaves
@@ -40,9 +46,20 @@ snapshot before validation, and overrides then use the same typed commands. Nest
 instances do not inherit or discover ambient surfaces.
 
 Persistence stores these typed values under `navigationSurface`,
-`navigationRegion`, `navigationModifier`, and `navigationLink`. Modifier shape and
+`navigationRegion`, `navigationModifier`, `navigationLink`, and `navigationAgent`.
+Modifier shape and
 operation names, link endpoint order, kind, and direction are explicit strings;
 one-way and bidirectional links therefore round trip without inference. Runtime
 conversion copies only enabled values from one
 committed `DocumentStateId`, which becomes the `SceneDefinitionRevision`; it never
 reads editor previews or an in-progress modal/property draft.
+
+`HoroNavigationRuntime` owns `NavigationAgentRegistry`, a bounded owner-thread
+registry whose handles carry an exact non-reused world and slot generation.
+`HoroNavigationSceneIntegration` prepares a complete detached agent population
+from the unpublished `RuntimeScene`, and the aggregate scene commit publishes it
+only after every activation participant validates. Failed capacity, duplicate-owner,
+stale-generation, or shutdown admission leaves the active scene and registry
+unchanged. Prefab expansion recognizes the canonical provider-neutral
+`game.horo.navigation_agent` serialized component envelope; other opaque payloads
+retain the existing typed-projection failure behavior.

@@ -83,6 +83,8 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::optional<Runtime::NavigationModifierComponent> modifierAfter;
         std::optional<Runtime::NavigationLinkComponent> linkBefore;
         std::optional<Runtime::NavigationLinkComponent> linkAfter;
+        std::optional<Runtime::NavigationAgentComponent> agentBefore;
+        std::optional<Runtime::NavigationAgentComponent> agentAfter;
     };
 
     struct EditorStateChangedDelta {
@@ -244,6 +246,8 @@ namespace Horo::Editor::SceneDocumentDetail {
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
         if (components.navigationLink && Runtime::ValidateNavigationLinkComponent(*components.navigationLink).HasError())
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
+        if (components.navigationAgent && Runtime::ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
+            return Result<void>::Failure(MakeError(Navigation::NavigationErrors::AgentDescriptorInvalid));
         if (components.camera.has_value()) {
             const Runtime::CameraComponent &camera = *components.camera;
             if (!IsValidCameraComponent(camera)) {
@@ -285,7 +289,8 @@ namespace Horo::Editor::SceneDocumentDetail {
             views.push_back({.surface = components.navigationSurface ? &*components.navigationSurface : nullptr,
                              .region = components.navigationRegion ? &*components.navigationRegion : nullptr,
                              .modifier = components.navigationModifier ? &*components.navigationModifier : nullptr,
-                             .link = components.navigationLink ? &*components.navigationLink : nullptr});
+                             .link = components.navigationLink ? &*components.navigationLink : nullptr,
+                             .agent = components.navigationAgent ? &*components.navigationAgent : nullptr});
         };
         for (const SceneObjectSnapshot &object : objects) {
             collect(replacement && replacement->first == object.id ? *replacement->second : object.components);

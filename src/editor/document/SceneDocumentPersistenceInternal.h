@@ -71,6 +71,7 @@ namespace Horo::Editor::ScenePersistenceDetail {
     [[nodiscard]] Result<Runtime::NavigationRegionComponent> ParseNavigationRegion(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationModifierComponent> ParseNavigationModifier(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationLinkComponent> ParseNavigationLink(const Json &value);
+    [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParseNavigationAgent(const Json &value);
 
     [[nodiscard]] Result<Runtime::RigidBodyComponent> ParseRigidBody(const Json &value);
     [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(const Json &value);
@@ -78,6 +79,7 @@ namespace Horo::Editor::ScenePersistenceDetail {
     [[nodiscard]] Result<std::vector<Gameplay::BehaviorComponent>> ParseBehaviors(const Json &value);
 
     [[nodiscard]] Json ComponentsJson(const SceneObjectComponentSet &components);
+    void AppendPhysicsComponents(Json &value, const SceneObjectComponentSet &components);
     [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value);
 
     /** @brief Intermediate scene payload shared by the loader and recovery reader. */

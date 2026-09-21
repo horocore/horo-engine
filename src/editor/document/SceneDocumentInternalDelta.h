@@ -71,7 +71,8 @@ namespace Horo::Editor::SceneDocumentDetail {
             return link ? link->profiles.size() * sizeof(Navigation::NavigationAgentProfileId) : 0U;
         };
         return sizeof(delta) + profileBytes(delta.surfaceBefore) + profileBytes(delta.surfaceAfter) + linkProfileBytes(delta.linkBefore) +
-               linkProfileBytes(delta.linkAfter);
+               linkProfileBytes(delta.linkAfter) + (delta.agentBefore.has_value() ? sizeof(Runtime::NavigationAgentComponent) : 0U) +
+               (delta.agentAfter.has_value() ? sizeof(Runtime::NavigationAgentComponent) : 0U);
     }
 
     [[nodiscard]] inline std::size_t EstimateMemoryBytes(const SceneCommandDelta &delta, const std::size_t affectedObjectCount) noexcept {
@@ -229,6 +230,7 @@ namespace Horo::Editor::SceneDocumentDetail {
             object->components.navigationRegion = delta.regionAfter;
             object->components.navigationModifier = delta.modifierAfter;
             object->components.navigationLink = delta.linkAfter;
+            object->components.navigationAgent = delta.agentAfter;
         }
     }
 
@@ -339,6 +341,7 @@ namespace Horo::Editor::SceneDocumentDetail {
             object->components.navigationRegion = delta.regionBefore;
             object->components.navigationModifier = delta.modifierBefore;
             object->components.navigationLink = delta.linkBefore;
+            object->components.navigationAgent = delta.agentBefore;
         }
     }
 

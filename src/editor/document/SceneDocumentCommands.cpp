@@ -91,7 +91,7 @@ namespace Horo::Editor {
             const std::optional<Runtime::NavigationSurfaceComponent> *surface,
             const std::optional<Runtime::NavigationRegionComponent> *region,
             const std::optional<Runtime::NavigationModifierComponent> *modifier,
-            const std::optional<Runtime::NavigationLinkComponent> *link) {
+            const std::optional<Runtime::NavigationLinkComponent> *link, const std::optional<Runtime::NavigationAgentComponent> *agent) {
             SceneObjectComponentSet candidate = object.components;
             if (surface != nullptr)
                 candidate.navigationSurface = *surface;
@@ -101,6 +101,8 @@ namespace Horo::Editor {
                 candidate.navigationModifier = *modifier;
             if (link != nullptr)
                 candidate.navigationLink = *link;
+            if (agent != nullptr)
+                candidate.navigationAgent = *agent;
             if (Result<void> valid = ValidateComponents(candidate); valid.HasError())
                 return Result<std::optional<PreparedNavigationComponents>>::Failure(valid.ErrorValue());
             if (Result<void> valid =
@@ -111,7 +113,8 @@ namespace Horo::Editor {
             if (candidate.navigationSurface == object.components.navigationSurface &&
                 candidate.navigationRegion == object.components.navigationRegion &&
                 candidate.navigationModifier == object.components.navigationModifier &&
-                candidate.navigationLink == object.components.navigationLink)
+                candidate.navigationLink == object.components.navigationLink &&
+                candidate.navigationAgent == object.components.navigationAgent)
                 return Result<std::optional<PreparedNavigationComponents>>::Success(std::nullopt);
 
             SceneCommandDelta delta = NavigationComponentsChangedDelta{
@@ -124,6 +127,8 @@ namespace Horo::Editor {
                 .modifierAfter = candidate.navigationModifier,
                 .linkBefore = object.components.navigationLink,
                 .linkAfter = candidate.navigationLink,
+                .agentBefore = object.components.navigationAgent,
+                .agentAfter = candidate.navigationAgent,
             };
             return Result<std::optional<PreparedNavigationComponents>>::Success(
                 PreparedNavigationComponents{std::move(candidate), std::move(delta)});
@@ -339,10 +344,11 @@ namespace Horo::Editor {
     Result<SceneCommandResult> SceneDocumentCommandExecutor::CommitNavigationComponents(
         const SceneObjectId objectId, const std::optional<Runtime::NavigationSurfaceComponent> *surface,
         const std::optional<Runtime::NavigationRegionComponent> *region,
-        const std::optional<Runtime::NavigationModifierComponent> *modifier, const std::optional<Runtime::NavigationLinkComponent> *link) {
+        const std::optional<Runtime::NavigationModifierComponent> *modifier, const std::optional<Runtime::NavigationLinkComponent> *link,
+        const std::optional<Runtime::NavigationAgentComponent> *agent) {
         return WithEditableObject(m_document, m_document.m_objects, objectId,
-                                  [this, surface, region, modifier, link](const SceneObjectSnapshot &object) {
-            auto prepared = PrepareNavigationComponents(m_document.m_objects, object, surface, region, modifier, link);
+                                  [this, surface, region, modifier, link, agent](const SceneObjectSnapshot &object) {
+            auto prepared = PrepareNavigationComponents(m_document.m_objects, object, surface, region, modifier, link, agent);
             if (prepared.HasError())
                 return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
             if (!prepared.Value().has_value())
@@ -357,22 +363,27 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneNavigationSurfaceCommand&) */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneNavigationSurfaceCommand &command) {
-        return CommitNavigationComponents(command.object, &command.surface, nullptr, nullptr, nullptr);
+        return CommitNavigationComponents(command.object, &command.surface, nullptr, nullptr, nullptr, nullptr);
     }
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneNavigationRegionCommand&) */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneNavigationRegionCommand &command) {
-        return CommitNavigationComponents(command.object, nullptr, &command.region, nullptr, nullptr);
+        return CommitNavigationComponents(command.object, nullptr, &command.region, nullptr, nullptr, nullptr);
     }
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneNavigationModifierCommand&) */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneNavigationModifierCommand &command) {
-        return CommitNavigationComponents(command.object, nullptr, nullptr, &command.modifier, nullptr);
+        return CommitNavigationComponents(command.object, nullptr, nullptr, &command.modifier, nullptr, nullptr);
     }
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneNavigationLinkCommand&) */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneNavigationLinkCommand &command) {
-        return CommitNavigationComponents(command.object, nullptr, nullptr, nullptr, &command.link);
+        return CommitNavigationComponents(command.object, nullptr, nullptr, nullptr, &command.link, nullptr);
+    }
+
+    /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneNavigationAgentCommand&) */
+    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneNavigationAgentCommand &command) {
+        return CommitNavigationComponents(command.object, nullptr, nullptr, nullptr, nullptr, &command.agent);
     }
 
 }  // namespace Horo::Editor
