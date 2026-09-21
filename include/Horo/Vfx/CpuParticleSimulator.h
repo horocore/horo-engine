@@ -33,9 +33,10 @@ namespace Horo::Vfx {
         Count,
     };
 
-    inline constexpr std::array<CpuParticleStage, 7> CpuParticleStageOrder{
-        CpuParticleStage::Spawn, CpuParticleStage::Initialize, CpuParticleStage::Forces, CpuParticleStage::Integrate,
-        CpuParticleStage::Collide, CpuParticleStage::Kill, CpuParticleStage::Extract};
+    inline constexpr std::array<CpuParticleStage, 7> CpuParticleStageOrder{CpuParticleStage::Spawn,   CpuParticleStage::Initialize,
+                                                                           CpuParticleStage::Forces,  CpuParticleStage::Integrate,
+                                                                           CpuParticleStage::Collide, CpuParticleStage::Kill,
+                                                                           CpuParticleStage::Extract};
 
     /**
      * @brief Optional owner-thread sentinel used to qualify stage order and inject a contained failure.
@@ -47,12 +48,12 @@ namespace Horo::Vfx {
 
     /** @brief Bounded preparation ceilings for one CPU simulation instance. */
     struct CpuParticleSimulationHardLimits final {
-        static constexpr std::uint32_t ForceModules = 64;   /**< Maximum compiled force modules. */
-        static constexpr std::uint32_t Planes = 64;         /**< Maximum analytic collision planes. */
-        static constexpr std::uint32_t CurveKeys = 32;      /**< Maximum keys in one over-life curve. */
-        static constexpr std::uint32_t PayloadChannels = 32; /**< Maximum typed custom channels. */
+        static constexpr std::uint32_t ForceModules = 64;          /**< Maximum compiled force modules. */
+        static constexpr std::uint32_t Planes = 64;                /**< Maximum analytic collision planes. */
+        static constexpr std::uint32_t CurveKeys = 32;             /**< Maximum keys in one over-life curve. */
+        static constexpr std::uint32_t PayloadChannels = 32;       /**< Maximum typed custom channels. */
         static constexpr std::uint32_t BurstParticles = 1'000'000; /**< Maximum requested burst per step. */
-        static constexpr float DeltaSeconds = 60.0F;         /**< Maximum selected-clock delta per step. */
+        static constexpr float DeltaSeconds = 60.0F;               /**< Maximum selected-clock delta per step. */
         static constexpr std::uint32_t RandomAlgorithmVersion = 1; /**< Versioned counter-hash algorithm. */
     };
 
@@ -139,7 +140,7 @@ namespace Horo::Vfx {
      * boundary. The adapter owns `context` and must remain valid for the complete step.
      */
     using CpuParticleCollisionProbe = Result<CpuParticleCollisionHit> (*)(void *context,
-                                                                            const CpuParticleCollisionQueryRequest &request) noexcept;
+                                                                          const CpuParticleCollisionQueryRequest &request) noexcept;
 
     /** @brief One explicitly captured collision query seam and its generation evidence. */
     struct CpuParticleCollisionQuerySeam final {
@@ -267,7 +268,7 @@ namespace Horo::Vfx {
          * @return Prepared simulator or a typed descriptor, limit, or allocation failure.
          */
         [[nodiscard]] static Result<CpuParticleSimulator> Create(const ParticleSystemDescriptor &descriptor,
-                                                                  const CpuParticleSimulatorCreateInfo &info);
+                                                                 const CpuParticleSimulatorCreateInfo &info);
 
         /**
          * @brief Executes one atomic seven-stage simulation tick.
@@ -308,8 +309,7 @@ namespace Horo::Vfx {
          * @param committedGeneration Generation returned by Extract or Advance.
          * @return Value or typed access/schema/stale-generation failure.
          */
-        [[nodiscard]] Result<float> ReadGameplayOutput(std::uint16_t channel, std::uint32_t dense,
-                                                        std::uint64_t committedGeneration) const;
+        [[nodiscard]] Result<float> ReadGameplayOutput(std::uint16_t channel, std::uint32_t dense, std::uint64_t committedGeneration) const;
 
         /** @brief Returns allocation-free committed diagnostics. @return Current lifetime counters. */
         [[nodiscard]] CpuParticleSimulationStatistics Statistics() const noexcept;

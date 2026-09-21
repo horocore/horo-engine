@@ -58,24 +58,22 @@ namespace Horo::Vfx {
         }
 
         Result<CpuParticleCollisionHit> AlwaysHit(void *, const CpuParticleCollisionQueryRequest &request) noexcept {
-            return Result<CpuParticleCollisionHit>::Success(
-                {.hit = true,
-                 .position = request.position,
-                 .normal = {0.0F, 1.0F, 0.0F},
-                 .distance = 0.0F,
-                 .restitution = 1.0F,
-                 .stableTarget = 9,
-                 .stableFeature = 2});
+            return Result<CpuParticleCollisionHit>::Success({.hit = true,
+                                                             .position = request.position,
+                                                             .normal = {0.0F, 1.0F, 0.0F},
+                                                             .distance = 0.0F,
+                                                             .restitution = 1.0F,
+                                                             .stableTarget = 9,
+                                                             .stableFeature = 2});
         }
 
         [[nodiscard]] CpuParticleSimulator Simulator(const ParticleSystemDescriptor &descriptor, const std::uint32_t slot,
                                                      const std::uint64_t seed = 0xD00D) {
-            auto result = CpuParticleSimulator::Create(
-                descriptor,
-                {.buffer = BufferId(slot),
-                 .activation = Activation(),
-                 .effectSeed = seed,
-                 .maximumBurstParticles = CpuParticleSimulationHardLimits::BurstParticles});
+            auto result =
+                CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(slot),
+                                                          .activation = Activation(),
+                                                          .effectSeed = seed,
+                                                          .maximumBurstParticles = CpuParticleSimulationHardLimits::BurstParticles});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
@@ -84,14 +82,12 @@ namespace Horo::Vfx {
     TEST_CASE("CPU simulator executes the fixed seven-stage order and commits atomically", "[unit][vfx][particle-simulator]") {
         StageTrace trace{};
         auto descriptor = Descriptor();
-        auto result = CpuParticleSimulator::Create(
-            descriptor,
-            {.buffer = BufferId(1),
-             .activation = Activation(),
-             .effectSeed = 10,
-             .maximumBurstParticles = 4,
-             .stageObserver = ObserveStage,
-             .stageObserverContext = &trace});
+        auto result = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(1),
+                                                                .activation = Activation(),
+                                                                .effectSeed = 10,
+                                                                .maximumBurstParticles = 4,
+                                                                .stageObserver = ObserveStage,
+                                                                .stageObserverContext = &trace});
         REQUIRE(result.HasValue());
         CpuParticleSimulator simulator = std::move(result).Value();
 
@@ -106,24 +102,20 @@ namespace Horo::Vfx {
     }
 
     TEST_CASE("CPU simulator is deterministic and steady-state stepping allocates nothing", "[unit][vfx][particle-simulator]") {
-        const std::array forces{
-            CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {0.0F, -2.0F, 0.0F}, .strength = 1.0F},
-            CpuParticleForceModule{.kind = CpuParticleForceKind::Noise, .strength = 0.25F, .frequency = 0.5F, .randomChannel = 19}};
+        const std::array
+            forces{CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {0.0F, -2.0F, 0.0F}, .strength = 1.0F},
+                   CpuParticleForceModule{.kind = CpuParticleForceKind::Noise, .strength = 0.25F, .frequency = 0.5F, .randomChannel = 19}};
         const auto descriptor = Descriptor(32, ParticleCollisionMode::None, 0.01);
-        auto firstResult = CpuParticleSimulator::Create(
-            descriptor,
-            {.buffer = BufferId(2),
-             .activation = Activation(),
-             .effectSeed = 0xA55A,
-             .maximumBurstParticles = 32,
-             .forces = forces});
-        auto secondResult = CpuParticleSimulator::Create(
-            descriptor,
-            {.buffer = BufferId(3),
-             .activation = Activation(),
-             .effectSeed = 0xA55A,
-             .maximumBurstParticles = 32,
-             .forces = forces});
+        auto firstResult = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(2),
+                                                                     .activation = Activation(),
+                                                                     .effectSeed = 0xA55A,
+                                                                     .maximumBurstParticles = 32,
+                                                                     .forces = forces});
+        auto secondResult = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(3),
+                                                                      .activation = Activation(),
+                                                                      .effectSeed = 0xA55A,
+                                                                      .maximumBurstParticles = 32,
+                                                                      .forces = forces});
         REQUIRE(firstResult.HasValue());
         REQUIRE(secondResult.HasValue());
         CpuParticleSimulator first = std::move(firstResult).Value();
@@ -159,20 +151,17 @@ namespace Horo::Vfx {
         auto cancelled = Simulator(Descriptor(4), 4);
         REQUIRE(cancelled.Advance({.burstCount = 1, .tick = 0}).HasValue());
         const auto before = cancelled.Statistics();
-        CHECK(HasError(cancelled.Advance({.burstCount = 1, .tick = 1, .cancelled = true}),
-                       VfxErrors::ParticleSimulationStepCancelled));
+        CHECK(HasError(cancelled.Advance({.burstCount = 1, .tick = 1, .cancelled = true}), VfxErrors::ParticleSimulationStepCancelled));
         CHECK(cancelled.Statistics().committedGeneration == before.committedGeneration);
         CHECK(cancelled.Statistics().active == before.active);
         REQUIRE(cancelled.Advance({.burstCount = 1, .tick = 1}).HasValue());
 
         StageTrace trace{.failAfter = 2};
-        auto result = CpuParticleSimulator::Create(
-            Descriptor(4),
-            {.buffer = BufferId(5),
-             .activation = Activation(),
-             .maximumBurstParticles = 4,
-             .stageObserver = ObserveStage,
-             .stageObserverContext = &trace});
+        auto result = CpuParticleSimulator::Create(Descriptor(4), {.buffer = BufferId(5),
+                                                                   .activation = Activation(),
+                                                                   .maximumBurstParticles = 4,
+                                                                   .stageObserver = ObserveStage,
+                                                                   .stageObserverContext = &trace});
         REQUIRE(result.HasValue());
         CpuParticleSimulator failed = std::move(result).Value();
         CHECK(HasError(failed.Advance({.burstCount = 1, .tick = 0}), VfxErrors::ParticleStageContractViolation));
@@ -181,26 +170,23 @@ namespace Horo::Vfx {
     }
 
     TEST_CASE("CPU simulator exposes typed collision and gameplay payload seams", "[unit][vfx][particle-simulator]") {
-        const std::array channels{
-            CpuParticlePayloadChannel{.channel = 1,
-                                      .classification = CpuParticlePayloadClass::GameplayInput,
-                                      .customFloatStream = 0,
-                                      .minimum = 0.0F,
-                                      .maximum = 1.0F},
-            CpuParticlePayloadChannel{.channel = 2,
-                                      .classification = CpuParticlePayloadClass::GameplayOutput,
-                                      .customFloatStream = 1,
-                                      .minimum = 0.0F,
-                                      .maximum = 1.0F}};
+        const std::array channels{CpuParticlePayloadChannel{.channel = 1,
+                                                            .classification = CpuParticlePayloadClass::GameplayInput,
+                                                            .customFloatStream = 0,
+                                                            .minimum = 0.0F,
+                                                            .maximum = 1.0F},
+                                  CpuParticlePayloadChannel{.channel = 2,
+                                                            .classification = CpuParticlePayloadClass::GameplayOutput,
+                                                            .customFloatStream = 1,
+                                                            .minimum = 0.0F,
+                                                            .maximum = 1.0F}};
         const auto descriptor = Descriptor(4, ParticleCollisionMode::PhysicsWorld);
-        auto result = CpuParticleSimulator::Create(
-            descriptor,
-            {.buffer = BufferId(6),
-             .activation = Activation(),
-             .maximumBurstParticles = 4,
-             .customFloatStreams = 2,
-             .physicsWorld = {.probe = AlwaysHit, .required = true},
-             .payloadChannels = channels});
+        auto result = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(6),
+                                                                .activation = Activation(),
+                                                                .maximumBurstParticles = 4,
+                                                                .customFloatStreams = 2,
+                                                                .physicsWorld = {.probe = AlwaysHit, .required = true},
+                                                                .payloadChannels = channels});
         REQUIRE(result.HasValue());
         CpuParticleSimulator simulator = std::move(result).Value();
         REQUIRE(simulator.SubmitGameplayInput(1, 0.75F).HasValue());
@@ -217,9 +203,10 @@ namespace Horo::Vfx {
 
     TEST_CASE("CPU simulator rejects mandatory capacity overflow without mutating state", "[unit][vfx][particle-simulator]") {
         const auto descriptor = Descriptor(1);
-        auto result = CpuParticleSimulator::Create(
-            descriptor,
-            {.buffer = BufferId(7), .activation = Activation(), .maximumBurstParticles = 4, .requiredGameplay = true});
+        auto result = CpuParticleSimulator::Create(descriptor, {.buffer = BufferId(7),
+                                                                .activation = Activation(),
+                                                                .maximumBurstParticles = 4,
+                                                                .requiredGameplay = true});
         REQUIRE(result.HasValue());
         CpuParticleSimulator simulator = std::move(result).Value();
         CHECK(HasError(simulator.Advance({.burstCount = 2, .tick = 0}), VfxErrors::ParticleStepCapacityExceeded));

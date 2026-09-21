@@ -42,8 +42,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] std::uint32_t PackColor(const Math::Vec4 color) noexcept {
-            return (PackChannel(color.x) << 24U) | (PackChannel(color.y) << 16U) | (PackChannel(color.z) << 8U) |
-                   PackChannel(color.w);
+            return (PackChannel(color.x) << 24U) | (PackChannel(color.y) << 16U) | (PackChannel(color.z) << 8U) | PackChannel(color.w);
         }
 
         [[nodiscard]] std::uint64_t Mix(std::uint64_t value) noexcept {
@@ -58,7 +57,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] std::uint64_t IdentityBase(const CpuParticleSimulatorCreateInfo &info,
-                                                  const ParticleSystemDescriptorData &descriptor) noexcept {
+                                                 const ParticleSystemDescriptorData &descriptor) noexcept {
             std::uint64_t hash = Mix(info.effectSeed);
             HashCombine(hash, info.activation.scope.Value());
             HashCombine(hash, info.activation.slot);
@@ -163,9 +162,9 @@ namespace Horo::Vfx {
             return OwnerThreadResult(*state);
         }
 
-        [[nodiscard]] std::uint64_t RandomWord(const Detail::CpuParticleSimulatorState &state,
-                                                const ParticleSimulationId particle, const std::uint32_t channel,
-                                                const std::uint32_t sampleOrdinal, const std::uint64_t tick) noexcept {
+        [[nodiscard]] std::uint64_t RandomWord(const Detail::CpuParticleSimulatorState &state, const ParticleSimulationId particle,
+                                               const std::uint32_t channel, const std::uint32_t sampleOrdinal,
+                                               const std::uint64_t tick) noexcept {
             std::uint64_t hash = Mix(state.effectSeed);
             HashCombine(hash, state.activation.scope.Value());
             HashCombine(hash, state.activation.slot);
@@ -182,8 +181,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] float UnitFloat(const Detail::CpuParticleSimulatorState &state, const ParticleSimulationId particle,
-                                      const std::uint32_t channel, const std::uint32_t sampleOrdinal,
-                                      const std::uint64_t tick) noexcept {
+                                      const std::uint32_t channel, const std::uint32_t sampleOrdinal, const std::uint64_t tick) noexcept {
             constexpr float Scale = 1.0F / 16'777'216.0F;
             return static_cast<float>(RandomWord(state, particle, channel, sampleOrdinal, tick) >> 40U) * Scale;
         }
@@ -219,8 +217,7 @@ namespace Horo::Vfx {
             const auto admitted = static_cast<std::uint32_t>(std::min<std::uint64_t>(requested, available));
             if (state.nextSimulationIdentity > std::numeric_limits<std::uint64_t>::max() - admitted)
                 return Failure<BirthPlan>(VfxErrors::ParticleSpawnOrdinalExhausted);
-            return Result<BirthPlan>::Success(
-                {.requested = requested, .admitted = admitted, .carry = continuous - integral});
+            return Result<BirthPlan>::Success({.requested = requested, .admitted = admitted, .carry = continuous - integral});
         }
 
         void InitializePosition(const Detail::CpuParticleSimulatorState &state, const ParticleSimulationId particle,
@@ -266,9 +263,8 @@ namespace Horo::Vfx {
             view.positionZ[dense] = static_cast<float>(z);
         }
 
-        void InitializeParticle(Detail::CpuParticleSimulatorState &state, const CpuParticleHandle &handle,
-                                const CpuParticleSoAView &view, const std::uint32_t dense,
-                                const std::uint64_t tick) noexcept {
+        void InitializeParticle(Detail::CpuParticleSimulatorState &state, const CpuParticleHandle &handle, const CpuParticleSoAView &view,
+                                const std::uint32_t dense, const std::uint64_t tick) noexcept {
             InitializePosition(state, handle.particle, view, dense, tick);
             double x = view.positionX[dense];
             double y = view.positionY[dense];
@@ -315,8 +311,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] float EvaluateCurve(const std::array<CpuParticleCurveKey, CpuParticleSimulationHardLimits::CurveKeys> &keys,
-                                           const std::uint32_t count, const float normalizedAge,
-                                           const float fallback) noexcept {
+                                          const std::uint32_t count, const float normalizedAge, const float fallback) noexcept {
             if (count == 0)
                 return fallback;
             if (normalizedAge <= keys[0].normalizedAge)
@@ -333,9 +328,9 @@ namespace Horo::Vfx {
             return keys[count - 1U].value;
         }
 
-        [[nodiscard]] Math::Vec4 EvaluateColorCurve(
-            const std::array<CpuParticleColorKey, CpuParticleSimulationHardLimits::CurveKeys> &keys,
-            const std::uint32_t count, const float normalizedAge, const Math::Vec4 fallback) noexcept {
+        [[nodiscard]] Math::Vec4 EvaluateColorCurve(const std::array<CpuParticleColorKey, CpuParticleSimulationHardLimits::CurveKeys> &keys,
+                                                    const std::uint32_t count, const float normalizedAge,
+                                                    const Math::Vec4 fallback) noexcept {
             if (count == 0)
                 return fallback;
             if (normalizedAge <= keys[0].normalizedAge)
@@ -352,8 +347,7 @@ namespace Horo::Vfx {
             return keys[count - 1U].color;
         }
 
-        void ApplyOverLife(Detail::CpuParticleSimulatorState &state, const CpuParticleSoAView &view,
-                           const std::uint32_t dense) noexcept {
+        void ApplyOverLife(Detail::CpuParticleSimulatorState &state, const CpuParticleSoAView &view, const std::uint32_t dense) noexcept {
             const float maximumAge = view.maximumAge[dense];
             const float normalizedAge = maximumAge > 0.0F && Finite(maximumAge) ? ClampUnit(view.age[dense] / maximumAge) : 0.0F;
             const std::uint32_t auxiliary = state.candidateOffset + dense;
@@ -361,8 +355,7 @@ namespace Horo::Vfx {
             view.sizeX[dense] = state.baseSizeX[auxiliary] * sizeMultiplier;
             view.sizeY[dense] = state.baseSizeY[auxiliary] * sizeMultiplier;
             const float opacityMultiplier = EvaluateCurve(state.opacityOverLife, state.opacityOverLifeCount, normalizedAge, 1.0F);
-            Math::Vec4 color = EvaluateColorCurve(state.colorOverLife, state.colorOverLifeCount, normalizedAge,
-                                                   state.baseColor[auxiliary]);
+            Math::Vec4 color = EvaluateColorCurve(state.colorOverLife, state.colorOverLifeCount, normalizedAge, state.baseColor[auxiliary]);
             color.w *= opacityMultiplier;
             view.packedColor[dense] = PackColor(color);
             for (std::uint32_t channelIndex = 0; channelIndex < state.payloadChannelCount; ++channelIndex) {
@@ -376,9 +369,8 @@ namespace Horo::Vfx {
             }
         }
 
-        void ApplyForces(const Detail::CpuParticleSimulatorState &state, const CpuParticleSoAView &view,
-                         const std::uint32_t dense, const std::uint64_t tick, const ParticleSimulationId particle,
-                         Math::Vec3 &acceleration) noexcept {
+        void ApplyForces(const Detail::CpuParticleSimulatorState &state, const CpuParticleSoAView &view, const std::uint32_t dense,
+                         const std::uint64_t tick, const ParticleSimulationId particle, Math::Vec3 &acceleration) noexcept {
             acceleration = {};
             const Math::Vec3 position{view.positionX[dense], view.positionY[dense], view.positionZ[dense]};
             for (std::uint32_t forceIndex = 0; forceIndex < state.forceCount; ++forceIndex) {
@@ -413,8 +405,7 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] Result<CollisionSelection> QueryCollision(const Detail::CpuParticleSimulatorState &state,
-                                                                const CpuParticleSimulationStep &step,
-                                                                const CpuParticleHandle &handle,
+                                                                const CpuParticleSimulationStep &step, const CpuParticleHandle &handle,
                                                                 const Math::Vec3 previous, const Math::Vec3 position,
                                                                 const Math::Vec3 velocity) {
             CollisionSelection selection{};
@@ -446,24 +437,23 @@ namespace Horo::Vfx {
                 }
                 case ParticleCollisionMode::SceneDepth:
                 case ParticleCollisionMode::PhysicsWorld: {
-                    const auto &seam = state.descriptor.collisionMode == ParticleCollisionMode::SceneDepth ? state.sceneDepth : state.physicsWorld;
+                    const auto &seam =
+                        state.descriptor.collisionMode == ParticleCollisionMode::SceneDepth ? state.sceneDepth : state.physicsWorld;
                     if (seam.probe == nullptr) {
                         if (seam.required || state.requiredGameplay)
                             return Failure<CollisionSelection>(VfxErrors::ParticleCollisionQueryUnavailable);
                         return Result<CollisionSelection>::Success(selection);
                     }
-                    const auto query = seam.probe(seam.context,
-                                                  {.particle = handle.particle,
-                                                   .previousPosition = previous,
-                                                   .position = position,
-                                                   .velocity = velocity,
-                                                   .deltaSeconds = step.deltaSeconds,
-                                                   .tick = step.tick,
-                                                   .sceneGeneration = seam.sceneGeneration,
-                                                   .snapshotGeneration = seam.snapshotGeneration});
+                    const auto query = seam.probe(seam.context, {.particle = handle.particle,
+                                                                 .previousPosition = previous,
+                                                                 .position = position,
+                                                                 .velocity = velocity,
+                                                                 .deltaSeconds = step.deltaSeconds,
+                                                                 .tick = step.tick,
+                                                                 .sceneGeneration = seam.sceneGeneration,
+                                                                 .snapshotGeneration = seam.snapshotGeneration});
                     if (query.HasError())
-                        return Result<CollisionSelection>::Failure(
-                            WrapError(VfxErrors::ParticleCollisionQueryFailed, query.ErrorValue()));
+                        return Result<CollisionSelection>::Failure(WrapError(VfxErrors::ParticleCollisionQueryFailed, query.ErrorValue()));
                     const auto &hit = query.Value();
                     if (!hit.hit)
                         return Result<CollisionSelection>::Success(selection);
@@ -552,9 +542,10 @@ namespace Horo::Vfx {
             info.maximumDeltaSeconds <= 0.0F || info.maximumDeltaSeconds > CpuParticleSimulationHardLimits::DeltaSeconds ||
             data.maximumParticles == 0 || data.maximumParticles > CpuParticleBufferHardLimits::Particles ||
             data.collisionMode >= ParticleCollisionMode::Count || info.collisionResponse >= CpuParticleCollisionResponse::Count ||
-            info.forces.size() > CpuParticleSimulationHardLimits::ForceModules || info.planes.size() > CpuParticleSimulationHardLimits::Planes ||
-            info.payloadChannels.size() > CpuParticleSimulationHardLimits::PayloadChannels ||
-            !ValidCurve(info.sizeOverLife) || !ValidCurve(info.opacityOverLife) || !ValidColorCurve(info.colorOverLife))
+            info.forces.size() > CpuParticleSimulationHardLimits::ForceModules ||
+            info.planes.size() > CpuParticleSimulationHardLimits::Planes ||
+            info.payloadChannels.size() > CpuParticleSimulationHardLimits::PayloadChannels || !ValidCurve(info.sizeOverLife) ||
+            !ValidCurve(info.opacityOverLife) || !ValidColorCurve(info.colorOverLife))
             return Failure<CpuParticleSimulator>(VfxErrors::ParticleSimulationDescriptorInvalid);
         for (const auto &force : info.forces) {
             if (!ValidForce(force))
@@ -593,9 +584,9 @@ namespace Horo::Vfx {
             return Failure<CpuParticleSimulator>(VfxErrors::ParticleCollisionQueryUnavailable);
 
         auto committed = CpuParticleBuffer::Create({.buffer = info.buffer,
-                                                     .capacity = data.maximumParticles,
-                                                     .customFloatStreams = customFloatStreams,
-                                                     .maximumBytes = info.maximumBufferBytes});
+                                                    .capacity = data.maximumParticles,
+                                                    .customFloatStreams = customFloatStreams,
+                                                    .maximumBytes = info.maximumBufferBytes});
         if (committed.HasError())
             return Result<CpuParticleSimulator>::Failure(committed.ErrorValue());
         auto candidate = CpuParticleBuffer::Create({.buffer = info.buffer,
@@ -653,9 +644,7 @@ namespace Horo::Vfx {
             state->candidateOffset = state->capacity;
             const std::uint64_t identityBase = IdentityBase(info, data);
             state->nextSimulationIdentity = identityBase == 0 ? 1 : identityBase;
-            state->spawnRate = SampleRange(*state,
-                                           ParticleSimulationId::Create(state->nextSimulationIdentity).Value(), 4,
-                                           data.spawnRate);
+            state->spawnRate = SampleRange(*state, ParticleSimulationId::Create(state->nextSimulationIdentity).Value(), 4, data.spawnRate);
             state->nextTick = 0;
             return Result<CpuParticleSimulator>::Success(CpuParticleSimulator{std::move(state)});
         } catch (const std::bad_alloc &) {
@@ -679,8 +668,7 @@ namespace Horo::Vfx {
         if (auto copied = state_->candidate.CopyFrom(state_->committed); copied.HasError())
             return Result<CpuParticleSimulationStepResult>::Failure(copied.ErrorValue());
         const std::uint32_t currentActive = state_->committed.Statistics().active;
-        std::copy_n(state_->handles.begin() + state_->committedOffset, currentActive,
-                    state_->handles.begin() + state_->candidateOffset);
+        std::copy_n(state_->handles.begin() + state_->committedOffset, currentActive, state_->handles.begin() + state_->candidateOffset);
         std::copy_n(state_->baseSizeX.begin() + state_->committedOffset, currentActive,
                     state_->baseSizeX.begin() + state_->candidateOffset);
         std::copy_n(state_->baseSizeY.begin() + state_->committedOffset, currentActive,
@@ -742,10 +730,10 @@ namespace Horo::Vfx {
             return Result<CpuParticleSimulationStepResult>::Failure(observed.ErrorValue());
         std::uint32_t collisionCount{};
         for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense) {
-            const auto collision = QueryCollision(*state_, step, state_->handles[state_->candidateOffset + dense],
-                                                  state_->previousPositions[dense],
-                                                  {view.positionX[dense], view.positionY[dense], view.positionZ[dense]},
-                                                  {view.velocityX[dense], view.velocityY[dense], view.velocityZ[dense]});
+            const auto collision =
+                QueryCollision(*state_, step, state_->handles[state_->candidateOffset + dense], state_->previousPositions[dense],
+                               {view.positionX[dense], view.positionY[dense], view.positionZ[dense]},
+                               {view.velocityX[dense], view.velocityY[dense], view.velocityZ[dense]});
             if (collision.HasError())
                 return Result<CpuParticleSimulationStepResult>::Failure(collision.ErrorValue());
             if (!collision.Value().hit)
@@ -782,8 +770,8 @@ namespace Horo::Vfx {
         const std::uint32_t candidateActive = state_->candidate.Statistics().active;
         std::uint32_t survivorCount{};
         for (std::uint32_t dense = 0; dense < candidateActive; ++dense) {
-            const bool expired = state_->descriptor.lifetimeKind == ParticleLifetimeKind::Finite &&
-                                 view.age[dense] >= view.maximumAge[dense];
+            const bool expired =
+                state_->descriptor.lifetimeKind == ParticleLifetimeKind::Finite && view.age[dense] >= view.maximumAge[dense];
             if (expired || (view.customFlags[dense] & ExplicitKillBit) != 0)
                 continue;
             state_->survivorSources[survivorCount] = dense;
@@ -810,14 +798,13 @@ namespace Horo::Vfx {
         state_->killed += killedThisStep;
         state_->collisions += collisionCount;
         state_->killRequests.clear();
-        return Result<CpuParticleSimulationStepResult>::Success(
-            {.requestedBirths = plan.Value().requested,
-             .spawned = plan.Value().admitted,
-             .dropped = plan.Value().requested - plan.Value().admitted,
-             .killed = killedThisStep,
-             .collisions = collisionCount,
-             .active = survivorCount,
-             .committedGeneration = state_->committedGeneration});
+        return Result<CpuParticleSimulationStepResult>::Success({.requestedBirths = plan.Value().requested,
+                                                                 .spawned = plan.Value().admitted,
+                                                                 .dropped = plan.Value().requested - plan.Value().admitted,
+                                                                 .killed = killedThisStep,
+                                                                 .collisions = collisionCount,
+                                                                 .active = survivorCount,
+                                                                 .committedGeneration = state_->committedGeneration});
     }
 
     /** @copydoc CpuParticleSimulator::SignalKill */
@@ -849,26 +836,28 @@ namespace Horo::Vfx {
         if (mutableView.HasError())
             return Result<CpuParticleExtractView>::Failure(mutableView.ErrorValue());
         const auto view = mutableView.Value();
-        const auto floats = [](const std::span<float> values) { return std::span<const float>{values.data(), values.size()}; };
+        const auto floats = [](const std::span<float> values) {
+            return std::span<const float>{values.data(), values.size()};
+        };
         const auto unsigneds = [](const std::span<std::uint32_t> values) {
             return std::span<const std::uint32_t>{values.data(), values.size()};
         };
         CpuParticleExtractView result{.committedGeneration = state_->committedGeneration,
-                                     .positionX = floats(view.positionX),
-                                     .positionY = floats(view.positionY),
-                                     .positionZ = floats(view.positionZ),
-                                     .velocityX = floats(view.velocityX),
-                                     .velocityY = floats(view.velocityY),
-                                     .velocityZ = floats(view.velocityZ),
-                                     .sizeX = floats(view.sizeX),
-                                     .sizeY = floats(view.sizeY),
-                                     .rotation = floats(view.rotation),
-                                     .angularVelocity = floats(view.angularVelocity),
-                                     .packedColor = unsigneds(view.packedColor),
-                                     .age = floats(view.age),
-                                     .maximumAge = floats(view.maximumAge),
-                                     .customFlags = unsigneds(view.customFlags),
-                                     .customFloatStreamCount = state_->customFloatStreams};
+                                      .positionX = floats(view.positionX),
+                                      .positionY = floats(view.positionY),
+                                      .positionZ = floats(view.positionZ),
+                                      .velocityX = floats(view.velocityX),
+                                      .velocityY = floats(view.velocityY),
+                                      .velocityZ = floats(view.velocityZ),
+                                      .sizeX = floats(view.sizeX),
+                                      .sizeY = floats(view.sizeY),
+                                      .rotation = floats(view.rotation),
+                                      .angularVelocity = floats(view.angularVelocity),
+                                      .packedColor = unsigneds(view.packedColor),
+                                      .age = floats(view.age),
+                                      .maximumAge = floats(view.maximumAge),
+                                      .customFlags = unsigneds(view.customFlags),
+                                      .customFloatStreamCount = state_->customFloatStreams};
         for (std::uint32_t index = 0; index < state_->customFloatStreams; ++index)
             result.customFloats[index] = floats(view.customFloats[index]);
         return Result<CpuParticleExtractView>::Success(result);
@@ -896,7 +885,7 @@ namespace Horo::Vfx {
 
     /** @copydoc CpuParticleSimulator::ReadGameplayOutput */
     Result<float> CpuParticleSimulator::ReadGameplayOutput(const std::uint16_t channel, const std::uint32_t dense,
-                                                            const std::uint64_t committedGeneration) const {
+                                                           const std::uint64_t committedGeneration) const {
         if (state_ == nullptr || state_->shutDown)
             return Failure<float>(VfxErrors::ParticleBufferShutDown);
         if (const auto owner = OwnerThreadResult(*state_); owner.HasError())
