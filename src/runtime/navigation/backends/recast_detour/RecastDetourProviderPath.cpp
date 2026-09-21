@@ -397,6 +397,32 @@ namespace Horo::Navigation::RecastDetourQueries {
             return {};
         }
 
+        [[nodiscard]] Result<void> PublishWaypoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target,
+                                                    const std::uint32_t maximumWaypoints, bool &pointBudgetExceeded) {
+            if (!pointBudgetExceeded) {
+                const NavigationPathWaypointKind targetKind = context.search.status == NavigationPathStatus::Reachable
+                                                                  ? NavigationPathWaypointKind::Destination
+                                                                  : NavigationPathWaypointKind::PartialStop;
+                const auto destination = MakeWaypoint(path, target, targetKind, static_cast<std::uint32_t>(path.corridor.size() - 1U),
+                                                      NavigationPathNoPortal, NavigationPathNoVertex);
+                if (AppendWaypoint(context.slot.waypoints, destination, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
+                    pointBudgetExceeded = true;
+            }
+            if (pointBudgetExceeded && context.request.coveragePolicy == NavigationPathCoveragePolicy::RequireComplete)
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            if (context.slot.waypoints.empty())
+                return Failure<void>(NavigationErrors::ProviderFailed);
+            try {
+                path.waypoints.assign(context.slot.waypoints.begin(), context.slot.waypoints.end());
+                path.points.reserve(path.waypoints.size());
+                for (const NavigationPathWaypoint &waypoint : path.waypoints)
+                    path.points.push_back(waypoint.position);
+            } catch (const std::bad_alloc &) {
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<FunnelResult> BuildWaypoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target) {
             if (path.corridor.empty())
                 return Failure<FunnelResult>(NavigationErrors::ProviderFailed);
@@ -424,28 +450,9 @@ namespace Horo::Navigation::RecastDetourQueries {
                 }
             }
 
-            if (!pointBudgetExceeded) {
-                const NavigationPathWaypointKind targetKind = context.search.status == NavigationPathStatus::Reachable
-                                                                  ? NavigationPathWaypointKind::Destination
-                                                                  : NavigationPathWaypointKind::PartialStop;
-                const auto destination = MakeWaypoint(path, target, targetKind, static_cast<std::uint32_t>(path.corridor.size() - 1U),
-                                                      NavigationPathNoPortal, NavigationPathNoVertex);
-                if (AppendWaypoint(context.slot.waypoints, destination, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
-                    pointBudgetExceeded = true;
-            }
-
-            if (pointBudgetExceeded && context.request.coveragePolicy == NavigationPathCoveragePolicy::RequireComplete)
-                return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
-            if (context.slot.waypoints.empty())
-                return Failure<FunnelResult>(NavigationErrors::ProviderFailed);
-            try {
-                path.waypoints.assign(context.slot.waypoints.begin(), context.slot.waypoints.end());
-                path.points.reserve(path.waypoints.size());
-                for (const NavigationPathWaypoint &waypoint : path.waypoints)
-                    path.points.push_back(waypoint.position);
-            } catch (const std::bad_alloc &) {
-                return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
-            }
+            if (const auto publication = PublishWaypoints(context, path, target, maximumWaypoints, pointBudgetExceeded);
+                publication.HasError())
+                return Result<FunnelResult>::Failure(publication.ErrorValue());
 
             FunnelResult result{.pointBudgetExceeded = pointBudgetExceeded,
                                 .effectiveTarget = path.points.back(),
