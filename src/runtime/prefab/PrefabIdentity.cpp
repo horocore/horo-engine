@@ -61,6 +61,8 @@ namespace Horo::Prefab {
     Result<void> ValidateRawComponentPayload(const RawComponentPayload &payload) {
         if (!payload.instance.IsValid())
             return Result<void>::Failure(MakeError(PrefabErrors::IdentityInvalid));
+        if (payload.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson)
+            return Result<void>::Failure(MakeError(PrefabErrors::DocumentInvalid));
         return Gameplay::ValidateSerializedComponent(payload.component);
     }
 }  // namespace Horo::Prefab

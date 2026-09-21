@@ -703,6 +703,7 @@ add_library(HoroCinematicModel STATIC
 )
 add_library(HoroEngine::CinematicModel ALIAS HoroCinematicModel)
 target_compile_features(HoroCinematicModel PUBLIC cxx_std_20)
+target_include_directories(HoroCinematicModel PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroCinematicModel
         PUBLIC HoroEngine::Foundation HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json
@@ -885,13 +886,18 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabDiagnostics.cpp
+        runtime/prefab/PrefabDocumentBehaviorComposition.cpp
+        runtime/prefab/PrefabDocumentCanonical.cpp
         runtime/prefab/PrefabDocument.cpp
+        runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
-target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application)
+target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
+target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
+        PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroInput STATIC
         runtime/input/Input.cpp

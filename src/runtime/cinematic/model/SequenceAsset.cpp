@@ -1,6 +1,7 @@
 #include "Horo/Cinematic/SequenceAsset.h"
 
 #include "Horo/Cinematic/CinematicErrors.h"
+#include "JsonUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -8,12 +9,13 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <unordered_set>
 #include <utility>
 
 namespace Horo::Cinematic {
     namespace {
         using Json = nlohmann::json;
+        using Horo::Foundation::HasAllowedFields;
+        using Horo::Foundation::JsonParseGuard;
         using namespace std::string_view_literals;
 
         [[nodiscard]] Error Failure(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
@@ -23,52 +25,6 @@ namespace Horo::Cinematic {
         template <typename T> [[nodiscard]] Result<T> Failed(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
             return Result<T>::Failure(Failure(descriptor, std::move(message)));
         }
-
-        [[nodiscard]] bool HasExactFields(const Json &value, const std::initializer_list<std::string_view> fields) {
-            if (!value.is_object())
-                return false;
-            std::size_t matchingFields{};
-            for (const std::string_view field : fields)
-                matchingFields += value.contains(std::string{field}) ? 1U : 0U;
-            return matchingFields == fields.size() && value.size() == matchingFields;
-        }
-
-        class JsonParseGuard final {
-        public:
-            explicit JsonParseGuard(const std::size_t maximumDepth) : maximumDepth_(maximumDepth) {}
-
-            bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || static_cast<std::size_t>(depth) >= maximumDepth_) {
-                    tooDeep_ = true;
-                    return false;
-                }
-                const auto index =
-                    event == Json::parse_event_t::key && depth > 0 ? static_cast<std::size_t>(depth - 1) : static_cast<std::size_t>(depth);
-                if (keys_.size() <= index)
-                    keys_.resize(index + 1);
-                if (event == Json::parse_event_t::object_start)
-                    keys_[index].clear();
-                if (event == Json::parse_event_t::key && !keys_[index].insert(value.get<std::string>()).second)
-                    duplicate_ = true;
-                if (event == Json::parse_event_t::object_end)
-                    keys_[index].clear();
-                return !duplicate_ && !tooDeep_;
-            }
-
-            [[nodiscard]] bool HasDuplicate() const noexcept {
-                return duplicate_;
-            }
-
-            [[nodiscard]] bool IsTooDeep() const noexcept {
-                return tooDeep_;
-            }
-
-        private:
-            std::size_t maximumDepth_;
-            std::vector<std::unordered_set<std::string>> keys_;
-            bool duplicate_{};
-            bool tooDeep_{};
-        };
 
         [[nodiscard]] Result<void> ValidateLimits(const SequenceSchemaLimits &limits) {
             if (const std::array admitted{limits.maximumSourceBytes > 0 &&
@@ -97,7 +53,7 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] Result<SequenceSchemaVersion> DecodeVersion(const Json &value) {
-            if (!HasExactFields(value, {"major", "minor"}))
+            if (!HasAllowedFields(value, {"major", "minor"}))
                 return Failed<SequenceSchemaVersion>(CinematicErrors::SequenceSchemaMalformed, "schemaVersion has an invalid shape.");
             auto major = ReadUnsigned<std::uint16_t>(value.at("major"), "schemaVersion.major");
             auto minor = ReadUnsigned<std::uint16_t>(value.at("minor"), "schemaVersion.minor");
@@ -109,7 +65,7 @@ namespace Horo::Cinematic {
         }
 
         template <typename Identity> [[nodiscard]] Result<Identity> DecodeIdentity(const Json &value, const std::string_view field) {
-            if (!HasExactFields(value, {"stableValue", "generation"}))
+            if (!HasAllowedFields(value, {"stableValue", "generation"}))
                 return Failed<Identity>(CinematicErrors::SequenceSchemaMalformed, std::format("{} has an invalid shape.", field));
             auto stable = ReadUnsigned<std::uint64_t>(value.at("stableValue"), std::format("{}.stableValue", field));
             auto generation = ReadUnsigned<std::uint32_t>(value.at("generation"), std::format("{}.generation", field));
@@ -144,7 +100,7 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] Result<SequencePlaybackSettings> DecodePlayback(const Json &value) {
             using enum SequenceClockSource;
-            if (!HasExactFields(value, {"loopMode", "clockSource", "pausePolicy", "dilationPolicy"}))
+            if (!HasAllowedFields(value, {"loopMode", "clockSource", "pausePolicy", "dilationPolicy"}))
                 return Failed<SequencePlaybackSettings>(CinematicErrors::SequenceSchemaMalformed, "playback has an invalid shape.");
             constexpr std::array loopModes{std::pair{"once"sv, SequenceLoopMode::Once}, std::pair{"loop"sv, SequenceLoopMode::Loop},
                                            std::pair{"pingPong"sv, SequenceLoopMode::PingPong}};
@@ -166,7 +122,7 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] Result<SequenceAssetReference> DecodeReference(const Json &value) {
             using enum SequenceReferenceKind;
-            if (!HasExactFields(value, {"assetId", "kind"}))
+            if (!HasAllowedFields(value, {"assetId", "kind"}))
                 return Failed<SequenceAssetReference>(CinematicErrors::SequenceSchemaMalformed, "track reference has an invalid shape.");
             constexpr std::array kinds{std::pair{"audioClip"sv, AudioClip}, std::pair{"subSequence"sv, SubSequence},
                                        std::pair{"bindingDescriptor"sv, BindingDescriptor}};
@@ -180,7 +136,7 @@ namespace Horo::Cinematic {
         [[nodiscard]] Result<SequenceTrackSchema> DecodeTrack(const Json &value, const SequenceSchemaLimits &limits,
                                                               std::size_t &referenceCount) {
             using enum SequenceTrackType;
-            if (!HasExactFields(value, {"id", "type", "keyframeCount", "references"}) || !value.at("references").is_array())
+            if (!HasAllowedFields(value, {"id", "type", "keyframeCount", "references"}) || !value.at("references").is_array())
                 return Failed<SequenceTrackSchema>(CinematicErrors::SequenceSchemaMalformed, "track has an invalid shape.");
             constexpr std::array types{std::pair{"transform"sv, Transform}, std::pair{"property"sv, Property},
                                        std::pair{"cameraCut"sv, CameraCut}, std::pair{"event"sv, Event},
@@ -208,10 +164,10 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] bool HasValidRootShape(const Json &root) {
-            return HasExactFields(root, {"schemaVersion", "assetId", "sequenceId", "name", "durationFrames", "frameRate", "playback",
-                                         "tracks"}) &&
+            return HasAllowedFields(root, {"schemaVersion", "assetId", "sequenceId", "name", "durationFrames", "frameRate", "playback",
+                                           "tracks"}) &&
                    root.at("name").is_string() && root.at("tracks").is_array() &&
-                   HasExactFields(root.at("frameRate"), {"numerator", "denominator"});
+                   HasAllowedFields(root.at("frameRate"), {"numerator", "denominator"});
         }
 
         [[nodiscard]] Result<SequenceSchemaVersion> DecodeCurrentVersion(const Json &value) {
@@ -408,8 +364,8 @@ namespace Horo::Cinematic {
             return Failed<SequenceAsset>(CinematicErrors::SequenceSchemaLimitExceeded,
                                          "Sequence source byte count exceeds the parser limit.");
 
-        JsonParseGuard guard{limits.maximumJsonDepth};
         try {
+            JsonParseGuard guard{limits.maximumJsonDepth};
             Json root = Json::parse(source, std::ref(guard), true, false);
             if (guard.HasDuplicate())
                 return Failed<SequenceAsset>(CinematicErrors::SequenceSchemaDuplicate, "Sequence JSON contains a duplicate object field.");

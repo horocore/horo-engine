@@ -565,6 +565,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
+        unit/runtime/prefab/PrefabDocumentSerializationTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
         unit/runtime/prefab/PrefabSceneIdentityRemapTests.cpp
