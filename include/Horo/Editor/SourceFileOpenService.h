@@ -140,6 +140,21 @@ namespace Horo::Editor {
         SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry &documentRegistry,
                               SourceFilePolicy policy = SourceFilePolicy::Default());
 
+        /**
+         * @brief Transfers a source-open service and preserves its borrowed or owned registry binding.
+         * @param other Service whose normalized policy, root, and owned registry are transferred.
+         */
+        SourceFileOpenService(SourceFileOpenService &&other) noexcept;
+
+        /**
+         * @brief Replaces this service with a moved source-open service.
+         * @param other Service whose state and registry binding are transferred.
+         * @return This service after the transfer.
+         */
+        SourceFileOpenService &operator=(SourceFileOpenService &&other) noexcept;
+        SourceFileOpenService(const SourceFileOpenService &) = delete;
+        SourceFileOpenService &operator=(const SourceFileOpenService &) = delete;
+
         /** @brief Returns the normalized project root captured by this service. */
         [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
             return projectRoot_;
@@ -176,6 +191,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<SourceOpenResult> Open(const SourceOpenRequest &request);
 
     private:
+        SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry *documentRegistry,
+                              SourceFilePolicy policy);
         [[nodiscard]] std::filesystem::path NormalizeInputPath(const std::filesystem::path &path) const;
         [[nodiscard]] Result<SourceOpenLocation> ResolveLocation(const std::filesystem::path &path) const;
 

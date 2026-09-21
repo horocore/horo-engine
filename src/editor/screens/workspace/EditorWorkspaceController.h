@@ -381,6 +381,8 @@ namespace Horo::Editor {
         void DegradeNativeGameplayReload(NativeGameplayReloadTransaction &transaction, Error error);
         void ReimportContentBrowserAsset(const std::filesystem::path &absolutePath);
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
+        /** @brief Loads and focuses one validated embedded UI Canvas source result. */
+        void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,

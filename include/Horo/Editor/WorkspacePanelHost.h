@@ -103,6 +103,13 @@ namespace Horo::Editor {
         [[nodiscard]] bool RestoreLayout(const std::filesystem::path &path, std::string *error = nullptr);
 
     private:
+        [[nodiscard]] bool CloseDocumentTabs(std::span<const WorkspaceDocumentTab> tabs, std::string *error);
+        [[nodiscard]] std::vector<WorkspaceDocumentTab> ReopenDocumentTabs(std::span<const WorkspaceDocumentTab> tabs);
+        void RestoreDocumentSnapshot(const WorkspaceLayout &layout, std::span<const WorkspaceDocumentTab> tabs,
+                                     const std::optional<DocumentOpenKey> &activeKey);
+        [[nodiscard]] Result<std::vector<WorkspaceDocumentTab>> OpenRestoredDocumentTabs(
+            std::span<const SerializedDocumentOpenKey> documents, std::string *error);
+
         WorkspaceLayout m_layout;
         DocumentIdentityRegistry m_ownedDocumentRegistry;
         DocumentIdentityRegistry *m_documentRegistry_{&m_ownedDocumentRegistry};

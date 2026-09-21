@@ -61,6 +61,7 @@ namespace Horo::Editor {
     struct UiCanvasDocumentSnapshot final {
         Runtime::Ui::UiDocument document;
         UiCanvasDocumentStateId state;
+        UiCanvasFileFingerprint fingerprint; /**< Canonical fingerprint of the bytes used to load the document. */
     };
 
     /** @brief Result category of a conflict-aware UI Canvas save attempt. */
@@ -97,7 +98,7 @@ namespace Horo::Editor {
     /**
      * @brief Loads and validates one authored Runtime UI document from a `.uicanvas` file.
      * @param absolutePath Absolute `.uicanvas` path.
-     * @return Immutable runtime UI document and its initial editor state identity.
+     * @return Immutable runtime UI document, initial editor state identity, and source fingerprint.
      */
     [[nodiscard]] Result<UiCanvasDocumentSnapshot> LoadUiCanvasDocument(const std::filesystem::path &absolutePath);
 

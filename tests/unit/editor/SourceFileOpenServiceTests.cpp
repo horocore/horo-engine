@@ -6,6 +6,7 @@
 #include <fstream>
 #include <string>
 #include <system_error>
+#include <utility>
 
 namespace {
     using namespace Horo::Editor;
@@ -99,6 +100,58 @@ TEST_CASE("UI canvas opening uses a distinct persistent document kind and focuse
     REQUIRE(menu.Value().document->identity.key.kind == DocumentKind::UiCanvas);
     REQUIRE(menu.Value().document->identity != hud.Value().document->identity);
     REQUIRE(registry.Size() == 2);
+}
+
+TEST_CASE("Source open service moves preserve borrowed and owned registry lifetimes", "[unit][editor][source][lifetime]") {
+    TemporaryProject project;
+    project.Write("source/gameplay/Player.cpp");
+
+    const SourceOpenRequest request{
+        .path = "source/gameplay/Player.cpp",
+        .origin = SourceOpenOrigin::Command,
+    };
+
+    DocumentIdentityRegistry external;
+    SourceFileOpenService borrowed{project.Root(), external};
+    const auto borrowedOpen = borrowed.Open(request);
+    REQUIRE(borrowedOpen.HasValue());
+    const DocumentIdentity borrowedIdentity = borrowedOpen.Value().document->identity;
+
+    SourceFileOpenService movedBorrowed{std::move(borrowed)};
+    const auto movedBorrowedOpen = movedBorrowed.Open(request);
+    REQUIRE(movedBorrowedOpen.HasValue());
+    REQUIRE(movedBorrowedOpen.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    REQUIRE(movedBorrowedOpen.Value().document->identity == borrowedIdentity);
+    REQUIRE(&movedBorrowed.DocumentRegistry() == &external);
+
+    DocumentIdentityRegistry destination;
+    SourceFileOpenService assignedBorrowed{project.Root(), destination};
+    assignedBorrowed = std::move(movedBorrowed);
+    const auto assignedBorrowedOpen = assignedBorrowed.Open(request);
+    REQUIRE(assignedBorrowedOpen.HasValue());
+    REQUIRE(assignedBorrowedOpen.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    REQUIRE(assignedBorrowedOpen.Value().document->identity == borrowedIdentity);
+    REQUIRE(&assignedBorrowed.DocumentRegistry() == &external);
+    REQUIRE(destination.Size() == 0);
+
+    SourceFileOpenService owned{project.Root()};
+    const auto ownedOpen = owned.Open(request);
+    REQUIRE(ownedOpen.HasValue());
+    const DocumentIdentity ownedIdentity = ownedOpen.Value().document->identity;
+
+    SourceFileOpenService movedOwned{std::move(owned)};
+    const auto movedOwnedOpen = movedOwned.Open(request);
+    REQUIRE(movedOwnedOpen.HasValue());
+    REQUIRE(movedOwnedOpen.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    REQUIRE(movedOwnedOpen.Value().document->identity == ownedIdentity);
+
+    SourceFileOpenService assignedOwned{project.Root()};
+    assignedOwned = std::move(movedOwned);
+    const auto assignedOwnedOpen = assignedOwned.Open(request);
+    REQUIRE(assignedOwnedOpen.HasValue());
+    REQUIRE(assignedOwnedOpen.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    REQUIRE(assignedOwnedOpen.Value().document->identity == ownedIdentity);
+    REQUIRE(assignedOwned.DocumentRegistry().Size() == 1);
 }
 
 TEST_CASE("Relative absolute and internal symlink paths focus one canonical source document", "[unit][editor][source][paths]") {

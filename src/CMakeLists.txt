@@ -1245,6 +1245,7 @@ add_library(HoroEditorServices STATIC
         editor/EditorSurfaceIdentity.cpp
         editor/SourceFileOpenService.cpp
         editor/UiCanvasDocument.cpp
+        editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceCommon.cpp

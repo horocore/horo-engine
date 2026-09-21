@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -96,6 +97,8 @@ TEST_CASE("UI Canvas documents round trip through the typed runtime model", "[un
     REQUIRE(loaded.Value().document.Revision() == authored.Revision());
     REQUIRE(loaded.Value().document.Canvases().size() == 1);
     REQUIRE(loaded.Value().document.Canvases().front() == authored.Canvases().front());
+    REQUIRE(loaded.Value().fingerprint.exists);
+    REQUIRE(loaded.Value().fingerprint.byteSize > 0);
 
     DocumentIdentityRegistry registry;
     auto opened = UiCanvasDocument::Open(OpenIdentity(registry), project.DocumentPath());
@@ -113,6 +116,27 @@ TEST_CASE("UI Canvas documents round trip through the typed runtime model", "[un
     const auto reopened = LoadUiCanvasDocument(project.DocumentPath());
     REQUIRE(reopened.HasValue());
     REQUIRE(reopened.Value().document.Revision().Value() == 2);
+}
+
+TEST_CASE("UI Canvas loading accepts uppercase hexadecimal identity digits", "[unit][editor][ui_canvas][validation]") {
+    TemporaryProject project;
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    SaveInitialDocument(project, MakeDocument(1, 0xab), mutations, files);
+
+    std::ifstream input(project.DocumentPath(), std::ios::binary);
+    REQUIRE(static_cast<bool>(input));
+    std::string serialized((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{});
+    const std::string lowercaseId = std::string(30U, '0') + "ab";
+    const std::string uppercaseId = std::string(30U, '0') + "AB";
+    const std::size_t idPosition = serialized.find(lowercaseId);
+    REQUIRE(idPosition != std::string::npos);
+    serialized.replace(idPosition, lowercaseId.size(), uppercaseId);
+    project.Write(serialized);
+
+    const auto loaded = LoadUiCanvasDocument(project.DocumentPath());
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value().document.Id() == MakeDocument(1, 0xab).Id());
 }
 
 TEST_CASE("UI Canvas save detects external changes before replacing bytes", "[unit][editor][ui_canvas][persistence]") {

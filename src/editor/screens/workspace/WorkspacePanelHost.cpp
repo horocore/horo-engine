@@ -258,6 +258,73 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc WorkspacePanelHost::CloseDocumentTabs */
+    bool WorkspacePanelHost::CloseDocumentTabs(const std::span<const WorkspaceDocumentTab> tabs, std::string *error) {
+        for (const WorkspaceDocumentTab &tab : tabs) {
+            if (const Result<void> closed = m_documentRegistry_->Close(tab.identity.instance); closed.HasError()) {
+                if (error)
+                    *error = closed.ErrorValue().message;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** @copydoc WorkspacePanelHost::ReopenDocumentTabs */
+    std::vector<WorkspaceDocumentTab> WorkspacePanelHost::ReopenDocumentTabs(const std::span<const WorkspaceDocumentTab> tabs) {
+        std::vector<WorkspaceDocumentTab> reopenedTabs;
+        reopenedTabs.reserve(tabs.size());
+        for (const WorkspaceDocumentTab &tab : tabs) {
+            const Result<DocumentOpenResult> reopened = m_documentRegistry_->Open(tab.identity.key);
+            if (reopened.HasError())
+                continue;
+            reopenedTabs.push_back(WorkspaceDocumentTab{.identity = reopened.Value().identity, .dirty = tab.dirty});
+        }
+        return reopenedTabs;
+    }
+
+    /** @copydoc WorkspacePanelHost::RestoreDocumentSnapshot */
+    void WorkspacePanelHost::RestoreDocumentSnapshot(const WorkspaceLayout &layout, const std::span<const WorkspaceDocumentTab> tabs,
+                                                     const std::optional<DocumentOpenKey> &activeKey) {
+        m_layout = layout;
+        m_documentTabs = ReopenDocumentTabs(tabs);
+        m_activeDocument.reset();
+        if (activeKey.has_value()) {
+            const auto active = std::ranges::find_if(m_documentTabs, [&](const WorkspaceDocumentTab &tab) {
+                return tab.identity.key == activeKey.value();
+            });
+            if (active != m_documentTabs.end())
+                m_activeDocument = active->identity.instance;
+        }
+        if (!m_activeDocument.has_value() && !m_documentTabs.empty())
+            m_activeDocument = m_documentTabs.front().identity.instance;
+    }
+
+    /** @copydoc WorkspacePanelHost::OpenRestoredDocumentTabs */
+    Result<std::vector<WorkspaceDocumentTab>> WorkspacePanelHost::OpenRestoredDocumentTabs(
+        const std::span<const SerializedDocumentOpenKey> documents, std::string *error) {
+        std::vector<WorkspaceDocumentTab> restoredTabs;
+        restoredTabs.reserve(documents.size());
+        for (const SerializedDocumentOpenKey &serialized : documents) {
+            const Result<DocumentOpenKey> key = DeserializeDocumentOpenKey(serialized);
+            if (key.HasError()) {
+                if (error)
+                    *error = "workspace document identity is invalid";
+                static_cast<void>(CloseDocumentTabs(restoredTabs, nullptr));
+                return Result<std::vector<WorkspaceDocumentTab>>::Failure(key.ErrorValue());
+            }
+            const Result<DocumentOpenResult> opened = m_documentRegistry_->Open(key.Value());
+            if (opened.HasError()) {
+                if (error)
+                    *error = opened.ErrorValue().message;
+                static_cast<void>(CloseDocumentTabs(restoredTabs, nullptr));
+                return Result<std::vector<WorkspaceDocumentTab>>::Failure(opened.ErrorValue());
+            }
+            restoredTabs.push_back(WorkspaceDocumentTab{.identity = opened.Value().identity});
+        }
+        return Result<std::vector<WorkspaceDocumentTab>>::Success(std::move(restoredTabs));
+    }
+
     bool WorkspacePanelHost::SaveLayout(const std::filesystem::path &path, std::string *error) const {
         return WorkspaceLayoutPersistence::Save(path, m_layout, error);
     }
@@ -275,64 +342,18 @@ namespace Horo::Editor {
         const std::optional<DocumentOpenKey> previousActiveKey =
             previousActiveTab != previousTabs.end() ? std::optional{previousActiveTab->identity.key} : std::nullopt;
 
-        const auto restorePrevious = [&]() {
-            std::vector<WorkspaceDocumentTab> restoredTabs;
-            restoredTabs.reserve(previousTabs.size());
-            for (const WorkspaceDocumentTab &tab : previousTabs) {
-                const Result<DocumentOpenResult> reopened = m_documentRegistry_->Open(tab.identity.key);
-                if (reopened.HasError())
-                    continue;
-                restoredTabs.push_back(WorkspaceDocumentTab{.identity = reopened.Value().identity, .dirty = tab.dirty});
-            }
-            m_layout = previousLayout;
-            m_documentTabs = std::move(restoredTabs);
-            m_activeDocument.reset();
-            if (previousActiveKey.has_value()) {
-                const auto active = std::ranges::find_if(m_documentTabs, [&](const WorkspaceDocumentTab &tab) {
-                    return tab.identity.key == *previousActiveKey;
-                });
-                if (active != m_documentTabs.end())
-                    m_activeDocument = active->identity.instance;
-            }
-            if (!m_activeDocument.has_value() && !m_documentTabs.empty())
-                m_activeDocument = m_documentTabs.front().identity.instance;
-        };
-
-        for (const WorkspaceDocumentTab &tab : previousTabs) {
-            if (const Result<void> closed = m_documentRegistry_->Close(tab.identity.instance); closed.HasError()) {
-                if (error)
-                    *error = closed.ErrorValue().message;
-                restorePrevious();
-                return false;
-            }
+        if (!CloseDocumentTabs(previousTabs, error)) {
+            RestoreDocumentSnapshot(previousLayout, previousTabs, previousActiveKey);
+            return false;
         }
-
-        std::vector<WorkspaceDocumentTab> restoredTabs;
-        restoredTabs.reserve(restored->openDocuments.size());
-        for (const SerializedDocumentOpenKey &serialized : restored->openDocuments) {
-            const Result<DocumentOpenKey> key = DeserializeDocumentOpenKey(serialized);
-            if (key.HasError()) {
-                if (error)
-                    *error = "workspace document identity is invalid";
-                for (const WorkspaceDocumentTab &tab : restoredTabs)
-                    static_cast<void>(m_documentRegistry_->Close(tab.identity.instance));
-                restorePrevious();
-                return false;
-            }
-            const Result<DocumentOpenResult> opened = m_documentRegistry_->Open(key.Value());
-            if (opened.HasError()) {
-                if (error)
-                    *error = opened.ErrorValue().message;
-                for (const WorkspaceDocumentTab &tab : restoredTabs)
-                    static_cast<void>(m_documentRegistry_->Close(tab.identity.instance));
-                restorePrevious();
-                return false;
-            }
-            restoredTabs.push_back(WorkspaceDocumentTab{.identity = opened.Value().identity});
+        const Result<std::vector<WorkspaceDocumentTab>> restoredTabs = OpenRestoredDocumentTabs(restored->openDocuments, error);
+        if (restoredTabs.HasError()) {
+            RestoreDocumentSnapshot(previousLayout, previousTabs, previousActiveKey);
+            return false;
         }
 
         m_layout = std::move(*restored);
-        m_documentTabs = std::move(restoredTabs);
+        m_documentTabs = std::move(restoredTabs).Value();
         m_activeDocument = m_documentTabs.empty() ? std::nullopt : std::optional{m_documentTabs.front().identity.instance};
         return true;
     }
