@@ -583,7 +583,6 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
-        physics/PhysicsWorldNative.cpp
         physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
@@ -596,10 +595,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.h
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQuery.h
-        physics/CanonicalPhysicsRuntimeQueries.cpp
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
@@ -607,8 +605,9 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQueries.cpp
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp

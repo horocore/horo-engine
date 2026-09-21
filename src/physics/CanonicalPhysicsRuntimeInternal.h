@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CanonicalPhysicsRuntime.h"
+#include "CanonicalPhysicsRuntimeDiagnostics.h"
+#include "CanonicalPhysicsRuntimeQuery.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
 #include <Jolt/Jolt.h>
@@ -16,6 +18,7 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollidePointResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -41,108 +44,6 @@
 #include <vector>
 
 namespace Horo::Physics::Detail {
-    struct AllocatorFunctions final {
-        JPH::AllocateFunction allocate{};
-        JPH::ReallocateFunction reallocate{};
-        JPH::AlignedAllocateFunction alignedAllocate{};
-    };
-
-    extern AllocatorFunctions installedAllocatorFunctions;
-
-    /** @brief Fixed non-blocking mailbox written by native callbacks and drained at an owner-thread safe point. */
-    struct DiagnosticInbox final {
-        /** @brief Appends a bounded owner-thread summary for messages rejected by callback contention. */
-        static void AppendDroppedSummary(std::string &message, const std::uint32_t droppedCount) {
-            if (droppedCount == 0)
-                return;
-            std::array<char, 16> countText{};
-            const auto [countEnd, error] = std::to_chars(countText.data(), countText.data() + countText.size(), droppedCount);
-            if (error != std::errc{})
-                return;
-            std::string suffix{" ["};
-            suffix.append(countText.data(), static_cast<std::size_t>(countEnd - countText.data()));
-            suffix.append(" additional messages dropped]");
-            if (message.size() + suffix.size() > MaximumPhysicsDiagnosticMessageBytes)
-                message.resize(MaximumPhysicsDiagnosticMessageBytes - suffix.size());
-            message.append(suffix);
-        }
-
-        /** @brief Maps one private normalized classification to a stable Horo error. */
-        static Error MakeDiagnosticError(const CanonicalDiagnosticKind kind, std::string message) {
-            using enum CanonicalDiagnosticKind;
-            switch (kind) {
-                case Validation:
-                    return MakeError(PhysicsErrors::SolverValidationMessage, std::move(message));
-                case Assertion:
-                    return MakeError(PhysicsErrors::SolverAssertionFailed, std::move(message));
-                case Fatal:
-                    return MakeError(PhysicsErrors::SolverFatalCondition, std::move(message));
-            }
-            return MakeError(PhysicsErrors::SolverFatalCondition, "Unknown canonical solver diagnostic classification.");
-        }
-
-        void RetainEmergency(const CanonicalDiagnosticKind kind) noexcept {
-            const auto desired = static_cast<std::uint8_t>(static_cast<std::uint8_t>(kind) + std::uint8_t{1});
-            std::uint8_t current = emergencyKind.load();
-            while (current < desired && !emergencyKind.compare_exchange_weak(current, desired)) {
-                // A producer changed the priority; retry only while this condition is more severe.
-            }
-        }
-
-        void Submit(const CanonicalDiagnosticKind kind, const std::string_view message) noexcept {
-            if (lock.test_and_set()) {
-                dropped.fetch_add(1);
-                if (kind != CanonicalDiagnosticKind::Validation)
-                    RetainEmergency(kind);
-                return;
-            }
-            if (!occupied || kind > retainedKind) {
-                retainedKind = kind;
-                const std::string_view evidence =
-                    message.empty() ? std::string_view{"Native solver emitted an empty diagnostic message."} : message;
-                const std::size_t count = std::min(evidence.size(), text.size() - 1);
-                std::copy_n(evidence.data(), count, text.data());
-                text[count] = '\0';
-                size = count;
-                occupied = true;
-            }
-            lock.clear();
-        }
-
-        [[nodiscard]] std::optional<Error> Drain() {
-            if (lock.test_and_set())
-                return MakeError(PhysicsErrors::SolverFatalCondition,
-                                 "A native solver callback did not quiesce before the owner-thread drain boundary.");
-            const std::uint8_t emergency = emergencyKind.exchange(0);
-            if (!occupied && emergency == 0) {
-                lock.clear();
-                return std::nullopt;
-            }
-            CanonicalDiagnosticKind kind = occupied ? retainedKind : static_cast<CanonicalDiagnosticKind>(emergency - 1);
-            std::string message =
-                occupied ? std::string{text.data(), size} : std::string{"Native solver fatal evidence was bounded by callback contention."};
-            if (occupied && emergency > static_cast<std::uint8_t>(kind) + 1) {
-                kind = static_cast<CanonicalDiagnosticKind>(emergency - 1);
-                message = "Native solver fatal evidence was bounded by callback contention.";
-            }
-            AppendDroppedSummary(message, dropped.exchange(0));
-            occupied = false;
-            size = 0;
-            lock.clear();
-            return MakeDiagnosticError(kind, std::move(message));
-        }
-
-        std::atomic_flag lock = ATOMIC_FLAG_INIT;
-        std::atomic<std::uint32_t> dropped{};
-        std::atomic<std::uint8_t> emergencyKind{};
-        std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> text{};
-        std::size_t size{};
-        CanonicalDiagnosticKind retainedKind{CanonicalDiagnosticKind::Validation};
-        bool occupied{};
-    };
-
-    std::atomic<DiagnosticInbox *> &ActiveDiagnosticInbox() noexcept;
-
     /** @brief Process-owned Jolt registration and resource accounting. */
     struct CanonicalRuntime final {
         CanonicalRuntime() = default;
@@ -185,11 +86,24 @@ namespace Horo::Physics::Detail {
         }
     };
 
-    struct CanonicalQueryFixtureRecord final {
-        PhysicsQueryFixture fixture;
-        PhysicsQueryFixtureDescriptor descriptor;
-        JPH::BodyID nativeBody;
-        JPH::Ref<JPH::Shape> shape;
+    struct CanonicalWorld;
+    class ContactCaptureRoute;
+
+    /** @brief Copies native contact callbacks into the owner-thread event projection seam. */
+    class CanonicalContactListener final : public JPH::ContactListener {
+    public:
+        explicit CanonicalContactListener(CanonicalWorld &world) noexcept : world_(world) {}
+
+        void OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
+                            JPH::ContactSettings &settings) override;
+        void OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
+                                JPH::ContactSettings &settings) override;
+
+    private:
+        void Emit(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
+                  const JPH::ContactSettings &settings) const noexcept;
+
+        CanonicalWorld &world_;
     };
 
     struct CanonicalSceneShapeRecord final {
@@ -211,32 +125,6 @@ namespace Horo::Physics::Detail {
     struct CanonicalSceneConstraintRecord final {
         ConstraintHandle handle;
         JPH::Ref<JPH::Constraint> constraint;
-    };
-
-    /** @brief Fixed-capacity native collector; callbacks cannot allocate or mutate world structure. */
-    template <typename Collector> class FixedQueryCollector final : public Collector {
-    public:
-        using ResultType = typename Collector::ResultType;
-
-        FixedQueryCollector(ResultType *storage, const PhysicsQueryCollection collection) : values(storage), collection_(collection) {}
-
-        void AddHit(const ResultType &hit) override {
-            if (collection_ == PhysicsQueryCollection::Any) {
-                if (count == 0)
-                    values[count++] = hit;
-                this->ForceEarlyOut();
-                return;
-            }
-            if (count < MaximumPhysicsQueryHits)
-                values[count++] = hit;
-            else
-                overflow = true;
-        }
-
-        ResultType *values{};
-        std::size_t count{};
-        bool overflow{};
-        PhysicsQueryCollection collection_;
     };
 
     /** @brief Native solver objects retained in dependency order for one world. */
@@ -276,11 +164,7 @@ namespace Horo::Physics::Detail {
         std::uint32_t nextFixtureSlot{};
         std::uint32_t nextFixtureGeneration{1};
         std::uint64_t querySchemaGeneration{1};
-        std::array<JPH::CastRayCollector::ResultType, MaximumPhysicsQueryHits> rayQueryResults{};
-        std::array<JPH::CollidePointCollector::ResultType, MaximumPhysicsQueryHits> pointQueryResults{};
-        std::array<JPH::CollideShapeCollector::ResultType, MaximumPhysicsQueryHits> overlapQueryResults{};
-        std::array<JPH::CastShapeCollector::ResultType, MaximumPhysicsQueryHits> sweepQueryResults{};
-        std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> queryCandidates{};
+        CanonicalQueryStorage storage;
     };
 
     /** @brief Per-world native ownership and bounded scene/query storage. */
@@ -296,21 +180,40 @@ namespace Horo::Physics::Detail {
         ClosedObjectVsBroadPhase objectVsBroadPhase;
         ClosedObjectPairs objectPairs;
         CanonicalWorldNativeState native;
+        CanonicalContactListener contactListener;
         DiagnosticInbox diagnostics;
+        std::atomic<ContactCaptureRoute *> contactRoute{};
         CanonicalWorldSceneState scene;
         CanonicalWorldQueryState query;
     };
 
-    /** @brief Reusable fixed-capacity collectors for one owner-thread query execution. */
-    struct CanonicalQueryCollectors final {
-        CanonicalQueryCollectors(CanonicalWorld &world, PhysicsQueryCollection collection)
-            : ray(world.query.rayQueryResults.data(), collection), point(world.query.pointQueryResults.data(), collection),
-              overlap(world.query.overlapQueryResults.data(), collection), sweep(world.query.sweepQueryResults.data(), collection) {}
+    /** @brief Limits native contact routing to one joined fixed step and clears borrowed state on exit. */
+    class ContactCaptureRoute final {
+    public:
+        ContactCaptureRoute(CanonicalWorld &world, const std::uint64_t simulationTick, const CanonicalContactSink sink) noexcept
+            : world_(world), simulationTick_(simulationTick), sink_(sink) {
+            world_.contactRoute.store(this, std::memory_order::seq_cst);
+        }
 
-        FixedQueryCollector<JPH::CastRayCollector> ray;
-        FixedQueryCollector<JPH::CollidePointCollector> point;
-        FixedQueryCollector<JPH::CollideShapeCollector> overlap;
-        FixedQueryCollector<JPH::CastShapeCollector> sweep;
+        ContactCaptureRoute(const ContactCaptureRoute &) = delete;
+        ContactCaptureRoute &operator=(const ContactCaptureRoute &) = delete;
+
+        ~ContactCaptureRoute() {
+            world_.contactRoute.store(nullptr, std::memory_order::seq_cst);
+        }
+
+        [[nodiscard]] const CanonicalContactSink &Sink() const noexcept {
+            return sink_;
+        }
+
+        [[nodiscard]] std::uint64_t SimulationTick() const noexcept {
+            return simulationTick_;
+        }
+
+    private:
+        CanonicalWorld &world_;
+        std::uint64_t simulationTick_{};
+        CanonicalContactSink sink_;
     };
 
     [[nodiscard]] inline JPH::Vec3 ToNative(const Math::Vec3 value) noexcept {

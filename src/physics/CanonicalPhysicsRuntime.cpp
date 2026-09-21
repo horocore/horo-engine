@@ -46,13 +46,6 @@
 #include <utility>
 
 namespace Horo::Physics::Detail {
-    AllocatorFunctions installedAllocatorFunctions;
-
-    std::atomic<DiagnosticInbox *> &ActiveDiagnosticInbox() noexcept {
-        static std::atomic<DiagnosticInbox *> inbox;
-        return inbox;
-    }
-
     CanonicalRuntime::~CanonicalRuntime() {
         ActiveDiagnosticInbox().store(nullptr);
         if (typesRegistered)
@@ -64,7 +57,7 @@ namespace Horo::Physics::Detail {
         JPH::Free = nullptr;
         JPH::AlignedAllocate = nullptr;
         JPH::AlignedFree = nullptr;
-        installedAllocatorFunctions = {};
+        ResetAllocators();
         JPH::Trace = priorTrace;
 #ifdef JPH_ENABLE_ASSERTS
         JPH::AssertFailed = priorAssertFailed;
@@ -73,7 +66,8 @@ namespace Horo::Physics::Detail {
 
     CanonicalWorld::CanonicalWorld(CanonicalRuntime &runtime, const std::uint32_t maximumBodies, const std::uint32_t maximumFixtures,
                                    const std::uint32_t maximumShapes, const std::uint32_t maximumConstraints)
-        : owner(runtime), scene(maximumBodies, maximumShapes, maximumConstraints), query(maximumFixtures, maximumBodies) {
+        : owner(runtime), contactListener(*this), scene(maximumBodies, maximumShapes, maximumConstraints),
+          query(maximumFixtures, maximumBodies) {
         ++owner.resources.worlds;
         query.fixtures.reserve(query.maximumFixtures);
         scene.shapes.reserve(scene.maximumShapes);
@@ -112,70 +106,6 @@ namespace Horo::Physics::Detail {
     }
 
     namespace {
-
-        /** @brief Normalizes one Jolt trace call into a bounded validation record without retaining native memory. */
-        void CaptureNativeTrace(const char *format, ...) noexcept {  // NOSONAR -- JPH::TraceFunction requires this C varargs ABI.
-            DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
-            if (inbox == nullptr || format == nullptr)
-                return;
-            thread_local std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> message{};
-            message.fill('\0');
-            std::va_list arguments;
-            va_start(arguments, format);
-            const int formatted = std::vsnprintf(message.data(), message.size(), format, arguments);  // NOSONAR -- native format ABI.
-            va_end(arguments);
-            if (formatted < 0)
-                inbox->Submit(CanonicalDiagnosticKind::Validation, "Native solver validation message could not be formatted.");
-            else
-                inbox->Submit(CanonicalDiagnosticKind::Validation, message.data());
-        }
-
-#ifdef JPH_ENABLE_ASSERTS
-        /** @brief Converts a Jolt assertion into fatal bounded evidence; owner lifecycle performs the transition. */
-        bool CaptureNativeAssertion(const char *expression, const char *message, const char *, const JPH::uint) noexcept {
-            DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
-            if (inbox == nullptr)
-                return false;
-            std::string_view evidence{"Native solver assertion"};
-            if (message != nullptr && message[0] != '\0')
-                evidence = message;
-            else if (expression != nullptr)
-                evidence = expression;
-            inbox->Submit(CanonicalDiagnosticKind::Assertion, evidence);
-            return false;
-        }
-#endif
-
-        /** @brief Native allocation cannot unwind through no-exception Jolt frames; fail closed instead of dereferencing null. */
-        void *RequireNativeAllocation(void *memory) noexcept {
-            if (memory == nullptr)
-                std::abort();
-            return memory;
-        }
-
-        /** @brief Preserves native allocation semantics with a defined process-fatal exhaustion path. */
-        void *CheckedAllocate(const std::size_t size) {
-            return RequireNativeAllocation(installedAllocatorFunctions.allocate(std::max(size, std::size_t{1})));
-        }
-
-        /** @brief Delegates reallocation without allowing null to escape into no-exception native code. */
-        void *CheckedReallocate(void *memory, const std::size_t oldSize, const std::size_t newSize) {
-            return RequireNativeAllocation(installedAllocatorFunctions.reallocate(memory, oldSize, std::max(newSize, std::size_t{1})));
-        }
-
-        /** @brief Retains platform alignment and fails closed on exhaustion. */
-        void *CheckedAlignedAllocate(const std::size_t size, const std::size_t alignment) {
-            return RequireNativeAllocation(installedAllocatorFunctions.alignedAllocate(std::max(size, std::size_t{1}), alignment));
-        }
-
-        /** @brief Captures platform allocation functions and installs bounded allocation-failure behavior explicitly. */
-        void InstallAllocators() {
-            JPH::RegisterDefaultAllocator();
-            installedAllocatorFunctions = {JPH::Allocate, JPH::Reallocate, JPH::AlignedAllocate};
-            JPH::Allocate = CheckedAllocate;
-            JPH::Reallocate = CheckedReallocate;
-            JPH::AlignedAllocate = CheckedAlignedAllocate;
-        }
 
         /** @brief Restricts process-global callback routing to one joined native step. */
         class DiagnosticRoute final {
@@ -284,6 +214,7 @@ namespace Horo::Physics::Detail {
                                    world->broadPhaseLayers, world->objectVsBroadPhase, world->objectPairs);
         world->native.system->SetPhysicsSettings(values.solver);
         world->native.system->SetGravity(values.gravity);
+        world->native.system->SetContactListener(&world->contactListener);
         if (failurePoint == CanonicalFailurePoint::SystemInitialized)
             return Result<CanonicalWorldHandle>::Failure(
                 MakeError(PhysicsErrors::InitializationFailed, "Native world initialization stage."));
@@ -296,7 +227,8 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc StepCanonicalWorld */
-    Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle world, const float fixedDeltaSeconds) {
+    Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle world, const float fixedDeltaSeconds,
+                                                    const std::uint64_t simulationTick, const CanonicalContactSink contactSink) {
         if (world.value == nullptr)
             return Result<CanonicalStepOutcome>::Failure(MakeError(PhysicsErrors::InvalidState));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
@@ -304,6 +236,7 @@ namespace Horo::Physics::Detail {
             return Result<CanonicalStepOutcome>::Failure(
                 MakeError(PhysicsErrors::InvalidState, "Another canonical solver callback generation is still active."));
         } else {
+            const ContactCaptureRoute contactRoute{canonical, simulationTick, contactSink};
             const auto updateError =
                 canonical.native.system->Update(fixedDeltaSeconds, 1, canonical.native.scratch.get(), canonical.native.jobs.get());
             std::optional<Error> diagnostic = canonical.diagnostics.Drain();
