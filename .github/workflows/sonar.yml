@@ -11,7 +11,10 @@ permissions:
 
 concurrency:
   group: sonar-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A newer main commit supersedes an older push analysis just like a newer PR
+  # commit supersedes its previous analysis. Avoid running stale Sonar scans in
+  # parallel when several PRs are merged in quick succession.
+  cancel-in-progress: true
 
 jobs:
   sonar:
@@ -52,8 +55,12 @@ jobs:
         with:
           path: |
             .cmake/fetchcontent
-          key: sonar-v1-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+          # Only dependency declarations affect this cache. Hashing every
+          # CMakeLists.txt created a new ~925 MB cache for unrelated target
+          # changes and crowded out the CFamily analysis cache.
+          key: sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/HoroNavigationDependency.cmake', 'cmake/HoroPhysicsDependency.cmake') }}
           restore-keys: |
+            sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-
             sonar-v1-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Restore compiler cache
