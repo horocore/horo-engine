@@ -220,6 +220,21 @@ children remain local-space, so callers must not subtract the active origin agai
 Scene replacement requires a new plan rather than carrying cached bindings across
 the scene-generation fence.
 
+## CIN-001.6 Migration Notes
+
+`HoroEngine::SceneModel` owns `Horo/Runtime/Scene/PropertyBindingRegistry.h` and
+`Horo/Runtime/Scene/PropertyBindingErrors.h`. Host composition registers inert
+typed component/property descriptors, then freezes one deterministic snapshot before
+activation. Accessors validate the owner-provided component instance and must not
+retain its pointer. `HoroEngine::CinematicModel` consumes that registry through
+`Horo/Cinematic/PropertyTrack.h` and the stable `Runtime::SceneObjectId` contract
+from `HoroEngine::Runtime`; it does not duplicate reflection metadata or use
+string paths in cooked/runtime track identities. Property plans borrow immutable
+curve keys and caller-owned target snapshots, and scene/component generation changes
+require revalidation before a setter is invoked. Missing or rejected bindings are
+returned as typed diagnostics for editor and runtime adapters rather than silently
+skipped.
+
 ## PLS-001.2 Migration Notes
 
 `HoroEngine::PlatformServices` owns

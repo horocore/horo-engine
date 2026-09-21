@@ -428,6 +428,7 @@ add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CurveSamplingTests.cpp
         unit/runtime/cinematic/CinematicIdentityTests.cpp
+        unit/runtime/cinematic/PropertyTrackTests.cpp
         unit/runtime/cinematic/SequenceAssetTests.cpp
         unit/runtime/cinematic/TransformTrackTests.cpp
 )
