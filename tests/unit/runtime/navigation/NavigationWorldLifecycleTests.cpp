@@ -93,6 +93,7 @@ namespace Horo::Navigation {
         REQUIRE(lifecycle.HasStagedCandidate());
         REQUIRE(lifecycle.CommitAtSafePoint(replacement.scene, replacement.sceneGeneration).HasValue());
         REQUIRE(lifecycle.ActiveDescriptor().Value() == replacement);
+        REQUIRE(destructions->load() == 1);
     }
 
     TEST_CASE("Revoked navigation worlds remain pinned until worker leases drain", "[unit][navigation][headless][lifecycle]") {
