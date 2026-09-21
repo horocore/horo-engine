@@ -1,10 +1,9 @@
-#include "editor/document/SceneDocumentComparison.h"
+#include "SceneDocumentPersistenceTestSupport.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/document/SceneFileWatchService.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <span>
@@ -13,357 +12,31 @@
 #include <variant>
 #include <vector>
 
+using namespace Horo;
+using namespace Horo::Editor;
+using namespace Horo::Editor::PersistenceTestSupport;
+
 namespace {
-    using namespace Horo;
-    using namespace Horo::Editor;
-
-    const ErrorCodeDescriptor InjectedReplaceFailure{
-        .domain = ErrorDomainId{"test.scene_persistence"},
-        .code = ErrorCode{"replace_failed"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "Injected scene replacement failure.",
-    };
-
-    class TemporaryProject final {
-    public:
-        TemporaryProject() {
-            const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            root_ = std::filesystem::temp_directory_path() / ("horo-scene-persistence-" + std::to_string(stamp));
-            std::filesystem::create_directories(root_ / ".horo");
-            std::filesystem::create_directories(root_ / "assets/scenes");
-        }
-
-        ~TemporaryProject() {
-            std::error_code error;
-            std::filesystem::remove_all(root_, error);
-        }
-
-        [[nodiscard]] const std::filesystem::path &Root() const noexcept {
-            return root_;
-        }
-
-        [[nodiscard]] std::filesystem::path ScenePath() const {
-            return root_ / "assets/scenes/main.horo";
-        }
-
-        [[nodiscard]] std::filesystem::path RecoveryPath() const {
-            return root_ / ".horo/local/recovery/default-scene.hororecovery";
-        }
-
-        void WriteMetadata(const std::string &defaultScene = "assets/scenes/main.horo") const {
-            std::ofstream output(root_ / ".horo/project.json", std::ios::binary);
-            output << R"({"settings":{"defaultScene":")" << defaultScene << R"("}})";
-        }
-
-        void WriteScene(std::string contents) const {
-            std::ofstream output(ScenePath(), std::ios::binary);
-            output << contents;
-        }
-
-    private:
-        std::filesystem::path root_;
-    };
-
-    class ReplaceFailingFileSystem final : public DurableFileSystem {
-    public:
-        [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
-                                                                    const std::string_view ownerMetadata) override {
-            return native_.TryAcquireExclusive(path, ownerMetadata);
-        }
-
-        [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-            return native_.AvailableBytes(path);
-        }
-
-        [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
-            return native_.WriteDurable(path, bytes);
-        }
-
-        [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-            return native_.CopyDurable(source, destination);
-        }
-
-        [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &, const std::filesystem::path &) override {
-            return Result<void>::Failure(MakeError(InjectedReplaceFailure));
-        }
-
-        [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override {
-            return native_.RemoveDurable(path);
-        }
-
-        [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override {
-            return native_.SyncDirectory(path);
-        }
-
-    private:
-        NativeDurableFileSystem native_;
-    };
-
-    class InterferingFileSystem final : public DurableFileSystem {
-    public:
-        explicit InterferingFileSystem(std::filesystem::path canonicalPath) : canonicalPath_(std::move(canonicalPath)) {}
-
-        [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
-                                                                    const std::string_view ownerMetadata) override {
-            return native_.TryAcquireExclusive(path, ownerMetadata);
-        }
-
-        [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-            return native_.AvailableBytes(path);
-        }
-
-        [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
-            Result<void> written = native_.WriteDurable(path, bytes);
-            if (written.HasValue() && path.extension() == ".tmp") {
-                std::ofstream external(canonicalPath_, std::ios::binary | std::ios::trunc);
-                external << "{\n  \"schemaVersion\": 1,\n  \"objects\": []\n}\n";
-            }
-            return written;
-        }
-
-        [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-            return native_.CopyDurable(source, destination);
-        }
-
-        [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
-            return native_.AtomicReplace(prepared, destination);
-        }
-
-        [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override {
-            return native_.RemoveDurable(path);
-        }
-
-        [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override {
-            return native_.SyncDirectory(path);
-        }
-
-    private:
-        std::filesystem::path canonicalPath_;
-        NativeDurableFileSystem native_;
-    };
-
-    [[nodiscard]] SceneDocumentSnapshot AuthoredScene() {
-        SceneDocument document;
-        EditorHistory history;
-        SceneDocumentCommandExecutor commands(document, history);
-        const Math::Transform transform{
-            .translation = {2.0F, 3.0F, -4.0F},
-            .rotation = Math::Quaternion::FromEulerRadians({0.1F, 0.2F, 0.3F}),
-            .scale = {1.5F, 2.0F, 0.5F},
-        };
-        const auto created =
-            commands.Execute(
-                CreateSceneObjectCommand{
-                    .name = "Persisted Box",
-                    .localTransform = transform,
-                    .primitiveMesh = PrimitiveMeshDescriptor::Defaults(Runtime::PrimitiveMeshType::Box),
-                    .components =
-                        SceneObjectComponentSet{
-                            .camera = Runtime::CameraComponent{.nearPlane = 0.25F, .farPlane = 500.0F, .enabled = false},
-                            .light = Runtime::LightComponent{.kind = Runtime::LightKind::Point, .intensity = 3.0F},
-                            .triggerVolume = Runtime::TriggerVolumeComponent{Runtime::ColliderShapeType::Sphere},
-                            .audioSource = Runtime::AudioSourceComponent{.playback = {.gain = 0.75F, .spatial = false}},
-                            .navigationSurface =
-                                Runtime::NavigationSurfaceComponent{
-                                    .id = Navigation::SurfaceId::Create(19).Value(),
-                                    .definition = Assets::AssetId::Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee").Value(),
-                                    .schemaVersion = 1,
-                                    .generation = 4,
-                                    .bakeScope = Runtime::NavigationBakeScope::LocalBounds,
-                                    .localBounds =
-                                        Runtime::NavigationLocalBounds{.center = {1.0F, 0.0F, -2.0F}, .halfExtents = {8.0F, 2.0F, 5.0F}},
-                                    .profiles = {Navigation::NavigationAgentProfileId::Create(6).Value()},
-                                },
-                            .navigationRegion =
-                                Runtime::NavigationRegionComponent{
-                                    .id = Navigation::NavigationRegionId::Create(27).Value(),
-                                    .surface = Navigation::SurfaceId::Create(19).Value(),
-                                    .generation = 3,
-                                    .localBounds = {.center = {-1.0F, 0.5F, 2.0F}, .halfExtents = {3.0F, 1.0F, 4.0F}},
-                                    .sourceSelection = Runtime::NavigationRegionSourceSelection::StaticCollisionInBounds,
-                                    .mode = Runtime::NavigationRegionMode::Exclude,
-                                },
-                            .navigationModifier =
-                                Runtime::NavigationModifierComponent{
-                                    .id = Navigation::NavigationModifierId::Create(31).Value(),
-                                    .surface = Navigation::SurfaceId::Create(19).Value(),
-                                    .generation = 2,
-                                    .volume = Runtime::NavigationCylinderVolume{.center = {0.5F, 1.0F, -0.5F},
-                                                                                .radius = 2.5F,
-                                                                                .halfHeight = 1.25F},
-                                    .operation = Runtime::NavigationModifierOperation::OverrideAreaAndCost,
-                                    .area = Navigation::NavigationAreaId::Create(12).Value(),
-                                    .traversalCost = 1.75F,
-                                },
-                            .navigationLink =
-                                Runtime::NavigationLinkComponent{
-                                    .id = Navigation::NavigationLinkId::Create(37).Value(),
-                                    .generation = 5,
-                                    .start = {.surface = Navigation::SurfaceId::Create(19).Value(),
-                                              .localPosition = {-2.0F, 0.0F, 0.0F},
-                                              .connectionRadiusMeters = 0.75F},
-                                    .end = {.surface = Navigation::SurfaceId::Create(19).Value(),
-                                            .localPosition = {2.0F, 0.0F, 0.0F},
-                                            .connectionRadiusMeters = 1.0F},
-                                    .kind = Runtime::NavigationLinkKind::Door,
-                                    .direction = Runtime::NavigationLinkDirection::Bidirectional,
-                                    .profiles = {Navigation::NavigationAgentProfileId::Create(6).Value()},
-                                    .traversalCost = 2.0F,
-                                },
-                            .rigidBody = Runtime::RigidBodyComponent{.id = {41}, .body = {42}},
-                            .colliders = {Runtime::ColliderComponent{
-                                .id = {43},
-                                .collider = {44},
-                                .body = {.object = {1}, .body = {42}},
-                                .source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{.radiusMeters = 1.25F}},
-                                .localPose = {.translation = {0.0F, 0.5F, 0.0F}},
-                                .collisionProfile = Physics::CollisionProfileId::Parse("11111111-2222-4333-8444-555555555555").Value(),
-                                .materials = {{.slot = Physics::PhysicsMaterialSlotId::FromValue(1),
-                                               .material = Assets::AssetId::Parse("99999999-aaaa-4bbb-8ccc-dddddddddddd").Value()}},
-                            }},
-                            .physicsConstraints = {Runtime::PhysicsConstraintComponent{
-                                .id = {45},
-                                .constraint = {46},
-                                .first = {.body = {.object = {1}, .body = {42}}},
-                                .second = Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 4.0F, 0.0F}}},
-                                .parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.5F, .maximumMeters = 4.0F},
-                            }},
-                            .behaviors =
-                                {
-                                    Gameplay::BehaviorComponent{
-                                        .instanceId = Gameplay::BehaviorInstanceId{44},
-                                        .typeId = Gameplay::BehaviorTypeId::Parse("game.tests.persisted_behavior").Value(),
-                                        .schemaVersion = 3,
-                                        .enabled = false,
-                                        .fields =
-                                            {
-                                                Gameplay::BehaviorField{"speed", 2.5},
-                                                Gameplay::BehaviorField{"label", std::string{"Unknown payload survives"}},
-                                                Gameplay::BehaviorField{"offset", Math::Vec3{1.0F, 2.0F, 3.0F}},
-                                            },
-                                    },
-                                },
-                        },
-                });
-        REQUIRE((created.HasValue()));
-        const auto profile = Physics::CollisionProfileId::Parse("11111111-2222-4333-8444-555555555555").Value();
-        const auto material = Assets::AssetId::Parse("99999999-aaaa-4bbb-8ccc-dddddddddddd").Value();
-        const auto materialBinding =
-            Runtime::PhysicsColliderMaterialBinding{.slot = Physics::PhysicsMaterialSlotId::FromValue(1), .material = material};
-        REQUIRE(
-            commands
-                .Execute(CreateSceneObjectCommand{
-                    .name = "Dynamic Physics Variants",
-                    .components =
-                        SceneObjectComponentSet{.rigidBody =
-                                                    Runtime::RigidBodyComponent{.id = {51},
-                                                                                .body = {52},
-                                                                                .motion = Runtime::AuthoredPhysicsMotionType::Dynamic,
-                                                                                .mass = Runtime::AuthoredPhysicsMass{.kilograms = 12.0F}},
-                                                .colliders =
-                                                    {Runtime::ColliderComponent{.id = {53},
-                                                                                .collider = {54},
-                                                                                .body = {.object = {2}, .body = {52}},
-                                                                                .source =
-                                                                                    Runtime::PhysicsAnalyticCollider{
-                                                                                        Runtime::PhysicsBoxCollider{}},
-                                                                                .collisionProfile = profile,
-                                                                                .materials = {materialBinding}},
-                                                     Runtime::ColliderComponent{.id = {55},
-                                                                                .collider = {56},
-                                                                                .body = {.object = {2}, .body = {52}},
-                                                                                .source =
-                                                                                    Runtime::PhysicsAnalyticCollider{
-                                                                                        Runtime::PhysicsCapsuleCollider{}},
-                                                                                .collisionProfile = profile,
-                                                                                .materials = {materialBinding}},
-                                                     Runtime::ColliderComponent{.id = {57},
-                                                                                .collider = {58},
-                                                                                .body = {.object = {2}, .body = {52}},
-                                                                                .source = Runtime::
-                                                                                    PhysicsShapeAssetReference{.asset =
-                                                                                                                   Assets::AssetId::Parse(
-                                                                                                                       "aaaaaaaa-1111-4222-"
-                                                                                                                       "8333-bbbbbbbbbbbb")
-                                                                                                                       .Value(),
-                                                                                                               .subresource = {3}},
-                                                                                .collisionProfile = profile,
-                                                                                .materials = {materialBinding}}},
-                                                .physicsConstraints =
-                                                    {Runtime::PhysicsConstraintComponent{.id = {59},
-                                                                                         .constraint = {60},
-                                                                                         .first = {.body = {.object = {2}, .body = {52}}},
-                                                                                         .second =
-                                                                                             Runtime::PhysicsConstraintBodyEndpoint{
-                                                                                                 .body = {.object = {1}, .body = {42}}},
-                                                                                         .parameters =
-                                                                                             Runtime::PhysicsFixedConstraint{}}}}})
-                .HasValue());
-        REQUIRE(
-            commands
-                .Execute(
-                    CreateSceneObjectCommand{.name = "Density Physics Variant",
-                                             .components =
-                                                 SceneObjectComponentSet{.rigidBody = Runtime::
-                                                                             RigidBodyComponent{.id = {61},
-                                                                                                .body = {62},
-                                                                                                .motion = Runtime::
-                                                                                                    AuthoredPhysicsMotionType::Dynamic,
-                                                                                                .mass = Runtime::AuthoredPhysicsDensity{}},
-                                                                         .colliders =
-                                                                             {Runtime::ColliderComponent{.id = {63},
-                                                                                                         .collider = {64},
-                                                                                                         .body = {.object = {3},
-                                                                                                                  .body = {62}},
-                                                                                                         .collisionProfile = profile,
-                                                                                                         .materials = {materialBinding}}}}})
-                .HasValue());
-        REQUIRE(
-            commands
-                .Execute(CreateSceneObjectCommand{
-                    .name = "Static Plane Physics Variant",
-                    .components =
-                        SceneObjectComponentSet{.rigidBody =
-                                                    Runtime::RigidBodyComponent{.id = {71},
-                                                                                .body = {72},
-                                                                                .motion = Runtime::AuthoredPhysicsMotionType::Kinematic},
-                                                .colliders = {Runtime::ColliderComponent{.id = {73},
-                                                                                         .collider = {74},
-                                                                                         .body = {.object = {4}, .body = {72}},
-                                                                                         .source =
-                                                                                             Runtime::PhysicsAnalyticCollider{
-                                                                                                 Runtime::PhysicsStaticPlaneCollider{}},
-                                                                                         .collisionProfile = profile,
-                                                                                         .materials = {materialBinding}}}}})
-                .HasValue());
-        const auto prefabAsset = Assets::AssetId::Parse("11112222-3333-4444-8888-9999aaaabbbb");
-        REQUIRE(prefabAsset.HasValue());
-        const auto sourcePrefab = Prefab::PrefabAssetReference::Create(prefabAsset.Value());
-        REQUIRE(sourcePrefab.HasValue());
-        REQUIRE(commands
-                    .Execute(CreateScenePrefabInstanceCommand{
-                        sourcePrefab.Value(),
-                        created.Value().object,
-                        Math::Transform{.translation = {-3.0F, 2.0F, 7.0F}, .scale = {0.5F, 0.5F, 0.5F}},
-                    })
-                    .HasValue());
-        return document.Snapshot();
+    [[nodiscard]] Result<ProjectSceneSaveResult> SaveDefaultScene(const TemporaryProject &project, const SceneDocumentSnapshot &snapshot) {
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations(files);
+        const auto expected = InspectProjectSceneFingerprint(project.Root(), project.ScenePath());
+        if (expected.HasError())
+            return Result<ProjectSceneSaveResult>::Failure(expected.ErrorValue());
+        return SaveProjectScene(project.Root(), project.ScenePath(), snapshot, expected.Value(), false, mutations, files);
     }
 
-    void RequireSameSceneObject(const SceneObjectSnapshot &actual, const SceneObjectSnapshot &expected) {
-        REQUIRE((actual.id == expected.id));
-        REQUIRE((actual.name == expected.name));
-        REQUIRE((actual.parent == expected.parent));
-        REQUIRE((actual.localTransform == expected.localTransform));
-        REQUIRE((actual.primitiveMesh == expected.primitiveMesh));
-        REQUIRE((actual.components == expected.components));
+    [[nodiscard]] Result<void> WriteRecoveryForTest(const TemporaryProject &project, const SceneDocumentSnapshot &snapshot) {
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations(files);
+        return WriteProjectSceneRecovery(project.Root(), project.ScenePath(), snapshot, DocumentRevision{}, DocumentStateId{1}, mutations,
+                                         files);
     }
 }  // namespace
 
 TEST_CASE("Project Scene Save Reopens The Same Authored State", "[unit][editor][persistence]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
     NativeDurableFileSystem files;
     ProjectMutationCoordinator mutations(files);
@@ -395,8 +68,7 @@ TEST_CASE("Project Scene Save Reopens The Same Authored State", "[unit][editor][
 
 TEST_CASE("Navigation link direction and modifier shape round trip explicitly", "[unit][editor][persistence][navigation]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
     SceneDocumentSnapshot authored = AuthoredScene();
     authored.prefabInstances.clear();
     auto &components = authored.objects.front().components;
@@ -426,8 +98,7 @@ TEST_CASE("Navigation link direction and modifier shape round trip explicitly", 
 
 TEST_CASE("Every authored light kind survives project scene save and reload", "[unit][editor][persistence]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
     const SceneDocumentSnapshot snapshot{
         .revision = DocumentRevision{3},
         .state = DocumentStateId{3},
@@ -450,11 +121,8 @@ TEST_CASE("Every authored light kind survives project scene save and reload", "[
             },
     };
 
-    NativeDurableFileSystem files;
-    ProjectMutationCoordinator mutations(files);
-    auto expected = InspectProjectSceneFingerprint(project.Root(), project.ScenePath());
-    REQUIRE((expected.HasValue()));
-    REQUIRE((SaveProjectScene(project.Root(), project.ScenePath(), snapshot, expected.Value(), false, mutations, files).HasValue()));
+    const auto saved = SaveDefaultScene(project, snapshot);
+    REQUIRE((saved.HasValue()));
 
     auto loaded = LoadProjectDefaultScene(project.Root());
     REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
@@ -469,8 +137,7 @@ TEST_CASE("Every authored light kind survives project scene save and reload", "[
 
 TEST_CASE("Imported mesh asset identity persists without a source path", "[unit][editor][persistence][asset]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
     const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff");
     REQUIRE((asset.HasValue()));
     SceneDocumentSnapshot snapshot{
@@ -479,11 +146,7 @@ TEST_CASE("Imported mesh asset identity persists without a source path", "[unit]
         .objects = {SceneObjectSnapshot{.id = SceneObjectId{1}, .name = "Chair", .meshAsset = asset.Value()}},
     };
 
-    NativeDurableFileSystem files;
-    ProjectMutationCoordinator mutations(files);
-    auto fingerprint = InspectProjectSceneFingerprint(project.Root(), project.ScenePath());
-    REQUIRE((fingerprint.HasValue()));
-    auto saved = SaveProjectScene(project.Root(), project.ScenePath(), snapshot, fingerprint.Value(), false, mutations, files);
+    const auto saved = SaveDefaultScene(project, snapshot);
     REQUIRE((saved.HasValue()));
     auto loaded = LoadProjectDefaultScene(project.Root());
     REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
@@ -494,8 +157,7 @@ TEST_CASE("Imported mesh asset identity persists without a source path", "[unit]
 
 void RequireAudioSourceRoundTrip(const std::span<const Audio::AudioSoundReference> references) {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
     std::vector<SceneObjectSnapshot> objects;
     objects.reserve(references.size());
@@ -503,14 +165,21 @@ void RequireAudioSourceRoundTrip(const std::span<const Audio::AudioSoundReferenc
         Runtime::AudioSourceComponent audioSource{.sound = references[index]};
         if (index == 0) {
             const auto bus = Audio::AudioBusId::Create(9);
+            const auto concurrencyGroup = Audio::AudioConcurrencyGroupId::Create(17);
             REQUIRE(bus.HasValue());
+            REQUIRE(concurrencyGroup.HasValue());
             audioSource.playback = {.gain = 0.75F,
                                     .pitch = 1.25F,
                                     .bus = bus.Value(),
                                     .loop = true,
-                                    .spatial = false,
+                                    .spatialMode = Audio::AudioSpatialMode::TwoD,
                                     .enableDoppler = true,
-                                    .playOnStart = false};
+                                    .playOnStart = false,
+                                    .priority = 240,
+                                    .concurrency = Audio::AudioConcurrencyPolicy{.group = concurrencyGroup.Value(),
+                                                                                 .maxInstances = 3,
+                                                                                 .mode = Audio::AudioConcurrencyMode::StealOldest}};
+            audioSource.sceneLifecycle = Audio::AudioSceneLifecyclePolicy::KeepAliveInHostContext;
         }
         objects.push_back(SceneObjectSnapshot{.id = SceneObjectId{static_cast<std::uint64_t>(index + 1)},
                                               .name = "AudioSource",
@@ -570,18 +239,19 @@ TEST_CASE("Audio source persists extension sound references", "[unit][editor][pe
 
 TEST_CASE("Audio source migration clears legacy native and middleware references", "[unit][editor][persistence][audio][migration]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene(R"({
+    project.PrepareEmptyScene(R"({
         "schemaVersion": 1,
         "objects": [
-            {"id": 1, "parent": null, "name": "Native Clip", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"kind": "native_clip", "gain": 1.0, "spatial": true}}},
-            {"id": 2, "parent": null, "name": "Middleware Event", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"kind": "middleware_event", "gain": 1.0, "spatial": true}}}
+            {"id": 1, "parent": null, "name": "Native Clip", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"kind": "native_clip", "sound": "11111111-1111-4111-8111-111111111111", "gain": 1.0, "spatial": true}}},
+            {"id": 2, "parent": null, "name": "Middleware Event", "transform": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}, "primitiveMesh": null, "components": {"audioSource": {"kind": "middleware_event", "gain": 1.0, "spatial": false}}}
         ]
     })");
 
     const auto loaded = LoadProjectDefaultScene(project.Root());
     REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
     REQUIRE(loaded.Value()->objects.size() == 2);
+    CHECK(loaded.Value()->objects[0].components.audioSource->playback.spatialMode == Audio::AudioSpatialMode::ThreeD);
+    CHECK(loaded.Value()->objects[1].components.audioSource->playback.spatialMode == Audio::AudioSpatialMode::TwoD);
     for (const SceneObjectSnapshot &object : loaded.Value()->objects) {
         REQUIRE(object.components.audioSource.has_value());
         CHECK(object.components.audioSource->sound.kind == Audio::AudioSoundReferenceKind::Unassigned);
@@ -589,117 +259,28 @@ TEST_CASE("Audio source migration clears legacy native and middleware references
     }
 }
 
-TEST_CASE("Scene Comparison Classifies Typed Added Removed And Modified Objects", "[unit][editor][persistence][compare]") {
-    const auto instanceOne = Prefab::PrefabInstanceId::Create(1);
-    const auto instanceTwo = Prefab::PrefabInstanceId::Create(2);
-    const auto instanceThree = Prefab::PrefabInstanceId::Create(3);
-    const auto documentSourceOne =
-        Prefab::PrefabAssetReference::Create(Assets::AssetId::Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").Value());
-    const auto documentSourceTwo =
-        Prefab::PrefabAssetReference::Create(Assets::AssetId::Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb").Value());
-    const auto diskSourceOne = Prefab::PrefabAssetReference::Create(Assets::AssetId::Parse("cccccccc-cccc-4ccc-8ccc-cccccccccccc").Value());
-    const auto diskSourceThree =
-        Prefab::PrefabAssetReference::Create(Assets::AssetId::Parse("dddddddd-dddd-4ddd-8ddd-dddddddddddd").Value());
-    REQUIRE((instanceOne.HasValue()));
-    REQUIRE((instanceTwo.HasValue()));
-    REQUIRE((instanceThree.HasValue()));
-    REQUIRE((documentSourceOne.HasValue()));
-    REQUIRE((documentSourceTwo.HasValue()));
-    REQUIRE((diskSourceOne.HasValue()));
-    REQUIRE((diskSourceThree.HasValue()));
-
-    SceneObjectSnapshot documentModified{
-        .id = SceneObjectId{1},
-        .name = "Document Name",
-        .localTransform = Math::Transform{.translation = {1.0F, 0.0F, 0.0F}},
-        .primitiveMesh = PrimitiveMeshDescriptor::Defaults(Runtime::PrimitiveMeshType::Box),
+TEST_CASE("Audio source persistence rejects malformed admission policies", "[unit][editor][persistence][audio][validation]") {
+    const std::array<std::string, 3> malformedPolicies{
+        R"("priority":256)",
+        R"("concurrency":{"mode":"unknown"})",
+        R"("sceneLifecycle":"unknown")",
     };
-    SceneObjectSnapshot diskModified = documentModified;
-    diskModified.name = "Disk Name";
-    diskModified.localTransform.translation = {2.0F, 0.0F, 0.0F};
-    diskModified.components.light = Runtime::LightComponent{.kind = Runtime::LightKind::Point};
-    diskModified.editorState.locked = true;
+    for (const std::string &policy : malformedPolicies) {
+        TemporaryProject project;
+        project.PrepareEmptyScene(
+            std::string{
+                R"({"schemaVersion":1,"objects":[{"id":1,"parent":null,"name":"Audio","transform":{"translation":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},"primitiveMesh":null,"components":{"audioSource":{"kind":"native_clip","gain":1.0,)"} +
+            policy + R"(}}}]})");
 
-    const SceneDocumentSnapshot document{
-        .objects =
-            {
-                documentModified,
-                SceneObjectSnapshot{
-                    .id = SceneObjectId{2},
-                    .name = "Removed",
-                },
-            },
-        .prefabInstances =
-            {
-                ScenePrefabInstance{
-                    .instanceId = instanceOne.Value(),
-                    .sourcePrefab = documentSourceOne.Value(),
-                },
-                ScenePrefabInstance{
-                    .instanceId = instanceTwo.Value(),
-                    .sourcePrefab = documentSourceTwo.Value(),
-                },
-            },
-    };
-    const SceneDocumentSnapshot disk{
-        .objects =
-            {
-                diskModified,
-                SceneObjectSnapshot{
-                    .id = SceneObjectId{3},
-                    .name = "Added",
-                },
-            },
-        .prefabInstances =
-            {
-                ScenePrefabInstance{
-                    .instanceId = instanceOne.Value(),
-                    .sourcePrefab = diskSourceOne.Value(),
-                },
-                ScenePrefabInstance{
-                    .instanceId = instanceThree.Value(),
-                    .sourcePrefab = diskSourceThree.Value(),
-                },
-            },
-    };
-
-    const SceneDocumentComparison comparison = CompareSceneDocuments(document, disk);
-    REQUIRE((comparison.addedOnDisk == 1));
-    REQUIRE((comparison.removedFromDisk == 1));
-    REQUIRE((comparison.modified == 1));
-    REQUIRE((comparison.prefabInstancesAddedOnDisk == 1));
-    REQUIRE((comparison.prefabInstancesRemovedFromDisk == 1));
-    REQUIRE((comparison.prefabInstancesModified == 1));
-    REQUIRE((comparison.objects.size() == 3));
-    REQUIRE((comparison.prefabInstances.size() == 3));
-
-    const SceneObjectComparison &modified = comparison.objects[0];
-    REQUIRE((modified.id == SceneObjectId{1}));
-    REQUIRE((modified.kind == SceneObjectComparisonKind::Modified));
-    REQUIRE((modified.documentName == "Document Name"));
-    REQUIRE((modified.diskName == "Disk Name"));
-    REQUIRE((modified.fields.name));
-    REQUIRE((modified.fields.transform));
-    REQUIRE((modified.fields.components));
-    REQUIRE((modified.fields.editorState));
-    REQUIRE((!modified.fields.parent));
-    REQUIRE((!modified.fields.primitive));
-    REQUIRE((comparison.objects[1].kind == SceneObjectComparisonKind::RemovedFromDisk));
-    REQUIRE((comparison.objects[2].kind == SceneObjectComparisonKind::AddedOnDisk));
-    REQUIRE((comparison.prefabInstances[0].id == instanceOne.Value()));
-    REQUIRE((comparison.prefabInstances[0].kind == SceneObjectComparisonKind::Modified));
-    REQUIRE((comparison.prefabInstances[0].fields.sourcePrefab));
-    REQUIRE((!comparison.prefabInstances[0].fields.parent));
-    REQUIRE((!comparison.prefabInstances[0].fields.rootTransform));
-    REQUIRE((comparison.prefabInstances[1].kind == SceneObjectComparisonKind::RemovedFromDisk));
-    REQUIRE((comparison.prefabInstances[2].kind == SceneObjectComparisonKind::AddedOnDisk));
+        const auto loaded = LoadProjectDefaultScene(project.Root());
+        CHECK(loaded.HasError());
+    }
 }
 
 TEST_CASE("Failed Atomic Scene Replace Preserves Canonical Bytes", "[unit][editor][persistence]") {
     TemporaryProject project;
-    project.WriteMetadata();
     const std::string original = "{\"schemaVersion\":1,\"objects\":[]}\n";
-    project.WriteScene(original);
+    project.PrepareEmptyScene(original);
 
     ReplaceFailingFileSystem files;
     ProjectMutationCoordinator mutations(files);
@@ -735,15 +316,13 @@ TEST_CASE("Project Scene Resolver Accepts An Empty Default Scene", "[unit][edito
 
 TEST_CASE("Project Scene Loader Rejects Unknown Schema Versions", "[unit][editor][persistence]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":2,\"objects\":[]}\n");
+    project.PrepareEmptyScene("{\"schemaVersion\":2,\"objects\":[]}\n");
     REQUIRE((LoadProjectDefaultScene(project.Root()).HasError()));
 }
 
 TEST_CASE("Project Scene Loader Rejects Malformed Prefab Instance Records", "[unit][editor][persistence][prefab]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene(R"({"schemaVersion":1,"objects":[],"prefabInstances":{}})");
+    project.PrepareEmptyScene(R"({"schemaVersion":1,"objects":[],"prefabInstances":{}})");
     REQUIRE((LoadProjectDefaultScene(project.Root()).HasError()));
 
     project.WriteScene(R"({"schemaVersion":1,"objects":[],"prefabInstances":[{"instanceId":1,"sourceAsset":"not-an-id"}]})");
@@ -752,9 +331,8 @@ TEST_CASE("Project Scene Loader Rejects Malformed Prefab Instance Records", "[un
 
 TEST_CASE("Scene Save Detects External Byte Changes Before Atomic Replacement", "[unit][editor][persistence][conflict]") {
     TemporaryProject project;
-    project.WriteMetadata();
     const std::string original = "{\"schemaVersion\":1,\"objects\":[]}\n";
-    project.WriteScene(original);
+    project.PrepareEmptyScene(original);
 
     NativeDurableFileSystem files;
     ProjectMutationCoordinator mutations(files);
@@ -775,8 +353,7 @@ TEST_CASE("Scene Save Detects External Byte Changes Before Atomic Replacement", 
 
 TEST_CASE("Explicit Scene Conflict Overwrite Returns The New Canonical Identity", "[unit][editor][persistence][conflict]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
     NativeDurableFileSystem files;
     ProjectMutationCoordinator mutations(files);
@@ -794,8 +371,7 @@ TEST_CASE("Explicit Scene Conflict Overwrite Returns The New Canonical Identity"
 
 TEST_CASE("Scene Destination Save Requires Explicit Existing File Approval", "[unit][editor][persistence][save-as]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
     const std::filesystem::path destination = project.Root() / "assets/scenes/existing.horo";
     const std::string original = "{\"schemaVersion\":1,\"objects\":[]}\n";
     {
@@ -822,8 +398,7 @@ TEST_CASE("Scene Destination Save Requires Explicit Existing File Approval", "[u
 
 TEST_CASE("Scene Destination Save Rejects Invalid Paths And Detects Races", "[unit][editor][persistence][save-as][conflict]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
     const std::filesystem::path destination = project.Root() / "assets/scenes/copy.horo";
 
     NativeDurableFileSystem nativeFiles;
@@ -861,8 +436,7 @@ TEST_CASE("Scene Destination Save Rejects Invalid Paths And Detects Races", "[un
 
 TEST_CASE("Scene Save Rechecks External Identity Immediately Before Replacement", "[unit][editor][persistence][conflict]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
     auto expected = InspectProjectSceneFingerprint(project.Root(), project.ScenePath());
     REQUIRE((expected.HasValue()));
@@ -882,16 +456,14 @@ TEST_CASE("Scene Save Rechecks External Identity Immediately Before Replacement"
 
 TEST_CASE("Scene Recovery Round Trips Without Mutating Canonical Scene", "[unit][editor][persistence][recovery]") {
     TemporaryProject project;
-    project.WriteMetadata();
     const std::string canonical = "{\"schemaVersion\":1,\"objects\":[]}\n";
-    project.WriteScene(canonical);
+    project.PrepareEmptyScene(canonical);
 
     NativeDurableFileSystem files;
     ProjectMutationCoordinator mutations(files);
+
     const SceneDocumentSnapshot authored = AuthoredScene();
-    REQUIRE(
-        (WriteProjectSceneRecovery(project.Root(), project.ScenePath(), authored, DocumentRevision{}, DocumentStateId{1}, mutations, files)
-             .HasValue()));
+    REQUIRE((WriteRecoveryForTest(project, authored).HasValue()));
 
     std::ifstream canonicalInput(project.ScenePath(), std::ios::binary);
     const std::string canonicalAfterAutosave{std::istreambuf_iterator<char>{canonicalInput}, std::istreambuf_iterator<char>{}};
@@ -925,15 +497,10 @@ TEST_CASE("Scene Recovery Round Trips Without Mutating Canonical Scene", "[unit]
 
 TEST_CASE("Scene Recovery Rejects Payload Whose Checksum No Longer Matches", "[unit][editor][persistence][recovery]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
-    NativeDurableFileSystem files;
-    ProjectMutationCoordinator mutations(files);
     const SceneDocumentSnapshot authored = AuthoredScene();
-    REQUIRE(
-        (WriteProjectSceneRecovery(project.Root(), project.ScenePath(), authored, DocumentRevision{}, DocumentStateId{1}, mutations, files)
-             .HasValue()));
+    REQUIRE((WriteRecoveryForTest(project, authored).HasValue()));
 
     std::ifstream input(project.RecoveryPath(), std::ios::binary);
     std::string corrupted{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
@@ -950,8 +517,7 @@ TEST_CASE("Scene Recovery Rejects Payload Whose Checksum No Longer Matches", "[u
 
 TEST_CASE("Failed Atomic Recovery Replace Leaves No Partial Recovery", "[unit][editor][persistence][recovery]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
     ReplaceFailingFileSystem files;
     ProjectMutationCoordinator mutations(files);
@@ -964,8 +530,7 @@ TEST_CASE("Failed Atomic Recovery Replace Leaves No Partial Recovery", "[unit][e
 
 TEST_CASE("Scene File Watch Inspects Canonical Bytes Off The Owner Thread", "[unit][editor][persistence][watch]") {
     TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
+    project.PrepareEmptyScene();
 
     JobSystem jobs(JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8});
     {
@@ -973,61 +538,18 @@ TEST_CASE("Scene File Watch Inspects Canonical Bytes Off The Owner Thread", "[un
         auto requested = watcher.Request(project.Root(), project.ScenePath());
         REQUIRE((requested.HasValue()));
 
-        std::vector<SceneFileWatchUpdate> updates;
-        for (std::size_t attempt = 0; attempt < 100'000 && updates.empty(); ++attempt) {
-            updates = watcher.DrainUpdates();
-            std::this_thread::yield();
-        }
-        REQUIRE((updates.size() == 1));
-        REQUIRE((updates.front().generation == requested.Value()));
-        REQUIRE((updates.front().fingerprint.has_value()));
-        REQUIRE((!updates.front().error.has_value()));
+        const SceneFileWatchUpdate firstUpdate = WaitForWatchUpdate(watcher);
+        REQUIRE((firstUpdate.generation == requested.Value()));
+        REQUIRE((firstUpdate.fingerprint.has_value()));
+        REQUIRE((!firstUpdate.error.has_value()));
 
-        const SceneFileFingerprint first = *updates.front().fingerprint;
+        const SceneFileFingerprint first = *firstUpdate.fingerprint;
         project.WriteScene("{\n  \"schemaVersion\": 1,\n  \"objects\": []\n}\n");
         requested = watcher.Request(project.Root(), project.ScenePath());
         REQUIRE((requested.HasValue()));
-        updates.clear();
-        for (std::size_t attempt = 0; attempt < 100'000 && updates.empty(); ++attempt) {
-            updates = watcher.DrainUpdates();
-            std::this_thread::yield();
-        }
-        REQUIRE((updates.size() == 1));
-        REQUIRE((updates.front().fingerprint.has_value()));
-        REQUIRE((*updates.front().fingerprint != first));
-    }
-    jobs.Shutdown(ShutdownPolicy::Drain);
-}
-
-TEST_CASE("Scene File Watch Reset Discards Completed Stale Generation", "[unit][editor][persistence][watch]") {
-    TemporaryProject project;
-    project.WriteMetadata();
-    project.WriteScene("{\"schemaVersion\":1,\"objects\":[]}\n");
-
-    JobSystem jobs(JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8});
-    {
-        SceneFileWatchService watcher(jobs);
-        const auto staleGeneration = watcher.Request(project.Root(), project.ScenePath());
-        REQUIRE((staleGeneration.HasValue()));
-        for (std::size_t attempt = 0; attempt < 100'000 && watcher.HasPendingInspection(); ++attempt)
-            std::this_thread::yield();
-        REQUIRE((!watcher.HasPendingInspection()));
-
-        watcher.Reset();
-        REQUIRE((watcher.DrainUpdates().empty()));
-
-        project.WriteScene("{\n  \"schemaVersion\": 1,\n  \"objects\": []\n}\n");
-        const auto currentGeneration = watcher.Request(project.Root(), project.ScenePath());
-        REQUIRE((currentGeneration.HasValue()));
-        REQUIRE((currentGeneration.Value() > staleGeneration.Value()));
-
-        std::vector<SceneFileWatchUpdate> updates;
-        for (std::size_t attempt = 0; attempt < 100'000 && updates.empty(); ++attempt) {
-            updates = watcher.DrainUpdates();
-            std::this_thread::yield();
-        }
-        REQUIRE((updates.size() == 1));
-        REQUIRE((updates.front().generation == currentGeneration.Value()));
+        const SceneFileWatchUpdate secondUpdate = WaitForWatchUpdate(watcher);
+        REQUIRE((secondUpdate.fingerprint.has_value()));
+        REQUIRE((*secondUpdate.fingerprint != first));
     }
     jobs.Shutdown(ShutdownPolicy::Drain);
 }

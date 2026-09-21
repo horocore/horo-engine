@@ -72,7 +72,8 @@ namespace Horo::Runtime {
             if (components.light && !ValidLight(*components.light))
                 return false;
             if (components.audioSource && (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
-                                           Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError()))
+                                           Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
+                                           Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
                 return false;
             if (components.uiCanvas && Ui::ValidateUiCanvasAssetReference(components.uiCanvas->canvas).HasError())
                 return false;
@@ -119,6 +120,51 @@ namespace Horo::Runtime {
             if (Result<void> navigation = ValidateNavigationComponents(entities); navigation.HasError())
                 return navigation;
             return ValidatePhysicsComponents(entities);
+        }
+
+        [[nodiscard]] Result<void> ValidateEntityHierarchy(const std::vector<RuntimeEntityDefinition> &entities) {
+            std::unordered_map<std::uint64_t, std::size_t> indices;
+            indices.reserve(entities.size());
+            for (std::size_t index = 0; index < entities.size(); ++index) {
+                if (const Result<void> valid = ValidateRuntimeEntityDefinition(entities[index]); valid.HasError())
+                    return valid;
+                if (!indices.emplace(entities[index].object.value, index).second)
+                    return Failure(SceneErrors::DuplicateObject, "Runtime scene contains a duplicate authored object identity.");
+            }
+
+            std::vector<std::optional<std::size_t>> parents(entities.size());
+            for (std::size_t index = 0; index < entities.size(); ++index) {
+                if (!entities[index].parent)
+                    continue;
+                const auto parent = indices.find(entities[index].parent->value);
+                if (parent == indices.end())
+                    return Failure(SceneErrors::ParentNotFound, "Runtime scene entity references a missing parent.");
+                parents[index] = parent->second;
+            }
+
+            enum class Visit : std::uint8_t {
+                Unvisited,
+                Visiting,
+                Complete
+            };
+            std::vector visits(entities.size(), Visit::Unvisited);
+            std::function<bool(std::size_t)> visit = [&](const std::size_t index) {
+                using enum Visit;
+                if (visits[index] == Complete)
+                    return true;
+                if (visits[index] == Visiting)
+                    return false;
+                visits[index] = Visiting;
+                if (parents[index].has_value() && !visit(*parents[index]))
+                    return false;
+                visits[index] = Complete;
+                return true;
+            };
+
+            for (std::size_t index = 0; index < entities.size(); ++index)
+                if (!visit(index))
+                    return Failure(SceneErrors::HierarchyCycle, "Runtime scene hierarchy contains a cycle.");
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -193,50 +239,8 @@ namespace Horo::Runtime {
             return Result<RuntimeSceneDefinition>::Failure(
                 MakeError(SceneErrors::InvalidDefinition, "Runtime scene identity must be non-zero."));
 
-        std::unordered_map<std::uint64_t, std::size_t> indices;
-        indices.reserve(entities_.size());
-        for (std::size_t index = 0; index < entities_.size(); ++index) {
-            if (const Result<void> valid = ValidateRuntimeEntityDefinition(entities_[index]); valid.HasError())
-                return Result<RuntimeSceneDefinition>::Failure(valid.ErrorValue());
-            if (!indices.emplace(entities_[index].object.value, index).second)
-                return Result<RuntimeSceneDefinition>::Failure(
-                    MakeError(SceneErrors::DuplicateObject, "Runtime scene contains a duplicate authored object identity."));
-        }
-
-        std::vector<std::optional<std::size_t>> parents(entities_.size());
-        for (std::size_t index = 0; index < entities_.size(); ++index) {
-            if (!entities_[index].parent)
-                continue;
-            const auto parent = indices.find(entities_[index].parent->value);
-            if (parent == indices.end())
-                return Result<RuntimeSceneDefinition>::Failure(
-                    MakeError(SceneErrors::ParentNotFound, "Runtime scene entity references a missing parent."));
-            parents[index] = parent->second;
-        }
-
-        enum class Visit : std::uint8_t {
-            Unvisited,
-            Visiting,
-            Complete
-        };
-        std::vector visits(entities_.size(), Visit::Unvisited);
-        std::function<bool(std::size_t)> visit = [&](std::size_t index) {
-            using enum Visit;
-            if (visits[index] == Visit::Complete)
-                return true;
-            if (visits[index] == Visit::Visiting)
-                return false;
-            visits[index] = Visit::Visiting;
-            if (parents[index].has_value() && !visit(*parents[index]))
-                return false;
-            visits[index] = Visit::Complete;
-            return true;
-        };
-
-        for (std::size_t index = 0; index < entities_.size(); ++index)
-            if (!visit(index))
-                return Result<RuntimeSceneDefinition>::Failure(
-                    MakeError(SceneErrors::HierarchyCycle, "Runtime scene hierarchy contains a cycle."));
+        if (const Result<void> valid = ValidateEntityHierarchy(entities_); valid.HasError())
+            return Result<RuntimeSceneDefinition>::Failure(valid.ErrorValue());
 
         std::ranges::sort(assetDependencies_, {}, [](const SceneAssetDependency &dependency) {
             return dependency.id;

@@ -75,6 +75,7 @@ namespace Horo::Runtime {
     struct AudioSourceComponent {
         Audio::AudioSoundReference sound;
         Audio::AudioSoundPlaybackDefaults playback;
+        Audio::AudioSceneLifecyclePolicy sceneLifecycle{Audio::AudioSceneLifecyclePolicy::StopOnUnload};
         bool enabled{true}; /**< Whether runtime audio emission is active. */
 
         [[nodiscard]] constexpr auto operator<=>(const AudioSourceComponent &) const noexcept = default;

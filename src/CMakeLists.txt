@@ -459,6 +459,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
         audio/api/AudioResamplerPlan.cpp
+        audio/api/AudioPlaybackRequest.cpp
         audio/api/AudioSoundReference.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioHandleRegistry.h
@@ -1092,6 +1093,8 @@ endif ()
 add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
         editor/document/SceneDocument.cpp
+        editor/document/SceneDocumentCommands.cpp
+        editor/document/SceneDocumentObjectCommands.cpp
         editor/document/RuntimeSceneConversion.cpp
         editor/project_model/EditorModelErrors.cpp
         editor/project_model/EditorSelectionModel.cpp
@@ -1203,6 +1206,12 @@ add_library(HoroEditorServices STATIC
         editor/EditorSurfaceIdentity.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
+        editor/document/SceneDocumentPersistenceCommon.cpp
+        editor/document/SceneDocumentPersistenceComponents.cpp
+        editor/document/SceneDocumentPersistenceComponentParsing.cpp
+        editor/document/SceneDocumentPersistenceNavigationParsing.cpp
+        editor/document/SceneDocumentPersistencePhysicsParsing.cpp
+        editor/document/SceneDocumentPersistenceScene.cpp
         editor/document/SceneFileWatchService.cpp
         editor/screens/welcome/WelcomeController.cpp
         editor/screens/project_creation/ProjectCreationController.cpp
@@ -1342,6 +1351,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp

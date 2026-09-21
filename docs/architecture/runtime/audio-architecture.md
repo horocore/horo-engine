@@ -571,37 +571,44 @@ policy.
 ### AudioSourceComponent
 
 `AudioSourceComponent` is the core scene emitter component. It describes a
-playback source without exposing backend voice handles:
+playback source without exposing backend voice handles. The implementation uses
+the typed Audio reference and playback policy values below:
 
 ```cpp
-enum class AudioSourceKind : uint8_t {
-    NativeClip = 0,           // 1.0 source kind
-    MiddlewareEvent = 1,      // reserved AUD-016 Post-1.0 extension kind
-    ProceduralGenerator = 2   // reserved AUD-013 Post-1.0 extension kind
+struct AudioSourceComponent {
+    AudioSoundReference sound;
+    AudioSoundPlaybackDefaults playback; // bus, gain, pitch, loop, priority, concurrency and spatial mode
+    AudioSceneLifecyclePolicy sceneLifecycle;
+    bool enabled;
 };
 
-struct AudioSourceComponent {
-    AudioSourceKind kind;           // clip/container, generator, or middleware event
-    AssetId sound;                  // valid for NativeClip or ProceduralGenerator;
-                                    // NativeClip may reference a variation container
-    StableEventId event;            // valid when kind == MiddlewareEvent
-    AudioBusId bus;
-    AudioPlaybackMode playbackMode; // one-shot, loop, streamed
-    AudioSpatialMode spatialMode;   // 2D or 3D
-    float gain;
-    float pitch;
-    bool enableDoppler;
-    bool playOnStart;
-    AudioPriority priority;
-    AttenuationDescriptor attenuation;
+struct AudioPlaybackRequest {
+    AudioSceneContextHandle sceneContext;
+    AudioSoundReference sound;
+    AudioPlaybackSettings playback;
+    AudioSceneLifecyclePolicy sceneLifecycle;
 };
 ```
 
 Runtime playback creates voices through the audio frontend. Persistent scene
-data never stores `AudioVoiceHandle`. Native clip sources resolve `sound` to a
+data never stores `AudioVoiceHandle` or another prepared voice/resource handle.
+Transient `AudioPlaybackRequest` values carry only the generation-checked scene
+context and semantic playback policy; the Audio control owner resolves resources
+and admits a voice. Native clip sources resolve `sound` to a
 cooked `AudioClip` payload, either directly or by expanding an
 `AudioVariationContainer`. Middleware event sources resolve through the
 middleware event bridge described below.
+
+`AudioSpatialMode::TwoD` is a complete direct-to-bus path. It does not require a
+listener, spatial provider, provider capability or spatial-provider activation;
+only `ThreeD` requests enter the provider-resolved spatial path. A legacy
+two-dimensional source may still carry its authored doppler bit, but that bit
+does not make the request depend on a spatial provider. Scene teardown uses the
+request's scene context and lifecycle policy, so closing a context rejects late
+requests and unloads its admitted voices through the ordered Audio barrier.
+
+Scene files written with the former boolean `spatial` field are migrated to the
+typed `spatialMode` value on load; new files always write `"2d"` or `"3d"`.
 
 In **event middleware** mode the native Horo mixer remains active. The bridge
 must reserve a proxy slot in `VoiceRegistry` for each middleware event so that

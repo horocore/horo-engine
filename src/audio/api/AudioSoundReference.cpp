@@ -36,6 +36,55 @@ namespace Horo::Audio {
             return version == CurrentAudioSoundDefinitionSchemaVersion;
         }
 
+        [[nodiscard]] bool IsKnownSpatialMode(const AudioSpatialMode mode) noexcept {
+            switch (mode) {
+                case AudioSpatialMode::TwoD:
+                case AudioSpatialMode::ThreeD:
+                    return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool IsKnownConcurrencyMode(const AudioConcurrencyMode mode) noexcept {
+            using enum AudioConcurrencyMode;
+            switch (mode) {
+                case Allow:
+                case Reject:
+                case StealOldest:
+                case StealQuietest:
+                case Virtualize:
+                    return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool IsKnownSceneLifecyclePolicy(const AudioSceneLifecyclePolicy policy) noexcept {
+            switch (policy) {
+                case AudioSceneLifecyclePolicy::StopOnUnload:
+                case AudioSceneLifecyclePolicy::KeepAliveInHostContext:
+                    return true;
+            }
+            return false;
+        }
+
+        /** @brief Checks the finite gain and bounded pitch portion of playback defaults. */
+        [[nodiscard]] bool HasValidGainAndPitch(const AudioSoundPlaybackDefaults &playback) noexcept {
+            if (!std::isfinite(playback.gain) || playback.gain < 0.0F)
+                return false;
+            if (!std::isfinite(playback.pitch) || playback.pitch <= 0.0F || playback.pitch > 8.0F)
+                return false;
+            return true;
+        }
+
+        /** @brief Checks routing, spatial, and deterministic admission values without consulting runtime state. */
+        [[nodiscard]] bool HasValidPlaybackAdmissionValues(const AudioSoundPlaybackDefaults &playback) noexcept {
+            if (playback.bus.has_value() && !playback.bus->IsValid())
+                return false;
+            if (!IsKnownSpatialMode(playback.spatialMode))
+                return false;
+            return playback.priority <= MaximumAudioPriority;
+        }
+
         [[nodiscard]] Result<AudioSoundReference> ForDefinition(const AudioSoundReferenceKind kind, const AudioSoundId definition) {
             if (!definition.IsValid())
                 return InvalidReference();
@@ -107,10 +156,21 @@ namespace Horo::Audio {
 
     /** @copydoc ValidateAudioSoundPlaybackDefaults */
     Result<void> ValidateAudioSoundPlaybackDefaults(const AudioSoundPlaybackDefaults &playback) {
-        if (!std::isfinite(playback.gain) || playback.gain < 0.0F || !std::isfinite(playback.pitch) || playback.pitch <= 0.0F ||
-            playback.pitch > 8.0F || (playback.bus.has_value() && !playback.bus->IsValid()))
+        if (!HasValidGainAndPitch(playback) || !HasValidPlaybackAdmissionValues(playback))
+            return InvalidDefinition();
+        return ValidateAudioConcurrencyPolicy(playback.concurrency);
+    }
+
+    /** @copydoc ValidateAudioConcurrencyPolicy */
+    Result<void> ValidateAudioConcurrencyPolicy(const AudioConcurrencyPolicy &policy) {
+        if ((policy.group.has_value() && !policy.group->IsValid()) || !IsKnownConcurrencyMode(policy.mode))
             return InvalidDefinition();
         return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateAudioSceneLifecyclePolicy */
+    Result<void> ValidateAudioSceneLifecyclePolicy(const AudioSceneLifecyclePolicy policy) {
+        return IsKnownSceneLifecyclePolicy(policy) ? Result<void>::Success() : InvalidDefinition();
     }
 
     /** @copydoc ValidateAudioSoundDefinition */

@@ -263,6 +263,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
+    Horo/Audio/AudioPlaybackRequest.h
     Horo/Audio/AudioSoundReference.h
 )
 

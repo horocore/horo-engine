@@ -241,6 +241,7 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/AudioMediaFormatRegistryTests.cpp
         unit/runtime/audio/AudioIdentityTests.cpp
         unit/runtime/audio/AudioResamplerPlanTests.cpp
+        unit/runtime/audio/AudioPlaybackRequestTests.cpp
         unit/runtime/audio/AudioPlanarBlockTests.cpp
         unit/runtime/audio/AudioVoiceStateMachineTests.cpp
 )
@@ -1213,6 +1214,9 @@ target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
+        unit/editor/SceneDocumentComparisonPersistenceTests.cpp
+        unit/editor/SceneDocumentFileWatchPersistenceTests.cpp
+        unit/editor/SceneDocumentPersistenceTestSupport.cpp
 )
 target_compile_features(HoroSceneDocumentPersistenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::EditorServices)

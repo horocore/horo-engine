@@ -49,6 +49,54 @@ namespace Horo::Audio {
     /** @brief Exactly one typed target carried by an authored sound reference. */
     using AudioSoundReferenceTarget = std::variant<std::monostate, AudioClipId, AudioSoundId, AudioSoundExtensionReference>;
 
+    /** @brief Normalized priority used by deterministic voice admission; larger values win ties. */
+    using AudioPriority = std::uint16_t;
+
+    /** @brief Inclusive upper bound for persisted voice-admission priority. */
+    inline constexpr AudioPriority MaximumAudioPriority = 255;
+
+    /** @brief Spatial behavior requested by one source or playback request. */
+    enum class AudioSpatialMode : std::uint8_t {
+        TwoD,
+        ThreeD,
+        TwoDimensional = TwoD,
+        ThreeDimensional = ThreeD,
+    };
+
+    /** @brief Admission behavior when a concurrency group reaches its limit. */
+    enum class AudioConcurrencyMode : std::uint8_t {
+        Allow,
+        Reject,
+        StealOldest,
+        StealQuietest,
+        Virtualize,
+        RejectNew = Reject,
+        StealLowestPriority = StealQuietest,
+    };
+
+    /**
+     * @brief Persistent concurrency limits carried into voice admission.
+     *
+     * A missing group is a source-local policy. A zero maximum means that the
+     * source does not impose a concurrency ceiling; a non-zero maximum is
+     * bounded by the representation and is applied by the Audio control owner.
+     */
+    struct AudioConcurrencyPolicy final {
+        std::optional<AudioConcurrencyGroupId> group;           /**< Optional stable group shared by competing sources. */
+        std::uint16_t maxInstances{};                           /**< Zero means this policy imposes no ceiling. */
+        AudioConcurrencyMode mode{AudioConcurrencyMode::Allow}; /**< Admission action at the group ceiling. */
+
+        [[nodiscard]] constexpr auto operator<=>(const AudioConcurrencyPolicy &) const noexcept = default;
+    };
+
+    /** @brief Policy describing how an admitted request is tied to scene teardown. */
+    enum class AudioSceneLifecyclePolicy : std::uint8_t {
+        StopOnUnload,
+        KeepAliveInHostContext,
+        StopOnSceneUnload = StopOnUnload,
+        PreserveOnUnload = KeepAliveInHostContext,
+    };
+
     /**
      * @brief Persistent backend-neutral reference to a playable sound source.
      *
@@ -92,15 +140,23 @@ namespace Horo::Audio {
 
     /** @brief Backend-neutral defaults applied when a sound definition creates a voice. */
     struct AudioSoundPlaybackDefaults final {
-        float gain{1.0F};
-        float pitch{1.0F};
-        std::optional<AudioBusId> bus;
-        bool loop{};
-        bool spatial{true};
-        bool enableDoppler{};
-        bool playOnStart{true};
+        float gain{1.0F};                                       /**< Finite non-negative linear gain. */
+        float pitch{1.0F};                                      /**< Finite positive playback multiplier, bounded to 8x. */
+        std::optional<AudioBusId> bus;                          /**< Optional stable mixer destination. */
+        bool loop{};                                            /**< Whether playback repeats at the source boundary. */
+        AudioSpatialMode spatialMode{AudioSpatialMode::ThreeD}; /**< 2D direct-bus or 3D provider-resolved routing. */
+        bool enableDoppler{};                                   /**< 3D pitch hint; 2D requests do not resolve a spatial provider. */
+        bool playOnStart{true};                                 /**< Whether a scene source emits on activation. */
+        AudioPriority priority{128};                            /**< Deterministic admission priority. */
+        AudioConcurrencyPolicy concurrency;                     /**< Shared-group admission and virtualization policy. */
         constexpr auto operator<=>(const AudioSoundPlaybackDefaults &) const noexcept = default;
     };
+
+    /** @brief Backend-neutral playback values shared by persistent sources and transient requests. */
+    using AudioPlaybackSettings = AudioSoundPlaybackDefaults;
+
+    /** @brief Compatibility name for the shared source/request playback values. */
+    using AudioPlaybackParameters = AudioSoundPlaybackDefaults;
 
     /**
      * @brief Versioned authored sound definition with no runtime voice, decoder, provider, or native ownership.
@@ -128,6 +184,20 @@ namespace Horo::Audio {
      * @return Success or SoundDefinitionInvalid.
      */
     [[nodiscard]] Result<void> ValidateAudioSoundPlaybackDefaults(const AudioSoundPlaybackDefaults &playback);
+
+    /**
+     * @brief Validates a concurrency policy without consulting a live voice registry.
+     * @param policy Candidate authored policy.
+     * @return Success or SoundDefinitionInvalid.
+     */
+    [[nodiscard]] Result<void> ValidateAudioConcurrencyPolicy(const AudioConcurrencyPolicy &policy);
+
+    /**
+     * @brief Validates a scene teardown policy without opening a scene context.
+     * @param policy Candidate lifecycle policy.
+     * @return Success or SoundDefinitionInvalid.
+     */
+    [[nodiscard]] Result<void> ValidateAudioSceneLifecyclePolicy(AudioSceneLifecyclePolicy policy);
 
     /**
      * @brief Validates a current-version authored sound definition.

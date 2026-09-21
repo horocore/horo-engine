@@ -36,6 +36,8 @@ namespace Horo::Editor {
     private:
         void DrawSelection(const EditorWorkspaceViewModel &viewModel, std::span<const SceneObjectId> selectedObjects,
                            EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        void DrawComponentEditors(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
+                                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                               const EditorGuiContext &context) const;
 
