@@ -211,7 +211,7 @@ namespace Horo::Runtime {
          * @param validator Artifact validator that outlives the planner.
          * @param policy Bounded retention and promotion policy.
          */
-        SaveSlotRecoveryPlanner(const ISaveSlotRecoveryValidator &validator, SaveSlotRecoveryPolicy policy) noexcept;
+        SaveSlotRecoveryPlanner(const ISaveSlotRecoveryValidator &validator, const SaveSlotRecoveryPolicy &policy) noexcept;
 
         /**
          * @brief Validates artifacts, selects one candidate, and computes deferred cleanup.

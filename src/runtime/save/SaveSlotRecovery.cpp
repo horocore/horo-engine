@@ -85,8 +85,8 @@ namespace Horo::Runtime {
             const std::size_t currentCount = request.current.has_value() ? 1U : 0U;
             if (request.backups.size() > policy.maximumObservedArtifacts - currentCount)
                 return Result<void>::Failure(LimitExceeded("Save-slot recovery observations exceed the configured bound."));
-            const std::size_t currentAndBackups = currentCount + request.backups.size();
-            if (request.quarantined.size() > policy.maximumObservedArtifacts - currentAndBackups)
+            if (const std::size_t currentAndBackups = currentCount + request.backups.size();
+                request.quarantined.size() > policy.maximumObservedArtifacts - currentAndBackups)
                 return Result<void>::Failure(LimitExceeded("Save-slot recovery observations exceed the configured bound."));
 
             try {
@@ -184,7 +184,8 @@ namespace Horo::Runtime {
                 auto validation = AdmitValidation(validator.Validate(artifact, request.slot));
                 if (validation.HasError())
                     return Result<std::vector<std::size_t>>::Failure(std::move(validation).ErrorValue());
-                plan.inspectedBackups.push_back({.artifact = artifact, .validation = std::move(validation).Value()});
+                plan.inspectedBackups.emplace_back(
+                    SaveSlotRecoveryCandidate{.artifact = artifact, .validation = std::move(validation).Value()});
             }
             std::ranges::sort(plan.inspectedBackups, [](const SaveSlotRecoveryCandidate &left, const SaveSlotRecoveryCandidate &right) {
                 return Newer(left.artifact, right.artifact);
@@ -209,11 +210,11 @@ namespace Horo::Runtime {
             std::vector<QuarantineEntry> quarantinePool;
             quarantinePool.reserve(request.quarantined.size() + plan.quarantine.size() + 1U);
             if (plan.currentValidation && plan.currentValidation->state != SaveSlotRecoveryValidationState::Valid)
-                quarantinePool.push_back({*request.current, true});
+                quarantinePool.emplace_back(QuarantineEntry{.artifact = *request.current, .protectedEvidence = true});
             for (const auto &candidate : plan.quarantine)
-                quarantinePool.push_back({candidate.artifact, false});
+                quarantinePool.emplace_back(QuarantineEntry{.artifact = candidate.artifact, .protectedEvidence = false});
             for (const auto &artifact : request.quarantined)
-                quarantinePool.push_back({artifact, false});
+                quarantinePool.emplace_back(QuarantineEntry{.artifact = artifact, .protectedEvidence = false});
             return quarantinePool;
         }
 
@@ -266,11 +267,12 @@ namespace Horo::Runtime {
 
         void SelectDecision(SaveSlotRecoveryPlan &plan, const SaveSlotRecoveryRequest &request, const SaveSlotRecoveryPolicy &policy,
                             const std::vector<std::size_t> &validIndices) {
+            using enum SaveSlotRecoveryDecisionReason;
             const bool currentValid = plan.currentValidation && plan.currentValidation->state == SaveSlotRecoveryValidationState::Valid;
             if (currentValid) {
                 plan.cleanup.clear();
                 plan.decision = SaveSlotRecoveryDecision::NoRecovery;
-                plan.decisionReason = SaveSlotRecoveryDecisionReason::CurrentValid;
+                plan.decisionReason = CurrentValid;
                 return;
             }
             if (validIndices.empty()) {
@@ -283,15 +285,15 @@ namespace Horo::Runtime {
             plan.promotion = plan.inspectedBackups[validIndices.front()];
             if (request.trigger == SaveSlotRecoveryTrigger::IncompatibleCurrent) {
                 plan.decision = SaveSlotRecoveryDecision::UserConfirmationRequired;
-                plan.decisionReason = SaveSlotRecoveryDecisionReason::IncompatibleCurrentRequiresConfirmation;
+                plan.decisionReason = IncompatibleCurrentRequiresConfirmation;
             } else if (AutomaticAllowed(policy.automaticPromotion, request.trigger)) {
                 plan.decision = SaveSlotRecoveryDecision::AutomaticPromotion;
-                plan.decisionReason = SaveSlotRecoveryDecisionReason::AutomaticPolicy;
+                plan.decisionReason = AutomaticPolicy;
             } else {
                 plan.decision = SaveSlotRecoveryDecision::UserConfirmationRequired;
                 plan.decisionReason = request.trigger == SaveSlotRecoveryTrigger::InterruptedPublication
-                                          ? SaveSlotRecoveryDecisionReason::InterruptedPublicationRequiresConfirmation
-                                          : SaveSlotRecoveryDecisionReason::AutomaticPolicyDisabled;
+                                          ? InterruptedPublicationRequiresConfirmation
+                                          : AutomaticPolicyDisabled;
             }
         }
     }  // namespace
@@ -360,7 +362,8 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveSlotRecoveryPlanner::SaveSlotRecoveryPlanner */
-    SaveSlotRecoveryPlanner::SaveSlotRecoveryPlanner(const ISaveSlotRecoveryValidator &validator, SaveSlotRecoveryPolicy policy) noexcept
+    SaveSlotRecoveryPlanner::SaveSlotRecoveryPlanner(const ISaveSlotRecoveryValidator &validator,
+                                                     const SaveSlotRecoveryPolicy &policy) noexcept
         : validator_(&validator), policy_(policy) {}
 
     /** @copydoc SaveSlotRecoveryPlanner::Build */

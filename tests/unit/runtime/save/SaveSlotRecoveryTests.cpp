@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,12 +28,18 @@ namespace Horo::Runtime {
         class FakeValidator final : public ISaveSlotRecoveryValidator {
         public:
             std::vector<std::pair<std::uint64_t, SaveSlotRecoveryValidationState>> states;
+            std::optional<Error> failure;
+            bool returnUnknownState{};
 
             [[nodiscard]] Result<SaveSlotRecoveryValidation> Validate(const SaveSlotRecoveryArtifact &artifact,
                                                                       const SaveGameSlotId expectedSlot) const override {
+                if (failure)
+                    return Result<SaveSlotRecoveryValidation>::Failure(*failure);
                 if (!artifact.metadata || artifact.metadata->publication.slot != expectedSlot)
                     return Result<SaveSlotRecoveryValidation>::Success(
                         {.state = SaveSlotRecoveryValidationState::Incompatible, .diagnostic = MakeError(SaveErrors::SlotRecoveryInvalid)});
+                if (returnUnknownState)
+                    return Result<SaveSlotRecoveryValidation>::Success({.state = SaveSlotRecoveryValidationState::Count});
                 SaveSlotRecoveryValidation validation{.state = SaveSlotRecoveryValidationState::Valid};
                 for (const auto &[sequence, state] : states) {
                     if (sequence == artifact.retentionSequence) {
@@ -228,6 +235,153 @@ namespace Horo::Runtime {
             CHECK(invalidPolicyResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
         }
 
+        TEST_CASE("Recovery rejects invalid bounds and incomplete ordering evidence", "[unit][runtime][save][slot-recovery]") {
+            FakeValidator validator;
+            const auto current = Artifact(90, 10);
+            const SaveSlotRecoveryRequest invalidSlot{.slot = {},
+                                                      .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                      .current = current,
+                                                      .backups = {},
+                                                      .quarantined = {}};
+            const auto invalidSlotResult = SaveSlotRecoveryPlanner(validator, {}).Build(invalidSlot);
+            REQUIRE(invalidSlotResult.HasError());
+            CHECK(invalidSlotResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            const SaveSlotRecoveryPolicy tightPolicy{.maximumBackups = 1,
+                                                     .maximumQuarantined = 1,
+                                                     .maximumObservedArtifacts = 2,
+                                                     .automaticPromotion = SaveSlotRecoveryAutomaticPolicy::CorruptCurrent};
+            const std::vector tooManyBackups{Artifact(1, 1), Artifact(2, 2)};
+            const SaveSlotRecoveryRequest tooManyBackupRequest{.slot = Id<SaveGameSlotId>(4),
+                                                               .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                               .current = current,
+                                                               .backups = tooManyBackups,
+                                                               .quarantined = {}};
+            const auto tooManyBackupsResult = SaveSlotRecoveryPlanner(validator, tightPolicy).Build(tooManyBackupRequest);
+            REQUIRE(tooManyBackupsResult.HasError());
+            CHECK(tooManyBackupsResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryLimitExceeded.code.Value());
+
+            const std::vector oneBackup{Artifact(1, 1)};
+            const std::vector tooManyQuarantined{Artifact(2, 2), Artifact(3, 3)};
+            const SaveSlotRecoveryRequest tooManyQuarantineRequest{.slot = Id<SaveGameSlotId>(4),
+                                                                   .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                                   .current = current,
+                                                                   .backups = oneBackup,
+                                                                   .quarantined = tooManyQuarantined};
+            const auto tooManyQuarantinedResult = SaveSlotRecoveryPlanner(validator, tightPolicy).Build(tooManyQuarantineRequest);
+            REQUIRE(tooManyQuarantinedResult.HasError());
+            CHECK(tooManyQuarantinedResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryLimitExceeded.code.Value());
+
+            const auto zeroCurrentResult = SaveSlotRecoveryPlanner(validator, {})
+                                               .Build(SaveSlotRecoveryRequest{.slot = Id<SaveGameSlotId>(4),
+                                                                              .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                                              .current = Artifact(90, 0),
+                                                                              .backups = {},
+                                                                              .quarantined = {}});
+            REQUIRE(zeroCurrentResult.HasError());
+            CHECK(zeroCurrentResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            const std::vector zeroSequenceBackup{Artifact(1, 0)};
+            const auto zeroBackupResult = SaveSlotRecoveryPlanner(validator, {})
+                                              .Build(SaveSlotRecoveryRequest{.slot = Id<SaveGameSlotId>(4),
+                                                                             .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                                             .current = current,
+                                                                             .backups = zeroSequenceBackup,
+                                                                             .quarantined = {}});
+            REQUIRE(zeroBackupResult.HasError());
+            CHECK(zeroBackupResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            const std::vector zeroSequenceQuarantine{Artifact(1, 0)};
+            const auto zeroQuarantineResult = SaveSlotRecoveryPlanner(validator, {})
+                                                  .Build(SaveSlotRecoveryRequest{.slot = Id<SaveGameSlotId>(4),
+                                                                                 .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                                                 .current = current,
+                                                                                 .backups = {},
+                                                                                 .quarantined = zeroSequenceQuarantine});
+            REQUIRE(zeroQuarantineResult.HasError());
+            CHECK(zeroQuarantineResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+        }
+
+        TEST_CASE("Recovery preserves interrupted publication evidence and confirmation policy", "[unit][runtime][save][slot-recovery]") {
+            FakeValidator validator;
+            const auto current = Artifact(90, 10);
+            const std::vector backups{Artifact(1, 1)};
+            const SaveSlotRecoveryRequest missingCurrent{.slot = Id<SaveGameSlotId>(4),
+                                                         .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                         .current = std::nullopt,
+                                                         .backups = backups,
+                                                         .quarantined = {}};
+            const auto missingCurrentResult = SaveSlotRecoveryPlanner(validator, {}).Build(missingCurrent);
+            REQUIRE(missingCurrentResult.HasError());
+            CHECK(missingCurrentResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            const SaveSlotRecoveryRequest interruptedWithoutCurrent{.slot = Id<SaveGameSlotId>(4),
+                                                                    .trigger = SaveSlotRecoveryTrigger::InterruptedPublication,
+                                                                    .current = std::nullopt,
+                                                                    .backups = {},
+                                                                    .quarantined = {}};
+            const auto interruptedPlan = Build(validator, interruptedWithoutCurrent);
+            CHECK_FALSE(interruptedPlan.currentValidation);
+            CHECK(interruptedPlan.decision == SaveSlotRecoveryDecision::NoRecovery);
+            CHECK(interruptedPlan.decisionReason == SaveSlotRecoveryDecisionReason::NoValidBackup);
+
+            validator.states = {{10, SaveSlotRecoveryValidationState::Corrupt}};
+            const SaveSlotRecoveryRequest interruptedWithCurrent{.slot = Id<SaveGameSlotId>(4),
+                                                                 .trigger = SaveSlotRecoveryTrigger::InterruptedPublication,
+                                                                 .current = current,
+                                                                 .backups = backups,
+                                                                 .quarantined = {}};
+            const auto confirmationPlan = Build(validator, interruptedWithCurrent);
+            REQUIRE(confirmationPlan.HasPromotion());
+            CHECK(confirmationPlan.RequiresUserConfirmation());
+            CHECK(confirmationPlan.decisionReason == SaveSlotRecoveryDecisionReason::InterruptedPublicationRequiresConfirmation);
+        }
+
+        TEST_CASE("Recovery propagates validator failures and rejects trigger disagreements", "[unit][runtime][save][slot-recovery]") {
+            FakeValidator validator;
+            const auto current = Artifact(90, 10);
+            const SaveSlotRecoveryRequest corruptRequest{.slot = Id<SaveGameSlotId>(4),
+                                                         .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
+                                                         .current = current,
+                                                         .backups = {},
+                                                         .quarantined = {}};
+            const auto corruptTriggerResult = SaveSlotRecoveryPlanner(validator, {}).Build(corruptRequest);
+            REQUIRE(corruptTriggerResult.HasError());
+            CHECK(corruptTriggerResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            const SaveSlotRecoveryRequest incompatibleRequest{.slot = Id<SaveGameSlotId>(4),
+                                                              .trigger = SaveSlotRecoveryTrigger::IncompatibleCurrent,
+                                                              .current = current,
+                                                              .backups = {},
+                                                              .quarantined = {}};
+            const auto incompatibleTriggerResult = SaveSlotRecoveryPlanner(validator, {}).Build(incompatibleRequest);
+            REQUIRE(incompatibleTriggerResult.HasError());
+            CHECK(incompatibleTriggerResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            validator.failure = MakeError(SaveErrors::SlotRecoveryInvalid);
+            const auto validatorFailureResult = SaveSlotRecoveryPlanner(validator, {}).Build(corruptRequest);
+            REQUIRE(validatorFailureResult.HasError());
+            CHECK(validatorFailureResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            validator.failure.reset();
+            validator.returnUnknownState = true;
+            const auto unknownStateResult = SaveSlotRecoveryPlanner(validator, {}).Build(corruptRequest);
+            REQUIRE(unknownStateResult.HasError());
+            CHECK(unknownStateResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+
+            validator.returnUnknownState = false;
+            validator.failure = MakeError(SaveErrors::SlotRecoveryInvalid);
+            const std::vector backups{Artifact(1, 1)};
+            const SaveSlotRecoveryRequest backupFailureRequest{.slot = Id<SaveGameSlotId>(4),
+                                                               .trigger = SaveSlotRecoveryTrigger::InterruptedPublication,
+                                                               .current = std::nullopt,
+                                                               .backups = backups,
+                                                               .quarantined = {}};
+            const auto backupFailureResult = SaveSlotRecoveryPlanner(validator, {}).Build(backupFailureRequest);
+            REQUIRE(backupFailureResult.HasError());
+            CHECK(backupFailureResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
+        }
+
         TEST_CASE("Production recovery validation classifies malformed bytes as corrupt without offering promotion",
                   "[unit][runtime][save][slot-recovery]") {
             SaveArchiveRecoveryValidator validator{SaveArchiveReader{}, {}};
@@ -236,6 +390,20 @@ namespace Horo::Runtime {
             CHECK(result.Value().state == SaveSlotRecoveryValidationState::Corrupt);
             REQUIRE(result.Value().diagnostic);
             CHECK(result.Value().diagnostic->code.Value() == SaveErrors::ArchiveEnvelopeInvalid.code.Value());
+
+            const SaveSlotRecoveryArtifact missingMetadata{.metadata = std::nullopt, .archive = {}, .retentionSequence = 1};
+            const auto missingMetadataResult = validator.Validate(missingMetadata, Id<SaveGameSlotId>(4));
+            REQUIRE(missingMetadataResult.HasValue());
+            CHECK(missingMetadataResult.Value().state == SaveSlotRecoveryValidationState::Corrupt);
+
+            const auto wrongScopeResult = validator.Validate(Artifact(1, 1, 3), Id<SaveGameSlotId>(4));
+            REQUIRE(wrongScopeResult.HasValue());
+            CHECK(wrongScopeResult.Value().state == SaveSlotRecoveryValidationState::Incompatible);
+
+            const SaveSlotRecoveryArtifact missingBytes{.metadata = Entry(4, 1), .archive = {}, .retentionSequence = 1};
+            const auto missingBytesResult = validator.Validate(missingBytes, Id<SaveGameSlotId>(4));
+            REQUIRE(missingBytesResult.HasValue());
+            CHECK(missingBytesResult.Value().state == SaveSlotRecoveryValidationState::Corrupt);
         }
     }  // namespace
 }  // namespace Horo::Runtime
