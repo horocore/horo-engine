@@ -317,6 +317,7 @@ add_library(HoroGameplayApi STATIC
         gameplay/api/SystemSchedule.cpp
         gameplay/api/SystemRegistry.cpp
         gameplay/api/GameModule.cpp
+        gameplay/api/GameplayComponentErrors.cpp
         gameplay/api/GameplayErrors.cpp
 )
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)

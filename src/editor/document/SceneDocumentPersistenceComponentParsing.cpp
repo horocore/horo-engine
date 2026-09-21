@@ -304,6 +304,30 @@ namespace Horo::Editor::ScenePersistenceDetail {
         return Result<void>::Success();
     }
 
+    [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components) {
+        if (value.contains("colliders")) {
+            auto colliders = ParseColliders(value["colliders"]);
+            if (colliders.HasError())
+                return Result<void>::Failure(colliders.ErrorValue());
+            components.colliders = std::move(colliders).Value();
+        }
+        if (value.contains("physicsConstraints")) {
+            auto constraints = ParsePhysicsConstraints(value["physicsConstraints"]);
+            if (constraints.HasError())
+                return Result<void>::Failure(constraints.ErrorValue());
+            components.physicsConstraints = std::move(constraints).Value();
+        }
+        if (value.contains("behaviors")) {
+            auto behaviors = ParseBehaviors(value["behaviors"]);
+            if (behaviors.HasError())
+                return Result<void>::Failure(behaviors.ErrorValue());
+            components.behaviors = std::move(behaviors).Value();
+        }
+        if (const Result<void> gameplay = ParseGameplayComponents(value, components.gameplayComponents); gameplay.HasError())
+            return Result<void>::Failure(gameplay.ErrorValue());
+        return Result<void>::Success();
+    }
+
     [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value) {
         if (!value.is_object()) {
             return Result<SceneObjectComponentSet>::Failure(PersistenceError(SceneInvalid, "Components must be an object."));
@@ -333,27 +357,8 @@ namespace Horo::Editor::ScenePersistenceDetail {
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (value.contains("colliders")) {
-            auto colliders = ParseColliders(value["colliders"]);
-            if (colliders.HasError())
-                return Result<SceneObjectComponentSet>::Failure(colliders.ErrorValue());
-            components.colliders = std::move(colliders).Value();
-        }
-        if (value.contains("physicsConstraints")) {
-            auto constraints = ParsePhysicsConstraints(value["physicsConstraints"]);
-            if (constraints.HasError())
-                return Result<SceneObjectComponentSet>::Failure(constraints.ErrorValue());
-            components.physicsConstraints = std::move(constraints).Value();
-        }
-        if (value.contains("behaviors")) {
-            auto behaviors = ParseBehaviors(value["behaviors"]);
-            if (behaviors.HasError()) {
-                return Result<SceneObjectComponentSet>::Failure(behaviors.ErrorValue());
-            }
-            components.behaviors = std::move(behaviors).Value();
-        }
-        if (const Result<void> gameplay = ParseGameplayComponents(value, components.gameplayComponents); gameplay.HasError())
-            return Result<SceneObjectComponentSet>::Failure(gameplay.ErrorValue());
+        if (const Result<void> collections = ParseCollectionComponents(value, components); collections.HasError())
+            return Result<SceneObjectComponentSet>::Failure(collections.ErrorValue());
         return Result<SceneObjectComponentSet>::Success(std::move(components));
     }
 
