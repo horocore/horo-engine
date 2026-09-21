@@ -853,6 +853,17 @@ save-schema migration changes root composition; participant migration advances o
 that participant (for example quests 7 -> 8 independently of inventory 2 -> 5). No
 implicit backward schema downgrade is permitted.
 
+The runtime contract is exposed by `Horo/Runtime/Save/SaveMigration.h`. Its
+`SaveMigrationRegistry` is mutable only during composition and produces an
+immutable generation-pinned snapshot for planning. The snapshot canonicalizes
+definition order and identity, validates one forward edge per typed range,
+selects one sequential route or an explicitly declared checkpoint, and returns
+typed diagnostics for gaps, ambiguity, unsupported source/newer versions, and
+non-equivalent checkpoints. `SaveMigrationExecutor` copies the validated source
+into bounded detached staging and returns a new candidate; callbacks cannot
+receive a mutable source or live runtime reference, and the source is checked
+again before success.
+
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic
 dependency identities and decoded hashes. Direct load is allowed only when every
