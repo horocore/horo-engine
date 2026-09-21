@@ -63,10 +63,10 @@ namespace Horo::Navigation {
      * identity may be invalid when the composed topology has no authored surface binding.
      */
     struct NavigationQueryProvenance final {
-        NavigationWorldId world;       /**< Exact navigation-world incarnation that was queried. */
-        NavigationGeneration topology; /**< Exact immutable topology generation that was queried. */
-        SurfaceId surface;             /**< Stable authored surface identity, when supplied by the topology owner. */
-        std::uint32_t polygonIndex{};  /**< Canonical provider-neutral polygon index. */
+        NavigationWorldId world;                             /**< Exact navigation-world incarnation that was queried. */
+        NavigationGeneration topology;                       /**< Exact immutable topology generation that was queried. */
+        SurfaceId surface;                                   /**< Stable authored surface identity, when supplied by the topology owner. */
+        std::uint32_t polygonIndex{NavigationPathNoPolygon}; /**< Canonical provider-neutral polygon index. */
 
         [[nodiscard]] constexpr auto operator<=>(const NavigationQueryProvenance &) const noexcept = default;
     };

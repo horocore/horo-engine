@@ -314,8 +314,7 @@ namespace Horo::Navigation::RecastDetourQueries {
                                                           const NavigationPathWaypoint &waypoint, const std::uint32_t maximumWaypoints) {
             if (!Math::IsFinite(waypoint.position))
                 return WaypointAppendResult::BudgetExceeded;
-            if (!waypoints.empty() && waypoints.back().provenance.kind == waypoint.provenance.kind &&
-                SamePoint(waypoints.back().position, waypoint.position))
+            if (!waypoints.empty() && SamePoint(waypoints.back().position, waypoint.position))
                 return WaypointAppendResult::Duplicate;
             if (waypoints.size() >= maximumWaypoints)
                 return WaypointAppendResult::BudgetExceeded;
