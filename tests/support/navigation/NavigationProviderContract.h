@@ -5,6 +5,7 @@
 #include "navigation/NavigationTestAssertions.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdint>
 
 namespace Horo::Navigation::TestSupport {
@@ -45,6 +46,11 @@ namespace Horo::Navigation::TestSupport {
         REQUIRE(first.Value().lengthMeters == second.Value().lengthMeters);
         REQUIRE(first.Value().points.size() <= request.requirement.limits.maximumResultPoints);
         REQUIRE_FALSE(first.Value().points.empty());
+        REQUIRE(first.Value().status == NavigationPathStatus::Reachable);
+        REQUIRE(first.Value().stopReason == NavigationPathStopReason::None);
+        REQUIRE(first.Value().sourceGeneration == request.topology);
+        REQUIRE(std::isfinite(first.Value().cost));
+        REQUIRE(first.Value().cost >= 0.0F);
         REQUIRE(first.Value().points.front() == request.start);
         REQUIRE(first.Value().points.back() == request.destination);
     }

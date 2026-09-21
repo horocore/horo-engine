@@ -15,23 +15,67 @@
 
 #include <compare>
 #include <cstdint>
+#include <limits>
 #include <tuple>
 #include <vector>
 
 namespace Horo::Navigation {
+    /** @brief Whether a path query may publish a bounded best-effort prefix. */
+    enum class NavigationPathCoveragePolicy : std::uint8_t {
+        RequireComplete,
+        AllowPartial,
+        Count
+    };
+
+    /** @brief Typed state of a provider-neutral grounded path query. */
+    enum class NavigationPathStatus : std::uint8_t {
+        Reachable,
+        Complete = Reachable,
+        Partial,
+        Unreachable,
+        BudgetExceeded,
+        Count
+    };
+
+    /** @brief Explains why a path stopped before reaching the requested destination. */
+    enum class NavigationPathStopReason : std::uint8_t {
+        None,
+        DestinationUnreachable,
+        NodeBudgetExceeded,
+        SearchBudgetExceeded = NodeBudgetExceeded,
+        ResultPointBudgetExceeded,
+        OutputBudgetExceeded = ResultPointBudgetExceeded,
+        Count
+    };
+
+    /** @brief Sentinel used when a path result has no known canonical polygon frontier. */
+    inline constexpr std::uint32_t NavigationPathNoPolygon = std::numeric_limits<std::uint32_t>::max();
+
     /** @brief Bounded provider-neutral request for one grounded path. */
     struct NavigationPathRequest final {
-        NavigationWorldId world;                /**< Exact active world captured at admission. */
-        NavigationGeneration topology;          /**< Exact immutable topology captured at admission. */
-        Math::Vec3 start;                       /**< Start in Horo right-handed, Y-up world space. */
-        Math::Vec3 destination;                 /**< Destination in the same origin revision as start. */
+        NavigationWorldId world;       /**< Exact active world captured at admission. */
+        NavigationGeneration topology; /**< Exact immutable topology captured at admission. */
+        Math::Vec3 start;              /**< Start in Horo right-handed, Y-up world space. */
+        Math::Vec3 destination;        /**< Destination in the same origin revision as start. */
+        NavigationFilterId filter;     /**< Exact registered traversal filter; never a default fallback. */
+        NavigationPathCoveragePolicy coveragePolicy{NavigationPathCoveragePolicy::RequireComplete}; /**< Partial-path opt-in. */
         NavigationQueryRequirement requirement; /**< Exact admitted quality and execution bounds. */
     };
 
-    /** @brief Provider-neutral ordered path points with no native polygon or node identity. */
+    /**
+     * @brief Provider-neutral ordered path points with typed progress and cost evidence.
+     * @details Reachable paths end at the requested destination. Partial paths end at `stopPosition` and carry the
+     * reason and canonical polygon where progress stopped. Unreachable and budget-exhausted paths may have no points.
+     */
     struct NavigationPath final {
-        std::vector<Math::Vec3> points; /**< Ordered world-space points, including declared endpoints. */
-        float lengthMeters{};           /**< Finite non-negative path length in metres. */
+        std::vector<Math::Vec3> points;                                 /**< Ordered world-space points, including the progress endpoint. */
+        NavigationPathStatus status{NavigationPathStatus::Unreachable}; /**< Typed search result state. */
+        NavigationPathStopReason stopReason{NavigationPathStopReason::None}; /**< Why progress stopped, if it did. */
+        Math::Vec3 stopPosition{};                               /**< Finite progress location for partial/unreachable results. */
+        std::uint32_t stopPolygonIndex{NavigationPathNoPolygon}; /**< Canonical polygon at the progress frontier, when known. */
+        float cost{};                                            /**< Finite non-negative traversal cost of the returned route. */
+        float lengthMeters{};                                    /**< Finite non-negative geometric path length in metres. */
+        NavigationGeneration sourceGeneration;                   /**< Exact topology generation used to produce this path. */
     };
 
     /**
