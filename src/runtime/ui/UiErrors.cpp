@@ -236,6 +236,81 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                          "Create a new engine for the active runtime canvas before submitting layout work.",
                                                          false,
                                                          false};
+    /** @copydoc StyleInvalid */
+    const ErrorCodeDescriptor StyleInvalid{UiDomain,
+                                           ErrorCode{"runtime_ui.style.invalid"},
+                                           ErrorSeverity::Error,
+                                           "The Runtime UI style schema or request is invalid.",
+                                           "Provide complete typed style identities, values, revisions, and bounded inputs.",
+                                           false,
+                                           true};
+    /** @copydoc StyleIdentityConflict */
+    const ErrorCodeDescriptor
+        StyleIdentityConflict{UiDomain,
+                              ErrorCode{"runtime_ui.style.identity_conflict"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI style generation repeats a stable identity.",
+                              "Use one unique asset, class, token, and property identity in the validated generation.",
+                              false,
+                              true};
+    /** @copydoc StyleReferenceInvalid */
+    const ErrorCodeDescriptor
+        StyleReferenceInvalid{UiDomain,
+                              ErrorCode{"runtime_ui.style.reference_invalid"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI style reference is missing or foreign.",
+                              "Resolve the exact qualified asset, class, token, or property identity before publication.",
+                              false,
+                              true};
+    /** @copydoc StyleTypeMismatch */
+    const ErrorCodeDescriptor StyleTypeMismatch{UiDomain,
+                                                ErrorCode{"runtime_ui.style.type_mismatch"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI style value has an incompatible type or range.",
+                                                "Use the exact registered property or token category and its declared bounds.",
+                                                false,
+                                                true};
+    /** @copydoc StyleCycle */
+    const ErrorCodeDescriptor StyleCycle{UiDomain,
+                                         ErrorCode{"runtime_ui.style.cycle"},
+                                         ErrorSeverity::Error,
+                                         "The Runtime UI style dependency graph contains a cycle.",
+                                         "Break the asset, class, or token cycle and prepare a complete candidate again.",
+                                         false,
+                                         true};
+    /** @copydoc StyleStateInvalid */
+    const ErrorCodeDescriptor StyleStateInvalid{UiDomain,
+                                                ErrorCode{"runtime_ui.style.state_invalid"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI visual-state selector is invalid.",
+                                                "Use known state bits, disjoint required/forbidden evidence, and a declared layer.",
+                                                false,
+                                                true};
+    /** @copydoc StyleSourceStale */
+    const ErrorCodeDescriptor StyleSourceStale{UiDomain,
+                                               ErrorCode{"runtime_ui.style.source_stale"},
+                                               ErrorSeverity::Error,
+                                               "The Runtime UI style source belongs to another owner or generation.",
+                                               "Prepare the candidate from the active tree, registry, and exact source revisions.",
+                                               true,
+                                               false};
+    /** @copydoc StyleSnapshotStorageExhausted */
+    const ErrorCodeDescriptor
+        StyleSnapshotStorageExhausted{UiDomain,
+                                      ErrorCode{"runtime_ui.style_snapshot.storage_exhausted"},
+                                      ErrorSeverity::Error,
+                                      "Every bounded Runtime UI computed-style snapshot slot is still leased.",
+                                      "Retire an in-flight style snapshot before retrying; never overwrite or allocate fallback storage.",
+                                      true,
+                                      false};
+    /** @copydoc StyleLifecycleUnavailable */
+    const ErrorCodeDescriptor StyleLifecycleUnavailable{UiDomain,
+                                                        ErrorCode{"runtime_ui.style.lifecycle_unavailable"},
+                                                        ErrorSeverity::Error,
+                                                        "The Runtime UI style owner is closed.",
+                                                        "Create a new style registry or resolver for the active runtime generation.",
+                                                        false,
+                                                        false};
     /** @copydoc HitTestInvalid */
     const ErrorCodeDescriptor
         HitTestInvalid{UiDomain,

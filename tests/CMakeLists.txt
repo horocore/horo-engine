@@ -1545,6 +1545,11 @@ add_executable(HoroRuntimeUiLayoutTests
 )
 target_compile_features(HoroRuntimeUiLayoutTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiStyleTests
+        unit/runtime/ui/UiStyleTests.cpp
+)
+target_compile_features(HoroRuntimeUiStyleTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiStyleTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiHitTestingTests
         unit/runtime/ui/UiHitTestingTests.cpp
         support/AllocationProbe.cpp
@@ -2290,6 +2295,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiRenderSnapshotTests
         HoroRuntimeUiRenderGeometryTests
         HoroRuntimeUiLayoutTests
+        HoroRuntimeUiStyleTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeUiPointerCaptureTests
