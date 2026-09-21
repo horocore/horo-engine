@@ -34,6 +34,24 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief Cooked bytes are empty or exceed the declared representation contract. */
     extern const ErrorCodeDescriptor PayloadInvalid;
+    /** @brief A durable document schema version is not supported by this Runtime UI build. */
+    extern const ErrorCodeDescriptor DocumentSchemaUnsupported;
+    /** @brief A serialized UI document is malformed or has an invalid typed value. */
+    extern const ErrorCodeDescriptor DocumentSerializationInvalid;
+    /** @brief A serialized UI document exceeds a parser or semantic content bound. */
+    extern const ErrorCodeDescriptor DocumentPayloadTooLarge;
+    /** @brief A durable UI element repeats a property key. */
+    extern const ErrorCodeDescriptor DocumentDuplicateProperty;
+    /** @brief A durable UI reference is malformed or targets an absent authored identity. */
+    extern const ErrorCodeDescriptor DocumentReferenceInvalid;
+    /** @brief A durable UI hierarchy is disconnected or contains a cycle. */
+    extern const ErrorCodeDescriptor DocumentHierarchyInvalid;
+    /** @brief A durable UI route definition is malformed or duplicated. */
+    extern const ErrorCodeDescriptor DocumentRouteInvalid;
+    /** @brief No explicit migration chain reaches the requested UI document schema. */
+    extern const ErrorCodeDescriptor DocumentMigrationMissing;
+    /** @brief The supplied UI document migration graph is malformed or ambiguous. */
+    extern const ErrorCodeDescriptor DocumentMigrationInvalid;
     /** @brief A scene/component canvas reference lacks stable identity or revision evidence. */
     extern const ErrorCodeDescriptor CanvasReferenceInvalid;
     /** @brief A canvas descriptor, viewport extent, or caller-supplied scale is malformed. */

@@ -1,6 +1,13 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 
+#include "Horo/Foundation/Utf8.h"
+
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <ranges>
+#include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -8,12 +15,320 @@ namespace Horo::Runtime::Ui {
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
         }
+
+        [[nodiscard]] bool IsValidSchemaVersion(const UiDocumentSchemaVersion version) noexcept {
+            return version.major != 0 && version.major == CurrentUiDocumentSchemaVersion.major &&
+                   version.minor <= CurrentUiDocumentSchemaVersion.minor;
+        }
+
+        [[nodiscard]] bool IsValidBand(const UiPresentationBand band) noexcept {
+            return static_cast<std::uint8_t>(band) < static_cast<std::uint8_t>(UiPresentationBand::Count);
+        }
+
+        [[nodiscard]] bool IsValidReferenceKind(const UiReferenceKind kind) noexcept {
+            return static_cast<std::uint8_t>(kind) < static_cast<std::uint8_t>(UiReferenceKind::Count);
+        }
+
+        [[nodiscard]] bool IsValidText(const std::string &value) noexcept {
+            return !value.empty() && value.size() <= MaximumUiDocumentTextBytes && IsValidUtf8ScalarSequence(value);
+        }
+
+        [[nodiscard]] bool IsElementReferenceShape(const UiReference &reference) noexcept {
+            return reference.element.IsValid() && !reference.canvas.IsValid() && !reference.document.IsValid() &&
+                   !reference.asset.IsValid() && reference.expectedAssetType.Value().empty();
+        }
+
+        [[nodiscard]] bool IsCanvasReferenceShape(const UiReference &reference) noexcept {
+            return !reference.element.IsValid() && reference.canvas.IsValid() && !reference.document.IsValid() &&
+                   !reference.asset.IsValid() && reference.expectedAssetType.Value().empty();
+        }
+
+        [[nodiscard]] bool IsDocumentReferenceShape(const UiReference &reference) noexcept {
+            return !reference.element.IsValid() && !reference.canvas.IsValid() && reference.document.IsValid() &&
+                   !reference.asset.IsValid() && reference.expectedAssetType.Value().empty();
+        }
+
+        [[nodiscard]] bool IsAssetReferenceShape(const UiReference &reference) noexcept {
+            return !reference.element.IsValid() && !reference.canvas.IsValid() && !reference.document.IsValid() &&
+                   reference.asset.IsValid() && !reference.expectedAssetType.Value().empty();
+        }
+
+        [[nodiscard]] bool IsValidReferenceShape(const UiReference &reference) noexcept {
+            if (!IsValidReferenceKind(reference.kind))
+                return false;
+            switch (reference.kind) {
+                case UiReferenceKind::Element:
+                    return IsElementReferenceShape(reference);
+                case UiReferenceKind::Canvas:
+                    return IsCanvasReferenceShape(reference);
+                case UiReferenceKind::Document:
+                    return IsDocumentReferenceShape(reference);
+                case UiReferenceKind::Asset:
+                    return IsAssetReferenceShape(reference);
+                case UiReferenceKind::Count:
+                    return false;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool IsValidProperty(const UiTypedProperty &property) noexcept {
+            if (!IsValidText(property.key))
+                return false;
+            return std::visit([](const auto &value) {
+                using Value = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Value, double>)
+                    return std::isfinite(value);
+                if constexpr (std::is_same_v<Value, std::string>)
+                    return value.size() <= MaximumUiDocumentTextBytes && IsValidUtf8ScalarSequence(value);
+                if constexpr (std::is_same_v<Value, UiReference>)
+                    return IsValidReferenceShape(value);
+                return true;
+            }, property.value);
+        }
+
+        [[nodiscard]] bool ContainsElement(const std::vector<UiDocumentElement> &elements, const UiElementId id) noexcept {
+            return std::ranges::find(elements, id, &UiDocumentElement::id) != elements.end();
+        }
+
+        [[nodiscard]] bool ContainsCanvas(const std::vector<UiCanvasDescriptor> &canvases, const UiCanvasId id) noexcept {
+            return std::ranges::find(canvases, id, &UiCanvasDescriptor::id) != canvases.end();
+        }
+
+        [[nodiscard]] bool ContainsDependency(const std::vector<UiAssetDependency> &dependencies, const UiReference &reference) noexcept {
+            return std::ranges::any_of(dependencies, [&](const UiAssetDependency &dependency) {
+                return dependency.asset == reference.asset && dependency.expectedType == reference.expectedAssetType;
+            });
+        }
+
+        struct UiElementIdHash final {
+            [[nodiscard]] std::size_t operator()(const UiElementId &id) const noexcept {
+                std::size_t hash{};
+                for (const auto byte : id.Bytes())
+                    hash = (hash * 131U) ^ byte;
+                return hash;
+            }
+        };
+
+        [[nodiscard]] bool RootsMatchCanvases(const std::vector<UiCanvasDescriptor> &canvases,
+                                              const std::vector<UiDocumentElement> &elements) {
+            std::size_t roots{};
+            for (const auto &element : elements) {
+                if (!element.parent.IsValid()) {
+                    ++roots;
+                    if (!std::ranges::any_of(canvases, [&](const UiCanvasDescriptor &canvas) {
+                        return canvas.rootElement == element.id;
+                    }))
+                        return false;
+                } else if (!ContainsElement(elements, element.parent)) {
+                    return false;
+                }
+            }
+            if (roots != canvases.size())
+                return false;
+            return true;
+        }
+
+        [[nodiscard]] bool HasAcyclicParentChains(const std::vector<UiDocumentElement> &elements) {
+            std::unordered_map<UiElementId, std::size_t, UiElementIdHash> indices;
+            indices.reserve(elements.size());
+            for (std::size_t index = 0; index < elements.size(); ++index)
+                if (!indices.emplace(elements[index].id, index).second)
+                    return false;
+
+            enum class VisitState : std::uint8_t {
+                Unvisited,
+                Visiting,
+                Visited
+            };
+            std::vector<VisitState> states(elements.size(), VisitState::Unvisited);
+            std::vector<std::size_t> path;
+            path.reserve(elements.size());
+            for (std::size_t start = 0; start < elements.size(); ++start) {
+                if (states[start] == VisitState::Visited)
+                    continue;
+                path.clear();
+                auto current = start;
+                while (states[current] != VisitState::Visited) {
+                    if (states[current] == VisitState::Visiting)
+                        return false;
+                    states[current] = VisitState::Visiting;
+                    path.push_back(current);
+                    const auto parent = elements[current].parent;
+                    if (!parent.IsValid())
+                        break;
+                    const auto found = indices.find(parent);
+                    if (found == indices.end())
+                        return false;
+                    current = found->second;
+                }
+                for (const auto index : path)
+                    states[index] = VisitState::Visited;
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool IsHierarchyValid(const std::vector<UiCanvasDescriptor> &canvases,
+                                            const std::vector<UiDocumentElement> &elements) {
+            // Canvas-only documents remain valid for compatibility with the pre-element authored model.
+            return elements.empty() || (RootsMatchCanvases(canvases, elements) && HasAcyclicParentChains(elements));
+        }
+
+        [[nodiscard]] Result<void> ValidateDocumentEnvelope(const UiDocumentSchemaVersion schemaVersion, const UiDocumentId id,
+                                                            const UiDocumentRevision revision,
+                                                            const std::vector<UiCanvasDescriptor> &canvases,
+                                                            const std::vector<UiDocumentElement> &elements,
+                                                            const std::vector<UiAssetDependency> &dependencies,
+                                                            const std::vector<UiRouteMetadata> &routes) {
+            if (!IsValidSchemaVersion(schemaVersion) || !id.IsValid() || !revision.IsValid())
+                return Failure(UiErrors::DocumentInvalid);
+            if (canvases.empty() || canvases.size() > MaximumUiDocumentCanvases || elements.size() > MaximumUiDocumentElements ||
+                dependencies.size() > MaximumUiDocumentDependencies || routes.size() > MaximumUiDocumentRoutes)
+                return Failure(UiErrors::DocumentInvalid);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateCanvases(const std::vector<UiCanvasDescriptor> &canvases) {
+            for (std::size_t index = 0; index < canvases.size(); ++index) {
+                if (!canvases[index].IsValid())
+                    return Failure(UiErrors::DocumentInvalid);
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (canvases[previous].id == canvases[index].id || canvases[previous].rootElement == canvases[index].rootElement)
+                        return Failure(UiErrors::DocumentDuplicateIdentity);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateDependencies(const std::vector<UiAssetDependency> &dependencies) {
+            for (std::size_t index = 0; index < dependencies.size(); ++index) {
+                if (!dependencies[index].asset.IsValid() || dependencies[index].expectedType.Value().empty())
+                    return Failure(UiErrors::DependencyInvalid);
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (dependencies[previous].asset == dependencies[index].asset &&
+                        dependencies[previous].expectedType != dependencies[index].expectedType)
+                        return Failure(UiErrors::DependencyInvalid);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateReferenceTarget(const UiReference &reference, const std::vector<UiCanvasDescriptor> &canvases,
+                                                           const std::vector<UiDocumentElement> &elements,
+                                                           const std::vector<UiAssetDependency> &dependencies) {
+            switch (reference.kind) {
+                case UiReferenceKind::Element:
+                    return ContainsElement(elements, reference.element) ? Result<void>::Success()
+                                                                        : Failure(UiErrors::DocumentReferenceInvalid);
+                case UiReferenceKind::Canvas:
+                    return ContainsCanvas(canvases, reference.canvas) ? Result<void>::Success()
+                                                                      : Failure(UiErrors::DocumentReferenceInvalid);
+                case UiReferenceKind::Asset:
+                    return ContainsDependency(dependencies, reference) ? Result<void>::Success()
+                                                                       : Failure(UiErrors::DocumentReferenceInvalid);
+                case UiReferenceKind::Document:
+                    return Result<void>::Success();
+                case UiReferenceKind::Count:
+                    return Failure(UiErrors::DocumentReferenceInvalid);
+            }
+            return Failure(UiErrors::DocumentReferenceInvalid);
+        }
+
+        [[nodiscard]] Result<void> ValidateElementProperties(const UiDocumentElement &element) {
+            for (std::size_t propertyIndex = 0; propertyIndex < element.properties.size(); ++propertyIndex) {
+                const auto &property = element.properties[propertyIndex];
+                if (!IsValidProperty(property))
+                    return Failure(UiErrors::DocumentSerializationInvalid);
+                for (std::size_t previous = 0; previous < propertyIndex; ++previous)
+                    if (element.properties[previous].key == property.key)
+                        return Failure(UiErrors::DocumentDuplicateProperty);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateElementReferences(const UiDocumentElement &element,
+                                                             const std::vector<UiCanvasDescriptor> &canvases,
+                                                             const std::vector<UiDocumentElement> &elements,
+                                                             const std::vector<UiAssetDependency> &dependencies) {
+            for (const auto &reference : element.references) {
+                if (!IsValidReferenceShape(reference))
+                    return Failure(UiErrors::DocumentReferenceInvalid);
+                if (auto result = ValidateReferenceTarget(reference, canvases, elements, dependencies); result.HasError())
+                    return result;
+            }
+            for (const auto &property : element.properties)
+                if (const auto *reference = std::get_if<UiReference>(&property.value)) {
+                    if (auto result = ValidateReferenceTarget(*reference, canvases, elements, dependencies); result.HasError())
+                        return result;
+                }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateElement(const UiDocumentElement &element, const std::vector<UiCanvasDescriptor> &canvases,
+                                                   const std::vector<UiDocumentElement> &elements,
+                                                   const std::vector<UiAssetDependency> &dependencies) {
+            if (!element.id.IsValid() || element.type.Value().empty() || element.properties.size() > MaximumUiDocumentProperties ||
+                element.references.size() > MaximumUiDocumentReferences)
+                return Failure(UiErrors::DocumentSerializationInvalid);
+            if (auto result = ValidateElementProperties(element); result.HasError())
+                return result;
+            return ValidateElementReferences(element, canvases, elements, dependencies);
+        }
+
+        [[nodiscard]] Result<void> ValidateElements(const std::vector<UiCanvasDescriptor> &canvases,
+                                                    const std::vector<UiDocumentElement> &elements,
+                                                    const std::vector<UiAssetDependency> &dependencies) {
+            for (std::size_t index = 0; index < elements.size(); ++index) {
+                const auto &element = elements[index];
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (elements[previous].id == element.id)
+                        return Failure(UiErrors::DocumentDuplicateIdentity);
+                if (auto result = ValidateElement(element, canvases, elements, dependencies); result.HasError())
+                    return result;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateRoutes(const std::vector<UiRouteMetadata> &routes) {
+            for (std::size_t index = 0; index < routes.size(); ++index) {
+                if (!routes[index].id.IsValid() || !IsValidBand(routes[index].band))
+                    return Failure(UiErrors::DocumentRouteInvalid);
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (routes[previous].id == routes[index].id)
+                        return Failure(UiErrors::DocumentRouteInvalid);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateDocumentContent(const UiDocumentSchemaVersion schemaVersion, const UiDocumentId id,
+                                                           const UiDocumentRevision revision,
+                                                           const std::vector<UiCanvasDescriptor> &canvases,
+                                                           const std::vector<UiDocumentElement> &elements,
+                                                           const std::vector<UiAssetDependency> &dependencies,
+                                                           const std::vector<UiRouteMetadata> &routes) {
+            if (auto result = ValidateDocumentEnvelope(schemaVersion, id, revision, canvases, elements, dependencies, routes);
+                result.HasError())
+                return result;
+            if (auto result = ValidateCanvases(canvases); result.HasError())
+                return result;
+            if (auto result = ValidateDependencies(dependencies); result.HasError())
+                return result;
+            if (auto result = ValidateElements(canvases, elements, dependencies); result.HasError())
+                return result;
+            if (!IsHierarchyValid(canvases, elements))
+                return Failure(UiErrors::DocumentHierarchyInvalid);
+            return ValidateRoutes(routes);
+        }
     }  // namespace
 
     /** @copydoc UiDocument::UiDocument */
-    UiDocument::UiDocument(UiDocumentId id, UiDocumentRevision revision, std::vector<UiCanvasDescriptor> canvases,
-                           std::vector<UiAssetDependency> dependencies) noexcept
-        : id_(id), revision_(revision), canvases_(std::move(canvases)), dependencies_(std::move(dependencies)) {}
+    UiDocument::UiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
+                           std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
+                           std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes) noexcept
+        : schemaVersion_(schemaVersion), id_(id), revision_(revision), canvases_(std::move(canvases)), elements_(std::move(elements)),
+          dependencies_(std::move(dependencies)), routes_(std::move(routes)) {}
+
+    /** @copydoc UiDocument::SchemaVersion */
+    UiDocumentSchemaVersion UiDocument::SchemaVersion() const noexcept {
+        return schemaVersion_;
+    }
 
     /** @copydoc UiDocument::Id */
     UiDocumentId UiDocument::Id() const noexcept {
@@ -30,19 +345,38 @@ namespace Horo::Runtime::Ui {
         return canvases_;
     }
 
+    /** @copydoc UiDocument::Elements */
+    std::span<const UiDocumentElement> UiDocument::Elements() const noexcept {
+        return elements_;
+    }
+
     /** @copydoc UiDocument::Dependencies */
     std::span<const UiAssetDependency> UiDocument::Dependencies() const noexcept {
         return dependencies_;
     }
 
+    /** @copydoc UiDocument::Routes */
+    std::span<const UiRouteMetadata> UiDocument::Routes() const noexcept {
+        return routes_;
+    }
+
     /** @copydoc UiDocumentBuilder::UiDocumentBuilder */
-    UiDocumentBuilder::UiDocumentBuilder(UiDocumentId id, UiDocumentRevision revision) noexcept : id_(id), revision_(revision) {}
+    UiDocumentBuilder::UiDocumentBuilder(UiDocumentId id, UiDocumentRevision revision, const UiDocumentSchemaVersion schemaVersion) noexcept
+        : schemaVersion_(schemaVersion), id_(id), revision_(revision) {}
 
     /** @copydoc UiDocumentBuilder::AddCanvas */
     Result<void> UiDocumentBuilder::AddCanvas(UiCanvasDescriptor canvas) {
         if (canvases_.size() == MaximumUiDocumentCanvases)
             return Failure(UiErrors::CapacityExceeded);
         canvases_.push_back(std::move(canvas));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiDocumentBuilder::AddElement */
+    Result<void> UiDocumentBuilder::AddElement(UiDocumentElement element) {
+        if (elements_.size() == MaximumUiDocumentElements)
+            return Failure(UiErrors::CapacityExceeded);
+        elements_.push_back(std::move(element));
         return Result<void>::Success();
     }
 
@@ -63,20 +397,27 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiDocumentBuilder::AddRoute */
+    Result<void> UiDocumentBuilder::AddRoute(UiRouteMetadata route) {
+        if (routes_.size() == MaximumUiDocumentRoutes)
+            return Failure(UiErrors::CapacityExceeded);
+        routes_.push_back(std::move(route));
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiDocumentBuilder::Build */
     Result<UiDocument> UiDocumentBuilder::Build() && {
-        if (!id_.IsValid() || !revision_.IsValid() || canvases_.empty())
-            return Failure<UiDocument>(UiErrors::DocumentInvalid);
-        for (std::size_t index = 0; index < canvases_.size(); ++index) {
-            const auto &canvas = canvases_[index];
-            if (!canvas.IsValid())
-                return Failure<UiDocument>(UiErrors::DocumentInvalid);
-            for (std::size_t previous = 0; previous < index; ++previous)
-                if (canvases_[previous].id == canvas.id || canvases_[previous].rootElement == canvas.rootElement)
-                    return Failure<UiDocument>(UiErrors::DocumentDuplicateIdentity);
+        for (auto &element : elements_) {
+            std::ranges::sort(element.properties, {}, &UiTypedProperty::key);
+            std::ranges::sort(element.references);
         }
+        if (const auto validated = ValidateDocumentContent(schemaVersion_, id_, revision_, canvases_, elements_, dependencies_, routes_);
+            validated.HasError())
+            return Result<UiDocument>::Failure(validated.ErrorValue());
         std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
-        return Result<UiDocument>::Success(UiDocument{id_, revision_, std::move(canvases_), std::move(dependencies_)});
+        std::ranges::sort(routes_, {}, &UiRouteMetadata::id);
+        return Result<UiDocument>::Success(UiDocument{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_),
+                                                      std::move(dependencies_), std::move(routes_)});
     }
 
     /** @copydoc CookedUiDocument::CookedUiDocument */
