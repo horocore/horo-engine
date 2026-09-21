@@ -1630,6 +1630,11 @@ add_executable(HoroRuntimeSaveSlotCommitTransactionTests
 )
 target_compile_features(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveSlotRecoveryTests
+        unit/runtime/save/SaveSlotRecoveryTests.cpp
+)
+target_compile_features(HoroRuntimeSaveSlotRecoveryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveSlotRecoveryTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSafePointCoordinatorTests
         unit/runtime/save/SaveSafePointCoordinatorTests.cpp
 )
@@ -2262,6 +2267,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveStoragePolicyTests
         HoroRuntimeSaveOperationArbiterTests
         HoroRuntimeSaveSlotCommitTransactionTests
+        HoroRuntimeSaveSlotRecoveryTests
         HoroRuntimeSaveSafePointCoordinatorTests
         HoroRuntimeSaveProjectPolicyTests
         HoroRuntimeSaveTestCompositionsTests

@@ -297,6 +297,22 @@ namespace Horo::Runtime::SaveErrors {
                                                        "Slot-generation recovery could not converge safely.",
                                                        "Quarantine slot mutation and preserve the journal for bounded operator recovery.",
                                                        true};
+    const ErrorCodeDescriptor SlotRecoveryInvalid{kDomain, ErrorCode{"save.slot_recovery.invalid"}, kError,
+                                                  "Last-known-good recovery evidence or policy is invalid.",
+                                                  "Preserve the current evidence and correct the bounded recovery input."};
+    const ErrorCodeDescriptor SlotRecoveryLimitExceeded{kDomain,
+                                                        ErrorCode{"save.slot_recovery.limit_exceeded"},
+                                                        kError,
+                                                        "Last-known-good recovery evidence exceeds a trusted retention bound.",
+                                                        "Preserve the evidence and revise the explicit recovery retention policy.",
+                                                        false,
+                                                        true};
+    const ErrorCodeDescriptor SlotRecoveryAllocationFailed{kDomain,
+                                                           ErrorCode{"save.slot_recovery.allocation_failed"},
+                                                           kError,
+                                                           "Last-known-good recovery bookkeeping could not be allocated.",
+                                                           "Keep the current generation and retry recovery after reducing memory pressure.",
+                                                           true};
     const ErrorCodeDescriptor StoragePolicyInvalid{kDomain, ErrorCode{"save.storage.policy_invalid"}, kError,
                                                    "Save storage capacity or recovery policy evidence is invalid.",
                                                    "Supply bounded ordered capacity evidence and a finite retry policy."};
