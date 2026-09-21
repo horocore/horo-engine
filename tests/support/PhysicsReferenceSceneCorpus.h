@@ -64,6 +64,53 @@ namespace Horo::Physics::Test {
         [[nodiscard]] constexpr auto operator<=>(const PhysicsReferenceObservation &) const noexcept = default;
     };
 
+    namespace Detail {
+        /** @brief Validates the bounded lifecycle fields and their canonical padding. */
+        [[nodiscard]] constexpr bool IsValidPhysicsReferenceEventFields(const PhysicsReferenceObservation &observation) noexcept {
+            for (std::size_t index = 0; index < observation.eventKinds.size(); ++index) {
+                if (index >= observation.eventCount) {
+                    if (observation.eventKinds[index] != PhysicsEventKind{} || observation.eventTicks[index] != 0)
+                        return false;
+                    continue;
+                }
+                if (static_cast<std::uint8_t>(observation.eventKinds[index]) > static_cast<std::uint8_t>(PhysicsEventKind::TriggerExit) ||
+                    observation.eventTicks[index] == 0)
+                    return false;
+                if (index > 0 && observation.eventTicks[index - 1] > observation.eventTicks[index])
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Validates query identities and zeroed entries outside the active hit count. */
+        [[nodiscard]] constexpr bool IsValidPhysicsReferenceQueryFields(const PhysicsReferenceObservation &observation) noexcept {
+            for (std::size_t index = 0; index < observation.queryBodyGenerations.size(); ++index) {
+                if (index >= observation.queryHitCount) {
+                    if (observation.queryBodySlots[index] != 0 || observation.queryBodyGenerations[index] != 0 ||
+                        observation.queryDistanceBits[index] != 0)
+                        return false;
+                    continue;
+                }
+                if (observation.queryBodyGenerations[index] == 0)
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Validates support status, reason and empty fields for unsupported scenes. */
+        [[nodiscard]] constexpr bool IsValidPhysicsReferenceStatus(const PhysicsReferenceObservation &observation) noexcept {
+            switch (observation.status) {
+                case PhysicsReferenceSceneStatus::Supported:
+                    return observation.unsupportedReason == PhysicsReferenceUnsupportedReason::None;
+                case PhysicsReferenceSceneStatus::Unsupported:
+                    return observation.unsupportedReason == PhysicsReferenceUnsupportedReason::RequiredCapabilityUnsupported &&
+                           observation.eventCount == 0 && observation.queryHitCount == 0;
+                default:
+                    return false;
+            }
+        }
+    }  // namespace Detail
+
     /**
      * @brief Checks the version-one shape and status invariants of one reference observation.
      * @param observation Captured or expected backend-neutral reference evidence.
@@ -74,33 +121,8 @@ namespace Horo::Physics::Test {
             observation.requiredCapability >= PhysicsCapability::Count || observation.eventCount > MaximumPhysicsReferenceEvents ||
             observation.queryHitCount > MaximumPhysicsReferenceQueryHits)
             return false;
-
-        for (std::size_t index = 0; index < observation.eventKinds.size(); ++index) {
-            if (index < observation.eventCount) {
-                if (static_cast<std::uint8_t>(observation.eventKinds[index]) > static_cast<std::uint8_t>(PhysicsEventKind::TriggerExit) ||
-                    observation.eventTicks[index] == 0 ||
-                    (index > 0 && index < observation.eventCount && observation.eventTicks[index - 1] > observation.eventTicks[index]))
-                    return false;
-            } else if (observation.eventKinds[index] != PhysicsEventKind::ContactBegin || observation.eventTicks[index] != 0) {
-                return false;
-            }
-        }
-        for (std::size_t index = 0; index < observation.queryBodyGenerations.size(); ++index) {
-            if (index < observation.queryHitCount) {
-                if (observation.queryBodyGenerations[index] == 0)
-                    return false;
-            } else if (observation.queryBodySlots[index] != 0 || observation.queryBodyGenerations[index] != 0 ||
-                       observation.queryDistanceBits[index] != 0) {
-                return false;
-            }
-        }
-
-        if (observation.status == PhysicsReferenceSceneStatus::Supported)
-            return observation.unsupportedReason == PhysicsReferenceUnsupportedReason::None;
-        if (observation.status == PhysicsReferenceSceneStatus::Unsupported)
-            return observation.unsupportedReason == PhysicsReferenceUnsupportedReason::RequiredCapabilityUnsupported &&
-                   observation.eventCount == 0 && observation.queryHitCount == 0;
-        return false;
+        return Detail::IsValidPhysicsReferenceEventFields(observation) && Detail::IsValidPhysicsReferenceQueryFields(observation) &&
+               Detail::IsValidPhysicsReferenceStatus(observation);
     }
 
     namespace Detail {

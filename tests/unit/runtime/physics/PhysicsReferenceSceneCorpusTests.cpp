@@ -97,11 +97,13 @@ namespace Horo::Physics {
                     .distanceMeters = distance};
         }
 
-        [[nodiscard]] Test::PhysicsReferenceObservation ObservationFromQueryHits(const std::span<const PhysicsQueryHit> hits) {
+        [[nodiscard]] Test::PhysicsReferenceObservation ObservationFromQueryHits(const Test::PhysicsReferenceSceneId scene,
+                                                                                 const PhysicsCapability requiredCapability,
+                                                                                 const std::span<const PhysicsQueryHit> hits) {
             Test::PhysicsReferenceObservation observation{.corpusVersion = Test::PhysicsReferenceSceneCorpusVersion,
-                                                          .scene = Test::PhysicsReferenceSceneId::QueryOrdering,
+                                                          .scene = scene,
                                                           .status = Test::PhysicsReferenceSceneStatus::Supported,
-                                                          .requiredCapability = PhysicsCapability::ImmediateQueries,
+                                                          .requiredCapability = requiredCapability,
                                                           .queryHitCount = static_cast<std::uint32_t>(hits.size())};
             REQUIRE(hits.size() <= Test::MaximumPhysicsReferenceQueryHits);
             for (std::size_t index = 0; index < hits.size(); ++index) {
@@ -161,7 +163,8 @@ namespace Horo::Physics {
         std::array hits{QueryHit(1, 2, 9.5F), QueryHit(0, 1, 4.5F)};
         std::ranges::sort(hits, PhysicsQueryHitLess);
         const auto &expected = Expectation(Test::PhysicsReferenceSceneId::QueryOrdering);
-        const auto actual = ObservationFromQueryHits(hits);
+        const auto actual =
+            ObservationFromQueryHits(Test::PhysicsReferenceSceneId::QueryOrdering, PhysicsCapability::ImmediateQueries, hits);
         INFO("reference scene: " << std::string(expected.name));
         REQUIRE(actual == expected.observation);
         REQUIRE(Test::PhysicsReferenceObservationHash(actual) == expected.expectedHash);
@@ -199,7 +202,8 @@ namespace Horo::Physics {
         REQUIRE_FALSE(result.Value().truncated);
 
         const auto &expected = Expectation(Test::PhysicsReferenceSceneId::QueryOrdering);
-        const auto actual = ObservationFromQueryHits(hits);
+        const auto actual =
+            ObservationFromQueryHits(Test::PhysicsReferenceSceneId::QueryOrdering, PhysicsCapability::ImmediateQueries, hits);
         INFO("reference scene: " << std::string(expected.name));
         REQUIRE(actual == expected.observation);
         REQUIRE(Test::PhysicsReferenceObservationHash(actual) == expected.expectedHash);
