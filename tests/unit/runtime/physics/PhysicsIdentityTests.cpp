@@ -104,7 +104,7 @@ namespace Horo::Physics {
         }
 
         TEST_CASE("Physics errors have unique definitive identities and actionable diagnostics", "[physics][errors]") {
-            const std::array<std::pair<const ErrorCodeDescriptor *, std::string_view>, 16> cases{{
+            const std::array<std::pair<const ErrorCodeDescriptor *, std::string_view>, 17> cases{{
                 {&PhysicsErrors::WorldInvalid, "physics.world.invalid"},
                 {&PhysicsErrors::HandleMalformed, "physics.handle.malformed"},
                 {&PhysicsErrors::HandleWorldMismatch, "physics.handle.world_mismatch"},
@@ -112,6 +112,7 @@ namespace Horo::Physics {
                 {&PhysicsErrors::GenerationExhausted, "physics.generation.exhausted"},
                 {&PhysicsErrors::CapabilityUnavailable, "physics.capability.unavailable"},
                 {&PhysicsErrors::OperationUnsupported, "physics.operation.unsupported"},
+                {&PhysicsErrors::TransformAuthorityViolation, "physics.transform.authority_violation"},
                 {&PhysicsErrors::InvalidState, "physics.state.invalid"},
                 {&PhysicsErrors::SolverValidationMessage, "physics.solver.validation"},
                 {&PhysicsErrors::SolverAssertionFailed, "physics.solver.assertion_failed"},
