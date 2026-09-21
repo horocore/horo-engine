@@ -11,7 +11,10 @@ permissions:
 
 concurrency:
   group: sonar-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A newer main commit supersedes an older push analysis just like a newer PR
+  # commit supersedes its previous analysis. Avoid running stale Sonar scans in
+  # parallel when several PRs are merged in quick succession.
+  cancel-in-progress: true
 
 jobs:
   sonar:
@@ -52,8 +55,12 @@ jobs:
         with:
           path: |
             .cmake/fetchcontent
-          key: sonar-v1-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+          # Only dependency declarations affect this cache. Hashing every
+          # CMakeLists.txt created a new ~925 MB cache for unrelated target
+          # changes and crowded out the CFamily analysis cache.
+          key: sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/Horo*Dependency.cmake') }}
           restore-keys: |
+            sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-
             sonar-v1-deps-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Restore compiler cache
@@ -155,7 +162,9 @@ jobs:
           xvfb-run -a build/sonar/tests/HoroEditorWorkspaceControllerTests
           /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
+          gcovr_started=$SECONDS
           /tmp/horo-gcovr/bin/gcovr --sonarqube build/sonar/coverage.xml \
+            -j 0 \
             --sonarqube-metric line \
             --root "$GITHUB_WORKSPACE" \
             --filter "$GITHUB_WORKSPACE/include" \
@@ -166,6 +175,7 @@ jobs:
             --exclude-noncode-lines \
             --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
             build/sonar
+          echo "gcovr completed in $((SECONDS - gcovr_started))s"
           ccache --show-stats
 
       - name: SonarCloud scan
