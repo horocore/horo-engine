@@ -114,6 +114,7 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackageArchiveTests.cpp
     unit/packages/PackageCacheTests.cpp
     unit/packages/PackageFileManifestTests.cpp
+    unit/packages/PackageRestoreTests.cpp
     unit/packages/PackagePublisherVerificationTests.cpp)
 target_link_libraries(HoroPackageValidationTests PRIVATE HoroEngine::Packages HoroEngine::PackageSecurity HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPackageValidationTests LABELS "packages;headless")
@@ -196,6 +197,7 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/NetworkFailureTests.cpp
         unit/runtime/networking/NetworkIoServiceTests.cpp
         unit/runtime/networking/NetworkLifecycleTests.cpp
+        unit/runtime/networking/NetworkProjectSettingsTests.cpp
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
@@ -309,8 +311,10 @@ target_link_libraries(HoroAudioCommandTests PRIVATE HoroEngine::AudioCommands)
 horo_register_catch_test(HoroAudioCommandTests LABELS "unit;audio;headless")
 
 add_executable(HoroPhysicsTests
+        support/AllocationProbe.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
+        unit/runtime/physics/CharacterFastPathStorageTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
         unit/runtime/physics/CharacterWorldCommandTests.cpp
@@ -330,6 +334,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsIdentityTests.cpp
         unit/runtime/physics/PhysicsMetricsTests.cpp
         unit/runtime/physics/PhysicsMaterialAssetTests.cpp
+        unit/runtime/physics/PhysicsMassPropertiesTests.cpp
         unit/runtime/physics/PhysicsPoseTests.cpp
         unit/runtime/physics/PhysicsQueryTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
@@ -341,7 +346,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsWorldTests.cpp
 )
 target_compile_features(HoroPhysicsTests PRIVATE cxx_std_20)
-target_include_directories(HoroPhysicsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics)
+target_include_directories(HoroPhysicsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
@@ -349,8 +354,10 @@ horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 add_executable(HoroAITests
         unit/runtime/ai/AIIdentityTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
+        unit/runtime/ai/BehaviorTreeTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
         unit/runtime/ai/BlackboardSchemaTests.cpp
+        unit/runtime/ai/DecisionAssetValidationTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
 )
@@ -459,6 +466,7 @@ horo_register_catch_test(HoroNavigationApiTests LABELS "unit;navigation;headless
 add_executable(HoroNavigationRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
+        unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationRuntimeQueuesTests.cpp
         unit/runtime/navigation/NavigationWorldLifecycleTests.cpp
@@ -549,6 +557,7 @@ horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;he
 
 add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
+        unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
@@ -703,6 +712,7 @@ add_executable(HoroEditorWelcomeControllerTests
 )
 
 target_compile_features(HoroEditorWelcomeControllerTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorWelcomeControllerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroEditorWelcomeControllerTests
         PRIVATE
         HoroEngine::EditorServices
@@ -727,6 +737,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/SettingsModalLifecycleTests.cpp
     )
     target_compile_features(HoroSettingsModalLifecycleTests PRIVATE cxx_std_20)
+    target_include_directories(HoroSettingsModalLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
     target_link_libraries(HoroSettingsModalLifecycleTests
             PRIVATE
             HoroEngine::Gui
@@ -748,6 +759,7 @@ if (HORO_BUILD_EDITOR_GUI)
             PRIVATE
             HoroEngine::Gui
             HoroEngine::EditorServices
+            HoroEngine::Extensions
             HoroThirdParty::ImGui
     )
     add_executable(HoroAssetImportModalLifecycleTests

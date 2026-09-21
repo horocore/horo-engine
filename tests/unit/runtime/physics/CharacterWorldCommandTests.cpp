@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "CharacterWorldTestHelpers.h"
 
 #include <barrier>
@@ -5,6 +6,16 @@
 namespace Horo::Character {
     namespace {
         using namespace TestDetail;
+
+        TEST_CASE("Character steady-state command movement does not allocate after preparation",
+                  "[physics][character][world][command][allocation]") {
+            auto [world, controllers] = ActiveWorldWithControllers();
+            const auto before = Tests::AllocationProbe::Count();
+
+            REQUIRE(world->QueueMovementCommand(Movement(controllers.front(), 1, 1)).HasValue());
+            REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
+            REQUIRE(Tests::AllocationProbe::Count() == before);
+        }
 
         TEST_CASE("Character fixed ticks canonically order commands and select the final replacement",
                   "[physics][character][world][command]") {
@@ -80,6 +91,7 @@ namespace Horo::Character {
             RequireError(world->QueueMovementCommand(Movement(first, 1, 1)), CharacterErrors::CommandOrderInvalid);
             REQUIRE(world->QueueMovementCommand(Movement(second, 1, 1)).HasValue());
             REQUIRE(world->QueueMovementCommand(Movement(first, 2, 2)).Value().status == CharacterCommandAdmissionStatus::RejectedFull);
+            REQUIRE(world->TickStatistics().commandOverflowCount == 1);
             RequireError(world->AdvanceFixedTick(FixedTick(1)), CharacterErrors::CapacityExceeded);
             REQUIRE((world->PublishedTick() == CharacterPublishedTick{}));
             REQUIRE(world->TickStatistics().pendingCommands == 2);

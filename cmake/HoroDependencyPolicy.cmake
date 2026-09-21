@@ -82,6 +82,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
 horo_allow_target_dependencies(TARGET HoroEditorServices
     DEPENDENCIES
         HoroFoundation
+        HoroNetworkApi
         HoroApplication
         HoroPlatform
         HoroEditorModel

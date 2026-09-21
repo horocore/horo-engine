@@ -68,4 +68,56 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionCapabilityUnavailable;
     /** @brief Storage for an immutable perception descriptor snapshot is unavailable. */
     extern const ErrorCodeDescriptor PerceptionRegistryStorageUnavailable;
+    /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
+    extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
+    /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */
+    extern const ErrorCodeDescriptor BehaviorTreeLimitExceeded;
+    /** @brief Stable behavior-tree graph, node, edge, pin, or property identity is duplicated. */
+    extern const ErrorCodeDescriptor BehaviorTreeIdentityConflict;
+    /** @brief A behavior-tree edge, root, child, service, or pin relationship is invalid. */
+    extern const ErrorCodeDescriptor BehaviorTreeTopologyInvalid;
+    /** @brief A behavior-tree topology contains a directed cycle. */
+    extern const ErrorCodeDescriptor BehaviorTreeCycle;
+    /** @brief Immutable behavior-tree asset storage is unavailable. */
+    extern const ErrorCodeDescriptor BehaviorTreeStorageUnavailable;
+    /** @brief A decision asset identity, kind, version, or typed validation contract is malformed. */
+    extern const ErrorCodeDescriptor DecisionAssetSchemaInvalid;
+    /** @brief A decision asset catalog, node, dependency, requirement, or diagnostic exceeds a fixed bound. */
+    extern const ErrorCodeDescriptor DecisionAssetLimitExceeded;
+    /** @brief A required decision node descriptor is not registered. */
+    extern const ErrorCodeDescriptor DecisionAssetDescriptorMissing;
+    /** @brief More than one compatible decision node descriptor claims one stable type identity. */
+    extern const ErrorCodeDescriptor DecisionAssetDescriptorAmbiguous;
+    /** @brief A decision node descriptor exists but no version is compatible with the authored requirement. */
+    extern const ErrorCodeDescriptor DecisionAssetDescriptorIncompatible;
+    /** @brief A required blackboard schema identity is not registered. */
+    extern const ErrorCodeDescriptor DecisionAssetSchemaMissing;
+    /** @brief More than one compatible blackboard schema candidate claims one stable identity and version. */
+    extern const ErrorCodeDescriptor DecisionAssetSchemaAmbiguous;
+    /** @brief A registered blackboard schema version is outside the asset's authored compatibility range. */
+    extern const ErrorCodeDescriptor DecisionAssetSchemaIncompatible;
+    /** @brief A required stable blackboard key is absent from the selected schema. */
+    extern const ErrorCodeDescriptor DecisionAssetBindingMissing;
+    /** @brief Multiple incompatible binding contracts claim one stable blackboard key. */
+    extern const ErrorCodeDescriptor DecisionAssetBindingAmbiguous;
+    /** @brief A resolved blackboard key has the wrong typed kind or cardinality. */
+    extern const ErrorCodeDescriptor DecisionAssetBindingTypeMismatch;
+    /** @brief A resolved blackboard key does not grant the node's required mutability. */
+    extern const ErrorCodeDescriptor DecisionAssetBindingAccessMismatch;
+    /** @brief A resolved blackboard key cannot satisfy the node's required presence policy. */
+    extern const ErrorCodeDescriptor DecisionAssetBindingPresenceMismatch;
+    /** @brief A node requires a blackboard default that the selected schema does not provide. */
+    extern const ErrorCodeDescriptor DecisionAssetBindingDefaultMissing;
+    /** @brief A required subtree or subplan asset is not registered. */
+    extern const ErrorCodeDescriptor DecisionAssetSubtreeMissing;
+    /** @brief More than one subtree candidate claims one stable asset identity. */
+    extern const ErrorCodeDescriptor DecisionAssetSubtreeAmbiguous;
+    /** @brief A subtree candidate has the wrong plan kind or incompatible asset schema version. */
+    extern const ErrorCodeDescriptor DecisionAssetSubtreeIncompatible;
+    /** @brief The decision-asset dependency graph contains a bounded-cycle violation. */
+    extern const ErrorCodeDescriptor DecisionAssetDependencyCycle;
+    /** @brief A compiled decision plan or validation report could not allocate bounded storage. */
+    extern const ErrorCodeDescriptor DecisionAssetStorageUnavailable;
+    /** @brief An activation slot was offered a compilation without a clean immutable plan. */
+    extern const ErrorCodeDescriptor DecisionAssetActivationInvalid;
 }  // namespace Horo::AI::AIErrors

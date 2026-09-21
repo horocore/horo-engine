@@ -1,55 +1,14 @@
 #include "Horo/Editor/WelcomeController.h"
+#include "support/editor/ScopedTestHome.h"
 
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <variant>
 #include <vector>
 
 namespace {
-    class ScopedTestHome {
-    public:
-        explicit ScopedTestHome(std::string_view name)
-            : path_(std::filesystem::temp_directory_path() /
-                    (std::string{name} + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
-#if defined(_WIN32)
-            constexpr const char *key = "USERPROFILE";
-#else
-            constexpr const char *key = "HOME";
-#endif
-            if (const char *current = std::getenv(key))
-                previous_ = current;
-            std::filesystem::create_directories(path_);
-#if defined(_WIN32)
-            _putenv_s(key, path_.string().c_str());
-#else
-            setenv(key, path_.string().c_str(), 1);
-#endif
-        }
-
-        ~ScopedTestHome() {
-#if defined(_WIN32)
-            constexpr const char *key = "USERPROFILE";
-            _putenv_s(key, previous_.value_or("").c_str());
-#else
-            constexpr const char *key = "HOME";
-            if (previous_)
-                setenv(key, previous_->c_str(), 1);
-            else
-                unsetenv(key);
-#endif
-            std::error_code ignored;
-            std::filesystem::remove_all(path_, ignored);
-        }
-
-    private:
-        std::filesystem::path path_;
-        std::optional<std::string> previous_;
-    };
-
     TEST_CASE("Route payload validation rejects mismatched parameters", "[unit][editor][welcome]") {
         using namespace Horo::Editor;
 
@@ -108,7 +67,7 @@ namespace {
     }
 
     TEST_CASE("Cached compatibility projection round trips", "[unit][editor][welcome]") {
-        const ScopedTestHome home{"horo-welcome-controller"};
+        const Horo::TestSupport::ScopedTestHome home{"horo-welcome-controller"};
         using namespace Horo::Application;
         using namespace Horo::Editor;
 

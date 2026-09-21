@@ -6,6 +6,7 @@
 #include <array>
 #include <memory>
 #include <string_view>
+#include <variant>
 
 namespace Horo::Release {
     namespace {
@@ -96,11 +97,34 @@ namespace Horo::Release {
             return gameProduct == std::holds_alternative<GameProductVersion>(artifact.version);
         }
 
+        /** @brief Rejects version wrappers whose public semantic-version payload bypassed canonical parsing. */
+        [[nodiscard]] bool ValidProductVersion(const DistributionArtifactIdentity &artifact) {
+            return std::visit([](const auto &productVersion) {
+                const auto parsed = ParseReleaseVersion(FormatReleaseVersion(productVersion.value));
+                return parsed.HasValue() && parsed.Value() == productVersion.value;
+            }, artifact.version);
+        }
+
         [[nodiscard]] bool ValidProductIdentity(const DistributionProductIdentity &product) noexcept {
             if (!IsKnownProduct(product.kind))
                 return false;
             const bool renderer = product.kind == DistributionProductKind::RendererComponent;
             return renderer ? IsValidDistributionIdentity(product.componentId) : product.componentId.empty();
+        }
+
+        [[nodiscard]] bool ValidArtifactIdentity(const DistributionArtifactIdentity &artifact) {
+            return ValidProductIdentity(artifact.product) && IsKnownArchitecture(artifact.architecture) &&
+                   IsKnownArtifactClass(artifact.artifactClass) && IsValidDistributionIdentity(artifact.build.value) &&
+                   IsValidDistributionIdentity(artifact.package.value) && ProductVersionMatches(artifact) && ValidProductVersion(artifact);
+        }
+
+        [[nodiscard]] bool ValidInstallationIdentity(const DistributionArtifactIdentity &artifact) {
+            return !artifact.installation.has_value() || IsValidDistributionIdentity(artifact.installation->value);
+        }
+
+        [[nodiscard]] bool ValidInstallationCombination(const DistributionArtifactIdentity &artifact) noexcept {
+            const bool installable = artifact.artifactClass == DistributionArtifactClass::InstallableProduct;
+            return installable == artifact.installation.has_value();
         }
 
         [[nodiscard]] bool SupportsArtifactClassFormat(const DistributionArtifactClass artifactClass,
@@ -110,17 +134,34 @@ namespace Horo::Release {
             return format == DistributionPackageFormat::ZipArchive || format == DistributionPackageFormat::TarGzip;
         }
 
-        [[nodiscard]] bool SupportsProduct(const DistributionProductIdentity &product, const DistributionPackageFormat format) noexcept {
+        [[nodiscard]] bool SupportsRendererComponentFormat(const DistributionPackageFormat format) noexcept {
             using enum DistributionPackageFormat;
+            return format == ZipArchive || format == TarGzip;
+        }
+
+        [[nodiscard]] bool SupportsDedicatedServerFormat(const DistributionPackageFormat format) noexcept {
+            using enum DistributionPackageFormat;
+            return format != MacAppBundle && format != LinuxAppImage && format != StorePackage;
+        }
+
+        [[nodiscard]] bool SupportsSdkFormat(const DistributionPackageFormat format) noexcept {
+            using enum DistributionPackageFormat;
+            return format != WindowsExeInstaller && format != MacDmg && format != MacAppBundle && format != LinuxAppImage &&
+                   format != StorePackage;
+        }
+
+        [[nodiscard]] bool SupportsProduct(const DistributionProductIdentity &product, const DistributionPackageFormat format) noexcept {
             using enum DistributionProductKind;
-            if (product.kind == RendererComponent)
-                return format == ZipArchive || format == TarGzip;
-            if (product.kind == GameDedicatedServer)
-                return format != MacAppBundle && format != LinuxAppImage && format != StorePackage;
-            if (product.kind == PublicSdk)
-                return format != WindowsExeInstaller && format != MacDmg && format != MacAppBundle && format != LinuxAppImage &&
-                       format != StorePackage;
-            return true;
+            switch (product.kind) {
+                case RendererComponent:
+                    return SupportsRendererComponentFormat(format);
+                case GameDedicatedServer:
+                    return SupportsDedicatedServerFormat(format);
+                case PublicSdk:
+                    return SupportsSdkFormat(format);
+                default:
+                    return true;
+            }
         }
     }  // namespace
 
@@ -155,13 +196,11 @@ namespace Horo::Release {
     /** @copydoc ValidateDistributionPackageSelection */
     Result<DistributionPackageSelection> ValidateDistributionPackageSelection(const DistributionArtifactIdentity &artifact,
                                                                               const DistributionPackageFormat format) {
-        if (!ValidProductIdentity(artifact.product) || !IsKnownArchitecture(artifact.architecture) ||
-            !IsKnownArtifactClass(artifact.artifactClass) || !IsValidDistributionIdentity(artifact.build.value) ||
-            !IsValidDistributionIdentity(artifact.package.value) || !ProductVersionMatches(artifact))
+        if (!ValidArtifactIdentity(artifact))
             return Result<DistributionPackageSelection>::Failure(MakeError(ReleaseErrors::DistributionIdentityInvalid));
-        if (const bool installable = artifact.artifactClass == DistributionArtifactClass::InstallableProduct;
-            installable != artifact.installation.has_value() ||
-            (artifact.installation.has_value() && !IsValidDistributionIdentity(artifact.installation->value)))
+        if (!ValidInstallationIdentity(artifact))
+            return Result<DistributionPackageSelection>::Failure(MakeError(ReleaseErrors::DistributionIdentityInvalid));
+        if (!ValidInstallationCombination(artifact))
             return Result<DistributionPackageSelection>::Failure(MakeError(ReleaseErrors::DistributionCombinationUnsupported));
         auto capabilities = ValidateDistributionProductPackageFormat(artifact.product, artifact.artifactClass, artifact.platform, format);
         if (capabilities.HasError())

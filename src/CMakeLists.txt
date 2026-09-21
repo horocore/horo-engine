@@ -148,6 +148,9 @@ target_compile_features(HoroPackages PUBLIC cxx_std_20)
 target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
 add_library(HoroPackageSecurity STATIC
+        packages/restore/PackageRestore.cpp
+        packages/restore/PackageRestoreService.cpp
+        packages/restore/PackageRestoreErrors.cpp
         packages/verification/PackagePublisherVerification.cpp
         packages/verification/PackagePublisherVerificationErrors.cpp
 )
@@ -242,6 +245,8 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/NetworkIoService.cpp
         runtime/networking/api/NetworkLifecycle.cpp
         runtime/networking/api/NetworkObjectIdentity.cpp
+        runtime/networking/api/NetworkProjectSettings.cpp
+        runtime/networking/api/NetworkProjectSettingsErrors.cpp
         runtime/networking/api/PacketBuffer.cpp
         runtime/networking/api/PacketQueue.cpp
         runtime/networking/api/ProtocolIdentityRegistry.cpp
@@ -541,6 +546,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterControllerRegistry.h
+        physics/CharacterFastPathStorage.h
         physics/CharacterWorld.cpp
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
@@ -565,6 +571,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsIdentity.cpp
         physics/PhysicsMetrics.cpp
         physics/PhysicsMaterialAsset.cpp
+        physics/PhysicsMassProperties.cpp
         physics/PhysicsPose.cpp
         physics/PhysicsQuery.cpp
         physics/PhysicsShapeDescriptor.cpp
@@ -602,8 +609,11 @@ add_library(HoroAI STATIC
         runtime/ai/api/AIErrors.cpp
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
+        runtime/ai/api/BehaviorTree.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
+        runtime/ai/api/DecisionAssetPlan.cpp
+        runtime/ai/api/DecisionAssetValidation.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
 )
@@ -705,6 +715,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationDataSerialization.cpp
         runtime/navigation/api/NavigationDataSerializationDecode.cpp
         runtime/navigation/api/NavigationDataSerializationMigration.cpp
+        runtime/navigation/api/NavigationDynamicErrors.cpp
         runtime/navigation/api/NavigationErrors.cpp
         runtime/navigation/api/NavigationIdentity.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
@@ -718,6 +729,9 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationBakeJobs.cpp
+        runtime/navigation/runtime/NavigationDynamicRegistry.cpp
+        runtime/navigation/runtime/NavigationDynamicRegistryCommit.cpp
+        runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
@@ -845,6 +859,7 @@ target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Asset
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
+        runtime/prefab/PrefabDiagnostics.cpp
         runtime/prefab/PrefabDocument.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
@@ -1206,6 +1221,7 @@ add_library(HoroEditorServices STATIC
         editor/settings/EditorConfiguration.cpp
         editor/settings/EditorSettingsService.cpp
         editor/settings/EditorSettingsStore.cpp
+        editor/settings/EditorSettingsStoreSerialization.cpp
         editor/localization/LocalizationService.cpp
         editor/menu/EditorMenuModel.cpp
         editor/status_bar/EditorStatusBarModel.cpp
@@ -1235,6 +1251,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::NetworkApi
         HoroEngine::Application
         HoroEngine::Platform
         HoroEngine::EditorModel
@@ -1301,7 +1318,13 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp
+            editor/modals/settings/SettingsModalExtensions.cpp
+            editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
+            editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalPluginDetails.cpp
+            editor/modals/settings/SettingsModalPluginList.cpp
+            editor/modals/settings/SettingsModalPluginShared.cpp
             editor/modals/settings/SettingsModalState.cpp
             editor/modals/asset_import/AssetImportModal.cpp
             editor/modals/asset_import/AssetImportModalLifecycle.cpp

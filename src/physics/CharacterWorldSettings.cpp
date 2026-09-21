@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <span>
 
 namespace Horo::Character {
@@ -96,7 +97,8 @@ namespace Horo::Character {
                 };
                 !AreWithinLimits(values, limits) ||
                 work.maximumRecoveryIterations > CharacterWorldSettingLimits::MaximumRecoveryIterations ||
-                work.maximumDisplacementMetersPerTick > CharacterWorldSettingLimits::MaximumDisplacementMetersPerTick) {
+                work.maximumDisplacementMetersPerTick > CharacterWorldSettingLimits::MaximumDisplacementMetersPerTick ||
+                work.scratchBytes > std::numeric_limits<std::size_t>::max()) {
                 return Exceeded("Character fixed-tick work exceeds retained storage or a schema-1 hard ceiling.");
             }
             return Result<void>::Success();

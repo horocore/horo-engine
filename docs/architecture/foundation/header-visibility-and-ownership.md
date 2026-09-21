@@ -134,6 +134,12 @@ source root to its listed consumers while their historical `editor/...` include
 spellings remain. New tests should prefer a narrower test-private include path;
 do not link this interface from production or SDK examples.
 
+The new `Horo/Navigation/NavigationDynamicRegistry.h` contract is owned by
+`HoroEngine::NavigationRuntime`, with `NavigationApi` providing its neutral
+identity, area, math, and result dependencies. It introduces no caller migration;
+consumers include the header through the runtime target and are covered by the
+generated `HoroNavigationRuntimePublicHeaderConsumer` target.
+
 `HoroGui` currently exposes Dear ImGui types in several established public
 headers, so `HoroThirdParty::ImGui` remains a truthful public usage requirement.
 It may become private only after those signatures migrate to Horo-owned types.
@@ -472,6 +478,17 @@ generated standalone public-header consumer. This slice introduces no production
 caller migration and no second schema/value authority. Future AI runtime composition
 must consume this contract instead of duplicating string-keyed storage or exposing
 mutable instance memory to worker tasks.
+
+`Horo/AI/DecisionAssetValidation.h` extends the same Foundation-only AI boundary
+with stable decision-asset/node/provider identities, typed schema requirements,
+source-located validation findings, and immutable plans that own their admitted
+blackboard schema snapshot. Node descriptors and asset catalogs remain inert
+borrowed metadata; package and script providers are not invoked during validation.
+Future Behavior Tree, state-machine, and utility asset adapters map their semantic
+nodes into this contract and must not add display-name or widget lookup fallbacks.
+Invalid recompilation is rejected by `DecisionAssetPlanStore` without replacing the
+last valid plan, so existing runtime callers require no migration until a concrete
+decision-graph asset family adopts the adapter seam.
 
 ## PCG Identity Boundary
 

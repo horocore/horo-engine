@@ -55,7 +55,10 @@ namespace Horo::Editor {
     struct SettingsNetworkTab {
         int maxPreviewClients = 4;
         int simulatedLatencyMs = 0;
-        int packageDownloadThreads = 8;
+    };
+
+    struct SettingsPackagesTab {
+        int downloadThreads = 8;
     };
 
     struct SettingsDiagnosticsTab {
@@ -119,6 +122,7 @@ namespace Horo::Editor {
         using RenderingTab = SettingsRenderingTab;
         using AudioTab = SettingsAudioTab;
         using NetworkTab = SettingsNetworkTab;
+        using PackagesTab = SettingsPackagesTab;
         using DiagnosticsTab = SettingsDiagnosticsTab;
         using PluginToggles = SettingsPluginToggles;
         using McpSettings = SettingsMcpSettings;
@@ -141,6 +145,7 @@ namespace Horo::Editor {
         RenderingTab rendering{};
         AudioTab audio{};
         NetworkTab network{};
+        PackagesTab packages{};
         DiagnosticsTab diagnostics{};
 
         int pluginSectionTab = 0;

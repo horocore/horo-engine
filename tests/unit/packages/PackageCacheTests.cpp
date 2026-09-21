@@ -1,73 +1,18 @@
 #include "Horo/Packages/PackageCache.h"
 #include "PackageArchiveTestSupport.h"
 
-#include <atomic>
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
 #include <fstream>
-#include <miniz.h>
 #include <nlohmann/json.hpp>
 
 namespace {
     using Horo::Packages::PackageCacheStore;
     using Horo::Packages::PackageQuarantineReason;
     using Horo::Packages::ValidatedPackageArchive;
-
-    std::atomic_uint64_t TemporarySequence{0};
-
-    class TemporaryDirectory final {
-    public:
-        TemporaryDirectory()
-            : path_(std::filesystem::temp_directory_path() /
-                    ("horo-package-cache-tests-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + '-' +
-                     std::to_string(++TemporarySequence))) {
-            std::filesystem::create_directories(path_);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code error;
-            for (std::filesystem::recursive_directory_iterator
-                     iterator{path_, std::filesystem::directory_options::skip_permission_denied, error},
-                 end;
-                 !error && iterator != end; iterator.increment(error)) {
-                std::filesystem::permissions(iterator->path(), std::filesystem::perms::owner_all, std::filesystem::perm_options::add,
-                                             error);
-                error.clear();
-            }
-            std::filesystem::remove_all(path_, error);
-        }
-
-        [[nodiscard]] const std::filesystem::path &Path() const noexcept {
-            return path_;
-        }
-
-    private:
-        std::filesystem::path path_;
-    };
-
-    struct File {
-        std::string name;
-        std::string content;
-    };
-
-    [[nodiscard]] std::vector<std::byte> ArchiveBytes() {
-        const std::vector<File> files{{"horo-package.toml", "schemaVersion = 1\n"}, {"assets/data.bin", "verified bytes"}};
-        nlohmann::json entries = nlohmann::json::array();
-        for (const auto &file : files) {
-            entries.push_back(Horo::Tests::Packages::FileInventoryEntry(file.name, file.content));
-        }
-        const std::string inventory = nlohmann::json{{"schemaVersion", 1}, {"files", entries}}.dump();
-
-        mz_zip_archive zip{};
-        REQUIRE(mz_zip_writer_init_heap(&zip, 0, 0));
-        for (const auto &file : files)
-            REQUIRE(mz_zip_writer_add_mem(&zip, file.name.c_str(), file.content.data(), file.content.size(), MZ_BEST_COMPRESSION));
-        REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", inventory.data(), inventory.size(), MZ_BEST_COMPRESSION));
-        return Horo::Tests::Packages::FinalizeArchive(zip);
-    }
+    using Horo::Tests::Packages::TemporaryDirectory;
 
     [[nodiscard]] ValidatedPackageArchive VerifiedArchive() {
-        auto result = ValidatedPackageArchive::Verify(ArchiveBytes());
+        auto result = ValidatedPackageArchive::Verify(Horo::Tests::Packages::ValidPackageArchiveBytes());
         REQUIRE(result.HasValue());
         return std::move(result).Value();
     }
@@ -221,7 +166,7 @@ namespace {
 
     TEST_CASE("Package cache isolates failed downloads without publishing them", "[packages][cache][quarantine]") {
         CacheFixture fixture;
-        const auto bytes = ArchiveBytes();
+        const auto bytes = Horo::Tests::Packages::ValidPackageArchiveBytes();
         const auto expected = Horo::ComputeSha256({});
 
         const auto result = fixture.store.Quarantine(bytes, PackageQuarantineReason::HashMismatch, expected);

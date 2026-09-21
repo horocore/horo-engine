@@ -33,9 +33,9 @@ namespace Horo::Editor {
         out.audioOutputDevice = static_cast<EditorAudioOutputDevice>(std::clamp(st.audio.audioOutputDevice, 0, 2));
         out.audioEnabled = st.audio.audioEnabled;
 
-        out.maxPreviewClients = st.network.maxPreviewClients;
-        out.simulatedLatencyMs = st.network.simulatedLatencyMs;
-        out.packageDownloadThreads = st.network.packageDownloadThreads;
+        out.networkPreviewPreferences.maxPreviewClients = static_cast<std::uint32_t>(std::max(st.network.maxPreviewClients, 0));
+        out.networkPreviewPreferences.simulatedLatencyMilliseconds = static_cast<std::uint32_t>(std::max(st.network.simulatedLatencyMs, 0));
+        out.packages.downloadThreads = st.packages.downloadThreads;
 
         out.consoleLogLevel = static_cast<EditorConsoleLogLevel>(std::clamp(st.diagnostics.consoleLogLevel, 0, 3));
         out.writeLogToFile = st.diagnostics.writeLogToFile;
@@ -72,9 +72,9 @@ namespace Horo::Editor {
         st.audio.audioOutputDevice = static_cast<int>(settings.audioOutputDevice);
         st.audio.audioEnabled = settings.audioEnabled;
 
-        st.network.maxPreviewClients = settings.maxPreviewClients;
-        st.network.simulatedLatencyMs = settings.simulatedLatencyMs;
-        st.network.packageDownloadThreads = settings.packageDownloadThreads;
+        st.network.maxPreviewClients = static_cast<int>(settings.networkPreviewPreferences.maxPreviewClients);
+        st.network.simulatedLatencyMs = static_cast<int>(settings.networkPreviewPreferences.simulatedLatencyMilliseconds);
+        st.packages.downloadThreads = settings.packages.downloadThreads;
 
         st.diagnostics.consoleLogLevel = static_cast<int>(settings.consoleLogLevel);
         st.diagnostics.writeLogToFile = settings.writeLogToFile;

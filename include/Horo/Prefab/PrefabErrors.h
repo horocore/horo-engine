@@ -7,6 +7,8 @@
 
 #include "Horo/Foundation/ErrorCode.h"
 
+#include <span>
+
 namespace Horo::Prefab::PrefabErrors {
     /** @brief A required prefab identity is invalid. */
     extern const ErrorCodeDescriptor IdentityInvalid;
@@ -56,4 +58,81 @@ namespace Horo::Prefab::PrefabErrors {
     extern const ErrorCodeDescriptor IdentityCollision;
     /** @brief A typed prefab reference cannot be rewritten without ambiguity or data loss. */
     extern const ErrorCodeDescriptor ReferenceRewriteInvalid;
+
+    /** @brief A referenced prefab source is absent from the admitted source snapshot. */
+    extern const ErrorCodeDescriptor MissingPrefabSource;
+    /** @brief A referenced prefab source revision is unavailable or not pinned. */
+    extern const ErrorCodeDescriptor SourceRevisionUnavailable;
+    /** @brief A prefab source schema cannot be interpreted by the active contract. */
+    extern const ErrorCodeDescriptor UnsupportedPrefabSchema;
+    /** @brief A nested placement or variant placement is malformed. */
+    extern const ErrorCodeDescriptor InvalidPlacement;
+    /** @brief A concrete or variant source declares more than one variant parent. */
+    extern const ErrorCodeDescriptor MultipleVariantParents;
+    /** @brief Combined nested and variant composition contains a cycle. */
+    extern const ErrorCodeDescriptor CyclicComposition;
+    /** @brief Variant inheritance exceeds the project bound. */
+    extern const ErrorCodeDescriptor VariantDepthExceeded;
+    /** @brief Nested composition exceeds the project bound. */
+    extern const ErrorCodeDescriptor CompositionDepthExceeded;
+    /** @brief Combined composition edges exceed the project bound. */
+    extern const ErrorCodeDescriptor CompositionEdgeLimitExceeded;
+
+    /** @brief A prefab override record is malformed or targets an unsupported operation. */
+    extern const ErrorCodeDescriptor OverrideInvalid;
+    /** @brief A prefab override conflicts with another admitted layer or precondition. */
+    extern const ErrorCodeDescriptor OverrideConflict;
+    /** @brief A prefab override target cannot be resolved without losing authored intent. */
+    extern const ErrorCodeDescriptor OverrideOrphan;
+    /** @brief A prefab override was authored against a source revision that is no longer active. */
+    extern const ErrorCodeDescriptor OverrideSourceStale;
+
+    /** @brief Prefab cook input is incomplete, inconsistent, or not canonical. */
+    extern const ErrorCodeDescriptor CookInputInvalid;
+    /** @brief A cooked prefab artifact is malformed or fails integrity validation. */
+    extern const ErrorCodeDescriptor CookArtifactInvalid;
+    /** @brief A cooked prefab payload exceeds the admitted bound. */
+    extern const ErrorCodeDescriptor CookPayloadTooLarge;
+
+    /** @brief A prefab source must pass the project migration pipeline before this operation. */
+    extern const ErrorCodeDescriptor MigrationRequired;
+    /** @brief A prefab source migration failed before publication. */
+    extern const ErrorCodeDescriptor MigrationFailed;
+
+    /** @brief The requested runtime prefab is absent from the cooked catalog. */
+    extern const ErrorCodeDescriptor AssetNotFound;
+    /** @brief A direct runtime prefab operation requires an asset that is not resident. */
+    extern const ErrorCodeDescriptor AssetNotLoaded;
+    /** @brief The cooked prefab format is not supported by this runtime. */
+    extern const ErrorCodeDescriptor UnsupportedCookedVersion;
+    /** @brief A cooked prefab payload is corrupt or fails its integrity envelope. */
+    extern const ErrorCodeDescriptor CorruptedPayload;
+    /** @brief A cooked prefab references an unavailable gameplay component type. */
+    extern const ErrorCodeDescriptor ComponentTypeUnregistered;
+    /** @brief Runtime staging could not allocate a required component payload. */
+    extern const ErrorCodeDescriptor ComponentAllocationFailed;
+    /** @brief A runtime spawn request repeats an asset in its inherited lineage. */
+    extern const ErrorCodeDescriptor SpawnRecursionDetected;
+    /** @brief A runtime spawn lineage exceeds the configured depth bound. */
+    extern const ErrorCodeDescriptor SpawnDepthExceeded;
+    /** @brief Runtime spawn admission rejected a bounded request before mutation. */
+    extern const ErrorCodeDescriptor AdmissionRejected;
+    /** @brief A runtime prefab operation was cancelled before publication. */
+    extern const ErrorCodeDescriptor Cancelled;
+    /** @brief The target runtime scene is unavailable or has been replaced. */
+    extern const ErrorCodeDescriptor SceneUnavailable;
+    /** @brief A runtime spawn parent is stale, missing, or belongs to another scene. */
+    extern const ErrorCodeDescriptor InvalidParent;
+    /** @brief Runtime entity identity storage is exhausted. */
+    extern const ErrorCodeDescriptor EntityAllocationExhausted;
+
+    /** @brief A structured prefab diagnostic input or retained context is malformed. */
+    extern const ErrorCodeDescriptor DiagnosticInvalid;
+    /** @brief A diagnostic category or originating error is outside the prefab contract. */
+    extern const ErrorCodeDescriptor DiagnosticUnsupported;
+    /** @brief A diagnostic cause or dependency chain exceeded its explicit bound. */
+    extern const ErrorCodeDescriptor DiagnosticBudgetExceeded;
+
+    /** @brief Returns the complete canonical prefab error descriptor set. @return Stable process-lifetime descriptor view. */
+    [[nodiscard]] std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept;
 }  // namespace Horo::Prefab::PrefabErrors

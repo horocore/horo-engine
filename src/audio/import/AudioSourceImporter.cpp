@@ -2,6 +2,10 @@
 
 #include "Horo/Audio/AudioErrors.h"
 
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+
 #define MA_NO_DEVICE_IO
 #define MA_NO_ENCODING
 #define STB_VORBIS_HEADER_ONLY

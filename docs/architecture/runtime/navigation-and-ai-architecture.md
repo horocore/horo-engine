@@ -29,7 +29,7 @@ NavigationRuntime never links or includes a concrete provider.
 | Target | Direct Horo dependencies | Private vendor dependency | Public-header owner |
 |---|---|---|---|
 | `HoroEngine::NavigationApi` | `HoroEngine::Foundation` | None | Neutral types, requests, handles, provider interfaces |
-| `HoroEngine::NavigationRuntime` | `NavigationApi`, `Foundation` | None | `NavigationCoordinator.h` |
+| `HoroEngine::NavigationRuntime` | `NavigationApi`, `Foundation` | None | `NavigationCoordinator.h`, `NavigationDynamicRegistry.h` |
 | `HoroEngine::NavigationRecastDetour` | `NavigationApi`, `Foundation` | Selected Recast/Detour components only | Horo-only `Backends/RecastDetourProvider.h` factory/descriptor |
 | `HoroEngine::NavigationNull` | `NavigationApi`, `Foundation` | None | Horo-only `Backends/NullProvider.h` factory/descriptor |
 
@@ -113,6 +113,18 @@ cancellation. Worker-visible read leases pin immutable records after logical rev
 so provider storage is reclaimed only after the final lease drains. Lifecycle mutation and
 lease acquisition are owner-thread operations; acquired leases and cancellation tokens may
 cross workers. Shutdown never blocks a frame thread waiting for those workers.
+
+`NavigationDynamicRegistry` is the provider-neutral owner-thread authority for Scene-scoped
+obstacle and semantic modifier contributions. A contribution carries a stable logical
+identity plus exact Scene/world, owner-generation, source-revision, shape, layer, priority,
+and fixed-tick evidence. Registration, replacement, and removal are value-only staged
+commands; `CommitAtSafePoint` is the only normal publication path, while
+`ReplaceSceneAtSafePoint` clears the old Scene publication and advances slot generations.
+Duplicate identities, stale owner/source revisions, old handles, excessive update rates,
+and profile-bound counts fail deterministically without changing the active publication.
+Snapshots copy the bounded active records into immutable storage that query and avoidance
+jobs may retain without a Scene or provider lifetime lease; their exact Scene binding and
+registry revision remain the currentness fence for later result publication.
 
 `NavigationRuntimeQueues` is the prepared transport boundary around that lifetime authority.
 It owns separate power-of-two command, query, and completion rings with explicit capacities
