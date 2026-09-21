@@ -57,7 +57,8 @@ namespace Horo::Runtime::Ui {
             const std::array elements{UiElementDescriptor{Stable<UiElementId>(1), {}},
                                       UiElementDescriptor{Stable<UiElementId>(2), Stable<UiElementId>(1)},
                                       UiElementDescriptor{Stable<UiElementId>(3), Stable<UiElementId>(1)},
-                                      UiElementDescriptor{Stable<UiElementId>(4), Stable<UiElementId>(1)}};
+                                      UiElementDescriptor{Stable<UiElementId>(5), Stable<UiElementId>(1)},
+                                      UiElementDescriptor{Stable<UiElementId>(4), Stable<UiElementId>(5)}};
             auto treeResult = UiElementTree::Create(allocator, descriptor, elements);
             REQUIRE(treeResult.HasValue());
             return std::move(treeResult).Value();
@@ -178,6 +179,7 @@ namespace Horo::Runtime::Ui {
             REQUIRE(snapshot.Relations(snapshot.Nodes()[2])[0].target == snapshot.Nodes()[1].id);
             REQUIRE(snapshot.Actions(snapshot.Nodes()[2])[2].argumentKind == UiAccessibilityActionValueKind::Number);
             REQUIRE(snapshot.Nodes()[2].parent == snapshot.Nodes()[0].id);
+            REQUIRE(snapshot.Nodes()[3].parent == snapshot.Nodes()[0].id);
 
             const auto slider = snapshot.Find(Stable<UiElementId>(3));
             REQUIRE(slider.HasValue());
@@ -302,7 +304,7 @@ namespace Horo::Runtime::Ui {
                 UiStructuralCommandBuffer::Create(tree.Instance(), tree.Canvas(), tree.SourceDocumentRevision(), tree.Revision(), 2);
             REQUIRE(commandsResult.HasValue());
             auto commands = std::move(commandsResult).Value();
-            REQUIRE(commands.Add(UiInsertElementCommand{Stable<UiElementId>(5), tree.Root().Value().handle, 0}).HasValue());
+            REQUIRE(commands.Add(UiInsertElementCommand{Stable<UiElementId>(6), tree.Root().Value().handle, 0}).HasValue());
             REQUIRE(tree.CommitDeferred(commands, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands).HasValue());
             auto reloadedResult = extractor.Extract(tree, Descriptor(tree, 2), fixture.View());
             REQUIRE(reloadedResult.HasValue());

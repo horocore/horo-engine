@@ -279,11 +279,32 @@ namespace Horo::Runtime::Ui {
             }
         }
 
-        [[nodiscard]] std::size_t FindNodeIndex(const std::span<const UiAccessibilityNodeInput> nodes, const UiElementId element) noexcept {
+        struct ProjectionLookupEntry final {
+            UiElementId element;
+            std::uint32_t index{};
+        };
+
+        using ProjectionLookup = std::span<const ProjectionLookupEntry>;
+
+        [[nodiscard]] Result<void> BuildProjectionLookup(const std::span<const UiAccessibilityNodeInput> nodes,
+                                                         std::vector<ProjectionLookupEntry> &lookup) {
+            lookup.clear();
             for (std::size_t index = 0; index < nodes.size(); ++index)
-                if (nodes[index].element == element)
-                    return index;
-            return std::numeric_limits<std::size_t>::max();
+                lookup.push_back({nodes[index].element, static_cast<std::uint32_t>(index)});
+            std::ranges::sort(lookup, {}, &ProjectionLookupEntry::element);
+            if (std::ranges::adjacent_find(lookup, [](const ProjectionLookupEntry &left, const ProjectionLookupEntry &right) {
+                return left.element == right.element;
+            }) != lookup.end())
+                return Failure<void>(UiErrors::AccessibilitySchemaInvalid);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] std::size_t FindProjectionIndex(const ProjectionLookup lookup, const UiElementId element) noexcept {
+            const auto found = std::lower_bound(lookup.begin(), lookup.end(), element,
+                                                [](const ProjectionLookupEntry &entry, const UiElementId candidate) {
+                return entry.element < candidate;
+            });
+            return found != lookup.end() && found->element == element ? found->index : std::numeric_limits<std::size_t>::max();
         }
 
         [[nodiscard]] bool HasLabelRelation(const UiAccessibilityNodeInput &node) noexcept {
@@ -322,12 +343,7 @@ namespace Horo::Runtime::Ui {
             return ValidateText(error.message, error.kind == UiAccessibilityErrorKind::None);
         }
 
-        [[nodiscard]] Result<void> ValidateAction(const UiAccessibilityActionInput &action, const UiAccessibilityNodeInput &node) {
-            if (!action.id.IsValid() || !IsKnownActionKind(action.kind) || !IsKnownActionValueKind(action.argumentKind))
-                return Failure<void>(UiErrors::AccessibilityActionInvalid);
-            if (const auto name = ValidateText(action.name); name.HasError())
-                return name;
-
+        [[nodiscard]] Result<void> ValidateActionArgument(const UiAccessibilityActionInput &action) {
             using ActionKind = UiAccessibilityActionKind;
             using ValueKind = UiAccessibilityActionValueKind;
             bool argumentValid{};
@@ -347,7 +363,11 @@ namespace Horo::Runtime::Ui {
             }
             if (!argumentValid)
                 return Failure<void>(UiErrors::AccessibilityActionInvalid);
+            return Result<void>::Success();
+        }
 
+        [[nodiscard]] Result<void> ValidateActionAdmission(const UiAccessibilityActionInput &action, const UiAccessibilityNodeInput &node) {
+            using ActionKind = UiAccessibilityActionKind;
             bool admitted = false;
             switch (action.kind) {
                 case ActionKind::Focus:
@@ -388,29 +408,17 @@ namespace Horo::Runtime::Ui {
             return admitted ? Result<void>::Success() : Failure<void>(UiErrors::AccessibilityActionInvalid);
         }
 
-        [[nodiscard]] Result<void> ValidateNode(const UiAccessibilityNodeInput &node) {
-            if (!node.element.IsValid() || !IsKnownSource(node.source) || !IsKnownExposure(node.exposure) || !node.bounds.IsValid())
-                return Failure<void>(UiErrors::AccessibilitySchemaInvalid);
-            if (!IsKnownRole(node.role))
-                return Failure<void>(UiErrors::AccessibilityRoleInvalid);
-            if (node.source == UiAccessibilityControlSource::Core ? node.contributor.IsValid() : !node.contributor.IsValid())
-                return Failure<void>(UiErrors::AccessibilityContributorInvalid);
-            if (const auto text = ValidateText(node.name); text.HasError())
-                return text;
-            if (const auto text = ValidateText(node.description); text.HasError())
-                return text;
-            if (const auto value = ValidateValue(node.value); value.HasError())
-                return value;
-            if (const auto error = ValidateError(node.error); error.HasError())
-                return error;
-            if (!node.state.IsValid())
-                return Failure<void>(UiErrors::AccessibilityStateInvalid);
-            if (node.hasRange && (!AllowsRange(node.role) || !node.range.IsValid()))
-                return Failure<void>(UiErrors::AccessibilityRangeInvalid);
-            if (node.role == UiAccessibilityRole::Slider && !node.hasRange)
-                return Failure<void>(UiErrors::AccessibilityRangeInvalid);
-            if (node.hasSelection && (!AllowsSelection(node.role) || !node.selection.IsValid()))
-                return Failure<void>(UiErrors::AccessibilitySelectionInvalid);
+        [[nodiscard]] Result<void> ValidateAction(const UiAccessibilityActionInput &action, const UiAccessibilityNodeInput &node) {
+            if (!action.id.IsValid() || !IsKnownActionKind(action.kind) || !IsKnownActionValueKind(action.argumentKind))
+                return Failure<void>(UiErrors::AccessibilityActionInvalid);
+            if (const auto name = ValidateText(action.name); name.HasError())
+                return name;
+            if (const auto argument = ValidateActionArgument(action); argument.HasError())
+                return argument;
+            return ValidateActionAdmission(action, node);
+        }
+
+        [[nodiscard]] Result<void> ValidateNodeStateCompatibility(const UiAccessibilityNodeInput &node) {
             if (node.state.Has(UiAccessibilityStateFlag::Checked) && !AllowsChecked(node.role))
                 return Failure<void>(UiErrors::AccessibilityStateInvalid);
             if (node.state.Has(UiAccessibilityStateFlag::Pressed) && !AllowsPressed(node.role))
@@ -435,6 +443,34 @@ namespace Horo::Runtime::Ui {
                 return Failure<void>(UiErrors::AccessibilityStateInvalid);
             if (node.state.Has(UiAccessibilityStateFlag::Invalid) && node.error.kind == UiAccessibilityErrorKind::None)
                 return Failure<void>(UiErrors::AccessibilityStateInvalid);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateNode(const UiAccessibilityNodeInput &node) {
+            if (!node.element.IsValid() || !IsKnownSource(node.source) || !IsKnownExposure(node.exposure) || !node.bounds.IsValid())
+                return Failure<void>(UiErrors::AccessibilitySchemaInvalid);
+            if (!IsKnownRole(node.role))
+                return Failure<void>(UiErrors::AccessibilityRoleInvalid);
+            if (node.source == UiAccessibilityControlSource::Core ? node.contributor.IsValid() : !node.contributor.IsValid())
+                return Failure<void>(UiErrors::AccessibilityContributorInvalid);
+            if (const auto text = ValidateText(node.name); text.HasError())
+                return text;
+            if (const auto text = ValidateText(node.description); text.HasError())
+                return text;
+            if (const auto value = ValidateValue(node.value); value.HasError())
+                return value;
+            if (const auto error = ValidateError(node.error); error.HasError())
+                return error;
+            if (!node.state.IsValid())
+                return Failure<void>(UiErrors::AccessibilityStateInvalid);
+            if (node.hasRange && (!AllowsRange(node.role) || !node.range.IsValid()))
+                return Failure<void>(UiErrors::AccessibilityRangeInvalid);
+            if (node.role == UiAccessibilityRole::Slider && !node.hasRange)
+                return Failure<void>(UiErrors::AccessibilityRangeInvalid);
+            if (node.hasSelection && (!AllowsSelection(node.role) || !node.selection.IsValid()))
+                return Failure<void>(UiErrors::AccessibilitySelectionInvalid);
+            if (const auto state = ValidateNodeStateCompatibility(node); state.HasError())
+                return state;
             if (node.value.kind != UiAccessibilityValueKind::None &&
                 (!AllowsValue(node.role) || !IsValueCompatible(node.role, node.value.kind)))
                 return Failure<void>(UiErrors::AccessibilityValueInvalid);
@@ -450,11 +486,11 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateRelations(const std::span<const UiAccessibilityNodeInput> nodes) {
+        [[nodiscard]] Result<void> ValidateRelations(const std::span<const UiAccessibilityNodeInput> nodes, const ProjectionLookup lookup) {
             for (const auto &node : nodes) {
                 for (const auto &relation : node.relations) {
                     if (!IsKnownRelationKind(relation.kind) || !relation.target.IsValid() ||
-                        FindNodeIndex(nodes, relation.target) == std::numeric_limits<std::size_t>::max())
+                        FindProjectionIndex(lookup, relation.target) == std::numeric_limits<std::size_t>::max())
                         return Failure<void>(UiErrors::AccessibilityRelationInvalid);
                 }
                 for (std::size_t index = 0; index < node.relations.size(); ++index)
@@ -467,26 +503,55 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool HasRelationCycle(const std::size_t nodeIndex, const std::span<const UiAccessibilityNodeInput> nodes,
-                                            std::vector<std::uint8_t> &colors) {
+                                            const ProjectionLookup lookup, std::vector<std::uint8_t> &colors) {
             if (colors[nodeIndex] == 1)
                 return true;
             if (colors[nodeIndex] == 2)
                 return false;
             colors[nodeIndex] = 1;
             for (const auto &relation : nodes[nodeIndex].relations) {
-                const auto target = FindNodeIndex(nodes, relation.target);
-                if (target != std::numeric_limits<std::size_t>::max() && HasRelationCycle(target, nodes, colors))
+                const auto target = FindProjectionIndex(lookup, relation.target);
+                if (target != std::numeric_limits<std::size_t>::max() && HasRelationCycle(target, nodes, lookup, colors))
                     return true;
             }
             colors[nodeIndex] = 2;
             return false;
         }
 
+        struct ProjectionTotals final {
+            std::size_t relations{};
+            std::size_t actions{};
+            std::size_t textBytes{};
+            std::size_t focused{};
+        };
+
+        [[nodiscard]] Result<ProjectionTotals> ValidateAndMeasureNodes(const UiElementTree &tree,
+                                                                       const UiAccessibilityProjection &projection) {
+            ProjectionTotals totals;
+            for (const auto &node : projection.nodes) {
+                if (const auto validation = ValidateNode(node); validation.HasError())
+                    return Result<ProjectionTotals>::Failure(validation.ErrorValue());
+                if (tree.Find(node.element).HasError())
+                    return Result<ProjectionTotals>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));
+                totals.relations += node.relations.size();
+                totals.actions += node.actions.size();
+                totals.textBytes += node.name.text.size() + node.description.text.size() + node.error.message.text.size();
+                if (node.value.kind == UiAccessibilityValueKind::Text)
+                    totals.textBytes += node.value.text.text.size();
+                for (const auto &action : node.actions)
+                    totals.textBytes += action.name.text.size();
+                if (node.state.Has(UiAccessibilityStateFlag::Focused))
+                    ++totals.focused;
+            }
+            return Result<ProjectionTotals>::Success(totals);
+        }
+
         [[nodiscard]] Result<void> ValidateProjection(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &descriptor,
                                                       const UiAccessibilityProjection &projection,
                                                       const UiAccessibilityExtractorDescriptor &owner,
                                                       const UiAccessibilitySemanticRevision lastRevision,
-                                                      std::vector<std::uint8_t> &cycleScratch) {
+                                                      std::vector<std::uint8_t> &cycleScratch,
+                                                      std::vector<ProjectionLookupEntry> &lookupScratch) {
             if (!descriptor.IsValid() || descriptor.limits.nodes > owner.limits.nodes ||
                 descriptor.limits.relations > owner.limits.relations || descriptor.limits.actions > owner.limits.actions ||
                 descriptor.limits.textBytes > owner.limits.textBytes)
@@ -502,40 +567,23 @@ namespace Horo::Runtime::Ui {
             if (projection.nodes.size() > descriptor.limits.nodes || projection.nodes.size() > MaximumUiAccessibilityNodes)
                 return Failure<void>(UiErrors::CapacityExceeded);
 
-            std::size_t relationCount{};
-            std::size_t actionCount{};
-            std::size_t textBytes{};
-            std::size_t focused{};
-            for (std::size_t index = 0; index < projection.nodes.size(); ++index) {
-                const auto &node = projection.nodes[index];
-                if (const auto validation = ValidateNode(node); validation.HasError())
-                    return validation;
-                if (tree.Find(node.element).HasError())
-                    return Failure<void>(UiErrors::AccessibilitySnapshotSourceStale);
-                for (std::size_t previous = 0; previous < index; ++previous)
-                    if (projection.nodes[previous].element == node.element)
-                        return Failure<void>(UiErrors::AccessibilitySchemaInvalid);
-                relationCount += node.relations.size();
-                actionCount += node.actions.size();
-                textBytes += node.name.text.size() + node.description.text.size() + node.error.message.text.size();
-                if (node.value.kind == UiAccessibilityValueKind::Text)
-                    textBytes += node.value.text.text.size();
-                for (const auto &action : node.actions)
-                    textBytes += action.name.text.size();
-                if (node.state.Has(UiAccessibilityStateFlag::Focused))
-                    ++focused;
-            }
-            if (relationCount > descriptor.limits.relations || relationCount > MaximumUiAccessibilityRelations ||
-                actionCount > descriptor.limits.actions || actionCount > MaximumUiAccessibilityActions ||
-                textBytes > descriptor.limits.textBytes || textBytes > MaximumUiAccessibilityTextBytes)
+            if (const auto lookup = BuildProjectionLookup(projection.nodes, lookupScratch); lookup.HasError())
+                return lookup;
+            const auto totalsResult = ValidateAndMeasureNodes(tree, projection);
+            if (totalsResult.HasError())
+                return Result<void>::Failure(totalsResult.ErrorValue());
+            const auto &totals = totalsResult.Value();
+            if (totals.relations > descriptor.limits.relations || totals.relations > MaximumUiAccessibilityRelations ||
+                totals.actions > descriptor.limits.actions || totals.actions > MaximumUiAccessibilityActions ||
+                totals.textBytes > descriptor.limits.textBytes || totals.textBytes > MaximumUiAccessibilityTextBytes)
                 return Failure<void>(UiErrors::CapacityExceeded);
-            if (focused > 1)
+            if (totals.focused > 1)
                 return Failure<void>(UiErrors::AccessibilityFocusConflict);
-            if (const auto relations = ValidateRelations(projection.nodes); relations.HasError())
+            if (const auto relations = ValidateRelations(projection.nodes, lookupScratch); relations.HasError())
                 return relations;
             cycleScratch.assign(projection.nodes.size(), 0);
             for (std::size_t index = 0; index < projection.nodes.size(); ++index)
-                if (HasRelationCycle(index, projection.nodes, cycleScratch))
+                if (HasRelationCycle(index, projection.nodes, lookupScratch, cycleScratch))
                     return Failure<void>(UiErrors::AccessibilityRelationInvalid);
             return Result<void>::Success();
         }
@@ -561,15 +609,6 @@ namespace Horo::Runtime::Ui {
             if (source.kind == UiAccessibilityValueKind::Text)
                 value.text = CopyText(text, source.text);
             return value;
-        }
-
-        [[nodiscard]] std::size_t FindPublishedIndex(const std::vector<UiAccessibilityNode> &nodes, const UiElementHandle element) {
-            if (!element.IsValid())
-                return std::numeric_limits<std::size_t>::max();
-            for (std::size_t index = 0; index < nodes.size(); ++index)
-                if (nodes[index].element == element)
-                    return index;
-            return std::numeric_limits<std::size_t>::max();
         }
 
         [[nodiscard]] UiAccessibilityActionValueKind ActionArgumentKind(const UiAccessibilityValueKind kind) noexcept {
@@ -663,7 +702,7 @@ namespace Horo::Runtime::Ui {
         }
 
         void Publish(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &sourceDescriptor,
-                     const UiAccessibilityProjection &projection) {
+                     const UiAccessibilityProjection &projection, const ProjectionLookup lookup) {
             descriptor = sourceDescriptor;
             nodes.clear();
             relations.clear();
@@ -704,10 +743,16 @@ namespace Horo::Runtime::Ui {
                 nodes.push_back(node);
             }
             for (std::size_t index = 0; index < nodes.size(); ++index) {
-                const auto parentElement = tree.Get(nodes[index].element).Value().parent;
-                const auto parentIndex = FindPublishedIndex(nodes, parentElement);
-                nodes[index].parent =
-                    parentIndex == std::numeric_limits<std::size_t>::max() ? UiAccessibilityNodeId{} : nodes[parentIndex].id;
+                auto parent = tree.Get(nodes[index].element).Value().parent;
+                while (parent.IsValid()) {
+                    const auto parentRecord = tree.Get(parent).Value();
+                    const auto parentIndex = FindProjectionIndex(lookup, parentRecord.id);
+                    if (parentIndex != std::numeric_limits<std::size_t>::max()) {
+                        nodes[index].parent = nodes[parentIndex].id;
+                        break;
+                    }
+                    parent = parentRecord.parent;
+                }
             }
         }
     };
@@ -720,9 +765,11 @@ namespace Horo::Runtime::Ui {
         std::size_t nextSlot{};
         UiAccessibilitySemanticRevision lastRevision;
         std::vector<std::uint8_t> cycleScratch;
+        std::vector<ProjectionLookupEntry> lookupScratch;
 
         explicit Storage(const UiAccessibilityExtractorDescriptor &source) : descriptor(source), cycleScratch(source.limits.nodes) {
             slots.reserve(source.concurrentSnapshots);
+            lookupScratch.reserve(source.limits.nodes);
             for (std::uint32_t index = 0; index < source.concurrentSnapshots; ++index)
                 slots.push_back(std::make_shared<UiAccessibilitySnapshot::Storage>(source.limits));
         }
@@ -895,8 +942,8 @@ namespace Horo::Runtime::Ui {
                                                                       const UiAccessibilityProjection &projection) {
         if (!storage_ || storage_->lifecycle != UiAccessibilityExtractorState::Active)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilityLifecycleUnavailable);
-        if (const auto validation =
-                ValidateProjection(tree, descriptor, projection, storage_->descriptor, storage_->lastRevision, storage_->cycleScratch);
+        if (const auto validation = ValidateProjection(tree, descriptor, projection, storage_->descriptor, storage_->lastRevision,
+                                                       storage_->cycleScratch, storage_->lookupScratch);
             validation.HasError())
             return Result<UiAccessibilitySnapshot>::Failure(validation.ErrorValue());
         auto slot = storage_->TryAcquire();
@@ -917,7 +964,7 @@ namespace Horo::Runtime::Ui {
         } lease{slot.get()};
 
         try {
-            slot->Publish(tree, descriptor, projection);
+            slot->Publish(tree, descriptor, projection, storage_->lookupScratch);
         } catch (const std::bad_alloc &) {
             return Failure<UiAccessibilitySnapshot>(UiErrors::CapacityExceeded);
         }
