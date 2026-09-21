@@ -20,7 +20,7 @@ jobs:
     # A cold build, coverage pass, and CFamily scan can exceed 40 minutes. Keep a
     # bounded margin so the scan and Quality Gate wait can finish and publish the
     # analysis cache instead of timing out at the save boundary.
-    timeout-minutes: 60
+    timeout-minutes: 90
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
