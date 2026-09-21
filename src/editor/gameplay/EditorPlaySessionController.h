@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
 #include "editor/document/RuntimeSceneConversion.h"
 
 #include <memory>
@@ -34,6 +35,17 @@ namespace Horo::Editor {
     public:
         /** @brief Creates and starts an isolated runtime clone from one committed authoring snapshot. */
         [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
+                                         std::unique_ptr<Runtime::RuntimeScene> preparedScene = nullptr);
+        /**
+         * @brief Creates and starts an isolated runtime clone after gating authored gameplay components against a module snapshot.
+         * @param authoring Immutable committed authoring snapshot.
+         * @param registry Frozen behavior registry for the active project generation.
+         * @param components Frozen component descriptor registry for the active project generation.
+         * @param preparedScene Optional already-converted runtime clone.
+         * @return Success or a typed Play-gate/conversion/runtime activation error.
+         */
+        [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
+                                         const Gameplay::ComponentRegistry &components,
                                          std::unique_ptr<Runtime::RuntimeScene> preparedScene = nullptr);
         /** @brief Pauses fixed simulation while leaving presentation active. */
         [[nodiscard]] Result<void> Pause();

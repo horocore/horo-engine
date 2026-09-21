@@ -58,6 +58,7 @@ namespace Horo::Prefab {
                     return PrefabProviderStatus::Missing;
                 case UnsupportedOlderSchema:
                 case NewerSchema:
+                case InvalidEnvelope:
                     return PrefabProviderStatus::IncompatibleSchema;
             }
             return PrefabProviderStatus::IncompatibleSchema;

@@ -40,7 +40,8 @@ namespace Horo::Gameplay {
 
     /** @copydoc ValidateSerializedComponent */
     Result<void> ValidateSerializedComponent(const SerializedComponent &component) {
-        if (!component.typeId.IsValid() || component.schemaVersion == 0 || component.payload.size() > MaximumSerializedComponentBytes)
+        if (!component.typeId.IsValid() || component.schemaVersion == 0 || component.encoding != ComponentPayloadEncoding::CanonicalJson ||
+            component.payload.size() > MaximumSerializedComponentBytes)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidSerializedComponent));
         return Result<void>::Success();
     }

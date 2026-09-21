@@ -3,17 +3,91 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <ranges>
+#include <string_view>
 
 namespace Horo::Editor {
     namespace {
         [[nodiscard]] Error InvalidTransition(const char *message) {
             return MakeError(Gameplay::GameplayErrors::InvalidBehaviorComponent, message);
         }
+
+        [[nodiscard]] std::string_view ComponentStatusText(const Gameplay::ComponentInspectionStatus status) noexcept {
+            using enum Gameplay::ComponentInspectionStatus;
+            switch (status) {
+                case MissingDescriptor:
+                    return "descriptor missing";
+                case MigrationRequired:
+                    return "migration required";
+                case UnsupportedOlderSchema:
+                    return "older schema unsupported";
+                case NewerSchema:
+                    return "newer schema";
+                case InvalidEnvelope:
+                    return "invalid envelope";
+                case Current:
+                    return "current";
+            }
+            return "unknown compatibility state";
+        }
+
+        [[nodiscard]] const ErrorCodeDescriptor &ComponentIssueCode(const Gameplay::ComponentInspectionStatus status) noexcept {
+            using enum Gameplay::ComponentInspectionStatus;
+            if (status == MissingDescriptor)
+                return Gameplay::GameplayErrors::ComponentDescriptorMissing;
+            if (status == InvalidEnvelope)
+                return Gameplay::GameplayErrors::InvalidSerializedComponent;
+            return Gameplay::GameplayErrors::ComponentSchemaIncompatible;
+        }
+
+        [[nodiscard]] Error GameplayComponentPlayError(const SceneGameplayInspection &inspection) {
+            Error error = MakeError(Gameplay::GameplayErrors::GameplayPlayBlocked,
+                                    std::format("Play Mode is blocked by {} unavailable or incompatible gameplay component(s).",
+                                                inspection.issues.size()));
+            error.diagnostics.reserve(inspection.issues.size());
+            for (const SceneGameplayComponentIssue &issue : inspection.issues) {
+                const ErrorCodeDescriptor &issueCode = ComponentIssueCode(issue.status);
+                const std::string typeId = issue.typeId.IsValid() ? issue.typeId.Value() : "<invalid>";
+                error.diagnostics.push_back(Diagnostic{
+                    .code = DiagnosticCode{issueCode.code.Value()},
+                    .severity = DiagnosticSeverity::Error,
+                    .message = std::format("Object {} references gameplay component '{}' ({}).", issue.object.value, typeId,
+                                           ComponentStatusText(issue.status)),
+                    .location = SourceLocation{"scene", 0, 0},
+                    .path = std::format("objects[{}].components.gameplayComponents[{}]", issue.object.value, issue.componentIndex),
+                });
+            }
+            return error;
+        }
+
+        [[nodiscard]] std::optional<Error> ValidatePlayPrerequisites(const SceneDocumentSnapshot &authoring,
+                                                                     const Gameplay::ComponentRegistry &components) {
+            if (std::ranges::none_of(authoring.objects, [](const SceneObjectSnapshot &object) {
+                return object.components.camera.has_value() && object.components.camera->enabled;
+            }))
+                return InvalidTransition("Play Mode requires an authored camera component.");
+            const SceneGameplayInspection inspection = InspectSceneGameplayComponents(authoring.objects, components);
+            if (inspection.HasBlockingIssues())
+                return GameplayComponentPlayError(inspection);
+            return std::nullopt;
+        }
     }  // namespace
 
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
+                                                    std::unique_ptr<Runtime::RuntimeScene> preparedScene) {
+        static const Gameplay::ComponentRegistry missingComponents = [] {
+            Gameplay::ComponentRegistry registry;
+            static_cast<void>(registry.Freeze());
+            return registry;
+        }();
+        return Start(authoring, registry, missingComponents, std::move(preparedScene));
+    }
+
+    /** @copydoc EditorPlaySessionController::Start */
+    Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
+                                                    const Gameplay::ComponentRegistry &components,
                                                     std::unique_ptr<Runtime::RuntimeScene> preparedScene) {
         if (state_ != EditorPlaySessionState::Idle && state_ != EditorPlaySessionState::Failed)
             return Result<void>::Failure(InvalidTransition("A play session is already active."));
@@ -22,10 +96,8 @@ namespace Horo::Editor {
         lastError_.reset();
         authoringRevision_ = authoring.revision;
 
-        if (std::ranges::none_of(authoring.objects, [](const SceneObjectSnapshot &object) {
-            return object.components.camera.has_value() && object.components.camera->enabled;
-        })) {
-            Error error = InvalidTransition("Play Mode requires an authored camera component.");
+        if (std::optional<Error> prerequisiteError = ValidatePlayPrerequisites(authoring, components); prerequisiteError.has_value()) {
+            Error error = std::move(*prerequisiteError);
             Fail(error);
             return Result<void>::Failure(std::move(error));
         }

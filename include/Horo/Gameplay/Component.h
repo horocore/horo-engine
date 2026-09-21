@@ -19,6 +19,7 @@ namespace Horo::Gameplay {
     inline constexpr std::size_t MaximumComponentPropertyIdBytes = 96;
     inline constexpr std::size_t MaximumComponentProperties = 256;
     inline constexpr std::size_t MaximumSerializedComponentBytes = 1024 * 1024;
+    inline constexpr std::size_t MaximumSerializedComponentsPerObject = 128;
 
     /** @brief Stable persistent identity of one project-owned component type. */
     class ComponentTypeId final {

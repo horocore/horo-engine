@@ -263,6 +263,44 @@ namespace {
         REQUIRE((document.Objects().back().components.camera.has_value()));
     }
 
+    TEST_CASE("Missing gameplay component payloads stay opaque and repair commands are undoable", "[unit][editor][gameplay]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        const Gameplay::ComponentTypeId typeId = Gameplay::ComponentTypeId::Parse("game.tests.removed_component").Value();
+        const Gameplay::SerializedComponent preserved{.typeId = typeId,
+                                                      .schemaVersion = 1,
+                                                      .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                                                      .payload = {std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}}};
+
+        SceneDocument document;
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+        const auto created = commands.Execute(CreateSceneObjectCommand{.name = "Gameplay Actor"});
+        REQUIRE(created.HasValue());
+        REQUIRE(commands.Execute(SetSceneObjectGameplayComponentCommand{created.Value().object, preserved}).HasValue());
+        REQUIRE(document.Objects().front().components.gameplayComponents == std::vector{preserved});
+
+        Gameplay::ComponentRegistry missing;
+        REQUIRE(missing.Freeze().HasValue());
+        const SceneGameplayInspection missingInspection = InspectSceneGameplayComponents(document.Objects(), missing);
+        REQUIRE(missingInspection.issues.size() == 1);
+        REQUIRE(missingInspection.issues.front().object == created.Value().object);
+        REQUIRE(missingInspection.issues.front().typeId == typeId);
+        REQUIRE(missingInspection.issues.front().status == Gameplay::ComponentInspectionStatus::MissingDescriptor);
+
+        const auto converted = ConvertSceneDocumentToRuntime(document.Snapshot(), Runtime::SceneDefinitionId{1});
+        REQUIRE(converted.HasValue());
+        REQUIRE(converted.Value().Entities().front().components.gameplayComponents == std::vector{preserved});
+
+        REQUIRE(commands.Execute(RemoveSceneObjectGameplayComponentCommand{created.Value().object, typeId}).HasValue());
+        REQUIRE(document.Objects().front().components.gameplayComponents.empty());
+        REQUIRE(commands.Undo().HasValue());
+        REQUIRE(document.Objects().front().components.gameplayComponents == std::vector{preserved});
+        REQUIRE(commands.Redo().HasValue());
+        REQUIRE(document.Objects().front().components.gameplayComponents.empty());
+    }
+
     TEST_CASE("Directional Light Kind Survives Duplicate Undo And Redo", "[unit][editor]") {
         using namespace Horo;
         using namespace Horo::Editor;
