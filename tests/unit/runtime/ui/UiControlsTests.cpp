@@ -235,10 +235,14 @@ namespace Horo::Runtime::Ui {
             REQUIRE(machine.HasValue());
             auto slider = std::move(machine).Value();
             REQUIRE(slider.Handle(Input(UiControlInputKind::FocusGained, 1)).HasValue());
-            ExpectError(slider.Handle(Input(UiControlInputKind::PointerPress, 2, UiControlActivationSource::Pointer, 2)),
-                        UiErrors::ControlInputInvalid);
+            const auto pointerPressed = slider.Handle(Input(UiControlInputKind::PointerPress, 2, UiControlActivationSource::Pointer, 2));
+            REQUIRE(pointerPressed.HasValue());
+            CHECK(pointerPressed.Value().transition == UiControlTransitionKind::Pressed);
+            CHECK(std::get<UiSliderControlState>(slider.Snapshot().Value()).pressed);
+            REQUIRE(slider.Handle(Input(UiControlInputKind::PointerRelease, 3, UiControlActivationSource::Pointer, 3)).HasValue());
+            CHECK_FALSE(std::get<UiSliderControlState>(slider.Snapshot().Value()).pressed);
             REQUIRE(slider
-                        .Handle(Input(UiControlInputKind::AdjustPress, 3, UiControlActivationSource::Keyboard, 3,
+                        .Handle(Input(UiControlInputKind::AdjustPress, 4, UiControlActivationSource::Keyboard, 4,
                                       UiControlAdjustment::Increase))
                         .HasValue());
             CHECK(std::get<UiSliderControlState>(slider.Snapshot().Value()).value == 0.5);
@@ -250,17 +254,17 @@ namespace Horo::Runtime::Ui {
             CHECK(std::get<UiSliderControlState>(slider.Snapshot().Value()).value == 0.75);
 
             REQUIRE(slider
-                        .Handle(Input(UiControlInputKind::AdjustRelease, 4, UiControlActivationSource::Keyboard, 4,
+                        .Handle(Input(UiControlInputKind::AdjustRelease, 5, UiControlActivationSource::Keyboard, 5,
                                       UiControlAdjustment::Increase))
                         .HasValue());
             REQUIRE(slider.SetAvailability(UiControlAvailability::Disabled).HasValue());
             const auto disabled = slider.Handle(
-                Input(UiControlInputKind::AdjustPress, 5, UiControlActivationSource::Keyboard, 5, UiControlAdjustment::Increase));
+                Input(UiControlInputKind::AdjustPress, 6, UiControlActivationSource::Keyboard, 6, UiControlAdjustment::Increase));
             REQUIRE(disabled.HasValue());
             CHECK(disabled.Value().transition == UiControlTransitionKind::IgnoredDisabled);
 
             REQUIRE(slider.BeginRetirement().HasValue());
-            ExpectError(slider.Handle(Input(UiControlInputKind::FocusGained, 6)), UiErrors::ControlLifecycleUnavailable);
+            ExpectError(slider.Handle(Input(UiControlInputKind::FocusGained, 7)), UiErrors::ControlLifecycleUnavailable);
             REQUIRE(slider.Snapshot().HasValue());
             slider.Shutdown();
             slider.Shutdown();

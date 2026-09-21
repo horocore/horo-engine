@@ -141,7 +141,7 @@ namespace Horo::Runtime::Ui {
         return Result<UiControlTransitionKind>::Success(changed ? UiControlTransitionKind::Cancelled : UiControlTransitionKind::NoOp);
     }
 
-    /** @brief Handles pointer activation for buttons, toggles and text fields. */
+    /** @brief Handles pointer activation for buttons, toggles, sliders and text fields. */
     Result<UiControlTransitionKind> UiControlStateMachine::Storage::HandlePointerPress(const UiControlInput &input) {
         if (!UiControlDetail::IsEnabled(state))
             return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::IgnoredDisabled);
@@ -156,15 +156,19 @@ namespace Horo::Runtime::Ui {
             }
             return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::Focused);
         }
-        if (kind == UiControlKind::Slider)
-            return Failure<UiControlTransitionKind>(UiErrors::ControlInputInvalid);
-        if (const auto armed = ArmRepeat(base.repeat, UiControlDetail::EventTick(input)); armed.HasError())
-            return Result<UiControlTransitionKind>::Failure(armed.ErrorValue());
+        if (kind != UiControlKind::Slider)
+            if (const auto armed = ArmRepeat(base.repeat, UiControlDetail::EventTick(input)); armed.HasError())
+                return Result<UiControlTransitionKind>::Failure(armed.ErrorValue());
         if (base.focusable)
             UiControlDetail::SetFocused(state, true);
         UiControlDetail::SetPressed(state, true);
         pressSource = input.activationSource;
         adjustment = UiControlAdjustment::Count;
+        if (kind == UiControlKind::Slider) {
+            // Pointer press establishes capture-equivalent state; a direction arrives with AdjustPress.
+            UiControlDetail::SetEditing(state, true);
+            return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::Pressed);
+        }
         return Result<UiControlTransitionKind>::Success(UiControlTransitionKind::Pressed);
     }
 

@@ -215,6 +215,23 @@ namespace Horo::Runtime::Ui {
         bool pressed{};
         bool editing{};
         UiActionText text;
+
+        /** @brief Compares the projected state using the logical bounded text value. */
+        [[nodiscard]] std::strong_ordering operator<=>(const UiTextInputControlState &other) const noexcept {
+            if (const auto comparison = availability <=> other.availability; comparison != 0)
+                return comparison;
+            if (focused != other.focused)
+                return focused ? std::strong_ordering::greater : std::strong_ordering::less;
+            if (pressed != other.pressed)
+                return pressed ? std::strong_ordering::greater : std::strong_ordering::less;
+            if (editing != other.editing)
+                return editing ? std::strong_ordering::greater : std::strong_ordering::less;
+            return text.View() <=> other.text.View();
+        }
+
+        [[nodiscard]] bool operator==(const UiTextInputControlState &other) const noexcept {
+            return (*this <=> other) == 0;
+        }
     };
 
     /** @brief Closed typed state projection matching exactly one control descriptor kind. */
