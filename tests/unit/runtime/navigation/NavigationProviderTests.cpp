@@ -22,6 +22,8 @@ namespace Horo::Navigation {
                 .topology = NavigationGeneration::Create(1).Value(),
                 .start = start,
                 .destination = destination,
+                .filter = NavigationFilterId::Create(1).Value(),
+                .coveragePolicy = NavigationPathCoveragePolicy::RequireComplete,
                 .requirement =
                     {
                         .query = NavigationQueryKind::Path,

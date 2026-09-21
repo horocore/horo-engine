@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h"
 
 #include <DetourNavMesh.h>
 #include <algorithm>
@@ -37,15 +38,29 @@ namespace Horo::Navigation::Detail {
 
     [[nodiscard]] inline bool FitsOwnedBudget(const RecastDetourProviderCreateInfo &info) noexcept {
         std::size_t bytes{};
-        if (std::size_t value{};
-            !CheckedProduct(info.vertices.size(), 64U, value) || !CheckedAdd(bytes, value) ||
-            !CheckedProduct(info.polygons.size(), 256U, value) || !CheckedAdd(bytes, value) ||
-            !CheckedProduct(info.maximumConcurrentQueries,
-                            (static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)) * sizeof(dtPolyRef)) +
-                                (static_cast<std::size_t>(info.maximumResultPoints) *
-                                 ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))),
-                            value) ||
-            !CheckedAdd(bytes, value))
+        const auto addBytes = [&bytes](const std::size_t count, const std::size_t elementSize) noexcept {
+            std::size_t value{};
+            return CheckedProduct(count, elementSize, value) && CheckedAdd(bytes, value);
+        };
+        if (!addBytes(info.vertices.size(), 64U) || !addBytes(info.polygons.size(), 256U) ||
+            !addBytes(info.areas.size(), sizeof(NavigationAreaDescriptor)) ||
+            !addBytes(info.filters.size(), sizeof(NavigationQueryFilterDescriptor)))
+            return false;
+        for (const NavigationQueryFilterDescriptor &filter : info.filters) {
+            if (!addBytes(filter.costOverrides.size(), sizeof(NavigationAreaCostOverride)))
+                return false;
+        }
+
+        if (std::size_t querySlotBytes{};
+            !CheckedProduct(static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)), sizeof(dtPolyRef),
+                            querySlotBytes) ||
+            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) *
+                                            ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))) ||
+            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumQueryNodes) *
+                                            (sizeof(NavigationAStarNode) + sizeof(std::uint32_t) + sizeof(std::uint32_t))) ||
+            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumQueryNodes) * sizeof(NavigationPathPortal)) ||
+            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) * sizeof(NavigationPathWaypoint)) ||
+            !CheckedProduct(info.maximumConcurrentQueries, querySlotBytes, querySlotBytes) || !CheckedAdd(bytes, querySlotBytes))
             return false;
         return bytes <= info.maximumOwnedBytes;
     }
