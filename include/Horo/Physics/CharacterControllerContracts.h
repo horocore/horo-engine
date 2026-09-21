@@ -178,6 +178,7 @@ namespace Horo::Character {
         std::optional<Physics::PhysicsQueryMaterial> material;
         Physics::PhysicsQueryResponse response{Physics::PhysicsQueryResponse::Block};
         float distanceMeters{};
+        Math::Vec3 relativeVelocityMetersPerSecond{}; /**< Surface velocity relative to the queried Character frame. */
     };
 
     /** @brief Read-only capsule sweep request for one bounded movement iteration. */
@@ -367,6 +368,10 @@ namespace Horo::Character {
         float groundSlopeDegrees{};
         Math::Vec3 groundNormal{0, 1, 0};
         std::optional<Physics::PhysicsQueryMaterial> groundMaterial;
+        std::optional<Physics::BodyHandle> groundBody;      /**< Support body identity, when the ground is body-backed. */
+        Physics::ShapeHandle groundShape;                   /**< Support shape identity; valid only when grounded. */
+        float groundDistanceMeters{};                       /**< Final capsule-to-support separation after snap. */
+        Math::Vec3 groundRelativeVelocityMetersPerSecond{}; /**< Support velocity relative to the Character frame. */
         CharacterCollisionFlags collisions{CharacterCollisionFlags::None};
         std::array<CharacterSurfaceContact, MaximumCharacterContacts> contacts{};
         std::uint32_t contactCount{};

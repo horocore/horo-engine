@@ -113,6 +113,19 @@ namespace Horo::Runtime {
             }
         }
 
+        TEST_CASE("Runtime Save diagnostics categorize slot recovery failures", "[save][diagnostics]") {
+            const std::array cases{
+                std::pair{&SaveErrors::SlotRecoveryInvalid, SaveFailureCategory::Validation},
+                std::pair{&SaveErrors::SlotRecoveryLimitExceeded, SaveFailureCategory::Quota},
+                std::pair{&SaveErrors::SlotRecoveryAllocationFailed, SaveFailureCategory::Quota},
+            };
+            for (const auto &[descriptor, expected] : cases) {
+                const auto record = Record(MakeError(*descriptor));
+                REQUIRE(record.HasValue());
+                CHECK(record.Value().Category() == expected);
+            }
+        }
+
         TEST_CASE("Runtime Save diagnostics accept every declared descriptor and reject unknown sources", "[save][diagnostics]") {
             REQUIRE(SaveDiagnosticErrorDescriptors().size() >= 50);
             for (const auto *descriptor : SaveDiagnosticErrorDescriptors()) {

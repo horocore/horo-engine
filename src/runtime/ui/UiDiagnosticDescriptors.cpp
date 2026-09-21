@@ -72,6 +72,30 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::ActionLifecycleUnavailable,
             &UiErrors::NavigationInvalid,
         };
+        const std::array pointerCapture{
+            &UiErrors::PointerCaptureInvalid,
+            &UiErrors::PointerCaptureSourceStale,
+            &UiErrors::PointerCaptureInteractionStale,
+            &UiErrors::PointerCaptureBusy,
+            &UiErrors::PointerCaptureCapacityExceeded,
+            &UiErrors::PointerCaptureLifecycleUnavailable,
+        };
+        const std::array controls{
+            &UiErrors::ControlDescriptorInvalid,
+            &UiErrors::ControlInputInvalid,
+            &UiErrors::ControlSourceStale,
+            &UiErrors::ControlDefaultPending,
+            &UiErrors::ControlDefaultInvalid,
+            &UiErrors::ControlCapacityExceeded,
+            &UiErrors::ControlSequenceInvalid,
+            &UiErrors::ControlLifecycleUnavailable,
+        };
+        const std::array renderGeometry{
+            &UiErrors::RenderGeometryInvalid,
+            &UiErrors::RenderGeometryCapacityExceeded,
+            &UiErrors::RenderGeometryStorageExhausted,
+            &UiErrors::RenderGeometryLifecycleUnavailable,
+        };
         const std::array accessibility{
             &UiErrors::AccessibilitySchemaInvalid,        &UiErrors::AccessibilityRoleInvalid,
             &UiErrors::AccessibilityStateInvalid,         &UiErrors::AccessibilityValueInvalid,
@@ -84,9 +108,14 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + actions.size() + accessibility.size()> combined{};
+            std::array<const ErrorCodeDescriptor *,
+                       core.size() + pointerCapture.size() + actions.size() + controls.size() + renderGeometry.size() + accessibility.size()>
+                combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
+            output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;
+            output = std::ranges::copy(controls, output).out;
+            output = std::ranges::copy(renderGeometry, output).out;
             std::ranges::copy(accessibility, output);
             return combined;
         }();
