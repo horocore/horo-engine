@@ -98,6 +98,19 @@ namespace Horo::Physics {
             return std::move(definition).Value();
         }
 
+        [[nodiscard]] Runtime::ColliderComponent Collider(const std::uint64_t component, const std::uint64_t slot,
+                                                          const std::uint64_t object, const std::uint64_t body,
+                                                          const Assets::AssetId material, Runtime::PhysicsColliderSource source,
+                                                          const bool sensor = false) {
+            return {.id = {component},
+                    .collider = {slot},
+                    .body = {.object = {object}, .body = {body}},
+                    .source = std::move(source),
+                    .collisionProfile = Profile(),
+                    .materials = {{.slot = PhysicsMaterialSlotId::FromValue(1), .material = material}},
+                    .sensor = sensor};
+        }
+
         [[nodiscard]] PhysicsSceneActivationSettings Settings(const std::uint32_t maximumBodies = 16) {
             PhysicsWorldSettingsDescriptor physicsDescriptor;
             physicsDescriptor.world.capacity = {maximumBodies, 32, 16, 4096};
@@ -268,6 +281,140 @@ namespace Horo::Physics {
             REQUIRE(candidate->FindBody({1}, {100}).has_value());
             REQUIRE(candidate->FindShape({1}, {200}).has_value());
             candidate->Shutdown();
+        }
+
+        TEST_CASE("Canonical Physics scene activation realizes analytic variants compound bodies and typed constraints",
+                  "[physics][scene][activation][canonical][geometry]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            AssetSceneFixture assets;
+
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{4}};
+            Runtime::RigidBodyComponent firstBody{.id = {10}, .body = {100}};
+            firstBody.motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
+            firstBody.mass = Runtime::AuthoredPhysicsDensity{500.0F};
+            Runtime::RuntimeEntityDefinition first;
+            first.object = {1};
+            first.components.rigidBody = firstBody;
+            first.components.colliders = {Collider(20, 200, 1, 100, assets.material,
+                                                   Runtime::PhysicsColliderSource{
+                                                       Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.6F}}}),
+                                          Collider(21, 201, 1, 100, assets.material,
+                                                   Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{
+                                                       Runtime::PhysicsBoxCollider{{0.5F, 0.25F, 0.5F}}}})};
+            Runtime::PhysicsConstraintComponent fixed;
+            fixed.id = {50};
+            fixed.constraint = {500};
+            fixed.first.body = {.object = {1}, .body = {100}};
+            fixed.second = Runtime::PhysicsConstraintBodyEndpoint{.body = {.object = {2}, .body = {101}},
+                                                                  .localFrame = {.translation = {0.0F, 0.5F, 0.0F}}};
+            fixed.parameters = Runtime::PhysicsFixedConstraint{};
+            first.components.physicsConstraints.push_back(fixed);
+
+            Runtime::RuntimeEntityDefinition second;
+            second.object = {2};
+            second.parent = Runtime::SceneObjectId{1};
+            second.localTransform = Math::Transform{.translation = {0.0F, 2.0F, 0.0F}};
+            second.components.rigidBody = Runtime::RigidBodyComponent{.id = {11}, .body = {101}};
+            second.components.colliders = {
+                Collider(22, 202, 2, 101, assets.material,
+                         Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{Runtime::PhysicsCapsuleCollider{0.4F, 0.8F}}})};
+            Runtime::PhysicsConstraintComponent distance;
+            distance.id = {51};
+            distance.constraint = {501};
+            distance.first.body = {.object = {2}, .body = {101}};
+            distance.second = Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 0.0F, 0.0F}}};
+            distance.parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.0F, .maximumMeters = 4.0F};
+            second.components.physicsConstraints.push_back(distance);
+
+            Runtime::RuntimeEntityDefinition third;
+            third.object = {3};
+            third.localTransform = Math::Transform{.translation = {0.0F, -2.0F, 0.0F}};
+            third.components.rigidBody = Runtime::RigidBodyComponent{.id = {12}, .body = {102}};
+            third.components.colliders = {Collider(23, 203, 3, 102, assets.material,
+                                                   Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{
+                                                       Runtime::PhysicsStaticPlaneCollider{{0.0F, 1.0F, 0.0F}, 0.0F}}})};
+
+            builder.Add(std::move(first));
+            builder.Add(std::move(second));
+            builder.Add(std::move(third));
+            REQUIRE(builder.RequireAsset({assets.material, assets.materialType}).HasValue());
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto view = assets.Prepare(definition.Value());
+            PhysicsSceneActivationAuthority authority;
+            PhysicsSceneActivationParticipant participant{*runtime.Value(), authority, Settings()};
+
+            auto prepared = participant.Prepare(definition.Value(), view);
+            if (prepared.HasError())
+                FAIL(prepared.ErrorValue().message);
+            REQUIRE(prepared.HasValue());
+            auto *candidate = dynamic_cast<PhysicsSceneActivationCandidate *>(prepared.Value().get());
+            REQUIRE(candidate != nullptr);
+            REQUIRE(candidate->ValidatePublication().HasValue());
+            REQUIRE(candidate->BodyBindings().size() == 3);
+            REQUIRE(candidate->ShapeBindings().size() == 4);
+            REQUIRE(candidate->ConstraintBindings().size() == 2);
+            REQUIRE(candidate->FindBody({3}, {102}).has_value());
+            REQUIRE(candidate->FindShape({2}, {202}).has_value());
+            REQUIRE(candidate->FindShape({3}, {203}).has_value());
+            REQUIRE(candidate->FindConstraint({1}, {500}).has_value());
+            REQUIRE(candidate->FindConstraint({2}, {501}).has_value());
+            candidate->Shutdown();
+        }
+
+        TEST_CASE("Physics scene activation rejects mixed sensor contributors before native admission",
+                  "[physics][scene][activation][validation]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            AssetSceneFixture assets;
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{5}};
+            Runtime::RuntimeEntityDefinition entity;
+            entity.object = {1};
+            entity.components.rigidBody = Runtime::RigidBodyComponent{.id = {10}, .body = {100}};
+            entity.components.colliders =
+                {Collider(20, 200, 1, 100, assets.material,
+                          Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{}}}),
+                 Collider(21, 201, 1, 100, assets.material,
+                          Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{}}}, true)};
+            builder.Add(std::move(entity));
+            REQUIRE(builder.RequireAsset({assets.material, assets.materialType}).HasValue());
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto view = assets.Prepare(definition.Value());
+            PhysicsSceneActivationAuthority authority;
+            PhysicsSceneActivationParticipant participant{*runtime.Value(), authority, Settings()};
+
+            const auto rejected = participant.Prepare(definition.Value(), view);
+            Test::RequireError(rejected, PhysicsErrors::OperationUnsupported);
+            REQUIRE(rejected.ErrorValue().message.find("mix sensor") != std::string::npos);
+        }
+
+        TEST_CASE("Physics scene activation rejects non-unit authored body scale with object context",
+                  "[physics][scene][activation][validation]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            AssetSceneFixture assets;
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{6}};
+            Runtime::RuntimeEntityDefinition entity;
+            entity.object = {1};
+            entity.localTransform.scale = {2.0F, 1.0F, 1.0F};
+            entity.components.rigidBody = Runtime::RigidBodyComponent{.id = {10}, .body = {100}};
+            entity.components.colliders = {
+                Collider(20, 200, 1, 100, assets.material,
+                         Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{}}})};
+            builder.Add(std::move(entity));
+            REQUIRE(builder.RequireAsset({assets.material, assets.materialType}).HasValue());
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto view = assets.Prepare(definition.Value());
+            PhysicsSceneActivationAuthority authority;
+            PhysicsSceneActivationParticipant participant{*runtime.Value(), authority, Settings()};
+
+            const auto rejected = participant.Prepare(definition.Value(), view);
+            Test::RequireError(rejected, PhysicsErrors::OperationUnsupported);
+            REQUIRE(rejected.ErrorValue().message.find("unit world scale") != std::string::npos);
+            REQUIRE(rejected.ErrorValue().message.find("object 1") != std::string::npos);
         }
 
         TEST_CASE("Physics scene asset failures preserve authored context before native preparation",
