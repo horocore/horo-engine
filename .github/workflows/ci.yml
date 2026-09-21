@@ -213,10 +213,12 @@ jobs:
           for enabled in ON OFF; do
             build_dir="build/navigation-${enabled,,}"
             cmake -S . -B "${build_dir}" -G Ninja \
-              -DBUILD_TESTING=OFF \
+              -DBUILD_TESTING=ON \
               -DHORO_BUILD_EDITOR_GUI=OFF \
               -DHORO_BUILD_EXAMPLES=OFF \
               -DHORO_BUILD_NAVIGATION_RECAST_DETOUR="${enabled}"
             cmake --build "${build_dir}" --target \
-              HoroNavigationRuntime HoroNavigationNull HoroNavigationRecastDetour
+              HoroNavigationRuntime HoroNavigationNull HoroNavigationRecastDetour \
+              HoroNavigationApiPublicHeaderConsumer HoroNavigationRuntimePublicHeaderConsumer \
+              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer
           done

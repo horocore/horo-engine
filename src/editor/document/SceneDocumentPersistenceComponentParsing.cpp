@@ -1,6 +1,7 @@
 #include "editor/document/SceneDocumentPersistenceInternal.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <limits>
 #include <string>
@@ -50,10 +51,12 @@ namespace Horo::Editor::ScenePersistenceDetail {
     }
 
     [[nodiscard]] Result<Runtime::TriggerVolumeComponent> ParseTriggerVolumeComponent(const Json &triggerVolume) {
-        const std::uint8_t shape = triggerVolume.at("shape").get<std::uint8_t>();
-        if (shape > static_cast<std::uint8_t>(Runtime::ColliderShapeType::StaticPlane)) {
+        if (!triggerVolume.is_object() || !triggerVolume.contains("shape") || !triggerVolume["shape"].is_number_unsigned() ||
+            triggerVolume["shape"].get<std::uint64_t>() > static_cast<std::uint8_t>(Runtime::ColliderShapeType::StaticPlane) ||
+            (triggerVolume.contains("enabled") && !triggerVolume["enabled"].is_boolean())) {
             return Result<Runtime::TriggerVolumeComponent>::Failure(PersistenceError(SceneInvalid, "Trigger shape is invalid."));
         }
+        const auto shape = static_cast<std::uint8_t>(triggerVolume["shape"].get<std::uint64_t>());
         return Result<Runtime::TriggerVolumeComponent>::Success(Runtime::TriggerVolumeComponent{
             .shape = static_cast<Runtime::ColliderShapeType>(shape),
             .enabled = triggerVolume.value("enabled", true),
@@ -234,6 +237,99 @@ namespace Horo::Editor::ScenePersistenceDetail {
         return Result<void>::Success();
     }
 
+    [[nodiscard]] std::optional<unsigned int> HexValue(const char value) noexcept {
+        if (value >= '0' && value <= '9')
+            return static_cast<unsigned int>(value - '0');
+        if (value >= 'a' && value <= 'f')
+            return static_cast<unsigned int>(value - 'a' + 10);
+        if (value >= 'A' && value <= 'F')
+            return static_cast<unsigned int>(value - 'A' + 10);
+        return std::nullopt;
+    }
+
+    [[nodiscard]] Result<std::vector<std::byte>> ParsePayloadHex(const Json &value) {
+        if (!value.is_string())
+            return Result<std::vector<std::byte>>::Failure(PersistenceError(SceneInvalid, "Gameplay component payload is invalid."));
+        const std::string encoded = value.get<std::string>();
+        if (encoded.size() % 2U != 0 || encoded.size() / 2U > Gameplay::MaximumSerializedComponentBytes)
+            return Result<std::vector<std::byte>>::Failure(PersistenceError(SceneInvalid, "Gameplay component payload size is invalid."));
+
+        std::vector<std::byte> payload;
+        payload.reserve(encoded.size() / 2U);
+        for (std::size_t index = 0; index < encoded.size(); index += 2U) {
+            const std::optional<unsigned int> high = HexValue(encoded[index]);
+            const std::optional<unsigned int> low = HexValue(encoded[index + 1U]);
+            if (!high.has_value() || !low.has_value())
+                return Result<std::vector<std::byte>>::Failure(
+                    PersistenceError(SceneInvalid, "Gameplay component payload must use hexadecimal bytes."));
+            payload.push_back(static_cast<std::byte>((*high << 4U) | *low));
+        }
+        return Result<std::vector<std::byte>>::Success(std::move(payload));
+    }
+
+    [[nodiscard]] Result<Gameplay::SerializedComponent> ParseSerializedComponent(const Json &value) {
+        if (!value.is_object() || !value.contains("typeId") || !value["typeId"].is_string() || !value.contains("schemaVersion") ||
+            !value["schemaVersion"].is_number_unsigned() || !value.contains("encoding") || !value["encoding"].is_string() ||
+            !value.contains("payloadHex") || value["encoding"].get<std::string>() != "canonical_json")
+            return Result<Gameplay::SerializedComponent>::Failure(
+                PersistenceError(SceneInvalid, "Gameplay component envelope is incomplete or unsupported."));
+        auto typeId = Gameplay::ComponentTypeId::Parse(value["typeId"].get<std::string>());
+        auto payload = ParsePayloadHex(value["payloadHex"]);
+        if (typeId.HasError() || payload.HasError())
+            return Result<Gameplay::SerializedComponent>::Failure(
+                PersistenceError(SceneInvalid, "Gameplay component identity or payload is invalid."));
+        Gameplay::SerializedComponent component{.typeId = std::move(typeId).Value(),
+                                                .schemaVersion = value["schemaVersion"].get<std::uint32_t>(),
+                                                .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                                                .payload = std::move(payload).Value()};
+        if (const Result<void> valid = Gameplay::ValidateSerializedComponent(component); valid.HasError())
+            return Result<Gameplay::SerializedComponent>::Failure(
+                PersistenceError(SceneInvalid, "Gameplay component envelope is invalid."));
+        return Result<Gameplay::SerializedComponent>::Success(std::move(component));
+    }
+
+    [[nodiscard]] Result<void> ParseGameplayComponents(const Json &value, std::vector<Gameplay::SerializedComponent> &destination) {
+        if (!value.contains("gameplayComponents"))
+            return Result<void>::Success();
+        const Json &gameplayComponents = value["gameplayComponents"];
+        if (!gameplayComponents.is_array() || gameplayComponents.size() > Gameplay::MaximumSerializedComponentsPerObject)
+            return Result<void>::Failure(PersistenceError(SceneInvalid, "Gameplay component list is invalid."));
+        destination.reserve(gameplayComponents.size());
+        for (const Json &entry : gameplayComponents) {
+            auto parsed = ParseSerializedComponent(entry);
+            if (parsed.HasError())
+                return Result<void>::Failure(parsed.ErrorValue());
+            destination.push_back(std::move(parsed).Value());
+        }
+        if (const Result<void> valid = Gameplay::ValidateSerializedComponents(destination); valid.HasError())
+            return valid;
+        return Result<void>::Success();
+    }
+
+    [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components) {
+        if (value.contains("colliders")) {
+            auto colliders = ParseColliders(value["colliders"]);
+            if (colliders.HasError())
+                return Result<void>::Failure(colliders.ErrorValue());
+            components.colliders = std::move(colliders).Value();
+        }
+        if (value.contains("physicsConstraints")) {
+            auto constraints = ParsePhysicsConstraints(value["physicsConstraints"]);
+            if (constraints.HasError())
+                return Result<void>::Failure(constraints.ErrorValue());
+            components.physicsConstraints = std::move(constraints).Value();
+        }
+        if (value.contains("behaviors")) {
+            auto behaviors = ParseBehaviors(value["behaviors"]);
+            if (behaviors.HasError())
+                return Result<void>::Failure(behaviors.ErrorValue());
+            components.behaviors = std::move(behaviors).Value();
+        }
+        if (const Result<void> gameplay = ParseGameplayComponents(value, components.gameplayComponents); gameplay.HasError())
+            return Result<void>::Failure(gameplay.ErrorValue());
+        return Result<void>::Success();
+    }
+
     [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value) {
         if (!value.is_object()) {
             return Result<SceneObjectComponentSet>::Failure(PersistenceError(SceneInvalid, "Components must be an object."));
@@ -263,25 +359,8 @@ namespace Horo::Editor::ScenePersistenceDetail {
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (value.contains("colliders")) {
-            auto colliders = ParseColliders(value["colliders"]);
-            if (colliders.HasError())
-                return Result<SceneObjectComponentSet>::Failure(colliders.ErrorValue());
-            components.colliders = std::move(colliders).Value();
-        }
-        if (value.contains("physicsConstraints")) {
-            auto constraints = ParsePhysicsConstraints(value["physicsConstraints"]);
-            if (constraints.HasError())
-                return Result<SceneObjectComponentSet>::Failure(constraints.ErrorValue());
-            components.physicsConstraints = std::move(constraints).Value();
-        }
-        if (value.contains("behaviors")) {
-            auto behaviors = ParseBehaviors(value["behaviors"]);
-            if (behaviors.HasError()) {
-                return Result<SceneObjectComponentSet>::Failure(behaviors.ErrorValue());
-            }
-            components.behaviors = std::move(behaviors).Value();
-        }
+        if (const Result<void> collections = ParseCollectionComponents(value, components); collections.HasError())
+            return Result<SceneObjectComponentSet>::Failure(collections.ErrorValue());
         return Result<SceneObjectComponentSet>::Success(std::move(components));
     }
 

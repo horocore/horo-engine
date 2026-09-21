@@ -211,6 +211,11 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveRestoreTransaction.cpp
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
+        runtime/save/SaveMigration.cpp
+        runtime/save/SaveMigrationExecutor.cpp
+        runtime/save/SaveMigrationPlanner.cpp
+        runtime/save/SaveMigrationRegistry.cpp
+        runtime/save/SaveMigrationValidation.cpp
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveFinalization.cpp
         runtime/save/SaveArchiveFraming.cpp
@@ -225,6 +230,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveSlotIndex.cpp
         runtime/save/SaveStorageAdapter.cpp
         runtime/save/SaveSlotCommitTransaction.cpp
+        runtime/save/SaveSlotRecovery.cpp
         runtime/save/SaveStoragePolicy.cpp
         runtime/save/SaveOperation.cpp
         runtime/save/SaveOperationArbiter.cpp
@@ -274,16 +280,24 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
+        runtime/ui/UiPointerCapture.cpp
+        runtime/ui/UiPointerCaptureErrors.cpp
+        runtime/ui/UiActions.cpp
+        runtime/ui/UiControls.cpp
+        runtime/ui/UiControlStateMachine.cpp
+        runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutTypes.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
+        runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiPresentationReceipt.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
@@ -317,6 +331,7 @@ add_library(HoroGameplayApi STATIC
         gameplay/api/SystemSchedule.cpp
         gameplay/api/SystemRegistry.cpp
         gameplay/api/GameModule.cpp
+        gameplay/api/GameplayComponentErrors.cpp
         gameplay/api/GameplayErrors.cpp
 )
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
@@ -552,6 +567,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorld.cpp
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h
+        physics/CharacterWorldMovementInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
         physics/CharacterWorldSettings.cpp
@@ -676,6 +692,9 @@ target_link_libraries(HoroPCG PUBLIC HoroEngine::Foundation)
 
 add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp
+        runtime/vfx/api/CpuParticleSimulator.cpp
+        runtime/vfx/api/CpuParticleSimulatorPreparation.cpp
+        runtime/vfx/api/CpuParticleSimulatorStages.cpp
         runtime/vfx/api/CpuParticleSpawnPipeline.cpp
         runtime/vfx/api/ParticleSystemDescriptor.cpp
         runtime/vfx/api/VfxErrors.cpp
@@ -712,6 +731,7 @@ add_library(HoroCinematicModel STATIC
 )
 add_library(HoroEngine::CinematicModel ALIAS HoroCinematicModel)
 target_compile_features(HoroCinematicModel PUBLIC cxx_std_20)
+target_include_directories(HoroCinematicModel PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroCinematicModel
         PUBLIC HoroEngine::Foundation HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json
@@ -894,13 +914,18 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabDiagnostics.cpp
+        runtime/prefab/PrefabDocumentBehaviorComposition.cpp
+        runtime/prefab/PrefabDocumentCanonical.cpp
         runtime/prefab/PrefabDocument.cpp
+        runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
-target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application)
+target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
+target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
+        PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroInput STATIC
         runtime/input/Input.cpp

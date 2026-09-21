@@ -170,7 +170,8 @@ namespace Horo::Editor {
         std::unique_ptr<Runtime::RuntimeScene> preparedScene;
         if (auto cloned = m_runtimeScene.CloneActive(Runtime::SceneRuntimeId{0x8000000000000001ULL}); cloned.HasValue())
             preparedScene = std::move(cloned).Value();
-        const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), std::move(preparedScene));
+        const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(),
+                                                         m_gameplayRegistry->Components(), std::move(preparedScene));
         m_viewModel.activeDocumentPanelId = "horo.game";
         if (started.HasError())
             LOG_ERROR("editor.play_mode", "Play Mode failed to start: %s", started.ErrorValue().message.c_str());

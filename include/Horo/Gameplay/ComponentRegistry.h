@@ -18,6 +18,7 @@ namespace Horo::Gameplay {
         MissingDescriptor,
         UnsupportedOlderSchema,
         NewerSchema,
+        InvalidEnvelope,
     };
 
     /** @brief Immutable inspection result suitable for headless tools or generic editor presentation. */

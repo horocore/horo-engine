@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Gameplay/BehaviorRegistry.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/LuaBehavior.h"
@@ -100,6 +101,8 @@ namespace Horo::Editor {
         [[nodiscard]] const Gameplay::BehaviorRegistry &Registry() const noexcept;
         /** @brief Returns current game-owned asset metadata or an empty frozen missing-code registry. */
         [[nodiscard]] const Gameplay::GameAssetTypeRegistry &AssetTypes() const noexcept;
+        /** @brief Returns current game-owned component metadata or an empty frozen missing-code registry. */
+        [[nodiscard]] const Gameplay::ComponentRegistry &Components() const noexcept;
         /** @brief Returns source-addressed compile and registration failures. */
         [[nodiscard]] const std::vector<ProjectGameplayDiagnostic> &Diagnostics() const noexcept;
         /** @brief Reports whether source failures prevent a coherent registry snapshot. */
@@ -155,6 +158,7 @@ namespace Horo::Editor {
 
         std::unique_ptr<Gameplay::LoadedGameModule> nativeModule_;
         Gameplay::GameAssetTypeRegistry missingAssetTypes_{"game.missing"};
+        Gameplay::ComponentRegistry missingComponents_;
         std::vector<std::unique_ptr<Gameplay::LuaBehaviorProgram>> luaPrograms_;
         std::vector<std::filesystem::path> luaSources_;
         std::vector<LuaSourceStat> luaSourceStats_;

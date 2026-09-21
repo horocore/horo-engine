@@ -32,6 +32,9 @@ workflows.
   validate project grid, precision, capacity, and package settings without fallback.
 - [World Partition Registry Snapshot Migration](./world-partition-registry-migration.md):
   publish immutable generation-pinned indices and run bounded allocation-free queries.
+- [World Partition Foundation Qualification](./world-partition-foundation-qualification.md):
+  qualify stable identities, deterministic quantization, immutable references, bounded
+  registry snapshots, capability profiles, and the non-streamed fallback composition.
 - [World Streaming Priority Policy Migration](./world-streaming-priority-policy-migration.md):
   rank bounded cell-work snapshots with revision fences, stable ties, and capped age.
 - [World Streaming Cell Stability Migration](./world-streaming-cell-stability-migration.md):
@@ -54,6 +57,11 @@ workflows.
 - [CPU Particle Spawn Pipeline Migration](./cpu-particle-spawn-pipeline-migration.md):
   prepare deterministic continuous/burst birth, descriptor initialization and expiry
   over fixed SoA capacity without steady-state allocation.
+- [VFX Foundation Qualification](./vfx-foundation-qualification.md): validate the
+  authored particle path end to end through headless domain resolution and CPU simulation,
+  plus hostile-input, tier, and allocation evidence.
+- [Physics Reference Scene Corpus](./physics-reference-scene-corpus.md): reproduce
+  versioned contact, trigger, query and explicit unsupported-capability observations.
 - [Grounded Navigation Provider Composition](./grounded-navigation-provider-composition.md):
   compose the pinned Detour runtime provider from neutral topology with explicit
   capacity, world-generation, cancellation, and teardown behavior.

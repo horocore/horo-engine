@@ -8,6 +8,8 @@ namespace Horo::Character {
     namespace {
         constexpr auto KnownCollisionFlags = CharacterCollisionFlags::Sides | CharacterCollisionFlags::Ground |
                                              CharacterCollisionFlags::Ceiling | CharacterCollisionFlags::Step;
+        constexpr float GroundSlopeToleranceDegrees = 1.0e-3F;
+        constexpr float GroundDistanceToleranceMeters = 1.0e-5F;
 
         /** @brief Checks a finite unit vector against the public Character tolerance. */
         [[nodiscard]] bool IsUnit(const Math::Vec3 value) noexcept {
@@ -112,21 +114,60 @@ namespace Horo::Character {
             return Result<void>::Success();
         }
 
-        /** @brief Checks coherent grounded or airborne surface evidence. */
-        [[nodiscard]] Result<void> ValidateGroundEvidence(const CharacterMovementResult &result) {
+        /** @brief Computes the angle between a validated surface normal and the controller up basis. */
+        [[nodiscard]] float GroundSlopeDegrees(const Math::Vec3 normal, const Math::Vec3 up) noexcept {
+            const float cosine = std::clamp(Math::Dot(normal, up), -1.0F, 1.0F);
+            return std::acos(cosine) * 180.0F / Math::Pi;
+        }
+
+        /** @brief Checks the support identity, motion and slope evidence of a grounded result. */
+        [[nodiscard]] Result<void> ValidateGroundedState(const CharacterMovementResult &result,
+                                                         const CharacterControllerDescriptor &descriptor) {
             using FlagValue = std::underlying_type_t<CharacterCollisionFlags>;
             const bool hasGroundCollision =
                 (static_cast<FlagValue>(result.collisions) & static_cast<FlagValue>(CharacterCollisionFlags::Ground)) != 0;
-            if (result.grounded) {
-                if (!IsUnit(result.groundNormal) || !result.groundMaterial.has_value() || !IsMaterialValid(*result.groundMaterial))
-                    return Result<void>::Failure(
-                        MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks valid surface evidence."));
-                if (!hasGroundCollision)
-                    return Result<void>::Failure(
-                        MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks ground collision evidence."));
-            } else if (result.groundMaterial.has_value()) {
+            if (!IsUnit(result.groundNormal) || !result.groundMaterial.has_value() || !IsMaterialValid(*result.groundMaterial) ||
+                !result.groundShape.IsValid() || result.groundShape.world != descriptor.physicsWorld ||
+                !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) || !std::isfinite(result.groundDistanceMeters) ||
+                result.groundDistanceMeters < 0.0F)
                 return Result<void>::Failure(
-                    MakeError(CharacterErrors::DescriptorInvalid, "Airborne result cannot claim ground material evidence."));
+                    MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks valid surface evidence."));
+            if (result.groundBody.has_value()) {
+                if (const auto owner = Physics::ValidatePhysicsHandleOwner(*result.groundBody, descriptor.physicsWorld); owner.HasError())
+                    return Result<void>::Failure(
+                        MakeError(CharacterErrors::DescriptorInvalid, "Ground support body does not belong to the descriptor world."));
+            }
+            if (!hasGroundCollision)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks ground collision evidence."));
+            if (const float expectedSlope = GroundSlopeDegrees(result.groundNormal, result.up);
+                !std::isfinite(expectedSlope) || expectedSlope > descriptor.maximumSlopeDegrees + GroundSlopeToleranceDegrees ||
+                std::abs(result.groundSlopeDegrees - expectedSlope) > GroundSlopeToleranceDegrees)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Ground slope metadata does not match the support normal."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks that an airborne result does not retain stale support evidence. */
+        [[nodiscard]] Result<void> ValidateAirborneState(const CharacterMovementResult &result) {
+            if (result.groundMaterial.has_value() || result.groundBody.has_value() || result.groundShape.IsValid() ||
+                !std::isfinite(result.groundDistanceMeters) || std::abs(result.groundDistanceMeters) > GroundDistanceToleranceMeters ||
+                !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) ||
+                Math::LengthSquared(result.groundRelativeVelocityMetersPerSecond) >
+                    GroundDistanceToleranceMeters * GroundDistanceToleranceMeters)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Airborne result cannot claim ground support evidence."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks coherent grounded or airborne surface evidence. */
+        [[nodiscard]] Result<void> ValidateGroundEvidence(const CharacterMovementResult &result,
+                                                          const CharacterControllerDescriptor &descriptor) {
+            if (result.grounded) {
+                if (const auto grounded = ValidateGroundedState(result, descriptor); grounded.HasError())
+                    return grounded;
+            } else if (const auto airborne = ValidateAirborneState(result); airborne.HasError()) {
+                return airborne;
             }
             if (result.platformAttached && !result.grounded)
                 return Result<void>::Failure(
@@ -152,6 +193,46 @@ namespace Horo::Character {
                 !std::isfinite(contact.penetrationDepthMeters) || contact.penetrationDepthMeters < 0.0F)
                 return Result<void>::Failure(
                     MakeError(CharacterErrors::DescriptorInvalid, "Contact evidence contains invalid numeric or material data."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks the closed response vocabulary accepted by a Character sweep adapter. */
+        [[nodiscard]] bool IsSweepResponseSupported(const Physics::PhysicsQueryResponse response) noexcept {
+            return response == Physics::PhysicsQueryResponse::Overlap || response == Physics::PhysicsQueryResponse::Block;
+        }
+
+        /** @brief Validates one complete sweep request before adapter evidence is consumed. */
+        [[nodiscard]] Result<void> ValidateSweepRequest(const CharacterSweepProbeRequest &request) {
+            if (const auto owner =
+                    ValidateCharacterControllerHandleOwner(request.controller, request.sceneGeneration, request.characterWorld);
+                owner.HasError())
+                return owner;
+            if (!request.physicsWorld.IsValid() || !request.collisionProfile.IsValid() || !request.queryChannel.IsValid() ||
+                !Math::IsFinite(request.position) || !IsUnit(request.up) || !IsUnit(request.direction) ||
+                !std::isfinite(request.maximumDistanceMeters) || request.maximumDistanceMeters <= 0.0F)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep request is malformed."));
+            if (const auto capsule = Physics::ValidatePhysicsShapeDescriptor(Physics::PhysicsShapeDescriptor{request.capsule});
+                capsule.HasError())
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep capsule is invalid."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates one copied hit against the request's exact world and travel bound. */
+        [[nodiscard]] Result<void> ValidateSweepHit(const CharacterSweepHit &hit, const CharacterSweepProbeRequest &request) {
+            if (!hit.shape.IsValid() || hit.shape.world != request.physicsWorld)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit shape does not belong to the request world."));
+            if (hit.body.has_value()) {
+                if (const auto owner = Physics::ValidatePhysicsHandleOwner(*hit.body, request.physicsWorld); owner.HasError())
+                    return Result<void>::Failure(
+                        MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit body does not belong to the request world."));
+            }
+            if (!IsSweepResponseSupported(hit.response) || !Math::IsFinite(hit.point) || !IsUnit(hit.normal) ||
+                !Math::IsFinite(hit.relativeVelocityMetersPerSecond) || !std::isfinite(hit.distanceMeters) || hit.distanceMeters < 0.0F ||
+                hit.distanceMeters > request.maximumDistanceMeters)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit evidence is malformed."));
+            if (hit.material.has_value() && !IsMaterialValid(*hit.material))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit material is malformed."));
             return Result<void>::Success();
         }
     }  // namespace
@@ -213,9 +294,9 @@ namespace Horo::Character {
                                              context.physicsSnapshotRevision == expected.physicsSnapshotRevision};
             !std::ranges::all_of(snapshotMatches, std::identity{}))
             return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
-        if (context.overlap == nullptr)
+        if (context.overlap == nullptr && context.sweep == nullptr)
             return Result<void>::Failure(
-                MakeError(CharacterErrors::OperationUnsupported, "Character placement requires a Physics overlap probe."));
+                MakeError(CharacterErrors::OperationUnsupported, "Character movement requires a Physics overlap or sweep probe."));
         return Result<void>::Success();
     }
 
@@ -232,6 +313,22 @@ namespace Horo::Character {
         if (Math::LengthSquared(result.recoveryDisplacement) <= Math::DefaultEpsilon * Math::DefaultEpsilon)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::OverlapRecoveryFailed, "Overlapping geometry did not provide a depenetration displacement."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCharacterSweepProbeResult */
+    Result<void> ValidateCharacterSweepProbeResult(const CharacterSweepProbeResult &result, const CharacterSweepProbeRequest &request) {
+        if (const auto requestValidation = ValidateSweepRequest(request); requestValidation.HasError())
+            return requestValidation;
+        if (result.hitCount > result.hits.size())
+            return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded, "Character sweep exceeded its fixed hit bound."));
+        if (result.truncated && result.hitCount != result.hits.size())
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::DescriptorInvalid, "Character sweep truncation requires a full retained hit prefix."));
+        for (std::uint32_t index = 0; index < result.hitCount; ++index) {
+            if (const auto hit = ValidateSweepHit(result.hits[index], request); hit.HasError())
+                return hit;
+        }
         return Result<void>::Success();
     }
 
@@ -286,7 +383,7 @@ namespace Horo::Character {
             return metadata;
         if (const auto bounds = ValidateResultBounds(result, descriptor); bounds.HasError())
             return bounds;
-        if (const auto ground = ValidateGroundEvidence(result); ground.HasError())
+        if (const auto ground = ValidateGroundEvidence(result, descriptor); ground.HasError())
             return ground;
         for (std::uint32_t index = 0; index < result.contactCount; ++index) {
             const auto contact = ValidateContact(result.contacts[index], descriptor.physicsWorld);

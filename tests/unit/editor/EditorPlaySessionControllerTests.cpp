@@ -1,3 +1,4 @@
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -67,6 +68,26 @@ namespace {
         descriptor.displayName = "Fast Play Mover";
         descriptor.phases.push_back({Gameplay::BehaviorPhase::Gameplay, "game.tests.play_mover", {}, {}, {}});
         REQUIRE(registry.Register({std::move(descriptor), {nullptr, &CreateFastBehavior, &DestroyFastBehavior}}).HasValue());
+        REQUIRE(registry.Freeze().HasValue());
+        return registry;
+    }
+
+    Gameplay::ComponentTypeId ComponentType() {
+        auto parsed = Gameplay::ComponentTypeId::Parse("game.tests.play_component");
+        REQUIRE(parsed.HasValue());
+        return std::move(parsed).Value();
+    }
+
+    Gameplay::SerializedComponent ComponentPayload() {
+        return {.typeId = ComponentType(),
+                .schemaVersion = 1,
+                .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                .payload = {std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}}};
+    }
+
+    Gameplay::ComponentRegistry ComponentRegistry() {
+        Gameplay::ComponentRegistry registry;
+        REQUIRE(registry.Register({.typeId = ComponentType(), .schemaVersion = 1, .displayName = "Play Component"}).HasValue());
         REQUIRE(registry.Freeze().HasValue());
         return registry;
     }
@@ -143,4 +164,24 @@ TEST_CASE("play session reloads behavior factories without replacing current run
     const auto actor = play.Scene()->View().Find(Runtime::SceneObjectId{2});
     REQUIRE(actor.has_value());
     REQUIRE(play.Scene()->View().Get(*actor).Value().localTransform->translation.x == 3.0F);
+}
+
+TEST_CASE("play session gates missing gameplay components with affected object diagnostics") {
+    Gameplay::BehaviorRegistry behaviors = Registry();
+    Gameplay::ComponentRegistry missing;
+    REQUIRE(missing.Freeze().HasValue());
+    Editor::SceneDocumentSnapshot authoring = AuthoringScene();
+    authoring.objects[1].components.gameplayComponents.push_back(ComponentPayload());
+
+    Editor::EditorPlaySessionController play;
+    REQUIRE(play.Start(authoring, behaviors, missing).HasError());
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Failed);
+    REQUIRE(play.LastError().has_value());
+    REQUIRE(play.LastError()->code.Value() == Gameplay::GameplayErrors::GameplayPlayBlocked.code.Value());
+    REQUIRE(play.LastError()->diagnostics.size() == 1);
+    REQUIRE(play.LastError()->diagnostics.front().path == "objects[2].components.gameplayComponents[0]");
+
+    Gameplay::ComponentRegistry restored = ComponentRegistry();
+    REQUIRE(play.Start(authoring, behaviors, restored).HasValue());
+    REQUIRE(play.Scene()->View().Find(Runtime::SceneObjectId{2}).has_value());
 }

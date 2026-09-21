@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetDependency.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
+#include "Horo/Gameplay/Component.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
@@ -21,11 +22,15 @@
 #include <vector>
 
 namespace Horo::Runtime {
-    /** @brief Typed core component payload owned by a definition or runtime scene. */
+    /**
+     * @brief Typed core component payload owned by a definition or runtime scene.
+     *
+     * Authoring conveniences such as TriggerVolumeComponent are normalized by
+     * scene conversion before this runtime-facing payload is constructed.
+     */
     struct RuntimeComponentSet {
         std::optional<CameraComponent> camera;
         std::optional<LightComponent> light;
-        std::optional<TriggerVolumeComponent> triggerVolume;
         std::optional<AudioSourceComponent> audioSource;
         std::optional<UiCanvasComponent> uiCanvas; /**< Optional canvas asset instantiated by the Runtime UI owner. */
         std::optional<NavigationSurfaceComponent> navigationSurface;
@@ -37,6 +42,7 @@ namespace Horo::Runtime {
         std::vector<ColliderComponent> colliders;
         std::vector<PhysicsConstraintComponent> physicsConstraints;
         std::vector<Gameplay::BehaviorComponent> behaviors;
+        std::vector<Gameplay::SerializedComponent> gameplayComponents;
         [[nodiscard]] bool operator==(const RuntimeComponentSet &) const noexcept = default;
     };
 

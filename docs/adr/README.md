@@ -191,6 +191,7 @@ to the replacement.
 | [177](177-mcp-application-capability-and-host-boundary.md) | MCP Application Capability and Host Boundary | Accepted | 2026-09-10 |
 | [178](178-application-security-primitive-and-signature-baseline.md) | Application Security Primitive And Signature Baseline | Accepted | 2026-09-10 |
 | [179](179-device-loss-and-renderer-restart-lifecycle.md) | Device Loss and Renderer Restart Lifecycle | Proposed | 2026-09-20 |
+| [180](180-runtime-ui-interactive-control-state-machines-and-default-actions.md) | Runtime UI Interactive Control State Machines and Default Actions | Proposed | 2026-09-21 |
 
 ## Conventions
 

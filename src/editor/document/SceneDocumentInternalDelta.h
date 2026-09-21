@@ -63,6 +63,16 @@ namespace Horo::Editor::SceneDocumentDetail {
         return sizeof(delta) + EstimateBehaviorMemoryBytes(delta.before) + EstimateBehaviorMemoryBytes(delta.after);
     }
 
+    [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const GameplayComponentsChangedDelta &delta) noexcept {
+        const auto payloadBytes = [](const std::vector<Gameplay::SerializedComponent> &components) {
+            std::size_t bytes = components.size() * sizeof(Gameplay::SerializedComponent);
+            for (const Gameplay::SerializedComponent &component : components)
+                bytes += component.typeId.Value().size() + component.payload.size();
+            return bytes;
+        };
+        return sizeof(delta) + payloadBytes(delta.before) + payloadBytes(delta.after);
+    }
+
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const NavigationComponentsChangedDelta &delta) noexcept {
         const auto profileBytes = [](const std::optional<Runtime::NavigationSurfaceComponent> &surface) {
             return surface ? surface->profiles.size() * sizeof(Navigation::NavigationAgentProfileId) : 0U;
@@ -242,6 +252,10 @@ namespace Horo::Editor::SceneDocumentDetail {
         FindObject(objects, delta.object)->components.behaviors = delta.after;
     }
 
+    inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const GameplayComponentsChangedDelta &delta) {
+        FindObject(objects, delta.object)->components.gameplayComponents = delta.after;
+    }
+
     inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const ComponentAddedDelta &delta) {
         if (const auto object = FindObject(objects, delta.object); object != objects.end())
             AddComponent(object->components, delta.type);
@@ -351,6 +365,10 @@ namespace Horo::Editor::SceneDocumentDetail {
 
     inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const BehaviorsChangedDelta &delta) {
         FindObject(objects, delta.object)->components.behaviors = delta.before;
+    }
+
+    inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const GameplayComponentsChangedDelta &delta) {
+        FindObject(objects, delta.object)->components.gameplayComponents = delta.before;
     }
 
     inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const ComponentAddedDelta &delta) {

@@ -70,6 +70,19 @@ namespace Horo::Vfx {
         std::uint32_t customFloatStreamCount{}; /**< Leading valid entries in customFloats. */
     };
 
+    /** @brief Read-only owner-thread view over the packed live prefix of every SoA stream. */
+    struct CpuParticleSoAConstView final {
+        std::span<const float> positionX, positionY, positionZ;
+        std::span<const float> velocityX, velocityY, velocityZ;
+        std::span<const float> sizeX, sizeY;
+        std::span<const float> rotation, angularVelocity;
+        std::span<const std::uint32_t> packedColor;
+        std::span<const float> age, maximumAge;
+        std::span<const std::uint32_t> customFlags;
+        std::array<std::span<const float>, CpuParticleBufferHardLimits::CustomFloatStreams> customFloats{};
+        std::uint32_t customFloatStreamCount{};
+    };
+
     /** @brief Allocation-free capacity and churn diagnostics. */
     struct CpuParticleBufferStatistics final {
         std::uint32_t capacity{};      /**< Immutable configured slot count. */
@@ -137,8 +150,25 @@ namespace Horo::Vfx {
          */
         [[nodiscard]] Result<std::uint32_t> ResolveDenseIndex(const CpuParticleHandle &handle);
 
+        /**
+         * @brief Copies a prepared source generation into this buffer without allocating.
+         * @param source Owner-thread buffer with the same identity, capacity, payload layout, and byte budget.
+         * @return Success or a typed lifecycle, thread, or compatibility failure.
+         */
+        [[nodiscard]] Result<void> CopyFrom(const CpuParticleBuffer &source);
+
+        /**
+         * @brief Stable-compacts the live prefix to the supplied survivor order.
+         * @param survivors Current live handles in strictly increasing dense-index order.
+         * @return Success or a typed lifecycle, thread, malformed, stale, or compaction-order failure.
+         */
+        [[nodiscard]] Result<void> CompactStable(std::span<const CpuParticleHandle> survivors);
+
         /** @brief Returns an owner-thread mutable view of the packed live prefix. @return View or thread/lifecycle failure. */
         [[nodiscard]] Result<CpuParticleSoAView> View();
+
+        /** @brief Returns an owner-thread read-only view of the packed live prefix. @return View or thread/lifecycle failure. */
+        [[nodiscard]] Result<CpuParticleSoAConstView> View() const;
 
         /** @brief Invalidates all live slots while retaining allocation and monotonic identity history. @return Success or thread failure.
          */
