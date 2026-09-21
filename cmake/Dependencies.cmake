@@ -227,6 +227,14 @@ endif()
 
 if(HORO_BUILD_RENDER_OPENGL)
     find_package(OpenGL REQUIRED)
+    add_library(HoroThirdPartyGlad STATIC
+        ${CMAKE_CURRENT_LIST_DIR}/../vendor/glad/src/gl.c
+    )
+    add_library(HoroThirdParty::Glad ALIAS HoroThirdPartyGlad)
+    target_include_directories(HoroThirdPartyGlad
+        PUBLIC
+            ${CMAKE_CURRENT_LIST_DIR}/../vendor/glad/include
+    )
 endif()
 
 if(HORO_BUILD_RENDER_VULKAN)
@@ -296,17 +304,6 @@ if(HORO_BUILD_EDITOR_GUI)
             GIT_SHALLOW TRUE
         )
         FetchContent_MakeAvailable(imgui_test_engine)
-    endif()
-
-    if(HORO_BUILD_RENDER_OPENGL)
-        add_library(HoroThirdPartyGlad STATIC
-            ${CMAKE_CURRENT_LIST_DIR}/../vendor/glad/src/gl.c
-        )
-        add_library(HoroThirdParty::Glad ALIAS HoroThirdPartyGlad)
-        target_include_directories(HoroThirdPartyGlad
-            PUBLIC
-                ${CMAKE_CURRENT_LIST_DIR}/../vendor/glad/include
-        )
     endif()
 
     add_library(HoroThirdPartyImGui STATIC

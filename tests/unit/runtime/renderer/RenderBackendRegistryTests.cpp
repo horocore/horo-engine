@@ -98,6 +98,18 @@ namespace {
         return std::move(created).Value();
     }
 
+    [[nodiscard]] std::unique_ptr<IRenderBackend> CreateInitializedNullBackend() {
+        std::unique_ptr<IRenderBackend> backend = CreateNullBackend();
+        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
+        return backend;
+    }
+
+    [[nodiscard]] FrameToken BeginNullFrame(IRenderBackend &backend) {
+        const auto begun = backend.BeginFrame(FrameDescriptor{.frameNumber = 9, .outputExtent = {640, 360}});
+        Check(begun.HasValue());
+        return begun.Value();
+    }
+
     TEST_CASE("Registry Owns Provider And Defers Invocation Until Create", "[unit][runtime][renderer]") {
         ProviderProbe probe;
         {
@@ -321,11 +333,14 @@ namespace {
         backend->Shutdown();
     }
 
-    TEST_CASE("Null backend satisfies the shared backend contract", "[unit][runtime][renderer][contract]") {
+    TEST_CASE("Null backend satisfies the shared backend contract", "[unit][runtime][renderer][contract][qualification]") {
         Test::RunBackendContractSuite(
             Test::BackendContractExpectations{
                 .id = RenderBackendId{"null"},
                 .presentsToWindow = false,
+                .errorDomain = "horo.render",
+                .syntheticCapabilities = true,
+                .unsupportedPassCode = "render.backend.unsupported_pass_kind",
             },
             &CreateNullBackend);
     }
@@ -399,13 +414,9 @@ namespace {
               "render.backend.invalid_frame_descriptor");
     }
 
-    TEST_CASE("Null Backend Validates Primary Output Attachments", "[unit][runtime][renderer]") {
-        std::unique_ptr<IRenderBackend> backend = CreateNullBackend();
-        Check(backend->Initialize(RenderBackendConfig{}).HasValue());
-
-        auto begun = backend->BeginFrame(FrameDescriptor{.frameNumber = 9, .outputExtent = {640, 360}});
-        Check(begun.HasValue());
-        const FrameToken frame = begun.Value();
+    TEST_CASE("Null Backend Accepts Valid Primary Output Attachments", "[unit][runtime][renderer]") {
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedNullBackend();
+        const FrameToken frame = BeginNullFrame(*backend);
         const std::array validPasses{
             RenderPassDescriptor{
                 .id = RenderPassId{10},
@@ -428,7 +439,12 @@ namespace {
             },
         };
         Check(backend->Execute(RenderExecutionPlan{.frame = frame, .orderedPasses = validPasses}).HasValue());
+        backend->AbortFrame(frame);
+    }
 
+    TEST_CASE("Null Backend Rejects Primary Output On Copy Passes", "[unit][runtime][renderer]") {
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedNullBackend();
+        const FrameToken frame = BeginNullFrame(*backend);
         const std::array invalidCopyPass{
             RenderPassDescriptor{
                 .id = RenderPassId{12},
@@ -438,7 +454,12 @@ namespace {
         };
         Check(backend->Execute(RenderExecutionPlan{.frame = frame, .orderedPasses = invalidCopyPass}).ErrorValue().code.Value() ==
               "render.backend.invalid_execution_plan");
+        backend->AbortFrame(frame);
+    }
 
+    TEST_CASE("Null Backend Rejects Invalid Primary Output Clear Colors", "[unit][runtime][renderer]") {
+        std::unique_ptr<IRenderBackend> backend = CreateInitializedNullBackend();
+        const FrameToken frame = BeginNullFrame(*backend);
         const std::array invalidClearPass{
             RenderPassDescriptor{
                 .id = RenderPassId{13},

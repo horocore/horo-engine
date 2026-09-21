@@ -18,6 +18,8 @@ probing, and no-renderer recovery are defined by
 Device loss, frame abortion, resource invalidation, host-owned restart and
 terminal failure are defined by
 [ADR-179](../../adr/179-device-loss-and-renderer-restart-lifecycle.md).
+The current evidence matrix and objective qualification thresholds are owned by
+[Cross-Backend RHI Qualification](./render-backend-qualification.md).
 
 ## Non-Negotiable Invariants
 
