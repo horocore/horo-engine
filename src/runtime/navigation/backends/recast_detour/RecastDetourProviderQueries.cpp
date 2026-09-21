@@ -1,5 +1,5 @@
 #include "Horo/Navigation/NavigationErrors.h"
-#include "runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h"
+#include "runtime/navigation/backends/recast_detour/RecastDetourProviderQueriesInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -41,30 +41,31 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<float> PathLength(const std::vector<Math::Vec3> &points) {
-            double length{};
-            for (std::size_t index = 1; index < points.size(); ++index) {
-                const Math::Vec3 &current = points[index];
-                const Math::Vec3 &previous = points[index - 1U];
-                length += std::hypot(static_cast<double>(current.x) - previous.x, static_cast<double>(current.y) - previous.y,
-                                     static_cast<double>(current.z) - previous.z);
-            }
-            if (!std::isfinite(length) || length > std::numeric_limits<float>::max())
-                return Failure<float>(NavigationErrors::ProviderFailed);
-            return Result<float>::Success(static_cast<float>(length));
-        }
+        using RecastDetourQueries::BuildPath;
+        using RecastDetourQueries::CorridorSearch;
+        using RecastDetourQueries::PathBuildContext;
+        using RecastDetourQueries::QueryEndpoint;
 
-        struct QueryEndpoint final {
-            bool found{};
-            std::uint32_t polygon{InvalidNavigationPolygonIndex};
-            Math::Vec3 projected{};
+        struct CorridorSearchContext final {
+            QuerySlot &slot;
+            const QueryEndpoint &start;
+            const QueryEndpoint &destination;
+            const NavigationPathRequest &request;
+            const NavigationAreaRegistry &areaRegistry;
+            const std::vector<GroundedNavigationPolygon> &polygons;
+            const std::vector<NavigationPolygonAdjacency> &adjacency;
+            const std::vector<Math::Vec3> &centers;
+            const CancellationToken &cancellation;
         };
 
-        struct CorridorSearch final {
-            NavigationPathStatus status{NavigationPathStatus::Unreachable};
-            NavigationPathStopReason stopReason{NavigationPathStopReason::DestinationUnreachable};
-            std::uint32_t terminalNode{InvalidNavigationPolygonIndex};
-            std::uint32_t polygonCount{};
+        struct CorridorSearchState final {
+            std::uint32_t nodeLimit{};
+            std::uint32_t nodeCount{};
+            std::uint32_t expansions{};
+            std::uint32_t bestNode{InvalidNavigationPolygonIndex};
+            NavigationPathStatus terminalStatus{NavigationPathStatus::Unreachable};
+            NavigationPathStopReason terminalReason{NavigationPathStopReason::DestinationUnreachable};
+            bool nodeBudgetExhausted{};
         };
 
         [[nodiscard]] Result<QueryEndpoint> ResolveEndpoint(const QuerySlot &slot, const Math::Vec3 point, const Math::Vec3 halfExtents,
@@ -177,318 +178,248 @@ namespace Horo::Navigation {
             return Result<float>::Success(std::isfinite(minimum) ? minimum : 0.0F);
         }
 
-        [[nodiscard]] Result<CorridorSearch> FindCorridor(QuerySlot &slot, const QueryEndpoint &start, const QueryEndpoint &destination,
-                                                          const NavigationPathRequest &request, const NavigationAreaRegistry &areaRegistry,
-                                                          const std::vector<GroundedNavigationPolygon> &polygons,
-                                                          const std::vector<NavigationPolygonAdjacency> &adjacency,
-                                                          const std::vector<Math::Vec3> &centers, const CancellationToken &cancellation) {
-            slot.openNodes.clear();
-            const std::uint32_t nodeLimit =
-                std::min({request.requirement.limits.maximumNodeExpansions, static_cast<std::uint32_t>(slot.searchNodes.size()),
-                          static_cast<std::uint32_t>(slot.openNodes.capacity())});
-            if (nodeLimit == 0)
-                return Failure<CorridorSearch>(NavigationErrors::CapacityExceeded);
-            for (std::uint32_t index = 0; index < nodeLimit; ++index)
-                slot.searchNodes[index] = {};
+        [[nodiscard]] Result<float> InitializeCorridorSearch(CorridorSearchContext &context, CorridorSearchState &state) {
+            context.slot.openNodes.clear();
+            state.nodeLimit = std::min({context.request.requirement.limits.maximumNodeExpansions,
+                                        static_cast<std::uint32_t>(context.slot.searchNodes.size()),
+                                        static_cast<std::uint32_t>(context.slot.openNodes.capacity())});
+            if (state.nodeLimit == 0)
+                return Failure<float>(NavigationErrors::CapacityExceeded);
+            for (std::uint32_t index = 0; index < state.nodeLimit; ++index)
+                context.slot.searchNodes[index] = {};
 
-            const auto minimumCost = MinimumTraversalCost(areaRegistry, request.filter, polygons);
+            const auto minimumCost = MinimumTraversalCost(context.areaRegistry, context.request.filter, context.polygons);
             if (minimumCost.HasError())
-                return Result<CorridorSearch>::Failure(minimumCost.ErrorValue());
-            const auto startHeuristic = Heuristic(centers[start.polygon], centers[destination.polygon], minimumCost.Value());
+                return Result<float>::Failure(minimumCost.ErrorValue());
+            const auto startHeuristic =
+                Heuristic(context.centers[context.start.polygon], context.centers[context.destination.polygon], minimumCost.Value());
             if (startHeuristic.HasError())
-                return Result<CorridorSearch>::Failure(startHeuristic.ErrorValue());
+                return Result<float>::Failure(startHeuristic.ErrorValue());
+            context.slot.searchNodes[0] = {.polygon = context.start.polygon,
+                                           .parent = InvalidNavigationPolygonIndex,
+                                           .cost = 0.0F,
+                                           .estimatedTotalCost = startHeuristic.Value(),
+                                           .open = true,
+                                           .closed = false};
+            context.slot.openNodes.push_back(0);
+            state.nodeCount = 1;
+            return minimumCost;
+        }
 
-            slot.searchNodes[0] = {.polygon = start.polygon,
-                                   .parent = InvalidNavigationPolygonIndex,
-                                   .cost = 0.0F,
-                                   .estimatedTotalCost = startHeuristic.Value(),
-                                   .open = true,
-                                   .closed = false};
-            slot.openNodes.push_back(0);
-            std::uint32_t nodeCount = 1;
-            std::uint32_t expansions{};
-            std::uint32_t bestNode = 0;
-            NavigationPathStatus terminalStatus{NavigationPathStatus::Unreachable};
-            NavigationPathStopReason terminalReason{NavigationPathStopReason::DestinationUnreachable};
-            bool nodeBudgetExhausted{};
+        [[nodiscard]] Result<float> CandidateSearchCost(const Math::Vec3 currentCenter, const Math::Vec3 neighborCenter,
+                                                        const float currentCost, const float traversalCost) {
+            const auto edgeDistance = Detail::PointDistance(currentCenter, neighborCenter);
+            if (edgeDistance.HasError())
+                return edgeDistance;
+            const double candidateCost = static_cast<double>(currentCost) + static_cast<double>(edgeDistance.Value()) * traversalCost;
+            if (!std::isfinite(candidateCost) || candidateCost > std::numeric_limits<float>::max())
+                return Failure<float>(NavigationErrors::QueryLimitExceeded);
+            return Result<float>::Success(static_cast<float>(candidateCost));
+        }
 
-            while (true) {
-                if (cancellation.IsCancellationRequested())
-                    return Failure<CorridorSearch>(NavigationErrors::QueryCancelled);
-                const std::uint32_t currentIndex = SelectBestOpenNode(slot);
-                if (currentIndex == InvalidNavigationPolygonIndex)
-                    break;
-                NavigationAStarNode &current = slot.searchNodes[currentIndex];
-                if (current.polygon == destination.polygon) {
-                    bestNode = currentIndex;
-                    terminalStatus = NavigationPathStatus::Reachable;
-                    terminalReason = NavigationPathStopReason::None;
-                    break;
-                }
-                if (expansions >= request.requirement.limits.maximumNodeExpansions) {
-                    bestNode = currentIndex;
-                    terminalStatus = NavigationPathStatus::BudgetExceeded;
-                    terminalReason = NavigationPathStopReason::NodeBudgetExceeded;
-                    break;
-                }
-                current.open = false;
-                current.closed = true;
-                ++expansions;
-                bestNode = currentIndex;
+        [[nodiscard]] Result<float> EstimatedSearchCost(const CorridorSearchContext &context, const std::uint32_t polygon,
+                                                        const float candidateCost, const float minimumCost) {
+            const auto estimate = Heuristic(context.centers[polygon], context.centers[context.destination.polygon], minimumCost);
+            if (estimate.HasError())
+                return Result<float>::Failure(estimate.ErrorValue());
+            const double estimatedTotalCost = static_cast<double>(candidateCost) + static_cast<double>(estimate.Value());
+            if (!std::isfinite(estimatedTotalCost) || estimatedTotalCost > std::numeric_limits<float>::max())
+                return Failure<float>(NavigationErrors::QueryLimitExceeded);
+            return Result<float>::Success(static_cast<float>(estimatedTotalCost));
+        }
 
-                const NavigationPolygonAdjacency &neighbors = adjacency[current.polygon];
-                for (std::uint8_t neighborIndex = 0; neighborIndex < neighbors.count; ++neighborIndex) {
-                    if (cancellation.IsCancellationRequested())
-                        return Failure<CorridorSearch>(NavigationErrors::QueryCancelled);
-                    const std::uint32_t neighbor = neighbors.neighbors[neighborIndex];
-                    const auto traversal = areaRegistry.ResolveTraversal(request.filter, polygons[neighbor].area);
-                    if (traversal.HasError())
-                        return Result<CorridorSearch>::Failure(traversal.ErrorValue());
-                    if (!traversal.Value().traversable)
-                        continue;
-                    const auto edgeDistance = Detail::PointDistance(centers[current.polygon], centers[neighbor]);
-                    if (edgeDistance.HasError())
-                        return Result<CorridorSearch>::Failure(edgeDistance.ErrorValue());
-                    const double candidateCost =
-                        static_cast<double>(current.cost) + static_cast<double>(edgeDistance.Value()) * traversal.Value().traversalCost;
-                    if (!std::isfinite(candidateCost) || candidateCost > std::numeric_limits<float>::max())
-                        return Failure<CorridorSearch>(NavigationErrors::QueryLimitExceeded);
-
-                    std::uint32_t neighborNode = FindSearchNode(slot, nodeCount, neighbor);
-                    if (neighborNode == InvalidNavigationPolygonIndex) {
-                        if (nodeCount >= nodeLimit) {
-                            nodeBudgetExhausted = true;
-                            continue;
-                        }
-                        neighborNode = nodeCount++;
-                        const auto estimate = Heuristic(centers[neighbor], centers[destination.polygon], minimumCost.Value());
-                        if (estimate.HasError())
-                            return Result<CorridorSearch>::Failure(estimate.ErrorValue());
-                        const double estimatedTotalCost = candidateCost + static_cast<double>(estimate.Value());
-                        if (!std::isfinite(estimatedTotalCost) || estimatedTotalCost > std::numeric_limits<float>::max())
-                            return Failure<CorridorSearch>(NavigationErrors::QueryLimitExceeded);
-                        slot.searchNodes[neighborNode] = {.polygon = neighbor,
-                                                          .parent = currentIndex,
-                                                          .cost = static_cast<float>(candidateCost),
-                                                          .estimatedTotalCost = static_cast<float>(estimatedTotalCost),
-                                                          .open = true,
-                                                          .closed = false};
-                        slot.openNodes.push_back(neighborNode);
-                        continue;
-                    }
-                    NavigationAStarNode &existing = slot.searchNodes[neighborNode];
-                    if (existing.closed && candidateCost >= existing.cost)
-                        continue;
-                    if (candidateCost > existing.cost ||
-                        (candidateCost == existing.cost && existing.parent != InvalidNavigationPolygonIndex &&
-                         current.polygon >= slot.searchNodes[existing.parent].polygon))
-                        continue;
-                    const auto estimate = Heuristic(centers[neighbor], centers[destination.polygon], minimumCost.Value());
-                    if (estimate.HasError())
-                        return Result<CorridorSearch>::Failure(estimate.ErrorValue());
-                    const double estimatedTotalCost = candidateCost + static_cast<double>(estimate.Value());
-                    if (!std::isfinite(estimatedTotalCost) || estimatedTotalCost > std::numeric_limits<float>::max())
-                        return Failure<CorridorSearch>(NavigationErrors::QueryLimitExceeded);
-                    existing.parent = currentIndex;
-                    existing.cost = static_cast<float>(candidateCost);
-                    existing.estimatedTotalCost = static_cast<float>(estimatedTotalCost);
-                    existing.open = true;
-                    existing.closed = false;
-                }
+        [[nodiscard]] Result<void> AddNeighborNode(CorridorSearchContext &context, CorridorSearchState &state,
+                                                   const std::uint32_t currentIndex, const std::uint32_t neighbor,
+                                                   const float candidateCost, const float minimumCost) {
+            if (state.nodeCount >= state.nodeLimit) {
+                state.nodeBudgetExhausted = true;
+                return Result<void>::Success();
             }
+            const std::uint32_t neighborNode = state.nodeCount++;
+            const auto estimatedCost = EstimatedSearchCost(context, neighbor, candidateCost, minimumCost);
+            if (estimatedCost.HasError())
+                return Result<void>::Failure(estimatedCost.ErrorValue());
+            context.slot.searchNodes[neighborNode] = {.polygon = neighbor,
+                                                      .parent = currentIndex,
+                                                      .cost = candidateCost,
+                                                      .estimatedTotalCost = estimatedCost.Value(),
+                                                      .open = true,
+                                                      .closed = false};
+            context.slot.openNodes.push_back(neighborNode);
+            return Result<void>::Success();
+        }
 
+        [[nodiscard]] Result<void> ConsiderNeighbor(CorridorSearchContext &context, CorridorSearchState &state,
+                                                    const std::uint32_t currentIndex, const std::uint32_t neighbor,
+                                                    const float minimumCost) {
+            if (context.cancellation.IsCancellationRequested())
+                return Failure<void>(NavigationErrors::QueryCancelled);
+            const auto traversal = context.areaRegistry.ResolveTraversal(context.request.filter, context.polygons[neighbor].area);
+            if (traversal.HasError())
+                return Result<void>::Failure(traversal.ErrorValue());
+            if (!traversal.Value().traversable)
+                return Result<void>::Success();
+            const auto candidateCost =
+                CandidateSearchCost(context.centers[context.slot.searchNodes[currentIndex].polygon], context.centers[neighbor],
+                                    context.slot.searchNodes[currentIndex].cost, traversal.Value().traversalCost);
+            if (candidateCost.HasError())
+                return Result<void>::Failure(candidateCost.ErrorValue());
+
+            std::uint32_t neighborNode = FindSearchNode(context.slot, state.nodeCount, neighbor);
+            if (neighborNode == InvalidNavigationPolygonIndex)
+                return AddNeighborNode(context, state, currentIndex, neighbor, candidateCost.Value(), minimumCost);
+
+            NavigationAStarNode &existing = context.slot.searchNodes[neighborNode];
+            const float candidate = candidateCost.Value();
+            if (existing.closed && candidate >= existing.cost)
+                return Result<void>::Success();
+            if (candidate > existing.cost ||
+                (candidate == existing.cost && existing.parent != InvalidNavigationPolygonIndex &&
+                 context.slot.searchNodes[existing.parent].polygon <= context.slot.searchNodes[currentIndex].polygon))
+                return Result<void>::Success();
+            const auto estimatedCost = EstimatedSearchCost(context, neighbor, candidate, minimumCost);
+            if (estimatedCost.HasError())
+                return Result<void>::Failure(estimatedCost.ErrorValue());
+            existing.parent = currentIndex;
+            existing.cost = candidate;
+            existing.estimatedTotalCost = estimatedCost.Value();
+            existing.open = true;
+            existing.closed = false;
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ExpandCorridorNode(CorridorSearchContext &context, CorridorSearchState &state,
+                                                      const std::uint32_t currentIndex, const float minimumCost) {
+            NavigationAStarNode &current = context.slot.searchNodes[currentIndex];
+            current.open = false;
+            current.closed = true;
+            ++state.expansions;
+            const NavigationPolygonAdjacency &neighbors = context.adjacency[current.polygon];
+            for (std::uint8_t neighborIndex = 0; neighborIndex < neighbors.count; ++neighborIndex) {
+                const auto considered = ConsiderNeighbor(context, state, currentIndex, neighbors.neighbors[neighborIndex], minimumCost);
+                if (considered.HasError())
+                    return considered;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> RunCorridorSearch(CorridorSearchContext &context, CorridorSearchState &state, const float minimumCost) {
+            while (true) {
+                if (context.cancellation.IsCancellationRequested())
+                    return Failure<void>(NavigationErrors::QueryCancelled);
+                const std::uint32_t currentIndex = SelectBestOpenNode(context.slot);
+                if (currentIndex == InvalidNavigationPolygonIndex)
+                    return Result<void>::Success();
+                NavigationAStarNode &current = context.slot.searchNodes[currentIndex];
+                if (current.polygon == context.destination.polygon) {
+                    state.bestNode = currentIndex;
+                    state.terminalStatus = NavigationPathStatus::Reachable;
+                    state.terminalReason = NavigationPathStopReason::None;
+                    return Result<void>::Success();
+                }
+                if (state.expansions >= context.request.requirement.limits.maximumNodeExpansions) {
+                    state.bestNode = currentIndex;
+                    state.terminalStatus = NavigationPathStatus::BudgetExceeded;
+                    state.terminalReason = NavigationPathStopReason::NodeBudgetExceeded;
+                    return Result<void>::Success();
+                }
+                state.bestNode = currentIndex;
+                const auto expanded = ExpandCorridorNode(context, state, currentIndex, minimumCost);
+                if (expanded.HasError())
+                    return expanded;
+            }
+        }
+
+        [[nodiscard]] Result<CorridorSearch> FinalizeCorridorSearch(CorridorSearchContext &context, CorridorSearchState &state) {
             CorridorSearch result{.status = NavigationPathStatus::Unreachable,
                                   .stopReason = NavigationPathStopReason::DestinationUnreachable,
-                                  .terminalNode = bestNode};
-            if (terminalStatus == NavigationPathStatus::Reachable || terminalStatus == NavigationPathStatus::BudgetExceeded) {
-                result.status = terminalStatus;
-                result.stopReason = terminalReason;
-            } else if (nodeBudgetExhausted) {
+                                  .terminalNode = state.bestNode};
+            if (state.terminalStatus == NavigationPathStatus::Reachable || state.terminalStatus == NavigationPathStatus::BudgetExceeded) {
+                result.status = state.terminalStatus;
+                result.stopReason = state.terminalReason;
+            } else if (state.nodeBudgetExhausted) {
                 result.status = NavigationPathStatus::BudgetExceeded;
                 result.stopReason = NavigationPathStopReason::NodeBudgetExceeded;
             }
             if (result.status != NavigationPathStatus::Reachable)
-                bestNode = SelectBestKnownNode(slot, nodeCount);
-            if (bestNode == InvalidNavigationPolygonIndex)
-                result.terminalNode = InvalidNavigationPolygonIndex;
-            else
-                result.terminalNode = bestNode;
-
+                state.bestNode = SelectBestKnownNode(context.slot, state.nodeCount);
+            result.terminalNode = state.bestNode;
             std::uint32_t cursor = result.terminalNode;
-            while (cursor != InvalidNavigationPolygonIndex && result.polygonCount < slot.polygonPathIndices.size()) {
-                slot.polygonPathIndices[result.polygonCount++] = slot.searchNodes[cursor].polygon;
-                cursor = slot.searchNodes[cursor].parent;
+            while (cursor != InvalidNavigationPolygonIndex && result.polygonCount < context.slot.polygonPathIndices.size()) {
+                context.slot.polygonPathIndices[result.polygonCount++] = context.slot.searchNodes[cursor].polygon;
+                cursor = context.slot.searchNodes[cursor].parent;
             }
-            std::ranges::reverse(std::span{slot.polygonPathIndices.data(), result.polygonCount});
+            std::ranges::reverse(std::span{context.slot.polygonPathIndices.data(), result.polygonCount});
             return Result<CorridorSearch>::Success(result);
         }
 
-        [[nodiscard]] Result<Math::Vec3> PartialTarget(QuerySlot &slot, const std::uint32_t polygon, const Math::Vec3 destination,
-                                                       const dtPolyRef reference) {
-            if (polygon == InvalidNavigationPolygonIndex)
-                return Result<Math::Vec3>::Success(destination);
-            const std::array<float, 3> source{destination.x, destination.y, destination.z};
-            std::array<float, 3> projected{};
-            bool pointOverPolygon{};
-            if (dtStatusFailed(slot.query->closestPointOnPoly(reference, source.data(), projected.data(), &pointOverPolygon)))
-                return Failure<Math::Vec3>(NavigationErrors::ProviderFailed);
-            if (!std::ranges::all_of(projected, [](const float value) {
-                return std::isfinite(value);
-            }))
-                return Failure<Math::Vec3>(NavigationErrors::ProviderFailed);
-            return Result<Math::Vec3>::Success({projected[0], projected[1], projected[2]});
+        [[nodiscard]] Result<CorridorSearch> FindCorridor(CorridorSearchContext &context) {
+            CorridorSearchState state;
+            const auto minimumCost = InitializeCorridorSearch(context, state);
+            if (minimumCost.HasError())
+                return Result<CorridorSearch>::Failure(minimumCost.ErrorValue());
+            const auto searched = RunCorridorSearch(context, state, minimumCost.Value());
+            if (searched.HasError())
+                return Result<CorridorSearch>::Failure(searched.ErrorValue());
+            return FinalizeCorridorSearch(context, state);
         }
 
-        [[nodiscard]] Result<float> CalculatePathCost(const std::vector<std::uint32_t> &pathIndices, const std::uint32_t count,
-                                                      const Math::Vec3 start, const Math::Vec3 destination,
-                                                      const NavigationAreaRegistry &areaRegistry, const NavigationFilterId filter,
-                                                      const std::vector<GroundedNavigationPolygon> &polygons,
-                                                      const std::vector<Math::Vec3> &centers) {
-            if (count == 0)
-                return Result<float>::Success(0.0F);
-            double cost{};
-            const auto firstPolicy = areaRegistry.ResolveTraversal(filter, polygons[pathIndices[0]].area);
-            if (firstPolicy.HasError())
-                return Result<float>::Failure(firstPolicy.ErrorValue());
-            auto firstDistance = Detail::PointDistance(start, centers[pathIndices[0]]);
-            if (firstDistance.HasError())
-                return firstDistance;
-            cost += static_cast<double>(firstDistance.Value()) * firstPolicy.Value().traversalCost;
-            for (std::uint32_t index = 1; index < count; ++index) {
-                const auto policy = areaRegistry.ResolveTraversal(filter, polygons[pathIndices[index]].area);
-                if (policy.HasError())
-                    return Result<float>::Failure(policy.ErrorValue());
-                const auto distance = Detail::PointDistance(centers[pathIndices[index - 1U]], centers[pathIndices[index]]);
-                if (distance.HasError())
-                    return distance;
-                cost += static_cast<double>(distance.Value()) * policy.Value().traversalCost;
-            }
-            const auto lastPolicy = areaRegistry.ResolveTraversal(filter, polygons[pathIndices[count - 1U]].area);
-            if (lastPolicy.HasError())
-                return Result<float>::Failure(lastPolicy.ErrorValue());
-            const auto lastDistance = Detail::PointDistance(centers[pathIndices[count - 1U]], destination);
-            if (lastDistance.HasError())
-                return lastDistance;
-            cost += static_cast<double>(lastDistance.Value()) * lastPolicy.Value().traversalCost;
-            if (!std::isfinite(cost) || cost > std::numeric_limits<float>::max())
-                return Failure<float>(NavigationErrors::QueryLimitExceeded);
-            return Result<float>::Success(static_cast<float>(cost));
-        }
-
-        [[nodiscard]] Result<NavigationPath> BuildPath(QuerySlot &slot, const QueryEndpoint &start, const NavigationPathRequest &request,
-                                                       const CorridorSearch &search, const NavigationAreaRegistry &areaRegistry,
-                                                       const std::vector<GroundedNavigationPolygon> &polygons,
-                                                       const std::vector<Math::Vec3> &centers, const std::vector<dtPolyRef> &references) {
+        [[nodiscard]] NavigationPath MakeUnreachablePath(const NavigationPathRequest &request, const bool startFound) {
             NavigationPath path;
-            path.status = search.status;
-            path.stopReason = search.stopReason;
+            path.status = NavigationPathStatus::Unreachable;
+            path.stopReason = NavigationPathStopReason::DestinationUnreachable;
+            path.stopPosition = startFound ? request.destination : request.start;
+            path.stopPolygonIndex = InvalidNavigationPolygonIndex;
             path.sourceGeneration = request.topology;
-            path.stopPolygonIndex = search.terminalNode == InvalidNavigationPolygonIndex ? InvalidNavigationPolygonIndex
-                                                                                         : slot.searchNodes[search.terminalNode].polygon;
-            path.stopPosition =
-                search.status == NavigationPathStatus::Reachable
-                    ? request.destination
-                    : (path.stopPolygonIndex == InvalidNavigationPolygonIndex ? request.start : centers[path.stopPolygonIndex]);
-            if (search.status != NavigationPathStatus::Reachable && request.coveragePolicy == NavigationPathCoveragePolicy::RequireComplete)
-                return Result<NavigationPath>::Success(std::move(path));
-            if (search.polygonCount == 0 || search.terminalNode == InvalidNavigationPolygonIndex)
-                return Result<NavigationPath>::Success(std::move(path));
+            return path;
+        }
 
-            path.status = NavigationPathStatus::Partial;
+        struct PathQueryContext final {
+            QuerySlot &slot;
+            const QueryEndpoint &start;
+            const QueryEndpoint &destination;
+            const NavigationPathRequest &request;
+            const NavigationAreaRegistry &areaRegistry;
+            const std::vector<GroundedNavigationPolygon> &polygons;
+            const std::vector<NavigationPolygonAdjacency> &adjacency;
+            const std::vector<Math::Vec3> &centers;
+            const std::vector<dtPolyRef> &references;
+        };
 
-            Math::Vec3 target = request.destination;
-            if (search.status != NavigationPathStatus::Reachable) {
-                auto partialTarget = PartialTarget(slot, path.stopPolygonIndex, request.destination, references[path.stopPolygonIndex]);
-                if (partialTarget.HasError())
-                    return Result<NavigationPath>::Failure(partialTarget.ErrorValue());
-                target = partialTarget.Value();
-                path.stopPosition = target;
-            }
-
-            for (std::uint32_t index = 0; index < search.polygonCount; ++index)
-                slot.polygonPath[index] = references[slot.polygonPathIndices[index]];
-            int pointCount{};
-            const auto scratchCapacity = static_cast<std::uint32_t>(slot.straightPoints.size() / 3U);
-            const auto boundedPoints = static_cast<int>(std::min(request.requirement.limits.maximumResultPoints, scratchCapacity));
-            const std::array<float, 3> projectedStart{start.projected.x, start.projected.y, start.projected.z};
-            const std::array<float, 3> projectedTarget{target.x, target.y, target.z};
-            const dtStatus straightStatus =
-                slot.query->findStraightPath(projectedStart.data(), projectedTarget.data(), slot.polygonPath.data(),
-                                             static_cast<int>(search.polygonCount), slot.straightPoints.data(), slot.straightFlags.data(),
-                                             slot.straightPolygons.data(), &pointCount, boundedPoints);
-            if (pointCount < 0 || pointCount > boundedPoints)
-                return Failure<NavigationPath>(NavigationErrors::ProviderFailed);
-            const bool reachedTarget = pointCount > 0 && (slot.straightFlags[pointCount - 1] & DT_STRAIGHTPATH_END) != 0;
-            const bool pointBudgetExceeded = dtStatusDetail(straightStatus, DT_BUFFER_TOO_SMALL) && !reachedTarget;
-            if (dtStatusFailed(straightStatus) && !pointBudgetExceeded)
-                return Failure<NavigationPath>(NavigationErrors::ProviderFailed);
-            if (pointBudgetExceeded) {
-                if (request.coveragePolicy == NavigationPathCoveragePolicy::RequireComplete)
-                    return Failure<NavigationPath>(NavigationErrors::CapacityExceeded);
-                path.status = NavigationPathStatus::Partial;
-                path.stopReason = NavigationPathStopReason::ResultPointBudgetExceeded;
-            }
-            try {
-                path.points.reserve(static_cast<std::size_t>(std::max(pointCount, 0)));
-                for (int index = 0; index < pointCount; ++index) {
-                    const std::size_t offset = static_cast<std::size_t>(index) * 3U;
-                    path.points.push_back(
-                        {slot.straightPoints[offset], slot.straightPoints[offset + 1U], slot.straightPoints[offset + 2U]});
-                }
-                if (path.points.empty())
-                    return Failure<NavigationPath>(NavigationErrors::ProviderFailed);
-                path.points.front() = request.start;
-                Math::Vec3 effectiveTarget = target;
-                if (!pointBudgetExceeded)
-                    path.points.back() = target;
-                else
-                    effectiveTarget = path.points.back();
-                if (search.status == NavigationPathStatus::Reachable && !pointBudgetExceeded) {
-                    path.status = NavigationPathStatus::Reachable;
-                    path.stopReason = NavigationPathStopReason::None;
-                    path.stopPosition = request.destination;
-                }
-                if (pointBudgetExceeded)
-                    path.stopPosition = effectiveTarget;
-                std::uint32_t costPolygonCount = search.polygonCount;
-                if (pointBudgetExceeded) {
-                    const dtPolyRef frontierReference = slot.straightPolygons[pointCount - 1];
-                    std::uint32_t frontierPosition = InvalidNavigationPolygonIndex;
-                    for (std::uint32_t index = 0; index < search.polygonCount; ++index) {
-                        if (references[slot.polygonPathIndices[index]] == frontierReference) {
-                            frontierPosition = index;
-                            break;
-                        }
-                    }
-                    if (frontierPosition == InvalidNavigationPolygonIndex)
-                        return Failure<NavigationPath>(NavigationErrors::ProviderFailed);
-                    path.stopPolygonIndex = slot.polygonPathIndices[frontierPosition];
-                    costPolygonCount = frontierPosition + 1U;
-                }
-                auto length = PathLength(path.points);
-                if (length.HasError())
-                    return Result<NavigationPath>::Failure(length.ErrorValue());
-                path.lengthMeters = length.Value();
-                auto cost = CalculatePathCost(slot.polygonPathIndices, costPolygonCount, start.projected, effectiveTarget, areaRegistry,
-                                              request.filter, polygons, centers);
-                if (cost.HasError())
-                    return Result<NavigationPath>::Failure(cost.ErrorValue());
-                path.cost = cost.Value();
-                if (!std::isfinite(path.cost) || path.cost < 0.0F ||
-                    path.lengthMeters > request.requirement.limits.maximumSearchDistanceMeters)
-                    return Failure<NavigationPath>(NavigationErrors::QueryLimitExceeded);
-                return Result<NavigationPath>::Success(std::move(path));
-            } catch (const std::bad_alloc &) {
-                return Failure<NavigationPath>(NavigationErrors::CapacityExceeded);
-            }
+        [[nodiscard]] Result<NavigationPath> ExecutePathQuery(PathQueryContext &context, const CancellationToken &cancellation) {
+            CorridorSearchContext corridorContext{.slot = context.slot,
+                                                  .start = context.start,
+                                                  .destination = context.destination,
+                                                  .request = context.request,
+                                                  .areaRegistry = context.areaRegistry,
+                                                  .polygons = context.polygons,
+                                                  .adjacency = context.adjacency,
+                                                  .centers = context.centers,
+                                                  .cancellation = cancellation};
+            auto corridor = FindCorridor(corridorContext);
+            if (corridor.HasError())
+                return Result<NavigationPath>::Failure(corridor.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
+            PathBuildContext pathContext{.slot = context.slot,
+                                         .start = context.start,
+                                         .request = context.request,
+                                         .search = corridor.Value(),
+                                         .areaRegistry = context.areaRegistry,
+                                         .polygons = context.polygons,
+                                         .centers = context.centers,
+                                         .references = context.references};
+            auto path = BuildPath(pathContext);
+            if (path.HasError())
+                return path;
+            if (cancellation.IsCancellationRequested())
+                return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
+            return path;
         }
 
         class RecastDetourNavigationQueryBackend final : public INavigationQueryBackend {
         public:
-            RecastDetourNavigationQueryBackend(const RecastDetourProviderCreateInfo &info, NavMeshPtr mesh, std::vector<QuerySlot> slots,
-                                               std::vector<Math::Vec3> vertices, std::vector<GroundedNavigationPolygon> polygons,
-                                               std::vector<NavigationPolygonAdjacency> adjacency, std::vector<Math::Vec3> polygonCenters,
-                                               std::vector<dtPolyRef> polygonReferences, NavigationAreaRegistry areaRegistry) noexcept
+            RecastDetourNavigationQueryBackend(const RecastDetourProviderCreateInfo &info, RecastDetourQueryBackendData data) noexcept
                 : world_(info.world), topology_(info.topology), nearestPointHalfExtents_(info.nearestPointHalfExtents),
                   maximumResultPoints_(info.maximumResultPoints),
                   capabilities_(MakeAvailableGroundedQueryCapabilities(info.capabilityRevision,
@@ -496,9 +427,10 @@ namespace Horo::Navigation {
                                                                         .maximumResultPoints = info.maximumResultPoints,
                                                                         .maximumSearchDistanceMeters = info.maximumSearchDistanceMeters},
                                                                        info.maximumConcurrentQueries)),
-                  mesh_(std::move(mesh)), slots_(std::move(slots)), vertices_(std::move(vertices)), polygons_(std::move(polygons)),
-                  adjacency_(std::move(adjacency)), polygonCenters_(std::move(polygonCenters)),
-                  polygonReferences_(std::move(polygonReferences)), areaRegistry_(std::move(areaRegistry)) {}
+                  mesh_(std::move(data.mesh)), slots_(std::move(data.slots)), vertices_(std::move(data.vertices)),
+                  polygons_(std::move(data.polygons)), adjacency_(std::move(data.adjacency)),
+                  polygonCenters_(std::move(data.polygonCenters)), polygonReferences_(std::move(data.polygonReferences)),
+                  areaRegistry_(std::move(data.areaRegistry)) {}
 
             [[nodiscard]] NavigationProviderCapabilities Capabilities() const noexcept override {
                 return capabilities_;
@@ -526,28 +458,19 @@ namespace Horo::Navigation {
                 if (cancellation.IsCancellationRequested())
                     return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
                 if (!start.Value().found || !destination.Value().found) {
-                    NavigationPath path;
-                    path.status = NavigationPathStatus::Unreachable;
-                    path.stopReason = NavigationPathStopReason::DestinationUnreachable;
-                    path.stopPosition = !start.Value().found ? request.start : request.destination;
-                    path.stopPolygonIndex = InvalidNavigationPolygonIndex;
-                    path.sourceGeneration = request.topology;
-                    return Result<NavigationPath>::Success(std::move(path));
+                    return Result<NavigationPath>::Success(MakeUnreachablePath(request, start.Value().found));
                 }
 
-                auto corridor = FindCorridor(slot, start.Value(), destination.Value(), request, areaRegistry_, polygons_, adjacency_,
-                                             polygonCenters_, cancellation);
-                if (corridor.HasError())
-                    return Result<NavigationPath>::Failure(corridor.ErrorValue());
-                if (cancellation.IsCancellationRequested())
-                    return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
-                auto path = BuildPath(slot, start.Value(), request, corridor.Value(), areaRegistry_, polygons_, polygonCenters_,
-                                      polygonReferences_);
-                if (path.HasError())
-                    return path;
-                if (cancellation.IsCancellationRequested())
-                    return Failure<NavigationPath>(NavigationErrors::QueryCancelled);
-                return path;
+                PathQueryContext context{.slot = slot,
+                                         .start = start.Value(),
+                                         .destination = destination.Value(),
+                                         .request = request,
+                                         .areaRegistry = areaRegistry_,
+                                         .polygons = polygons_,
+                                         .adjacency = adjacency_,
+                                         .centers = polygonCenters_,
+                                         .references = polygonReferences_};
+                return ExecutePathQuery(context, cancellation);
             }
 
             /** @copydoc INavigationQueryBackend::ProjectPoint */
@@ -605,15 +528,10 @@ namespace Horo::Navigation {
     }  // namespace
 
     /** @copydoc MakeRecastDetourNavigationQueryBackend */
-    Result<std::unique_ptr<INavigationQueryBackend>> MakeRecastDetourNavigationQueryBackend(
-        const RecastDetourProviderCreateInfo &info, NavMeshPtr mesh, std::vector<QuerySlot> slots, std::vector<Math::Vec3> vertices,
-        std::vector<GroundedNavigationPolygon> polygons, std::vector<NavigationPolygonAdjacency> adjacency,
-        std::vector<Math::Vec3> polygonCenters, std::vector<dtPolyRef> polygonReferences, NavigationAreaRegistry areaRegistry) {
+    Result<std::unique_ptr<INavigationQueryBackend>> MakeRecastDetourNavigationQueryBackend(const RecastDetourProviderCreateInfo &info,
+                                                                                            RecastDetourQueryBackendData data) {
         try {
-            auto provider =
-                std::make_unique<RecastDetourNavigationQueryBackend>(info, std::move(mesh), std::move(slots), std::move(vertices),
-                                                                     std::move(polygons), std::move(adjacency), std::move(polygonCenters),
-                                                                     std::move(polygonReferences), std::move(areaRegistry));
+            auto provider = std::make_unique<RecastDetourNavigationQueryBackend>(info, std::move(data));
             return Result<std::unique_ptr<INavigationQueryBackend>>::Success(std::move(provider));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);

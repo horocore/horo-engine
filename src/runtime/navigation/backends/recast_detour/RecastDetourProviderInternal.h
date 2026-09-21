@@ -78,6 +78,17 @@ namespace Horo::Navigation {
         std::atomic<bool> leased{false};
     };
 
+    struct RecastDetourQueryBackendData final {
+        NavMeshPtr mesh;
+        std::vector<QuerySlot> slots;
+        std::vector<Math::Vec3> vertices;
+        std::vector<GroundedNavigationPolygon> polygons;
+        std::vector<NavigationPolygonAdjacency> adjacency;
+        std::vector<Math::Vec3> polygonCenters;
+        std::vector<dtPolyRef> polygonReferences;
+        NavigationAreaRegistry areaRegistry;
+    };
+
     class QueryLease final {
     public:
         explicit QueryLease(QuerySlot *slot) noexcept : slot_(slot) {}
@@ -171,7 +182,5 @@ namespace Horo::Navigation {
                                                                                            std::uint32_t maximumResultPoints);
 
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> MakeRecastDetourNavigationQueryBackend(
-        const RecastDetourProviderCreateInfo &info, NavMeshPtr mesh, std::vector<QuerySlot> slots, std::vector<Math::Vec3> vertices,
-        std::vector<GroundedNavigationPolygon> polygons, std::vector<NavigationPolygonAdjacency> adjacency,
-        std::vector<Math::Vec3> polygonCenters, std::vector<dtPolyRef> polygonReferences, NavigationAreaRegistry areaRegistry);
+        const RecastDetourProviderCreateInfo &info, RecastDetourQueryBackendData data);
 }  // namespace Horo::Navigation

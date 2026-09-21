@@ -419,10 +419,15 @@ namespace Horo::Navigation {
                 return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(slots.ErrorValue());
             std::vector<Math::Vec3> vertices{info.vertices.begin(), info.vertices.end()};
             std::vector<GroundedNavigationPolygon> polygons{info.polygons.begin(), info.polygons.end()};
-            return MakeRecastDetourNavigationQueryBackend(info, std::move(mesh).Value(), std::move(slots).Value(), std::move(vertices),
-                                                          std::move(polygons), std::move(translated).Value().adjacency,
-                                                          std::move(centers).Value(), std::move(references).Value(),
-                                                          std::move(areaRegistry).Value());
+            RecastDetourQueryBackendData data{.mesh = std::move(mesh).Value(),
+                                              .slots = std::move(slots).Value(),
+                                              .vertices = std::move(vertices),
+                                              .polygons = std::move(polygons),
+                                              .adjacency = std::move(translated).Value().adjacency,
+                                              .polygonCenters = std::move(centers).Value(),
+                                              .polygonReferences = std::move(references).Value(),
+                                              .areaRegistry = std::move(areaRegistry).Value()};
+            return MakeRecastDetourNavigationQueryBackend(info, std::move(data));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
         }
