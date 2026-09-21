@@ -34,11 +34,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief One logical vertex in 1/64-DIP coordinates and normalized source coordinates. */
     struct UiRenderVertex final {
-        float x{};                              /**< Logical horizontal position in 1/64-DIP units. */
-        float y{};                              /**< Logical vertical position in 1/64-DIP units. */
-        float u{};                              /**< Normalized source horizontal coordinate. */
-        float v{};                              /**< Normalized source vertical coordinate. */
-        UiLinearColor color;                    /**< Per-vertex linear RGBA color after command opacity. */
+        float x{};           /**< Logical horizontal position in 1/64-DIP units. */
+        float y{};           /**< Logical vertical position in 1/64-DIP units. */
+        float u{};           /**< Normalized source horizontal coordinate. */
+        float v{};           /**< Normalized source vertical coordinate. */
+        UiLinearColor color; /**< Per-vertex linear RGBA color after command opacity. */
 
         /** @brief Checks finite position, source coordinates, and color representation. @return Whether the vertex is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -86,9 +86,9 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Exact view and capacity admission for one owner-thread geometry arena. */
     struct UiRenderGeometryArenaDescriptor final {
-        UiRenderViewId view;                 /**< Exact Horo-owned view incarnation. */
-        UiRenderGeometryLimits limits;       /**< Per-plan geometry capacities reserved at creation. */
-        std::uint32_t concurrentPlans{};     /**< Number of immutable plan slots reserved at creation. */
+        UiRenderViewId view;             /**< Exact Horo-owned view incarnation. */
+        UiRenderGeometryLimits limits;   /**< Per-plan geometry capacities reserved at creation. */
+        std::uint32_t concurrentPlans{}; /**< Number of immutable plan slots reserved at creation. */
 
         /** @brief Validates view identity, capacities, and the bounded slot count. @return Whether the arena can be created. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -108,7 +108,7 @@ namespace Horo::Runtime::Ui {
     struct UiRenderGeometryStatistics final {
         std::uint32_t capacityVertices{}; /**< Configured vertex capacity per plan. */
         std::uint32_t capacityIndices{};  /**< Configured index capacity per plan. */
-        std::uint32_t capacityBatches{}; /**< Configured batch capacity per plan. */
+        std::uint32_t capacityBatches{};  /**< Configured batch capacity per plan. */
         std::uint32_t usedVertices{};     /**< Vertices held by currently leased plans. */
         std::uint32_t usedIndices{};      /**< Indices held by currently leased plans. */
         std::uint32_t usedBatches{};      /**< Batches held by currently leased plans. */

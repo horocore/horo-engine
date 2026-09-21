@@ -66,11 +66,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief One positioned Horo glyph identity in logical 1/64-DIP units. */
     struct UiPositionedGlyph final {
-        std::uint32_t glyph{};                              /**< Horo glyph identity, never an atlas slot. */
-        std::uint32_t cluster{};                            /**< Source text cluster index. */
-        UiLogicalPoint origin;                              /**< Positioned logical origin. */
-        UiLogicalExtent extent;                             /**< Bounded logical glyph quad extent. */
-        std::array<float, 4> uv{0.0F, 0.0F, 1.0F, 1.0F};   /**< Normalized atlas/source coordinates. */
+        std::uint32_t glyph{};                           /**< Horo glyph identity, never an atlas slot. */
+        std::uint32_t cluster{};                         /**< Source text cluster index. */
+        UiLogicalPoint origin;                           /**< Positioned logical origin. */
+        UiLogicalExtent extent;                          /**< Bounded logical glyph quad extent. */
+        std::array<float, 4> uv{0.0F, 0.0F, 1.0F, 1.0F}; /**< Normalized atlas/source coordinates. */
     };
 
     /** @brief Immutable glyph range resolved to one exact font resource. */
@@ -113,9 +113,9 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Resolved sprite paint payload naming an image resource and normalized source rectangle. */
     struct UiSpriteDraw final {
-        std::uint32_t resource{};                         /**< Image resource table index. */
+        std::uint32_t resource{};                        /**< Image resource table index. */
         std::array<float, 4> uv{0.0F, 0.0F, 1.0F, 1.0F}; /**< Normalized source rectangle [u0, v0, u1, v1]. */
-        UiLinearColor tint;                                /**< Resolved linear tint. */
+        UiLinearColor tint;                              /**< Resolved linear tint. */
     };
 
     /** @brief Resolved text paint payload naming one positioned run. */
