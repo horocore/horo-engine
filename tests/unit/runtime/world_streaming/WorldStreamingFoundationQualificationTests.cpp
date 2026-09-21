@@ -123,9 +123,8 @@ namespace Horo::WorldStreaming {
             const auto nextGeneration = NextStreamingGeneration(generation);
             REQUIRE(nextGeneration.HasValue());
             REQUIRE(nextGeneration.Value().Value() == 4);
-            REQUIRE(NextStreamingGeneration(IdentityFrom<StreamingGeneration>(std::numeric_limits<std::uint64_t>::max()))
-                        .ErrorValue()
-                        .code.Value() == WorldStreamingErrors::GenerationExhausted.code.Value());
+            RequireError(NextStreamingGeneration(IdentityFrom<StreamingGeneration>(std::numeric_limits<std::uint64_t>::max())),
+                         WorldStreamingErrors::GenerationExhausted);
         }
 
         TEST_CASE("World streaming foundation keeps registry snapshots stable across publication",

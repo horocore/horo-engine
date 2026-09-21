@@ -75,7 +75,7 @@ configuration completed:
 - `cmake --build build/skeleton --target HoroWorldStreamingTests --parallel 2`
 - `ctest --test-dir build/skeleton -R '^HoroWorldStreamingTests::' --output-on-failure` (302/302 passed)
 - `ctest --test-dir build/skeleton -R 'HoroWorldStreamingTests::World streaming foundation' --output-on-failure` (6/6 passed)
-- `build/skeleton/tests/HoroWorldStreamingTests "[qualification]"` (96 assertions in 6 cases passed)
+- `build/skeleton/tests/HoroWorldStreamingTests "[qualification]"` (97 assertions in 6 cases passed)
 
 CTest discovers Catch2 cases as `HoroWorldStreamingTests::...`; the unqualified
 aggregate name is not registered. Local Linux evidence does not replace the
