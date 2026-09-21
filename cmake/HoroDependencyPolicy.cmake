@@ -86,6 +86,7 @@ horo_allow_target_dependencies(TARGET HoroEditorServices
         HoroNetworkApi
         HoroApplication
         HoroPlatform
+        HoroRuntimeUi
         HoroEditorModel
         HoroGameplayModuleHost
         HoroGameplayBuild
