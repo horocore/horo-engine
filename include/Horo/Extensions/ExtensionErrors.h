@@ -9,6 +9,14 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor ContributionRejected;
     /** @brief An editor-surface descriptor is malformed or violates its host contract. */
     extern const ErrorCodeDescriptor EditorSurfaceDescriptorInvalid;
+    /** @brief A language-neutral script export descriptor is malformed or violates its host contract. */
+    extern const ErrorCodeDescriptor ScriptExportDescriptorInvalid;
+    /** @brief Script export identities conflict within one immutable descriptor generation. */
+    extern const ErrorCodeDescriptor ScriptExportDescriptorConflict;
+    /** @brief A script export replacement is not an explicitly compatible evolution. */
+    extern const ErrorCodeDescriptor ScriptExportDescriptorIncompatible;
+    /** @brief A script export descriptor or generation exceeded an explicit finite bound. */
+    extern const ErrorCodeDescriptor ScriptExportDescriptorCapacityExceeded;
     extern const ErrorCodeDescriptor InvocationFailed;
     extern const ErrorCodeDescriptor ModuleResolutionFailed;
     /** @brief A lifecycle transition used the wrong owner, ordering, or state evidence. */

@@ -1807,6 +1807,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
+        unit/extensions/ScriptExportDescriptorTests.cpp
         unit/extensions/ExtensionModuleResolutionTests.cpp
         unit/extensions/ExtensionAbiValidationTests.cpp
         unit/extensions/ExtensionAbiConformanceTests.cpp
