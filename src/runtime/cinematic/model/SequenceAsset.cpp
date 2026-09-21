@@ -364,8 +364,8 @@ namespace Horo::Cinematic {
             return Failed<SequenceAsset>(CinematicErrors::SequenceSchemaLimitExceeded,
                                          "Sequence source byte count exceeds the parser limit.");
 
-        JsonParseGuard guard{limits.maximumJsonDepth};
         try {
+            JsonParseGuard guard{limits.maximumJsonDepth};
             Json root = Json::parse(source, std::ref(guard), true, false);
             if (guard.HasDuplicate())
                 return Failed<SequenceAsset>(CinematicErrors::SequenceSchemaDuplicate, "Sequence JSON contains a duplicate object field.");
