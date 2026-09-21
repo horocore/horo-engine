@@ -154,6 +154,45 @@ namespace Horo::Character {
                     MakeError(CharacterErrors::DescriptorInvalid, "Contact evidence contains invalid numeric or material data."));
             return Result<void>::Success();
         }
+
+        /** @brief Checks the closed response vocabulary accepted by a Character sweep adapter. */
+        [[nodiscard]] bool IsSweepResponseSupported(const Physics::PhysicsQueryResponse response) noexcept {
+            return response == Physics::PhysicsQueryResponse::Overlap || response == Physics::PhysicsQueryResponse::Block;
+        }
+
+        /** @brief Validates one complete sweep request before adapter evidence is consumed. */
+        [[nodiscard]] Result<void> ValidateSweepRequest(const CharacterSweepProbeRequest &request) {
+            if (const auto owner =
+                    ValidateCharacterControllerHandleOwner(request.controller, request.sceneGeneration, request.characterWorld);
+                owner.HasError())
+                return owner;
+            if (!request.physicsWorld.IsValid() || !request.collisionProfile.IsValid() || !request.queryChannel.IsValid() ||
+                !Math::IsFinite(request.position) || !IsUnit(request.up) || !IsUnit(request.direction) ||
+                !std::isfinite(request.maximumDistanceMeters) || request.maximumDistanceMeters <= 0.0F)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep request is malformed."));
+            if (const auto capsule = Physics::ValidatePhysicsShapeDescriptor(Physics::PhysicsShapeDescriptor{request.capsule});
+                capsule.HasError())
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep capsule is invalid."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates one copied hit against the request's exact world and travel bound. */
+        [[nodiscard]] Result<void> ValidateSweepHit(const CharacterSweepHit &hit, const CharacterSweepProbeRequest &request) {
+            if (!hit.shape.IsValid() || hit.shape.world != request.physicsWorld)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit shape does not belong to the request world."));
+            if (hit.body.has_value()) {
+                if (const auto owner = Physics::ValidatePhysicsHandleOwner(*hit.body, request.physicsWorld); owner.HasError())
+                    return Result<void>::Failure(
+                        MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit body does not belong to the request world."));
+            }
+            if (!IsSweepResponseSupported(hit.response) || !Math::IsFinite(hit.point) || !IsUnit(hit.normal) ||
+                !std::isfinite(hit.distanceMeters) || hit.distanceMeters < 0.0F || hit.distanceMeters > request.maximumDistanceMeters)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit evidence is malformed."));
+            if (hit.material.has_value() && !IsMaterialValid(*hit.material))
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit material is malformed."));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc CharacterWorldId::Create */
@@ -213,9 +252,9 @@ namespace Horo::Character {
                                              context.physicsSnapshotRevision == expected.physicsSnapshotRevision};
             !std::ranges::all_of(snapshotMatches, std::identity{}))
             return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
-        if (context.overlap == nullptr)
+        if (context.overlap == nullptr && context.sweep == nullptr)
             return Result<void>::Failure(
-                MakeError(CharacterErrors::OperationUnsupported, "Character placement requires a Physics overlap probe."));
+                MakeError(CharacterErrors::OperationUnsupported, "Character movement requires a Physics overlap or sweep probe."));
         return Result<void>::Success();
     }
 
@@ -232,6 +271,22 @@ namespace Horo::Character {
         if (Math::LengthSquared(result.recoveryDisplacement) <= Math::DefaultEpsilon * Math::DefaultEpsilon)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::OverlapRecoveryFailed, "Overlapping geometry did not provide a depenetration displacement."));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCharacterSweepProbeResult */
+    Result<void> ValidateCharacterSweepProbeResult(const CharacterSweepProbeResult &result, const CharacterSweepProbeRequest &request) {
+        if (const auto requestValidation = ValidateSweepRequest(request); requestValidation.HasError())
+            return requestValidation;
+        if (result.hitCount > result.hits.size())
+            return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded, "Character sweep exceeded its fixed hit bound."));
+        if (result.truncated && result.hitCount != result.hits.size())
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::DescriptorInvalid, "Character sweep truncation requires a full retained hit prefix."));
+        for (std::uint32_t index = 0; index < result.hitCount; ++index) {
+            if (const auto hit = ValidateSweepHit(result.hits[index], request); hit.HasError())
+                return hit;
+        }
         return Result<void>::Success();
     }
 
