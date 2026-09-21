@@ -302,7 +302,7 @@ namespace Horo::Vfx {
             state_->allocatedBytes != source.state_->allocatedBytes)
             return Failure<void>(VfxErrors::ParticleBufferInvalid);
 
-        std::memcpy(state_->storage, source.state_->storage, state_->allocatedBytes);
+        std::copy_n(source.state_->storage, state_->allocatedBytes, state_->storage);
         state_->lastSimulationIdentity = source.state_->lastSimulationIdentity;
         state_->active = source.state_->active;
         state_->freeCount = source.state_->freeCount;
@@ -393,6 +393,33 @@ namespace Horo::Vfx {
         for (std::uint32_t index = 0; index < state_->customFloatStreamCount; ++index)
             view.customFloats[index] = {state_->streams.customFloats[index], count};
         return Result<CpuParticleSoAView>::Success(view);
+    }
+
+    /** @copydoc CpuParticleBuffer::View */
+    Result<CpuParticleSoAConstView> CpuParticleBuffer::View() const {
+        if (const auto state = ValidateOperationalState(state_.get()); state.HasError())
+            return Result<CpuParticleSoAConstView>::Failure(state.ErrorValue());
+        const std::size_t count = state_->active;
+        CpuParticleSoAConstView view{
+            .positionX = {state_->streams.floats[0], count},
+            .positionY = {state_->streams.floats[1], count},
+            .positionZ = {state_->streams.floats[2], count},
+            .velocityX = {state_->streams.floats[3], count},
+            .velocityY = {state_->streams.floats[4], count},
+            .velocityZ = {state_->streams.floats[5], count},
+            .sizeX = {state_->streams.floats[6], count},
+            .sizeY = {state_->streams.floats[7], count},
+            .rotation = {state_->streams.floats[8], count},
+            .angularVelocity = {state_->streams.floats[9], count},
+            .packedColor = {state_->streams.packedColor, count},
+            .age = {state_->streams.floats[10], count},
+            .maximumAge = {state_->streams.floats[11], count},
+            .customFlags = {state_->streams.customFlags, count},
+            .customFloatStreamCount = state_->customFloatStreamCount,
+        };
+        for (std::uint32_t index = 0; index < state_->customFloatStreamCount; ++index)
+            view.customFloats[index] = {state_->streams.customFloats[index], count};
+        return Result<CpuParticleSoAConstView>::Success(view);
     }
 
     /** @copydoc CpuParticleBuffer::Clear */
