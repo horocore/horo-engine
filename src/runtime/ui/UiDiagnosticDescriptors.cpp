@@ -73,22 +73,13 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::NavigationInvalid,
         };
         const std::array pointerCapture{
-            &UiErrors::PointerCaptureInvalid,
-            &UiErrors::PointerCaptureSourceStale,
-            &UiErrors::PointerCaptureInteractionStale,
-            &UiErrors::PointerCaptureBusy,
-            &UiErrors::PointerCaptureCapacityExceeded,
-            &UiErrors::PointerCaptureLifecycleUnavailable,
+            &UiErrors::PointerCaptureInvalid, &UiErrors::PointerCaptureSourceStale,      &UiErrors::PointerCaptureInteractionStale,
+            &UiErrors::PointerCaptureBusy,    &UiErrors::PointerCaptureCapacityExceeded, &UiErrors::PointerCaptureLifecycleUnavailable,
         };
         const std::array controls{
-            &UiErrors::ControlDescriptorInvalid,
-            &UiErrors::ControlInputInvalid,
-            &UiErrors::ControlSourceStale,
-            &UiErrors::ControlDefaultPending,
-            &UiErrors::ControlDefaultInvalid,
-            &UiErrors::ControlCapacityExceeded,
-            &UiErrors::ControlSequenceInvalid,
-            &UiErrors::ControlLifecycleUnavailable,
+            &UiErrors::ControlDescriptorInvalid, &UiErrors::ControlInputInvalid,         &UiErrors::ControlSourceStale,
+            &UiErrors::ControlDefaultPending,    &UiErrors::ControlDefaultInvalid,       &UiErrors::ControlCapacityExceeded,
+            &UiErrors::ControlSequenceInvalid,   &UiErrors::ControlLifecycleUnavailable,
         };
         const std::array renderGeometry{
             &UiErrors::RenderGeometryInvalid,
@@ -108,8 +99,8 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *,
-                       core.size() + pointerCapture.size() + actions.size() + controls.size() + renderGeometry.size() + accessibility.size()>
+            std::array<const ErrorCodeDescriptor *, core.size() + pointerCapture.size() + actions.size() + controls.size() +
+                                                        renderGeometry.size() + accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
             output = std::ranges::copy(pointerCapture, output).out;
