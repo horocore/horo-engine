@@ -21,6 +21,32 @@ namespace Horo::Physics::Detail {
     /** @copydoc DestroyCanonicalWorld */
     void DestroyCanonicalWorld(const CanonicalWorldHandle) noexcept {}
 
+    /** @copydoc CreateCanonicalSceneShape */
+    Result<ShapeHandle> CreateCanonicalSceneShape(const CanonicalWorldHandle, const PhysicsWorldId, const PhysicsShapeDescriptor &) {
+        return Result<ShapeHandle>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc CreateCanonicalSceneCompoundShape */
+    Result<ShapeHandle> CreateCanonicalSceneCompoundShape(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                          const std::span<const PhysicsSceneShapeInstance>) {
+        return Result<ShapeHandle>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc CreateCanonicalSceneBody */
+    Result<BodyHandle> CreateCanonicalSceneBody(const CanonicalWorldHandle, const PhysicsWorldId, const PhysicsSceneBodyDescriptor &) {
+        return Result<BodyHandle>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc CreateCanonicalSceneConstraint */
+    Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                            const PhysicsConstraintDescriptor &) {
+        return Result<ConstraintHandle>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
     /** @copydoc CreateCanonicalQueryFixture */
     Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsQueryFixtureDescriptor &) {

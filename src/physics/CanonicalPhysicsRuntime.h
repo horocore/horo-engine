@@ -5,7 +5,11 @@
  */
 
 #include "Horo/Physics/PhysicsEvents.h"
+#include "Horo/Physics/PhysicsBodyDescriptor.h"
+#include "Horo/Physics/PhysicsConstraintDescriptor.h"
 #include "Horo/Physics/PhysicsQuery.h"
+#include "Horo/Physics/PhysicsShapeDescriptor.h"
+#include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
 #include <cstdint>
@@ -93,6 +97,18 @@ namespace Horo::Physics::Detail {
     [[nodiscard]] bool InvokeCanonicalContactCallbackForTesting(CanonicalWorldHandle world, const PhysicsQueryFixture &first,
                                                                 const PhysicsQueryFixture &second, std::uint64_t simulationTick,
                                                                 bool sensor, bool persisted, CanonicalContactSink contactSink);
+    /** @brief Admits one analytic scene shape into an unpublished owner-thread world. */
+    [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneShape(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                const PhysicsShapeDescriptor &descriptor);
+    /** @brief Admits one immutable compound scene shape from resident child shapes. */
+    [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneCompoundShape(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                        std::span<const PhysicsSceneShapeInstance> instances);
+    /** @brief Admits one scene body after its shape has been staged. */
+    [[nodiscard]] Result<BodyHandle> CreateCanonicalSceneBody(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                              const PhysicsSceneBodyDescriptor &descriptor);
+    /** @brief Admits one scene constraint after both body endpoints have been staged. */
+    [[nodiscard]] Result<ConstraintHandle> CreateCanonicalSceneConstraint(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                          const PhysicsConstraintDescriptor &descriptor);
     /** @brief Exercises the same bounded callback inbox from native-boundary tests. */
     void SubmitCanonicalDiagnosticForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message) noexcept;
     /** @brief Invokes the installed native callback hook under a bounded test route. */

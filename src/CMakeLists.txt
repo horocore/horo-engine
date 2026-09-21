@@ -583,6 +583,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldNative.cpp
         physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
@@ -598,6 +599,8 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeDiagnostics.h
         physics/CanonicalPhysicsRuntimeQuery.cpp
         physics/CanonicalPhysicsRuntimeQuery.h
+        physics/CanonicalPhysicsRuntimeQueries.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
@@ -605,6 +608,8 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueries.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp
         PROPERTIES
@@ -613,7 +618,10 @@ else()
     target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
 endif()
 
-add_library(HoroPhysicsSceneIntegration STATIC physics/PhysicsSceneActivation.cpp)
+add_library(HoroPhysicsSceneIntegration STATIC
+        physics/PhysicsSceneActivation.cpp
+        physics/PhysicsSceneActivationCapabilities.cpp
+        physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene)

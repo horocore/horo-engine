@@ -1,0 +1,106 @@
+#include "PhysicsWorldInternal.h"
+
+namespace Horo::Physics {
+    /** @copydoc PhysicsWorld::CreateQueryFixture */
+    Result<PhysicsQueryFixture> PhysicsWorld::CreateQueryFixture(const PhysicsQueryFixtureDescriptor &fixture) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsQueryFixtureDescriptor(fixture, impl_->identity); valid.HasError())
+            return Result<PhysicsQueryFixture>::Failure(valid.ErrorValue());
+        return Detail::CreateCanonicalQueryFixture(impl_->native, impl_->identity, fixture);
+    }
+
+    /** @copydoc PhysicsWorld::DestroyQueryFixture */
+    Result<void> PhysicsWorld::DestroyQueryFixture(const PhysicsQueryFixture &fixture) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const auto body = ValidatePhysicsHandleOwner(fixture.body, impl_->identity); body.HasError())
+            return body;
+        if (const auto shape = ValidatePhysicsHandleOwner(fixture.shape, impl_->identity); shape.HasError())
+            return shape;
+        return Detail::DestroyCanonicalQueryFixture(impl_->native, fixture);
+    }
+
+    /** @copydoc PhysicsWorld::CreateSceneShape */
+    Result<ShapeHandle> PhysicsWorld::CreateSceneShape(const PhysicsShapeDescriptor &descriptor) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsShapeDescriptor(descriptor); valid.HasError())
+            return Result<ShapeHandle>::Failure(valid.ErrorValue());
+        return Detail::CreateCanonicalSceneShape(impl_->native, impl_->identity, descriptor);
+    }
+
+    /** @copydoc PhysicsWorld::CreateSceneCompoundShape */
+    Result<ShapeHandle> PhysicsWorld::CreateSceneCompoundShape(const std::span<const PhysicsSceneShapeInstance> instances) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (instances.empty())
+            return Result<ShapeHandle>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "A scene compound shape requires a child shape."));
+        for (const PhysicsSceneShapeInstance &instance : instances) {
+            if (const Result<void> owner = ValidatePhysicsHandleOwner(instance.shape, impl_->identity); owner.HasError())
+                return Result<ShapeHandle>::Failure(owner.ErrorValue());
+            if (const Result<void> pose = ValidatePhysicsPose(instance.localPose); pose.HasError())
+                return Result<ShapeHandle>::Failure(pose.ErrorValue());
+        }
+        return Detail::CreateCanonicalSceneCompoundShape(impl_->native, impl_->identity, instances);
+    }
+
+    /** @copydoc PhysicsWorld::CreateSceneBody */
+    Result<BodyHandle> PhysicsWorld::CreateSceneBody(const PhysicsSceneBodyDescriptor &descriptor) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, impl_->identity); valid.HasError())
+            return Result<BodyHandle>::Failure(valid.ErrorValue());
+        return Detail::CreateCanonicalSceneBody(impl_->native, impl_->identity, descriptor);
+    }
+
+    /** @copydoc PhysicsWorld::CreateSceneConstraint */
+    Result<ConstraintHandle> PhysicsWorld::CreateSceneConstraint(const PhysicsConstraintDescriptor &descriptor) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<ConstraintHandle>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<ConstraintHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<ConstraintHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsConstraintDescriptor(descriptor, impl_->identity); valid.HasError())
+            return Result<ConstraintHandle>::Failure(valid.ErrorValue());
+        return Detail::CreateCanonicalSceneConstraint(impl_->native, impl_->identity, descriptor);
+    }
+
+    /** @copydoc PhysicsWorld::Query */
+    Result<PhysicsQueryResult> PhysicsWorld::Query(const PhysicsQueryDescriptor &descriptor, const std::span<PhysicsQueryHit> hits) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsQueryDescriptor(descriptor, impl_->identity, impl_->querySceneGeneration);
+            valid.HasError())
+            return Result<PhysicsQueryResult>::Failure(valid.ErrorValue());
+        if (hits.size() > MaximumPhysicsQueryHits)
+            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+        return Detail::ExecuteCanonicalQuery(impl_->native, descriptor, hits);
+    }
+}  // namespace Horo::Physics

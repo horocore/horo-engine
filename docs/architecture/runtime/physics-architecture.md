@@ -117,12 +117,14 @@ solver state. ECS components hold generation-checked handles.
 `PhysicsRuntime` is an explicit process-composition owner. `Canonical` is used by
 both graphical and headless hosts that require simulation; `Null` explicitly
 reports omitted Physics and unsupported features. It is never an automatic fallback.
-The initial lifecycle implementation advertises canonical world creation and the
-owner-thread immediate-query capability. Rigid-body, constraint, snapshot-query and
-origin-rebasing behavior is not advertised merely because a native empty system
-exists. Simulation filters remain closed until validated collision-profile and body
-admission are implemented; immediate-query fixtures are a narrow analytic admission
-path and do not publish simulation bodies or replace scene activation.
+The initial lifecycle implementation advertises canonical world creation, analytic
+scene-shape admission, rigid-body and fixed/distance-constraint staging, and the
+owner-thread immediate-query capability. Snapshot-query and origin-rebasing behavior
+remain unsupported. Simulation filters remain closed until the validated collision-
+profile table is installed; scene activation still validates authored profiles and
+materials and publishes complete body/shape/constraint bindings, but does not claim
+contact filtering support from the closed native filter. Immediate-query fixtures
+remain a separate narrow analytic path and do not replace scene activation.
 
 `PrepareWorld` builds an isolated unpublished candidate from one captured settings
 snapshot. It owns scratch storage, serial job dispatch, filters and native system
