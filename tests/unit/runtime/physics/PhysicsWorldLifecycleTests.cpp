@@ -48,13 +48,6 @@ namespace Horo::Physics {
         const auto identity = PhysicsWorldId::Create(100).Value();
         REQUIRE(world->Activate(identity).HasValue());
         REQUIRE(world->State() == PhysicsWorldState::ActiveNull);
-        const PhysicsShapeDescriptor sceneShape = PhysicsBoxShape{};
-        const std::span<const PhysicsSceneShapeInstance> emptyInstances{};
-        REQUIRE(world->CreateSceneShape(sceneShape).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
-        REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() ==
-                PhysicsErrors::CapabilityUnavailable.code.Value());
-        REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
-        REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
         const auto destroyCommand = DestroyCommand();
         REQUIRE(world->QueueStructuralCommand(destroyCommand).ErrorValue().code.Value() ==
                 PhysicsErrors::CapabilityUnavailable.code.Value());
@@ -82,6 +75,19 @@ namespace Horo::Physics {
         runtime->Shutdown();
         REQUIRE(runtime->State() == PhysicsRuntimeState::Stopped);
         REQUIRE(runtime->PrepareWorld(settings).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
+    }
+
+    TEST_CASE("Null Physics rejects scene admission as unavailable", "[physics][lifecycle][scene]") {
+        auto runtime = std::move(PhysicsRuntime::Create(PhysicsRuntimeMode::Null).Value());
+        auto world = std::move(runtime->PrepareWorld(Test::SmallWorldSettings()).Value());
+        REQUIRE(world->Activate(PhysicsWorldId::Create(100).Value()).HasValue());
+        const PhysicsShapeDescriptor sceneShape = PhysicsBoxShape{};
+        const std::span<const PhysicsSceneShapeInstance> emptyInstances{};
+        REQUIRE(world->CreateSceneShape(sceneShape).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() ==
+                PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
     }
 
     TEST_CASE("Physics rejects unknown compositions and closes unactivated candidates on runtime shutdown", "[physics][lifecycle]") {
