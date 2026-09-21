@@ -375,6 +375,34 @@ invalidated, remaining callbacks and the default action are suppressed, and the
 caller receives a typed failure. Handler exceptions are contained at the callback
 boundary. Retirement closes admission and shutdown is idempotent.
 
+## Typed Actions, Commands, And Default Navigation
+
+Interactive controls do not retain callbacks or gameplay references. They emit
+typed `UiActionCommand` values through a generation-fenced `UiActionRouter`.
+Button, form, route, and gameplay commands each carry a distinct stable action
+identity; default navigation uses a closed direction vocabulary and exact
+presented focus handles. Arguments are a fixed-capacity typed payload containing
+only bounded scalar, UTF-8 text, and Horo-owned identity values.
+
+One admitted request captures its runtime instance, canvas, document, tree and
+interaction revisions. The owner rejects foreign or stale evidence before queue
+admission. A consumer returns exactly one typed `Handled`, `Rejected`, `Pending`,
+`Completed`, or `Cancelled` result correlated to that request. `Pending` carries
+an owner-local operation identity; terminal results never mutate the widget or
+retain a provider, gameplay, script, renderer, platform, or editor object.
+
+Default navigation results distinguish focus movement, submit/cancel dispatch, and
+no-target evidence. A no-target result cannot silently fall through to gameplay;
+the input/context owner decides the declared handled or rejected policy. Queue
+storage is reserved at router creation, so frame-hot admission and dispatch do
+not allocate, block, perform I/O, or invoke another subsystem synchronously.
+
+Retirement closes new admission, reload creates a new owner/revision generation,
+and shutdown discards queued requests without invoking a consumer. Late results
+from an old request or operation are stale and cannot affect a replacement UI
+generation. Async operation ownership, progress, busy projection, and
+cancellation observation are layered above this result boundary.
+
 [ADR-078](../../adr/078-runtime-ui-input-context-and-player-routing.md) keeps device,
 input user, local player, logical viewport and UI context identities separate. Each
 context declares a single-player, shared-player, game-instance or unassigned-join

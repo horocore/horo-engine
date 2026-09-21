@@ -348,6 +348,95 @@ namespace Horo::Runtime::Ui::UiErrors {
                                           "Finish the active route or create a dispatcher for the current runtime canvas generation.",
                                           false,
                                           false};
+    /** @copydoc ActionInvalid */
+    const ErrorCodeDescriptor ActionInvalid{UiDomain,
+                                            ErrorCode{"runtime_ui.action.invalid"},
+                                            ErrorSeverity::Error,
+                                            "The Runtime UI action owner context or request is invalid.",
+                                            "Use exact active instance, canvas, document, revision, and element evidence.",
+                                            false,
+                                            false};
+    /** @copydoc ActionPayloadInvalid */
+    const ErrorCodeDescriptor ActionPayloadInvalid{UiDomain,
+                                                   ErrorCode{"runtime_ui.action_payload.invalid"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI action payload contains an invalid typed value.",
+                                                   "Use finite scalar values, valid stable identities, and bounded UTF-8 text.",
+                                                   false,
+                                                   true};
+    /** @copydoc ActionPayloadCapacityExceeded */
+    const ErrorCodeDescriptor ActionPayloadCapacityExceeded{UiDomain,
+                                                            ErrorCode{"runtime_ui.action_payload.capacity_exceeded"},
+                                                            ErrorSeverity::Error,
+                                                            "The Runtime UI action payload exceeds its fixed argument bound.",
+                                                            "Reduce the command arguments to the declared bounded typed payload contract.",
+                                                            false,
+                                                            true};
+    /** @copydoc ActionCommandInvalid */
+    const ErrorCodeDescriptor ActionCommandInvalid{UiDomain,
+                                                   ErrorCode{"runtime_ui.action_command.invalid"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI typed action command is invalid.",
+                                                   "Use a valid stable action identity and a compatible closed operation kind.",
+                                                   false,
+                                                   true};
+    /** @copydoc ActionQueueCapacityExceeded */
+    const ErrorCodeDescriptor
+        ActionQueueCapacityExceeded{UiDomain,
+                                    ErrorCode{"runtime_ui.action_queue.capacity_exceeded"},
+                                    ErrorSeverity::Error,
+                                    "The Runtime UI action queue is full.",
+                                    "Retry at a later owner safe point or increase the finite admitted queue capacity.",
+                                    true,
+                                    false};
+    /** @copydoc ActionSourceStale */
+    const ErrorCodeDescriptor ActionSourceStale{UiDomain,
+                                                ErrorCode{"runtime_ui.action.source_stale"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI action source belongs to another owner or revision.",
+                                                "Retarget the action against the latest successfully presented interaction generation.",
+                                                true,
+                                                false};
+    /** @copydoc ActionResultInvalid */
+    const ErrorCodeDescriptor ActionResultInvalid{UiDomain,
+                                                  ErrorCode{"runtime_ui.action_result.invalid"},
+                                                  ErrorSeverity::Error,
+                                                  "The Runtime UI action result has invalid state-specific fields.",
+                                                  "Return exactly one closed action result state with matching operation evidence.",
+                                                  false,
+                                                  false};
+    /** @copydoc ActionResultStale */
+    const ErrorCodeDescriptor ActionResultStale{UiDomain,
+                                                ErrorCode{"runtime_ui.action_result.stale"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI action result does not match its admitted request.",
+                                                "Complete or reject the exact request identity supplied to the consumer.",
+                                                true,
+                                                false};
+    /** @copydoc ActionHandlerFailed */
+    const ErrorCodeDescriptor ActionHandlerFailed{UiDomain,
+                                                  ErrorCode{"runtime_ui.action_handler.failed"},
+                                                  ErrorSeverity::Error,
+                                                  "A Runtime UI action consumer threw across its callback boundary.",
+                                                  "Contain consumer failures and return a typed action result instead of throwing.",
+                                                  false,
+                                                  false};
+    /** @copydoc ActionLifecycleUnavailable */
+    const ErrorCodeDescriptor ActionLifecycleUnavailable{UiDomain,
+                                                         ErrorCode{"runtime_ui.action.lifecycle_unavailable"},
+                                                         ErrorSeverity::Error,
+                                                         "The Runtime UI action router is closed or dispatching reentrantly.",
+                                                         "Stop admitting actions during retirement and create a new router after reload.",
+                                                         false,
+                                                         false};
+    /** @copydoc NavigationInvalid */
+    const ErrorCodeDescriptor NavigationInvalid{UiDomain,
+                                                ErrorCode{"runtime_ui.navigation.invalid"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI default navigation command or result is invalid.",
+                                                "Use a known direction and exact presented focus handles.",
+                                                false,
+                                                false};
     /** @copydoc RenderSnapshotInvalid */
     const ErrorCodeDescriptor RenderSnapshotInvalid{UiDomain,
                                                     ErrorCode{"runtime_ui.render_snapshot.invalid"},
