@@ -159,15 +159,17 @@ namespace Horo::Runtime::Ui {
             std::size_t expectedIndex = 0;
             std::size_t expectedCommand = 0;
             for (const auto &batch : batches)
-                if (!batch.IsValid(vertices.size(), indices.size(), commandCount) || batch.firstVertex != expectedVertex ||
-                    batch.firstIndex != expectedIndex || batch.firstCommand != expectedCommand)
+                if (!batch.IsValid(vertices.size(), indices.size(), commandCount) ||
+                    std::array<std::size_t, 3>{batch.firstVertex, batch.firstIndex, batch.firstCommand} !=
+                        std::array<std::size_t, 3>{expectedVertex, expectedIndex, expectedCommand})
                     return Failure(UiErrors::RenderGeometryInvalid);
                 else {
                     expectedVertex += batch.vertexCount;
                     expectedIndex += batch.indexCount;
                     expectedCommand += batch.commandCount;
                 }
-            if (expectedVertex != vertices.size() || expectedIndex != indices.size() || expectedCommand != commandCount)
+            if (std::array<std::size_t, 3>{expectedVertex, expectedIndex, expectedCommand} !=
+                std::array<std::size_t, 3>{vertices.size(), indices.size(), commandCount})
                 return Failure(UiErrors::RenderGeometryInvalid);
             return Result<void>::Success();
         }
