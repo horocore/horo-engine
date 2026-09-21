@@ -36,7 +36,7 @@ ctest --test-dir build/skeleton -R HoroVfxApiTests --output-on-failure
 The focused qualification cases can be selected with:
 
 ```bash
-ctest --test-dir build/skeleton -R 'VfxFoundationQualification|HoroVfxApiTests' --output-on-failure
+ctest --test-dir build/skeleton -R 'VFX foundation' --output-on-failure
 ```
 
 ## Ownership and limits

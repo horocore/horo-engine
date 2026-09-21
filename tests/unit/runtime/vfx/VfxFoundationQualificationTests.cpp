@@ -142,13 +142,16 @@ namespace Horo::Vfx {
         auto simulation = std::move(pipeline).Value();
         const auto before = ::Horo::Tests::AllocationProbe::Count();
         const auto step = simulation.Advance({.deltaSeconds = 1.0F / 60.0F, .burstCount = 32});
+        const auto view = simulation.View();
+        const auto statistics = simulation.Statistics();
         const auto after = ::Horo::Tests::AllocationProbe::Count();
         REQUIRE(step.HasValue());
-        CHECK(step.Value().spawned >= 32);
+        REQUIRE(view.HasValue());
+        CHECK(step.Value().spawned == 32);
         CHECK(step.Value().active == step.Value().spawned);
         CHECK(after == before);
-        CHECK(simulation.View().Value().positionX.size() == step.Value().active);
-        CHECK(simulation.Statistics().nextSpawnOrdinal == step.Value().spawned);
+        CHECK(view.Value().positionX.size() == step.Value().active);
+        CHECK(statistics.nextSpawnOrdinal == step.Value().spawned);
     }
 
     TEST_CASE("VFX foundation rejects hostile import and cook evidence with typed findings", "[unit][vfx][qualification][hostile]") {
