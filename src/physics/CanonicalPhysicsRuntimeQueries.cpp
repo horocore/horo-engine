@@ -6,28 +6,28 @@
 namespace Horo::Physics::Detail {
     namespace {
         [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const BodyHandle body) {
-            const auto found = std::ranges::find_if(world.fixtures, [body](const auto &fixture) {
+            const auto found = std::ranges::find_if(world.query.fixtures, [body](const auto &fixture) {
                 return fixture.fixture.body == body;
             });
-            return found == world.fixtures.end() ? nullptr : std::to_address(found);
+            return found == world.query.fixtures.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const ShapeHandle shape) {
-            const auto found = std::ranges::find_if(world.fixtures, [shape](const auto &fixture) {
+            const auto found = std::ranges::find_if(world.query.fixtures, [shape](const auto &fixture) {
                 return fixture.fixture.shape == shape;
             });
-            return found == world.fixtures.end() ? nullptr : std::to_address(found);
+            return found == world.query.fixtures.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const JPH::BodyID body) {
             const std::size_t nativeIndex = body.GetIndex();
-            if (nativeIndex >= world.nativeFixtureIndices.size())
+            if (nativeIndex >= world.query.nativeFixtureIndices.size())
                 return nullptr;
-            const std::size_t fixtureIndex = world.nativeFixtureIndices[nativeIndex];
-            if (fixtureIndex == CanonicalWorld::InvalidFixtureIndex || fixtureIndex >= world.fixtures.size() ||
-                world.fixtures[fixtureIndex].nativeBody != body)
+            const std::size_t fixtureIndex = world.query.nativeFixtureIndices[nativeIndex];
+            if (fixtureIndex == CanonicalWorldQueryState::InvalidFixtureIndex || fixtureIndex >= world.query.fixtures.size() ||
+                world.query.fixtures[fixtureIndex].nativeBody != body)
                 return nullptr;
-            return &world.fixtures[fixtureIndex];
+            return &world.query.fixtures[fixtureIndex];
         }
 
         [[nodiscard]] bool Admits(const CanonicalQueryFixtureRecord &fixture, const PhysicsQueryDescriptor &descriptor) noexcept {
@@ -75,7 +75,7 @@ namespace Horo::Physics::Detail {
 
         [[nodiscard]] std::optional<Math::Vec3> RayNormal(const CanonicalWorld &world, const JPH::BodyID body,
                                                           const JPH::SubShapeID &subshape, const Math::Vec3 position) {
-            JPH::BodyLockRead lock(world.system->GetBodyLockInterface(), body);
+            JPH::BodyLockRead lock(world.native.system->GetBodyLockInterface(), body);
             if (!lock.Succeeded())
                 return std::nullopt;
             const JPH::Vec3 normal = lock.GetBody().GetWorldSpaceSurfaceNormal(subshape, {position.x, position.y, position.z});
@@ -85,15 +85,15 @@ namespace Horo::Physics::Detail {
 
         void CollectRayQuery(const CanonicalWorld &world, const PhysicsRayQuery &query, CanonicalQueryCollectors &collectors,
                              const QueryBodyFilter &bodyFilter) {
-            world.system->GetNarrowPhaseQuery().CastRay({JPH::RVec3(query.origin.x, query.origin.y, query.origin.z),
-                                                         ToNative(query.direction * query.maximumDistanceMeters)},
-                                                        JPH::RayCastSettings{}, collectors.ray, {}, {}, bodyFilter);
+            world.native.system->GetNarrowPhaseQuery().CastRay({JPH::RVec3(query.origin.x, query.origin.y, query.origin.z),
+                                                                ToNative(query.direction * query.maximumDistanceMeters)},
+                                                               JPH::RayCastSettings{}, collectors.ray, {}, {}, bodyFilter);
         }
 
         void CollectPointQuery(const CanonicalWorld &world, const PhysicsPointQuery &query, CanonicalQueryCollectors &collectors,
                                const QueryBodyFilter &bodyFilter) {
-            world.system->GetNarrowPhaseQuery().CollidePoint({query.point.x, query.point.y, query.point.z}, collectors.point, {}, {},
-                                                             bodyFilter);
+            world.native.system->GetNarrowPhaseQuery().CollidePoint({query.point.x, query.point.y, query.point.z}, collectors.point, {}, {},
+                                                                    bodyFilter);
         }
 
         [[nodiscard]] JPH::RMat44 ToNativeTransform(const PhysicsPose &pose) {
@@ -104,8 +104,8 @@ namespace Horo::Physics::Detail {
         void CollectOverlapQuery(const CanonicalWorld &world, const PhysicsOverlapQuery &query, const CanonicalQueryFixtureRecord &source,
                                  CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
             const JPH::RMat44 transform = ToNativeTransform(query.pose);
-            world.system->GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
-                                                             JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
+            world.native.system->GetNarrowPhaseQuery().CollideShape(source.shape, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
+                                                                    JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
         }
 
         void CollectSweepQuery(const CanonicalWorld &world, const PhysicsSweepQuery &query, const CanonicalQueryFixtureRecord &source,
@@ -113,8 +113,8 @@ namespace Horo::Physics::Detail {
             const JPH::RMat44 transform = ToNativeTransform(query.pose);
             const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(source.shape, JPH::Vec3::sOne(), transform,
                                                                               ToNative(query.direction * query.maximumDistanceMeters));
-            world.system->GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {}, {},
-                                                          bodyFilter);
+            world.native.system->GetNarrowPhaseQuery().CastShape(cast, JPH::ShapeCastSettings{}, JPH::RVec3::sZero(), collectors.sweep, {},
+                                                                 {}, bodyFilter);
         }
 
         /** @brief Executes one validated native query into the world-owned fixed collectors. */
@@ -174,7 +174,7 @@ namespace Horo::Physics::Detail {
                                 .layer = fixture->descriptor.layer,
                                 .profile = fixture->descriptor.profile,
                                 .channel = fixture->descriptor.channel,
-                                .filterSchemaGeneration = world.querySchemaGeneration,
+                                .filterSchemaGeneration = world.query.querySchemaGeneration,
                                 .response = ToResponse(fixture->descriptor.response),
                                 .position = evidence.position,
                                 .normal = evidence.normal,
@@ -294,33 +294,35 @@ namespace Horo::Physics::Detail {
         if (world.value == nullptr || !owner.IsValid())
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        if (canonical.nextFixtureSlot == std::numeric_limits<std::uint32_t>::max() ||
-            canonical.nextFixtureGeneration == std::numeric_limits<std::uint32_t>::max() ||
-            canonical.fixtures.size() >= canonical.maximumFixtures)
+        if (canonical.query.nextFixtureSlot == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.query.nextFixtureGeneration == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.query.fixtures.size() >= canonical.query.maximumFixtures)
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         const auto nativeShape = CreateNativeShape(fixture.shape);
         if (nativeShape.HasError())
             return Result<PhysicsQueryFixture>::Failure(nativeShape.ErrorValue());
 
-        const std::uint32_t slot = canonical.nextFixtureSlot++;
-        const std::uint32_t generation = canonical.nextFixtureGeneration++;
+        const std::uint32_t slot = canonical.query.nextFixtureSlot++;
+        const std::uint32_t generation = canonical.query.nextFixtureGeneration++;
         const PhysicsQueryFixture identity{.body = {owner, {slot, generation}}, .shape = {owner, {slot, generation}}};
         JPH::BodyCreationSettings settings(nativeShape.Value().GetPtr(),
                                            JPH::RVec3(fixture.pose.translation.x, fixture.pose.translation.y, fixture.pose.translation.z),
                                            ToNative(fixture.pose.rotation), JPH::EMotionType::Static, JPH::ObjectLayer{0});
         settings.mIsSensor = fixture.trigger;
-        const JPH::BodyID nativeBody = canonical.system->GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+        const JPH::BodyID nativeBody =
+            canonical.native.system->GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
         if (nativeBody.IsInvalid())
             return Result<PhysicsQueryFixture>::Failure(
                 MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the query fixture body admission."));
-        if (nativeBody.GetIndex() >= canonical.nativeFixtureIndices.size()) {
-            canonical.system->GetBodyInterface().RemoveBody(nativeBody);
-            canonical.system->GetBodyInterface().DestroyBody(nativeBody);
+        if (nativeBody.GetIndex() >= canonical.query.nativeFixtureIndices.size()) {
+            canonical.native.system->GetBodyInterface().RemoveBody(nativeBody);
+            canonical.native.system->GetBodyInterface().DestroyBody(nativeBody);
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         }
-        canonical.fixtures.push_back({.fixture = identity, .descriptor = fixture, .nativeBody = nativeBody, .shape = nativeShape.Value()});
-        canonical.nativeFixtureIndices[nativeBody.GetIndex()] = canonical.fixtures.size() - 1;
-        ++canonical.querySchemaGeneration;
+        canonical.query.fixtures.push_back(
+            {.fixture = identity, .descriptor = fixture, .nativeBody = nativeBody, .shape = nativeShape.Value()});
+        canonical.query.nativeFixtureIndices[nativeBody.GetIndex()] = canonical.query.fixtures.size() - 1;
+        ++canonical.query.querySchemaGeneration;
         return Result<PhysicsQueryFixture>::Success(identity);
     }
 
@@ -334,19 +336,19 @@ namespace Horo::Physics::Detail {
         if (fixture.body.world.Value() != fixture.shape.world.Value() || fixture.body.slot.index != fixture.shape.slot.index ||
             fixture.body.slot.generation != fixture.shape.slot.generation)
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture body and shape identities must be paired."));
-        const auto found = std::ranges::find_if(canonical.fixtures, [&fixture](const auto &entry) {
+        const auto found = std::ranges::find_if(canonical.query.fixtures, [&fixture](const auto &entry) {
             return entry.fixture == fixture;
         });
-        if (found == canonical.fixtures.end())
+        if (found == canonical.query.fixtures.end())
             return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
-        canonical.system->GetBodyInterface().RemoveBody(found->nativeBody);
-        canonical.system->GetBodyInterface().DestroyBody(found->nativeBody);
-        const auto erasedIndex = static_cast<std::size_t>(std::distance(canonical.fixtures.begin(), found));
-        canonical.nativeFixtureIndices[found->nativeBody.GetIndex()] = CanonicalWorld::InvalidFixtureIndex;
-        canonical.fixtures.erase(found);
-        if (erasedIndex < canonical.fixtures.size())
-            canonical.nativeFixtureIndices[canonical.fixtures[erasedIndex].nativeBody.GetIndex()] = erasedIndex;
-        ++canonical.querySchemaGeneration;
+        canonical.native.system->GetBodyInterface().RemoveBody(found->nativeBody);
+        canonical.native.system->GetBodyInterface().DestroyBody(found->nativeBody);
+        const auto erasedIndex = static_cast<std::size_t>(std::distance(canonical.query.fixtures.begin(), found));
+        canonical.query.nativeFixtureIndices[found->nativeBody.GetIndex()] = CanonicalWorldQueryState::InvalidFixtureIndex;
+        canonical.query.fixtures.erase(found);
+        if (erasedIndex < canonical.query.fixtures.size())
+            canonical.query.nativeFixtureIndices[canonical.query.fixtures[erasedIndex].nativeBody.GetIndex()] = erasedIndex;
+        ++canonical.query.querySchemaGeneration;
         return Result<void>::Success();
     }
 
@@ -361,12 +363,12 @@ namespace Horo::Physics::Detail {
         if (const Result<void> collected = CollectCanonicalQuery(canonical, descriptor, collectors, bodyFilter); collected.HasError())
             return Result<PhysicsQueryResult>::Failure(collected.ErrorValue());
 
-        auto &candidates = canonical.queryCandidates;
+        auto &candidates = canonical.query.queryCandidates;
         std::size_t candidateCount{};
         if (const Result<void> projected = ProjectCanonicalQueryHits(canonical, descriptor, collectors, candidates, candidateCount);
             projected.HasError())
             return Result<PhysicsQueryResult>::Failure(projected.ErrorValue());
 
-        return FinalizeCanonicalQuery(descriptor, candidates, candidateCount, hits, canonical.querySchemaGeneration);
+        return FinalizeCanonicalQuery(descriptor, candidates, candidateCount, hits, canonical.query.querySchemaGeneration);
     }
 }  // namespace Horo::Physics::Detail

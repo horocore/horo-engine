@@ -1,7 +1,4 @@
-#include "CanonicalPhysicsRuntime.h"
-
-#include "CanonicalPhysicsRuntimeDiagnostics.h"
-#include "CanonicalPhysicsRuntimeQuery.h"
+#include "CanonicalPhysicsRuntimeInternal.h"
 #include "CanonicalSolver.h"
 #include "CanonicalWorldSettings.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
@@ -12,6 +9,7 @@
 // Jolt subsidiary headers require its root definitions first.
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
+#include <Jolt/Core/Memory.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyFilter.h>
@@ -20,15 +18,26 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollidePointResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
-#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/PlaneShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/RegisterTypes.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
+#include <cmath>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <ranges>
@@ -37,141 +46,136 @@
 #include <utility>
 
 namespace Horo::Physics::Detail {
+    AllocatorFunctions installedAllocatorFunctions;
+
+    std::atomic<DiagnosticInbox *> &ActiveDiagnosticInbox() noexcept {
+        static std::atomic<DiagnosticInbox *> inbox;
+        return inbox;
+    }
+
+    CanonicalRuntime::~CanonicalRuntime() {
+        ActiveDiagnosticInbox().store(nullptr);
+        if (typesRegistered)
+            JPH::UnregisterTypes();
+        JPH::Factory::sInstance = nullptr;
+        factory.reset();
+        JPH::Allocate = nullptr;
+        JPH::Reallocate = nullptr;
+        JPH::Free = nullptr;
+        JPH::AlignedAllocate = nullptr;
+        JPH::AlignedFree = nullptr;
+        installedAllocatorFunctions = {};
+        JPH::Trace = priorTrace;
+#ifdef JPH_ENABLE_ASSERTS
+        JPH::AssertFailed = priorAssertFailed;
+#endif
+    }
+
+    CanonicalWorld::CanonicalWorld(CanonicalRuntime &runtime, const std::uint32_t maximumBodies, const std::uint32_t maximumFixtures,
+                                   const std::uint32_t maximumShapes, const std::uint32_t maximumConstraints)
+        : owner(runtime), scene(maximumBodies, maximumShapes, maximumConstraints), query(maximumFixtures, maximumBodies) {
+        ++owner.resources.worlds;
+        query.fixtures.reserve(query.maximumFixtures);
+        scene.shapes.reserve(scene.maximumShapes);
+        scene.bodies.reserve(scene.maximumBodies);
+        scene.constraints.reserve(scene.maximumConstraints);
+    }
+
+    CanonicalWorld::~CanonicalWorld() {
+        if (native.system != nullptr) {
+            for (const CanonicalSceneConstraintRecord &constraint : scene.constraints)
+                native.system->RemoveConstraint(constraint.constraint.GetPtr());
+            auto &bodyInterface = native.system->GetBodyInterface();
+            for (const CanonicalSceneBodyRecord &body : scene.bodies) {
+                bodyInterface.RemoveBody(body.nativeBody);
+                bodyInterface.DestroyBody(body.nativeBody);
+            }
+            for (const CanonicalQueryFixtureRecord &fixture : query.fixtures) {
+                bodyInterface.RemoveBody(fixture.nativeBody);
+                bodyInterface.DestroyBody(fixture.nativeBody);
+            }
+        }
+        scene.constraints.clear();
+        scene.bodies.clear();
+        scene.shapes.clear();
+        query.fixtures.clear();
+        const auto hadSystem = static_cast<std::uint32_t>(native.system != nullptr);
+        const auto hadJobs = static_cast<std::uint32_t>(native.jobs != nullptr);
+        const auto hadScratch = static_cast<std::uint32_t>(native.scratch != nullptr);
+        native.system.reset();
+        native.jobs.reset();
+        native.scratch.reset();
+        owner.resources.physicsSystems -= hadSystem;
+        owner.resources.jobSystems -= hadJobs;
+        owner.resources.scratchAllocators -= hadScratch;
+        --owner.resources.worlds;
+    }
+
     namespace {
-        /** @brief Process-owned Jolt registration; destruction occurs only after every native world retires. */
-        struct CanonicalRuntime final {
-            CanonicalRuntime() = default;
-            CanonicalRuntime(const CanonicalRuntime &) = delete;
-            CanonicalRuntime &operator=(const CanonicalRuntime &) = delete;
 
-            ~CanonicalRuntime() {
-                ActiveDiagnosticInbox().store(nullptr);
-                if (typesRegistered)
-                    JPH::UnregisterTypes();
-                JPH::Factory::sInstance = nullptr;
-                factory.reset();
-                JPH::Allocate = nullptr;
-                JPH::Reallocate = nullptr;
-                JPH::Free = nullptr;
-                JPH::AlignedAllocate = nullptr;
-                JPH::AlignedFree = nullptr;
-                ResetAllocators();
-                JPH::Trace = priorTrace;
+        /** @brief Normalizes one Jolt trace call into a bounded validation record without retaining native memory. */
+        void CaptureNativeTrace(const char *format, ...) noexcept {  // NOSONAR -- JPH::TraceFunction requires this C varargs ABI.
+            DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
+            if (inbox == nullptr || format == nullptr)
+                return;
+            thread_local std::array<char, MaximumPhysicsDiagnosticMessageBytes + 1> message{};
+            message.fill('\0');
+            std::va_list arguments;
+            va_start(arguments, format);
+            const int formatted = std::vsnprintf(message.data(), message.size(), format, arguments);  // NOSONAR -- native format ABI.
+            va_end(arguments);
+            if (formatted < 0)
+                inbox->Submit(CanonicalDiagnosticKind::Validation, "Native solver validation message could not be formatted.");
+            else
+                inbox->Submit(CanonicalDiagnosticKind::Validation, message.data());
+        }
+
 #ifdef JPH_ENABLE_ASSERTS
-                JPH::AssertFailed = priorAssertFailed;
-#endif
-            }
-
-            bool typesRegistered{};
-            JPH::TraceFunction priorTrace{};
-#ifdef JPH_ENABLE_ASSERTS
-            JPH::AssertFailedFunction priorAssertFailed{};
-#endif
-            CanonicalResourceCounts resources;
-            std::unique_ptr<JPH::Factory> factory;
-        };
-
-        /** @brief Temporary closed filter until the collision-profile ticket installs a validated table. */
-        class ClosedBroadPhaseLayers final : public JPH::BroadPhaseLayerInterface {
-        public:
-            [[nodiscard]] JPH::uint GetNumBroadPhaseLayers() const override {
-                return 1;
-            }
-
-            [[nodiscard]] JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer) const override {
-                return JPH::BroadPhaseLayer{0};
-            }
-        };
-
-        /** @brief Rejects all pairs while body/filter capability remains unpublished. */
-        class ClosedObjectVsBroadPhase final : public JPH::ObjectVsBroadPhaseLayerFilter {
-        public:
-            [[nodiscard]] bool ShouldCollide(JPH::ObjectLayer, JPH::BroadPhaseLayer) const override {
+        /** @brief Converts a Jolt assertion into fatal bounded evidence; owner lifecycle performs the transition. */
+        bool CaptureNativeAssertion(const char *expression, const char *message, const char *, const JPH::uint) noexcept {
+            DiagnosticInbox *inbox = ActiveDiagnosticInbox().load();
+            if (inbox == nullptr)
                 return false;
-            }
-        };
+            std::string_view evidence{"Native solver assertion"};
+            if (message != nullptr && message[0] != '\0')
+                evidence = message;
+            else if (expression != nullptr)
+                evidence = expression;
+            inbox->Submit(CanonicalDiagnosticKind::Assertion, evidence);
+            return false;
+        }
+#endif
 
-        /** @brief Rejects all object pairs while body/filter capability remains unpublished. */
-        class ClosedObjectPairs final : public JPH::ObjectLayerPairFilter {
-        public:
-            [[nodiscard]] bool ShouldCollide(JPH::ObjectLayer, JPH::ObjectLayer) const override {
-                return false;
-            }
-        };
+        /** @brief Native allocation cannot unwind through no-exception Jolt frames; fail closed instead of dereferencing null. */
+        void *RequireNativeAllocation(void *memory) noexcept {
+            if (memory == nullptr)
+                std::abort();
+            return memory;
+        }
 
-        struct CanonicalWorld;
-        class ContactCaptureRoute;
+        /** @brief Preserves native allocation semantics with a defined process-fatal exhaustion path. */
+        void *CheckedAllocate(const std::size_t size) {
+            return RequireNativeAllocation(installedAllocatorFunctions.allocate(std::max(size, std::size_t{1})));
+        }
 
-        /** @brief Copies Jolt contact callbacks into Horo evidence without invoking consumers or locking native bodies. */
-        class CanonicalContactListener final : public JPH::ContactListener {
-        public:
-            explicit CanonicalContactListener(CanonicalWorld &world) noexcept : world_(world) {}
+        /** @brief Delegates reallocation without allowing null to escape into no-exception native code. */
+        void *CheckedReallocate(void *memory, const std::size_t oldSize, const std::size_t newSize) {
+            return RequireNativeAllocation(installedAllocatorFunctions.reallocate(memory, oldSize, std::max(newSize, std::size_t{1})));
+        }
 
-            void OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
-                                JPH::ContactSettings &settings) override;
-            void OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
-                                    JPH::ContactSettings &settings) override;
+        /** @brief Retains platform alignment and fails closed on exhaustion. */
+        void *CheckedAlignedAllocate(const std::size_t size, const std::size_t alignment) {
+            return RequireNativeAllocation(installedAllocatorFunctions.alignedAllocate(std::max(size, std::size_t{1}), alignment));
+        }
 
-        private:
-            void Emit(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
-                      const JPH::ContactSettings &settings) const noexcept;
-
-            CanonicalWorld &world_;
-        };
-
-        /** @brief Per-world native ownership in dependency order; reverse member destruction releases the system first. */
-        struct CanonicalWorld final {
-            static constexpr std::size_t InvalidFixtureIndex = std::numeric_limits<std::size_t>::max();
-
-            CanonicalWorld(CanonicalRuntime &runtime, const std::uint32_t maximumBodies, const std::uint32_t maximumFixtures)
-                : owner(runtime), contactListener(*this), maximumFixtures(maximumFixtures),
-                  nativeFixtureIndices(maximumBodies, InvalidFixtureIndex) {
-                ++owner.resources.worlds;
-                fixtures.reserve(maximumFixtures);
-            }
-
-            CanonicalWorld(const CanonicalWorld &) = delete;
-            CanonicalWorld &operator=(const CanonicalWorld &) = delete;
-
-            ~CanonicalWorld() {
-                if (system != nullptr) {
-                    auto &bodyInterface = system->GetBodyInterface();
-                    for (const CanonicalQueryFixtureRecord &fixture : fixtures) {
-                        bodyInterface.RemoveBody(fixture.nativeBody);
-                        bodyInterface.DestroyBody(fixture.nativeBody);
-                    }
-                }
-                fixtures.clear();
-                const auto hadSystem = static_cast<std::uint32_t>(system != nullptr);
-                const auto hadJobs = static_cast<std::uint32_t>(jobs != nullptr);
-                const auto hadScratch = static_cast<std::uint32_t>(scratch != nullptr);
-                system.reset();
-                jobs.reset();
-                scratch.reset();
-                owner.resources.physicsSystems -= hadSystem;
-                owner.resources.jobSystems -= hadJobs;
-                owner.resources.scratchAllocators -= hadScratch;
-                --owner.resources.worlds;
-            }
-
-            CanonicalRuntime &owner;
-            ClosedBroadPhaseLayers broadPhaseLayers;
-            ClosedObjectVsBroadPhase objectVsBroadPhase;
-            ClosedObjectPairs objectPairs;
-            std::unique_ptr<JPH::TempAllocatorImpl> scratch;
-            std::unique_ptr<JPH::JobSystemSingleThreaded> jobs;
-            std::unique_ptr<JPH::PhysicsSystem> system;
-            CanonicalContactListener contactListener;
-            DiagnosticInbox diagnostics;
-            std::atomic<ContactCaptureRoute *> contactRoute{};
-            std::uint32_t maximumFixtures{};
-            std::vector<CanonicalQueryFixtureRecord> fixtures;
-            std::vector<std::size_t> nativeFixtureIndices;
-            std::uint32_t nextFixtureSlot{};
-            std::uint32_t nextFixtureGeneration{1};
-            std::uint64_t querySchemaGeneration{1};
-            CanonicalQueryStorage queryStorage;
-        };
+        /** @brief Captures platform allocation functions and installs bounded allocation-failure behavior explicitly. */
+        void InstallAllocators() {
+            JPH::RegisterDefaultAllocator();
+            installedAllocatorFunctions = {JPH::Allocate, JPH::Reallocate, JPH::AlignedAllocate};
+            JPH::Allocate = CheckedAllocate;
+            JPH::Reallocate = CheckedReallocate;
+            JPH::AlignedAllocate = CheckedAlignedAllocate;
+        }
 
         /** @brief Restricts process-global callback routing to one joined native step. */
         class DiagnosticRoute final {
@@ -200,35 +204,6 @@ namespace Horo::Physics::Detail {
             bool admitted_{};
         };
 
-        /** @brief Limits native contact routing to the joined solver step and clears borrowed state on every exit path. */
-        class ContactCaptureRoute final {
-        public:
-            ContactCaptureRoute(CanonicalWorld &world, const std::uint64_t simulationTick, const CanonicalContactSink sink) noexcept
-                : world_(world), simulationTick_(simulationTick), sink_(sink) {
-                world_.contactRoute.store(this, std::memory_order::seq_cst);
-            }
-
-            ContactCaptureRoute(const ContactCaptureRoute &) = delete;
-            ContactCaptureRoute &operator=(const ContactCaptureRoute &) = delete;
-
-            ~ContactCaptureRoute() {
-                world_.contactRoute.store(nullptr, std::memory_order::seq_cst);
-            }
-
-            [[nodiscard]] const CanonicalContactSink &Sink() const noexcept {
-                return sink_;
-            }
-
-            [[nodiscard]] std::uint64_t SimulationTick() const noexcept {
-                return simulationTick_;
-            }
-
-        private:
-            CanonicalWorld &world_;
-            std::uint64_t simulationTick_{};
-            CanonicalContactSink sink_;
-        };
-
         /** @brief Rejects foreign native ownership rather than replacing global hooks or factories. */
         bool NativeGlobalsAreUnowned() noexcept {
             const std::array globalsUnowned{
@@ -236,113 +211,6 @@ namespace Horo::Physics::Detail {
                 JPH::AlignedAllocate == nullptr,    JPH::AlignedFree == nullptr,
             };
             return std::ranges::all_of(globalsUnowned, std::identity{});
-        }
-
-        [[nodiscard]] JPH::Vec3 ToNative(const Math::Vec3 value) noexcept {
-            return {value.x, value.y, value.z};
-        }
-
-        [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const BodyHandle body) {
-            const auto found = std::ranges::find_if(world.fixtures, [body](const auto &fixture) {
-                return fixture.fixture.body == body;
-            });
-            return found == world.fixtures.end() ? nullptr : std::to_address(found);
-        }
-
-        [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const JPH::BodyID body) {
-            const std::size_t nativeIndex = body.GetIndex();
-            if (nativeIndex >= world.nativeFixtureIndices.size())
-                return nullptr;
-            const std::size_t fixtureIndex = world.nativeFixtureIndices[nativeIndex];
-            if (fixtureIndex == CanonicalWorld::InvalidFixtureIndex || fixtureIndex >= world.fixtures.size() ||
-                world.fixtures[fixtureIndex].nativeBody != body)
-                return nullptr;
-            return &world.fixtures[fixtureIndex];
-        }
-
-        /** @brief Converts a native double/float position to the backend-neutral scene vector. */
-        [[nodiscard]] Math::Vec3 ToScene(const JPH::RVec3 &value) noexcept {
-            return {value.GetX(), value.GetY(), value.GetZ()};
-        }
-
-        /** @brief Copies one fixture's stable identity and current filter generation into event evidence. */
-        [[nodiscard]] PhysicsEventEndpoint ToEventEndpoint(const CanonicalWorld &world,
-                                                           const CanonicalQueryFixtureRecord &fixture) noexcept {
-            return {.body = fixture.fixture.body,
-                    .shape = fixture.fixture.shape,
-                    .subshape = fixture.descriptor.subshape,
-                    .layer = fixture.descriptor.layer,
-                    .profile = fixture.descriptor.profile,
-                    .filterSchemaGeneration = world.querySchemaGeneration};
-        }
-
-        /** @brief Converts optional query material evidence without retaining the descriptor or native shape. */
-        [[nodiscard]] std::optional<PhysicsEventMaterial> ToEventMaterial(const std::optional<PhysicsQueryMaterial> &material) noexcept {
-            if (!material.has_value())
-                return std::nullopt;
-            return PhysicsEventMaterial{.asset = material->asset, .assetGeneration = material->assetGeneration, .slot = material->slot};
-        }
-
-        /** @brief Chooses a deterministic lexicographically smallest copied point from one manifold. */
-        [[nodiscard]] Math::Vec3 ContactPoint(const JPH::ContactManifold &manifold) noexcept {
-            Math::Vec3 selected = ToScene(manifold.mBaseOffset);
-            bool selectedPoint = false;
-            for (JPH::uint index = 0; index < manifold.mRelativeContactPointsOn1.size(); ++index) {
-                const Math::Vec3 candidate = ToScene(manifold.GetWorldSpaceContactPointOn1(index));
-                if (!selectedPoint || std::tie(candidate.x, candidate.y, candidate.z) < std::tie(selected.x, selected.y, selected.z)) {
-                    selected = candidate;
-                    selectedPoint = true;
-                }
-            }
-            return selected;
-        }
-
-        /** @copydoc CanonicalContactListener::OnContactAdded */
-        void CanonicalContactListener::OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
-                                                      JPH::ContactSettings &settings) {
-            Emit(body1, body2, manifold, settings);
-        }
-
-        /** @copydoc CanonicalContactListener::OnContactPersisted */
-        void CanonicalContactListener::OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2,
-                                                          const JPH::ContactManifold &manifold, JPH::ContactSettings &settings) {
-            Emit(body1, body2, manifold, settings);
-        }
-
-        /** @brief Copies one complete callback manifold before Jolt releases its locked callback view. */
-        void CanonicalContactListener::Emit(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
-                                            const JPH::ContactSettings &settings) const noexcept {
-            const ContactCaptureRoute *route = world_.contactRoute.load(std::memory_order::seq_cst);
-            if (route == nullptr || route->Sink().append == nullptr || route->Sink().context == nullptr)
-                return;
-            const auto *fixture1 = FindFixture(world_, body1.GetID());
-            const auto *fixture2 = FindFixture(world_, body2.GetID());
-            if (fixture1 == nullptr || fixture2 == nullptr)
-                return;
-            const PhysicsContactObservation observation{.simulationTick = route->SimulationTick(),
-                                                        .first = ToEventEndpoint(world_, *fixture1),
-                                                        .second = ToEventEndpoint(world_, *fixture2),
-                                                        .firstMaterial = ToEventMaterial(fixture1->descriptor.material),
-                                                        .secondMaterial = ToEventMaterial(fixture2->descriptor.material),
-                                                        .contact = {.position = ContactPoint(manifold),
-                                                                    .normal = {manifold.mWorldSpaceNormal.GetX(),
-                                                                               manifold.mWorldSpaceNormal.GetY(),
-                                                                               manifold.mWorldSpaceNormal.GetZ()},
-                                                                    .penetrationDepthMeters = manifold.mPenetrationDepth,
-                                                                    .normalImpulseNewtonSeconds = 0.0F},
-                                                        .sensor = settings.mIsSensor};
-            static_cast<void>(route->Sink().append(route->Sink().context, observation));
-        }
-
-        [[nodiscard]] CanonicalQueryAccess MakeQueryAccess(CanonicalWorld &world) {
-            return {.system = *world.system,
-                    .fixtures = world.fixtures,
-                    .nativeFixtureIndices = world.nativeFixtureIndices,
-                    .maximumFixtures = world.maximumFixtures,
-                    .nextFixtureSlot = world.nextFixtureSlot,
-                    .nextFixtureGeneration = world.nextFixtureGeneration,
-                    .querySchemaGeneration = world.querySchemaGeneration,
-                    .storage = world.queryStorage};
         }
 
     }  // namespace
@@ -399,56 +267,27 @@ namespace Horo::Physics::Detail {
 
         const auto &values = translated.Value();
         auto world = std::make_unique<CanonicalWorld>(*static_cast<CanonicalRuntime *>(runtime.value), values.maximumBodies,
-                                                      settings.Values().budgets.maximumShapes);
-        world->scratch = std::make_unique<JPH::TempAllocatorImpl>(static_cast<std::size_t>(values.scratchBytes));
+                                                      settings.Values().budgets.maximumShapes, settings.Values().budgets.maximumShapes,
+                                                      settings.Values().world.capacity.maximumConstraints);
+        world->native.scratch = std::make_unique<JPH::TempAllocatorImpl>(static_cast<std::size_t>(values.scratchBytes));
         ++world->owner.resources.scratchAllocators;
         if (failurePoint == CanonicalFailurePoint::ScratchCreated)
             return Result<CanonicalWorldHandle>::Failure(MakeError(PhysicsErrors::InitializationFailed, "Scratch creation stage."));
-        world->jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+        world->native.jobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
         ++world->owner.resources.jobSystems;
         if (failurePoint == CanonicalFailurePoint::JobsCreated)
             return Result<CanonicalWorldHandle>::Failure(
                 MakeError(PhysicsErrors::InitializationFailed, "Serial job-dispatch creation stage."));
-        world->system = std::make_unique<JPH::PhysicsSystem>();
+        world->native.system = std::make_unique<JPH::PhysicsSystem>();
         ++world->owner.resources.physicsSystems;
-        world->system->Init(values.maximumBodies, 1, values.maximumBodyPairs, values.maximumContactConstraints, world->broadPhaseLayers,
-                            world->objectVsBroadPhase, world->objectPairs);
-        world->system->SetPhysicsSettings(values.solver);
-        world->system->SetGravity(values.gravity);
-        world->system->SetContactListener(&world->contactListener);
+        world->native.system->Init(values.maximumBodies, 1, values.maximumBodyPairs, values.maximumContactConstraints,
+                                   world->broadPhaseLayers, world->objectVsBroadPhase, world->objectPairs);
+        world->native.system->SetPhysicsSettings(values.solver);
+        world->native.system->SetGravity(values.gravity);
         if (failurePoint == CanonicalFailurePoint::SystemInitialized)
             return Result<CanonicalWorldHandle>::Failure(
                 MakeError(PhysicsErrors::InitializationFailed, "Native world initialization stage."));
-        return Result<CanonicalWorldHandle>::Success({world.release()});
-    }
-
-    /** @copydoc CreateCanonicalQueryFixture */
-    Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle world, const PhysicsWorldId owner,
-                                                            const PhysicsQueryFixtureDescriptor &fixture) {
-        if (world.value == nullptr)
-            return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        auto access = MakeQueryAccess(canonical);
-        return CreateCanonicalQueryFixtureFromAccess(access, owner, fixture);
-    }
-
-    /** @copydoc DestroyCanonicalQueryFixture */
-    Result<void> DestroyCanonicalQueryFixture(const CanonicalWorldHandle world, const PhysicsQueryFixture &fixture) {
-        if (world.value == nullptr)
-            return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        auto access = MakeQueryAccess(canonical);
-        return DestroyCanonicalQueryFixtureFromAccess(access, fixture);
-    }
-
-    /** @copydoc ExecuteCanonicalQuery */
-    Result<PhysicsQueryResult> ExecuteCanonicalQuery(const CanonicalWorldHandle world, const PhysicsQueryDescriptor &descriptor,
-                                                     const std::span<PhysicsQueryHit> hits) {
-        if (world.value == nullptr)
-            return Result<PhysicsQueryResult>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        auto access = MakeQueryAccess(canonical);
-        return ExecuteCanonicalQueryFromAccess(access, descriptor, hits);
+        return Result<CanonicalWorldHandle>::Success(CanonicalWorldHandle{world.release()});
     }
 
     /** @copydoc DestroyCanonicalWorld */
@@ -457,8 +296,7 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc StepCanonicalWorld */
-    Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle world, const float fixedDeltaSeconds,
-                                                    const std::uint64_t simulationTick, const CanonicalContactSink contactSink) {
+    Result<CanonicalStepOutcome> StepCanonicalWorld(const CanonicalWorldHandle world, const float fixedDeltaSeconds) {
         if (world.value == nullptr)
             return Result<CanonicalStepOutcome>::Failure(MakeError(PhysicsErrors::InvalidState));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
@@ -466,8 +304,8 @@ namespace Horo::Physics::Detail {
             return Result<CanonicalStepOutcome>::Failure(
                 MakeError(PhysicsErrors::InvalidState, "Another canonical solver callback generation is still active."));
         } else {
-            const ContactCaptureRoute contactRoute{canonical, simulationTick, contactSink};
-            const auto updateError = canonical.system->Update(fixedDeltaSeconds, 1, canonical.scratch.get(), canonical.jobs.get());
+            const auto updateError =
+                canonical.native.system->Update(fixedDeltaSeconds, 1, canonical.native.scratch.get(), canonical.native.jobs.get());
             std::optional<Error> diagnostic = canonical.diagnostics.Drain();
             if (diagnostic.has_value() && (diagnostic->code.Value() == PhysicsErrors::SolverAssertionFailed.code.Value() ||
                                            diagnostic->code.Value() == PhysicsErrors::SolverFatalCondition.code.Value()))
@@ -477,39 +315,6 @@ namespace Horo::Physics::Detail {
                     MakeError(PhysicsErrors::CapacityExceeded, "Canonical fixed tick exhausted required contact or pair storage."));
             return Result<CanonicalStepOutcome>::Success({.diagnostic = std::move(diagnostic)});
         }
-    }
-
-    /** @copydoc InvokeCanonicalContactCallbackForTesting */
-    bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle world, const PhysicsQueryFixture &first,
-                                                  const PhysicsQueryFixture &second, const std::uint64_t simulationTick, const bool sensor,
-                                                  const bool persisted, const CanonicalContactSink contactSink) {
-        if (world.value == nullptr || simulationTick == 0)
-            return false;
-        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        const auto *firstFixture = FindFixture(canonical, first.body);
-        const auto *secondFixture = FindFixture(canonical, second.body);
-        if (firstFixture == nullptr || secondFixture == nullptr)
-            return false;
-
-        const ContactCaptureRoute route{canonical, simulationTick, contactSink};
-        JPH::BodyLockRead firstLock(canonical.system->GetBodyLockInterface(), firstFixture->nativeBody);
-        JPH::BodyLockRead secondLock(canonical.system->GetBodyLockInterface(), secondFixture->nativeBody);
-        if (!firstLock.Succeeded() || !secondLock.Succeeded())
-            return false;
-
-        JPH::ContactManifold manifold;
-        manifold.mBaseOffset = JPH::RVec3::sZero();
-        manifold.mWorldSpaceNormal = JPH::Vec3::sAxisY();
-        manifold.mPenetrationDepth = 0.1F;
-        manifold.mRelativeContactPointsOn1.push_back(JPH::Vec3::sZero());
-        manifold.mRelativeContactPointsOn2.push_back(JPH::Vec3::sZero());
-        JPH::ContactSettings settings{};
-        settings.mIsSensor = sensor;
-        if (persisted)
-            canonical.contactListener.OnContactPersisted(firstLock.GetBody(), secondLock.GetBody(), manifold, settings);
-        else
-            canonical.contactListener.OnContactAdded(firstLock.GetBody(), secondLock.GetBody(), manifold, settings);
-        return true;
     }
 
     /** @copydoc SubmitCanonicalDiagnosticForTesting */

@@ -7,20 +7,20 @@
 namespace Horo::Physics::Detail {
     namespace {
         [[nodiscard]] const CanonicalSceneShapeRecord *FindSceneShape(const CanonicalWorld &world, const ShapeHandle handle) {
-            const auto found = std::ranges::find_if(world.sceneShapes, [handle](const auto &shape) {
+            const auto found = std::ranges::find_if(world.scene.shapes, [handle](const auto &shape) {
                 return shape.handle == handle;
             });
-            return found == world.sceneShapes.end() ? nullptr : std::to_address(found);
+            return found == world.scene.shapes.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] const CanonicalSceneBodyRecord *FindSceneBody(const CanonicalWorld &world, const BodyHandle handle) {
-            const auto found = std::ranges::find_if(world.sceneBodies, [handle](const auto &body) {
+            const auto found = std::ranges::find_if(world.scene.bodies, [handle](const auto &body) {
                 return body.handle == handle;
             });
-            return found == world.sceneBodies.end() ? nullptr : std::to_address(found);
+            return found == world.scene.bodies.end() ? nullptr : std::to_address(found);
         }
 
-        [[nodiscard]] Result<void> AddCanonicalCompoundChildren(CanonicalWorld &world, const PhysicsWorldId owner,
+        [[nodiscard]] Result<void> AddCanonicalCompoundChildren(const CanonicalWorld &world, const PhysicsWorldId owner,
                                                                 const std::span<const PhysicsSceneShapeInstance> instances,
                                                                 JPH::StaticCompoundShapeSettings &settings) {
             for (const PhysicsSceneShapeInstance &instance : instances) {
@@ -45,16 +45,17 @@ namespace Horo::Physics::Detail {
             const auto *density = std::get_if<PhysicsDensity>(&mass);
             if (density == nullptr)
                 return Result<void>::Success();
-            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
             const float defaultMass = settings.GetMassProperties().mMass;
             if (!std::isfinite(defaultMass) || defaultMass <= 0.0F)
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::DescriptorInvalid, "Canonical scene density could not derive a finite body mass."));
+            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
             settings.mMassPropertiesOverride.mMass = defaultMass * (density->kilogramsPerCubicMeter / 1'000.0F);
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<CanonicalConstraintBodies> ResolveCanonicalConstraintBodies(CanonicalWorld &world, const PhysicsWorldId owner,
+        [[nodiscard]] Result<CanonicalConstraintBodies> ResolveCanonicalConstraintBodies(const CanonicalWorld &world,
+                                                                                         const PhysicsWorldId owner,
                                                                                          const PhysicsConstraintDescriptor &descriptor) {
             if (const Result<void> valid = ValidatePhysicsConstraintDescriptor(descriptor, owner); valid.HasError())
                 return Result<CanonicalConstraintBodies>::Failure(valid.ErrorValue());
@@ -69,8 +70,8 @@ namespace Horo::Physics::Detail {
         }
 
         [[nodiscard]] bool HasCanonicalConstraintCapacity(const CanonicalWorld &world) noexcept {
-            return world.nextSceneConstraintSlot != std::numeric_limits<std::uint32_t>::max() &&
-                   world.sceneConstraints.size() < world.maximumConstraints;
+            return world.scene.nextConstraintSlot != std::numeric_limits<std::uint32_t>::max() &&
+                   world.scene.constraints.size() < world.scene.maximumConstraints;
         }
 
         [[nodiscard]] Result<void> ValidateCanonicalConstraintLocks(const JPH::BodyLockWrite &firstLock,
@@ -81,36 +82,45 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] JPH::Ref<JPH::Constraint> CreateNativeFixedConstraint(JPH::Body &body1, JPH::Body &body2,
+                                                                            const PhysicsPose &firstFrame, const PhysicsPose &secondFrame) {
+            JPH::FixedConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mAutoDetectPoint = false;
+            settings.mPoint1 = ToNativePoint(firstFrame.translation);
+            settings.mAxisX1 = ToNative(firstFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mAxisY1 = ToNative(firstFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mPoint2 = ToNativePoint(secondFrame.translation);
+            settings.mAxisX2 = ToNative(secondFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mAxisY2 = ToNative(secondFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            return settings.Create(body1, body2);
+        }
+
+        [[nodiscard]] JPH::Ref<JPH::Constraint> CreateNativeDistanceConstraint(JPH::Body &body1, JPH::Body &body2,
+                                                                               const PhysicsPose &firstFrame,
+                                                                               const PhysicsPose &secondFrame,
+                                                                               const PhysicsDistanceConstraint &distance) {
+            JPH::DistanceConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = ToNativePoint(firstFrame.translation);
+            settings.mPoint2 = ToNativePoint(secondFrame.translation);
+            settings.mMinDistance = distance.minimumMeters;
+            settings.mMaxDistance = distance.maximumMeters;
+            return settings.Create(body1, body2);
+        }
+
         [[nodiscard]] Result<JPH::Ref<JPH::Constraint>> CreateNativeSceneConstraint(
-            JPH::BodyLockWrite &firstLock, JPH::BodyLockWrite &secondLock, const CanonicalSceneBodyRecord *second,
+            const JPH::BodyLockWrite &firstLock, const JPH::BodyLockWrite &secondLock, const CanonicalSceneBodyRecord *second,
             const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
             const std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint> &parameters) {
-            JPH::Ref<JPH::Constraint> nativeConstraint;
-            std::visit([&nativeConstraint, &firstLock, &secondLock, second, &firstFrame, &secondFrame](const auto &value) {
-                using Parameter = std::decay_t<decltype(value)>;
-                JPH::Body &body1 = firstLock.GetBody();
-                JPH::Body &body2 = second != nullptr ? secondLock.GetBody() : JPH::Body::sFixedToWorld;
-                if constexpr (std::is_same_v<Parameter, PhysicsFixedConstraint>) {
-                    JPH::FixedConstraintSettings settings;
-                    settings.mSpace = JPH::EConstraintSpace::WorldSpace;
-                    settings.mAutoDetectPoint = false;
-                    settings.mPoint1 = ToNativePoint(firstFrame.translation);
-                    settings.mAxisX1 = ToNative(firstFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
-                    settings.mAxisY1 = ToNative(firstFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
-                    settings.mPoint2 = ToNativePoint(secondFrame.translation);
-                    settings.mAxisX2 = ToNative(secondFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
-                    settings.mAxisY2 = ToNative(secondFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
-                    nativeConstraint = settings.Create(body1, body2);
-                } else {
-                    static_assert(std::is_same_v<Parameter, PhysicsDistanceConstraint>);
-                    JPH::DistanceConstraintSettings settings;
-                    settings.mSpace = JPH::EConstraintSpace::WorldSpace;
-                    settings.mPoint1 = ToNativePoint(firstFrame.translation);
-                    settings.mPoint2 = ToNativePoint(secondFrame.translation);
-                    settings.mMinDistance = value.minimumMeters;
-                    settings.mMaxDistance = value.maximumMeters;
-                    nativeConstraint = settings.Create(body1, body2);
-                }
+            JPH::Body &body1 = firstLock.GetBody();
+            JPH::Body &body2 = second != nullptr ? secondLock.GetBody() : JPH::Body::sFixedToWorld;
+            const JPH::Ref<JPH::Constraint> nativeConstraint = std::visit([&]<typename Parameter>(const Parameter &value) {
+                using ParameterType = std::decay_t<Parameter>;
+                if constexpr (std::is_same_v<ParameterType, PhysicsFixedConstraint>)
+                    return CreateNativeFixedConstraint(body1, body2, firstFrame, secondFrame);
+                else
+                    return CreateNativeDistanceConstraint(body1, body2, firstFrame, secondFrame, value);
             }, parameters);
             if (nativeConstraint == nullptr)
                 return Result<JPH::Ref<JPH::Constraint>>::Failure(
@@ -125,8 +135,8 @@ namespace Horo::Physics::Detail {
         if (world.value == nullptr || !owner.IsValid())
             return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        if (canonical.nextSceneShapeSlot == std::numeric_limits<std::uint32_t>::max() ||
-            canonical.sceneShapes.size() >= canonical.maximumShapes)
+        if (canonical.scene.nextShapeSlot == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.scene.shapes.size() >= canonical.scene.maximumShapes)
             return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         if (const Result<void> valid = ValidatePhysicsShapeDescriptor(descriptor); valid.HasError())
             return Result<ShapeHandle>::Failure(valid.ErrorValue());
@@ -134,9 +144,9 @@ namespace Horo::Physics::Detail {
         if (nativeShape.HasError())
             return Result<ShapeHandle>::Failure(nativeShape.ErrorValue());
 
-        const std::uint32_t slot = canonical.nextSceneShapeSlot++;
+        const std::uint32_t slot = canonical.scene.nextShapeSlot++;
         const ShapeHandle identity{owner, {slot, 1}};
-        canonical.sceneShapes.push_back({.handle = identity, .shape = nativeShape.Value()});
+        canonical.scene.shapes.push_back({.handle = identity, .shape = nativeShape.Value()});
         return Result<ShapeHandle>::Success(identity);
     }
 
@@ -149,8 +159,8 @@ namespace Horo::Physics::Detail {
             return Result<ShapeHandle>::Failure(
                 MakeError(PhysicsErrors::DescriptorInvalid, "A canonical scene compound requires at least one child shape."));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        if (canonical.nextSceneShapeSlot == std::numeric_limits<std::uint32_t>::max() ||
-            canonical.sceneShapes.size() >= canonical.maximumShapes)
+        if (canonical.scene.nextShapeSlot == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.scene.shapes.size() >= canonical.scene.maximumShapes)
             return Result<ShapeHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
 
         JPH::StaticCompoundShapeSettings settings;
@@ -161,9 +171,9 @@ namespace Horo::Physics::Detail {
             return Result<ShapeHandle>::Failure(
                 MakeError(PhysicsErrors::ShapeArtifactInvalid, "Canonical solver rejected the scene compound shape."));
 
-        const std::uint32_t slot = canonical.nextSceneShapeSlot++;
+        const std::uint32_t slot = canonical.scene.nextShapeSlot++;
         const ShapeHandle identity{owner, {slot, 1}};
-        canonical.sceneShapes.push_back({.handle = identity, .shape = created.Get()});
+        canonical.scene.shapes.push_back({.handle = identity, .shape = created.Get()});
         return Result<ShapeHandle>::Success(identity);
     }
 
@@ -173,8 +183,8 @@ namespace Horo::Physics::Detail {
         if (world.value == nullptr || !owner.IsValid())
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        if (canonical.nextSceneBodySlot == std::numeric_limits<std::uint32_t>::max() ||
-            canonical.sceneBodies.size() >= canonical.maximumBodies)
+        if (canonical.scene.nextBodySlot == std::numeric_limits<std::uint32_t>::max() ||
+            canonical.scene.bodies.size() >= canonical.scene.maximumBodies)
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, owner); valid.HasError())
             return Result<BodyHandle>::Failure(valid.ErrorValue());
@@ -197,19 +207,20 @@ namespace Horo::Physics::Detail {
         if (const Result<void> mass = ApplyCanonicalMassPolicy(settings, descriptor.body.mass); mass.HasError())
             return Result<BodyHandle>::Failure(mass.ErrorValue());
 
-        const JPH::BodyID nativeBody = canonical.system->GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+        const JPH::BodyID nativeBody =
+            canonical.native.system->GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
         if (nativeBody.IsInvalid())
             return Result<BodyHandle>::Failure(
                 MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the scene body admission."));
-        if (nativeBody.GetIndex() >= canonical.nativeFixtureIndices.size()) {
-            canonical.system->GetBodyInterface().RemoveBody(nativeBody);
-            canonical.system->GetBodyInterface().DestroyBody(nativeBody);
+        if (nativeBody.GetIndex() >= canonical.query.nativeFixtureIndices.size()) {
+            canonical.native.system->GetBodyInterface().RemoveBody(nativeBody);
+            canonical.native.system->GetBodyInterface().DestroyBody(nativeBody);
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         }
 
-        const std::uint32_t slot = canonical.nextSceneBodySlot++;
+        const std::uint32_t slot = canonical.scene.nextBodySlot++;
         const BodyHandle identity{owner, {slot, 1}};
-        canonical.sceneBodies.push_back({.handle = identity, .nativeBody = nativeBody, .pose = descriptor.body.pose});
+        canonical.scene.bodies.push_back({.handle = identity, .nativeBody = nativeBody, .pose = descriptor.body.pose});
         return Result<BodyHandle>::Success(identity);
     }
 
@@ -228,8 +239,8 @@ namespace Horo::Physics::Detail {
         const CanonicalSceneBodyRecord *second = bodies.Value().second;
         const auto *secondBody = std::get_if<PhysicsBodyAnchor>(&descriptor.second);
 
-        JPH::BodyLockWrite firstLock(canonical.system->GetBodyLockInterfaceNoLock(), first->nativeBody);
-        JPH::BodyLockWrite secondLock(canonical.system->GetBodyLockInterfaceNoLock(),
+        JPH::BodyLockWrite firstLock(canonical.native.system->GetBodyLockInterfaceNoLock(), first->nativeBody);
+        JPH::BodyLockWrite secondLock(canonical.native.system->GetBodyLockInterfaceNoLock(),
                                       second != nullptr ? second->nativeBody : JPH::BodyID{});
         if (const Result<void> locks = ValidateCanonicalConstraintLocks(firstLock, secondLock, second); locks.HasError())
             return Result<ConstraintHandle>::Failure(locks.ErrorValue());
@@ -242,10 +253,10 @@ namespace Horo::Physics::Detail {
         if (nativeConstraint.HasError())
             return Result<ConstraintHandle>::Failure(nativeConstraint.ErrorValue());
 
-        canonical.system->AddConstraint(nativeConstraint.Value().GetPtr());
-        const std::uint32_t slot = canonical.nextSceneConstraintSlot++;
+        canonical.native.system->AddConstraint(nativeConstraint.Value().GetPtr());
+        const std::uint32_t slot = canonical.scene.nextConstraintSlot++;
         const ConstraintHandle identity{owner, {slot, 1}};
-        canonical.sceneConstraints.push_back({.handle = identity, .constraint = nativeConstraint.Value()});
+        canonical.scene.constraints.push_back({.handle = identity, .constraint = nativeConstraint.Value()});
         return Result<ConstraintHandle>::Success(identity);
     }
 }  // namespace Horo::Physics::Detail

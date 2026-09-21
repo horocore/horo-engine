@@ -239,36 +239,40 @@ namespace Horo::Physics::Detail {
         PhysicsQueryCollection collection_;
     };
 
-    /** @brief Per-world native ownership in dependency order. */
-    struct CanonicalWorld final {
-        static constexpr std::size_t InvalidFixtureIndex = std::numeric_limits<std::size_t>::max();
-
-        CanonicalWorld(CanonicalRuntime &runtime, std::uint32_t maximumBodies, std::uint32_t maximumFixtures, std::uint32_t maximumShapes,
-                       std::uint32_t maximumConstraints);
-        CanonicalWorld(const CanonicalWorld &) = delete;
-        CanonicalWorld &operator=(const CanonicalWorld &) = delete;
-        ~CanonicalWorld();
-
-        CanonicalRuntime &owner;
-        ClosedBroadPhaseLayers broadPhaseLayers;
-        ClosedObjectVsBroadPhase objectVsBroadPhase;
-        ClosedObjectPairs objectPairs;
+    /** @brief Native solver objects retained in dependency order for one world. */
+    struct CanonicalWorldNativeState final {
         std::unique_ptr<JPH::TempAllocatorImpl> scratch;
         std::unique_ptr<JPH::JobSystemSingleThreaded> jobs;
         std::unique_ptr<JPH::PhysicsSystem> system;
-        DiagnosticInbox diagnostics;
-        std::uint32_t maximumFixtures{};
+    };
+
+    /** @brief Scene-owned shape, body and constraint storage plus its bounded capacities. */
+    struct CanonicalWorldSceneState final {
+        CanonicalWorldSceneState(const std::uint32_t maximumBodies, const std::uint32_t maximumShapes,
+                                 const std::uint32_t maximumConstraints)
+            : maximumShapes(maximumShapes), maximumBodies(maximumBodies), maximumConstraints(maximumConstraints) {}
+
         std::uint32_t maximumShapes{};
         std::uint32_t maximumBodies{};
         std::uint32_t maximumConstraints{};
-        std::vector<CanonicalSceneShapeRecord> sceneShapes;
-        std::vector<CanonicalSceneBodyRecord> sceneBodies;
-        std::vector<CanonicalSceneConstraintRecord> sceneConstraints;
+        std::vector<CanonicalSceneShapeRecord> shapes;
+        std::vector<CanonicalSceneBodyRecord> bodies;
+        std::vector<CanonicalSceneConstraintRecord> constraints;
+        std::uint32_t nextShapeSlot{};
+        std::uint32_t nextBodySlot{};
+        std::uint32_t nextConstraintSlot{};
+    };
+
+    /** @brief Query fixtures, stable native-index mapping and reusable bounded collectors for one world. */
+    struct CanonicalWorldQueryState final {
+        static constexpr std::size_t InvalidFixtureIndex = std::numeric_limits<std::size_t>::max();
+
+        CanonicalWorldQueryState(const std::uint32_t maximumFixtures, const std::uint32_t maximumBodies)
+            : maximumFixtures(maximumFixtures), nativeFixtureIndices(maximumBodies, InvalidFixtureIndex) {}
+
+        std::uint32_t maximumFixtures{};
         std::vector<CanonicalQueryFixtureRecord> fixtures;
         std::vector<std::size_t> nativeFixtureIndices;
-        std::uint32_t nextSceneShapeSlot{};
-        std::uint32_t nextSceneBodySlot{};
-        std::uint32_t nextSceneConstraintSlot{};
         std::uint32_t nextFixtureSlot{};
         std::uint32_t nextFixtureGeneration{1};
         std::uint64_t querySchemaGeneration{1};
@@ -279,11 +283,29 @@ namespace Horo::Physics::Detail {
         std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> queryCandidates{};
     };
 
+    /** @brief Per-world native ownership and bounded scene/query storage. */
+    struct CanonicalWorld final {
+        CanonicalWorld(CanonicalRuntime &runtime, std::uint32_t maximumBodies, std::uint32_t maximumFixtures, std::uint32_t maximumShapes,
+                       std::uint32_t maximumConstraints);
+        CanonicalWorld(const CanonicalWorld &) = delete;
+        CanonicalWorld &operator=(const CanonicalWorld &) = delete;
+        ~CanonicalWorld();
+
+        CanonicalRuntime &owner;
+        ClosedBroadPhaseLayers broadPhaseLayers;
+        ClosedObjectVsBroadPhase objectVsBroadPhase;
+        ClosedObjectPairs objectPairs;
+        CanonicalWorldNativeState native;
+        DiagnosticInbox diagnostics;
+        CanonicalWorldSceneState scene;
+        CanonicalWorldQueryState query;
+    };
+
     /** @brief Reusable fixed-capacity collectors for one owner-thread query execution. */
     struct CanonicalQueryCollectors final {
         CanonicalQueryCollectors(CanonicalWorld &world, PhysicsQueryCollection collection)
-            : ray(world.rayQueryResults.data(), collection), point(world.pointQueryResults.data(), collection),
-              overlap(world.overlapQueryResults.data(), collection), sweep(world.sweepQueryResults.data(), collection) {}
+            : ray(world.query.rayQueryResults.data(), collection), point(world.query.pointQueryResults.data(), collection),
+              overlap(world.query.overlapQueryResults.data(), collection), sweep(world.query.sweepQueryResults.data(), collection) {}
 
         FixedQueryCollector<JPH::CastRayCollector> ray;
         FixedQueryCollector<JPH::CollidePointCollector> point;

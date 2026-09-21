@@ -620,6 +620,7 @@ endif()
 
 add_library(HoroPhysicsSceneIntegration STATIC
         physics/PhysicsSceneActivation.cpp
+        physics/PhysicsSceneActivationPlan.cpp
         physics/PhysicsSceneActivationCapabilities.cpp
         physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)

@@ -29,14 +29,15 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc RequirePhysicsSceneCapabilities */
     Result<void> RequirePhysicsSceneCapabilities(const PhysicsRuntime &runtime, const Runtime::RuntimeSceneDefinition &definition) {
+        using enum PhysicsCapability;
         if (DefinitionHasActiveBodies(definition)) {
-            if (const Result<void> shapes = RequireSceneCapability(runtime, PhysicsCapability::ImmutableShapes); shapes.HasError())
+            if (const Result<void> shapes = RequireSceneCapability(runtime, ImmutableShapes); shapes.HasError())
                 return shapes;
-            if (const Result<void> bodies = RequireSceneCapability(runtime, PhysicsCapability::RigidBodies); bodies.HasError())
+            if (const Result<void> bodies = RequireSceneCapability(runtime, RigidBodies); bodies.HasError())
                 return bodies;
         }
         if (DefinitionHasActiveConstraints(definition))
-            return RequireSceneCapability(runtime, PhysicsCapability::Constraints);
+            return RequireSceneCapability(runtime, Constraints);
         return Result<void>::Success();
     }
 }  // namespace Horo::Physics::Detail

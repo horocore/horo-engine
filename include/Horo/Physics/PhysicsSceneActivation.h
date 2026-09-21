@@ -117,6 +117,12 @@ namespace Horo::Physics {
     private:
         friend class PhysicsSceneActivationParticipant;
 
+        [[nodiscard]] static std::unique_ptr<PhysicsSceneActivationCandidate> Create(
+            std::unique_ptr<PhysicsWorld> physics, std::unique_ptr<Character::CharacterWorld> character,
+            const PhysicsSceneActivationAuthority &authority, PhysicsSceneActivationEvidence evidence,
+            std::vector<PhysicsSceneBodyBinding> bodies, std::vector<PhysicsSceneShapeBinding> shapes,
+            std::vector<PhysicsSceneConstraintBinding> constraints);
+
         PhysicsSceneActivationCandidate(std::unique_ptr<PhysicsWorld> physics, std::unique_ptr<Character::CharacterWorld> character,
                                         const PhysicsSceneActivationAuthority &authority, PhysicsSceneActivationEvidence evidence,
                                         std::vector<PhysicsSceneBodyBinding> bodies, std::vector<PhysicsSceneShapeBinding> shapes,
