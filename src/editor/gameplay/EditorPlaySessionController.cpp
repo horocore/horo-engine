@@ -67,8 +67,8 @@ namespace Horo::Editor {
                 return object.components.camera.has_value() && object.components.camera->enabled;
             }))
                 return InvalidTransition("Play Mode requires an authored camera component.");
-            const SceneGameplayInspection inspection = InspectSceneGameplayComponents(authoring.objects, components);
-            if (inspection.HasBlockingIssues())
+            if (const SceneGameplayInspection inspection = InspectSceneGameplayComponents(authoring.objects, components);
+                inspection.HasBlockingIssues())
                 return GameplayComponentPlayError(inspection);
             return std::nullopt;
         }

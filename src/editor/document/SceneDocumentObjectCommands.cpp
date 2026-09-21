@@ -65,6 +65,30 @@ namespace Horo::Editor {
                 return Result<SceneCommandDelta>::Failure(valid.ErrorValue());
             return Result<SceneCommandDelta>::Success(std::move(delta));
         }
+
+        /** @brief Prepares one validated opaque gameplay-component update or reports a no-op. */
+        [[nodiscard]] Result<std::optional<SceneCommandDelta>> PrepareGameplayComponentDelta(
+            const SceneObjectSnapshot &object, const SetSceneObjectGameplayComponentCommand &command) {
+            auto after = object.components.gameplayComponents;
+            if (const auto existing = std::ranges::find(after, command.component.typeId, &Gameplay::SerializedComponent::typeId);
+                existing != after.end()) {
+                if (*existing == command.component)
+                    return Result<std::optional<SceneCommandDelta>>::Success(std::nullopt);
+                *existing = command.component;
+            } else {
+                after.push_back(command.component);
+            }
+            std::ranges::sort(after, {}, [](const Gameplay::SerializedComponent &component) {
+                return component.typeId.Value();
+            });
+
+            SceneObjectComponentSet candidate = object.components;
+            candidate.gameplayComponents = after;
+            if (const Result<void> valid = ValidateComponents(candidate); valid.HasError())
+                return Result<std::optional<SceneCommandDelta>>::Failure(valid.ErrorValue());
+            return Result<std::optional<SceneCommandDelta>>::Success(
+                SceneCommandDelta{GameplayComponentsChangedDelta{object.id, object.components.gameplayComponents, std::move(after)}});
+        }
     }  // namespace
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectEditorStateCommand&) */
@@ -156,27 +180,15 @@ namespace Horo::Editor {
         if (const Result<void> valid = Gameplay::ValidateSerializedComponent(command.component); valid.HasError())
             return Result<SceneCommandResult>::Failure(valid.ErrorValue());
         return WithEditableObject(m_document, m_document.m_objects, command.object, [this, &command](const SceneObjectSnapshot &object) {
-            auto after = object.components.gameplayComponents;
-            const auto existing = std::ranges::find(after, command.component.typeId, &Gameplay::SerializedComponent::typeId);
-            if (existing != after.end()) {
-                if (*existing == command.component)
-                    return ComponentNoOpResult(m_document, object.id);
-                *existing = command.component;
-            } else {
-                after.push_back(command.component);
-            }
-            std::ranges::sort(after, {}, [](const Gameplay::SerializedComponent &component) {
-                return component.typeId.Value();
-            });
-
-            SceneObjectComponentSet candidate = object.components;
-            candidate.gameplayComponents = after;
-            if (const Result<void> valid = ValidateComponents(candidate); valid.HasError())
-                return Result<SceneCommandResult>::Failure(valid.ErrorValue());
-            SceneCommandDelta delta = GameplayComponentsChangedDelta{object.id, object.components.gameplayComponents, std::move(after)};
-            if (const Result<void> validHistory = ValidateHistoryDelta(delta, 1); validHistory.HasError())
+            auto prepared = PrepareGameplayComponentDelta(object, command);
+            if (prepared.HasError())
+                return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
+            std::optional<SceneCommandDelta> delta = std::move(prepared).Value();
+            if (!delta)
+                return ComponentNoOpResult(m_document, object.id);
+            if (const Result<void> validHistory = ValidateHistoryDelta(*delta, 1); validHistory.HasError())
                 return Result<SceneCommandResult>::Failure(validHistory.ErrorValue());
-            return CommitObject({std::move(delta), command.object, DocumentChangeKind::ComponentChanged});
+            return CommitObject({std::move(*delta), command.object, DocumentChangeKind::ComponentChanged});
         });
     }
 
