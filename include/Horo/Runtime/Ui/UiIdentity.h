@@ -55,6 +55,7 @@ namespace Horo::Runtime::Ui {
     struct UiDocumentIdentityTag;
     struct UiElementIdentityTag;
     struct UiCanvasIdentityTag;
+    struct UiActionIdentityTag;
 
     /** @brief Stable authored identity of one Runtime UI document. */
     using UiDocumentId = UiStableId<UiDocumentIdentityTag>;
@@ -62,6 +63,8 @@ namespace Horo::Runtime::Ui {
     using UiElementId = UiStableId<UiElementIdentityTag>;
     /** @brief Stable authored identity of one canvas within its owning document. */
     using UiCanvasId = UiStableId<UiCanvasIdentityTag>;
+    /** @brief Stable authored identity shared by a typed Runtime UI action contract. */
+    using UiActionId = UiStableId<UiActionIdentityTag>;
 
     /** @brief Non-zero process-local service/runtime/scope incarnation that must never be serialized. */
     class UiOwnershipGeneration final {
@@ -219,12 +222,18 @@ namespace Horo::Runtime::Ui {
     struct UiDocumentRevisionTag;
     struct UiRuntimeTreeRevisionTag;
     struct UiInteractionRevisionTag;
+    struct UiActionSequenceTag;
+    struct UiActionOperationTag;
     /** @brief Monotonic revision of one authored Runtime UI document. */
     using UiDocumentRevision = UiRevision<UiDocumentRevisionTag>;
     /** @brief Monotonic revision of one published runtime tree generation. */
     using UiRuntimeTreeRevision = UiRevision<UiRuntimeTreeRevisionTag>;
     /** @brief Monotonic revision of one immutable interaction/layout publication. */
     using UiInteractionRevision = UiRevision<UiInteractionRevisionTag>;
+    /** @brief Monotonic owner-local sequence assigned to one admitted UI action request. */
+    using UiActionSequence = UiRevision<UiActionSequenceTag>;
+    /** @brief Owner-local identity correlating a pending action with its terminal result. */
+    using UiActionOperationSequence = UiRevision<UiActionOperationTag>;
 
     /** @brief Requires an expected revision to match the current owner-published revision.
      * @param expected Revision captured when the caller prepared its command.
