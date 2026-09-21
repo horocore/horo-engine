@@ -51,8 +51,8 @@ namespace Horo::Navigation::Detail {
                 return false;
         }
 
-        std::size_t querySlotBytes{};
-        if (!CheckedProduct(static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)), sizeof(dtPolyRef),
+        if (std::size_t querySlotBytes{};
+            !CheckedProduct(static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)), sizeof(dtPolyRef),
                             querySlotBytes) ||
             !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) *
                                             ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))) ||

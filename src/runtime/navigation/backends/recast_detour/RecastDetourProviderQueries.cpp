@@ -35,9 +35,9 @@ namespace Horo::Navigation {
                 return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
             if (const auto admitted = AdmitNavigationQuery(capabilities, capabilities.revision, request.requirement); admitted.HasError())
                 return admitted;
-            const NavigationQueryLimits &available = capabilities.queryLimits[static_cast<std::size_t>(request.requirement.query)]
-                                                                             [static_cast<std::size_t>(request.requirement.quality)];
-            if ((request.outputLimits.maximumCorridorPolygons != 0 &&
+            if (const NavigationQueryLimits &available = capabilities.queryLimits[static_cast<std::size_t>(request.requirement.query)]
+                                                                                 [static_cast<std::size_t>(request.requirement.quality)];
+                (request.outputLimits.maximumCorridorPolygons != 0 &&
                  request.outputLimits.maximumCorridorPolygons > available.maximumNodeExpansions) ||
                 (request.outputLimits.maximumPortals != 0 && request.outputLimits.maximumPortals > available.maximumResultPoints) ||
                 (request.outputLimits.maximumWaypoints != 0 && request.outputLimits.maximumWaypoints > available.maximumResultPoints) ||

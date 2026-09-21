@@ -34,21 +34,21 @@ namespace Horo::Navigation::RecastDetourQueries {
 
         [[nodiscard]] std::uint32_t MaximumCorridorPolygons(const PathBuildContext &context) noexcept {
             const std::uint32_t requested = context.request.outputLimits.maximumCorridorPolygons;
-            const std::uint32_t prepared = static_cast<std::uint32_t>(context.slot.polygonPathIndices.size());
+            const auto prepared = static_cast<std::uint32_t>(context.slot.polygonPathIndices.size());
             const std::uint32_t admitted = context.request.requirement.limits.maximumNodeExpansions;
             return std::min(prepared, requested == 0 ? admitted : requested);
         }
 
         [[nodiscard]] std::uint32_t MaximumPortals(const PathBuildContext &context) noexcept {
             const std::uint32_t requested = context.request.outputLimits.maximumPortals;
-            const std::uint32_t prepared = static_cast<std::uint32_t>(context.slot.portals.capacity());
+            const auto prepared = static_cast<std::uint32_t>(context.slot.portals.capacity());
             const std::uint32_t admitted = context.request.requirement.limits.maximumResultPoints;
             return std::min(prepared, requested == 0 ? admitted : requested);
         }
 
         [[nodiscard]] std::uint32_t MaximumWaypoints(const PathBuildContext &context) noexcept {
             const std::uint32_t requested = context.request.outputLimits.maximumWaypoints;
-            const std::uint32_t prepared = static_cast<std::uint32_t>(context.slot.waypoints.capacity());
+            const auto prepared = static_cast<std::uint32_t>(context.slot.waypoints.capacity());
             const std::uint32_t admitted = context.request.requirement.limits.maximumResultPoints;
             return std::min(prepared, requested == 0 ? admitted : requested);
         }
@@ -135,8 +135,8 @@ namespace Horo::Navigation::RecastDetourQueries {
                 const std::uint32_t fromSecond = from.vertexIndices[(fromEdge + 1U) % from.vertexCount];
                 for (std::uint8_t toEdge = 0; toEdge < to.vertexCount; ++toEdge) {
                     const std::uint32_t toFirst = to.vertexIndices[toEdge];
-                    const std::uint32_t toSecond = to.vertexIndices[(toEdge + 1U) % to.vertexCount];
-                    if (!IsSameUndirectedEdge(fromFirst, fromSecond, toFirst, toSecond))
+                    if (const std::uint32_t toSecond = to.vertexIndices[(toEdge + 1U) % to.vertexCount];
+                        !IsSameUndirectedEdge(fromFirst, fromSecond, toFirst, toSecond))
                         continue;
                     if (result.has_value())
                         return Failure<SharedEdge>(NavigationErrors::PathPortalDegenerate);
@@ -207,7 +207,7 @@ namespace Horo::Navigation::RecastDetourQueries {
             if (static_cast<double>(clearance) * 2.0 + PortalLengthEpsilon >= geometry.Value().rawLength)
                 return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
 
-            const float ratio = static_cast<float>(static_cast<double>(clearance) / geometry.Value().rawLength);
+            const auto ratio = static_cast<float>(static_cast<double>(clearance) / geometry.Value().rawLength);
             const Math::Vec3 edge = geometry.Value().right - geometry.Value().left;
             const Math::Vec3 left = geometry.Value().left + edge * ratio;
             const Math::Vec3 right = geometry.Value().right - edge * ratio;
@@ -312,14 +312,15 @@ namespace Horo::Navigation::RecastDetourQueries {
 
         [[nodiscard]] WaypointAppendResult AppendWaypoint(std::vector<NavigationPathWaypoint> &waypoints,
                                                           const NavigationPathWaypoint &waypoint, const std::uint32_t maximumWaypoints) {
+            using enum WaypointAppendResult;
             if (!Math::IsFinite(waypoint.position))
-                return WaypointAppendResult::BudgetExceeded;
+                return BudgetExceeded;
             if (!waypoints.empty() && SamePoint(waypoints.back().position, waypoint.position))
-                return WaypointAppendResult::Duplicate;
+                return Duplicate;
             if (waypoints.size() >= maximumWaypoints)
-                return WaypointAppendResult::BudgetExceeded;
+                return BudgetExceeded;
             waypoints.push_back(waypoint);
-            return WaypointAppendResult::Added;
+            return Added;
         }
 
         struct FunnelResult final {
@@ -347,9 +348,9 @@ namespace Horo::Navigation::RecastDetourQueries {
                                                               const std::uint32_t maximumWaypoints) {
             const Math::Vec3 corner = useLeft ? funnel.left : funnel.right;
             const std::uint32_t corridorIndex = cornerPortal == NavigationPathNoPortal ? 0U : cornerPortal;
-            const std::uint32_t vertexIndex = cornerPortal < path.portals.size() ? (useLeft ? path.portals[cornerPortal].leftVertexIndex
-                                                                                            : path.portals[cornerPortal].rightVertexIndex)
-                                                                                 : NavigationPathNoVertex;
+            std::uint32_t vertexIndex = NavigationPathNoVertex;
+            if (cornerPortal < path.portals.size())
+                vertexIndex = useLeft ? path.portals[cornerPortal].leftVertexIndex : path.portals[cornerPortal].rightVertexIndex;
             const auto waypoint =
                 MakeWaypoint(path, corner, NavigationPathWaypointKind::PortalCorner, corridorIndex, cornerPortal, vertexIndex);
             const auto result = AppendWaypoint(context.slot.waypoints, waypoint, maximumWaypoints);
@@ -363,37 +364,51 @@ namespace Horo::Navigation::RecastDetourQueries {
             return result;
         }
 
+        [[nodiscard]] FunnelProgress ProcessRightPortal(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
+                                                        const Math::Vec3 target, const bool isTargetPortal, const std::uint32_t portalIndex,
+                                                        const std::uint32_t maximumWaypoints) {
+            if (const Math::Vec3 newRight = isTargetPortal ? target : path.portals[portalIndex].right;
+                TriangleAreaXZ(funnel.apex, funnel.right, newRight) <= FunnelEpsilon) {
+                if (SamePoint(funnel.apex, funnel.right) || TriangleAreaXZ(funnel.apex, funnel.left, newRight) > FunnelEpsilon) {
+                    funnel.right = newRight;
+                    funnel.rightPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
+                    return {};
+                }
+                const std::uint32_t cornerPortal = funnel.leftPortal == NavigationPathNoPortal ? portalIndex : funnel.leftPortal;
+                if (AppendFunnelCorner(context, path, funnel, cornerPortal, true, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
+                    return {.pointBudgetExceeded = true};
+                return {.restart = true, .restartPortal = cornerPortal};
+            }
+            return {};
+        }
+
+        [[nodiscard]] FunnelProgress ProcessLeftPortal(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
+                                                       const Math::Vec3 target, const bool isTargetPortal, const std::uint32_t portalIndex,
+                                                       const std::uint32_t maximumWaypoints) {
+            if (const Math::Vec3 newLeft = isTargetPortal ? target : path.portals[portalIndex].left;
+                TriangleAreaXZ(funnel.apex, funnel.left, newLeft) >= -FunnelEpsilon) {
+                if (SamePoint(funnel.apex, funnel.left) || TriangleAreaXZ(funnel.apex, funnel.right, newLeft) < -FunnelEpsilon) {
+                    funnel.left = newLeft;
+                    funnel.leftPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
+                    return {};
+                }
+                const std::uint32_t cornerPortal = funnel.rightPortal == NavigationPathNoPortal ? portalIndex : funnel.rightPortal;
+                if (AppendFunnelCorner(context, path, funnel, cornerPortal, false, maximumWaypoints) ==
+                    WaypointAppendResult::BudgetExceeded)
+                    return {.pointBudgetExceeded = true};
+                return {.restart = true, .restartPortal = cornerPortal};
+            }
+            return {};
+        }
+
         [[nodiscard]] FunnelProgress ProcessFunnelPortal(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
                                                          const Math::Vec3 target, const std::uint32_t portalIndex,
                                                          const std::uint32_t maximumWaypoints) {
             const bool isTargetPortal = portalIndex == path.portals.size();
-            const Math::Vec3 newLeft = isTargetPortal ? target : path.portals[portalIndex].left;
-            const Math::Vec3 newRight = isTargetPortal ? target : path.portals[portalIndex].right;
-            if (TriangleAreaXZ(funnel.apex, funnel.right, newRight) <= FunnelEpsilon) {
-                if (SamePoint(funnel.apex, funnel.right) || TriangleAreaXZ(funnel.apex, funnel.left, newRight) > FunnelEpsilon) {
-                    funnel.right = newRight;
-                    funnel.rightPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
-                } else {
-                    const std::uint32_t cornerPortal = funnel.leftPortal == NavigationPathNoPortal ? portalIndex : funnel.leftPortal;
-                    if (AppendFunnelCorner(context, path, funnel, cornerPortal, true, maximumWaypoints) ==
-                        WaypointAppendResult::BudgetExceeded)
-                        return {.pointBudgetExceeded = true};
-                    return {.restart = true, .restartPortal = cornerPortal};
-                }
-            }
-            if (TriangleAreaXZ(funnel.apex, funnel.left, newLeft) >= -FunnelEpsilon) {
-                if (SamePoint(funnel.apex, funnel.left) || TriangleAreaXZ(funnel.apex, funnel.right, newLeft) < -FunnelEpsilon) {
-                    funnel.left = newLeft;
-                    funnel.leftPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
-                } else {
-                    const std::uint32_t cornerPortal = funnel.rightPortal == NavigationPathNoPortal ? portalIndex : funnel.rightPortal;
-                    if (AppendFunnelCorner(context, path, funnel, cornerPortal, false, maximumWaypoints) ==
-                        WaypointAppendResult::BudgetExceeded)
-                        return {.pointBudgetExceeded = true};
-                    return {.restart = true, .restartPortal = cornerPortal};
-                }
-            }
-            return {};
+            const FunnelProgress right = ProcessRightPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
+            if (right.pointBudgetExceeded || right.restart)
+                return right;
+            return ProcessLeftPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
         }
 
         [[nodiscard]] Result<void> PublishWaypoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target,
@@ -430,9 +445,9 @@ namespace Horo::Navigation::RecastDetourQueries {
                 return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
 
             context.slot.waypoints.clear();
-            const auto start = MakeWaypoint(path, context.request.start, NavigationPathWaypointKind::Start, 0, NavigationPathNoPortal,
-                                            NavigationPathNoVertex);
-            if (AppendWaypoint(context.slot.waypoints, start, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
+            if (const auto start = MakeWaypoint(path, context.request.start, NavigationPathWaypointKind::Start, 0, NavigationPathNoPortal,
+                                                NavigationPathNoVertex);
+                AppendWaypoint(context.slot.waypoints, start, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
                 return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
 
             FunnelState funnel{.apex = context.start.projected, .left = context.start.projected, .right = context.start.projected};
@@ -461,7 +476,8 @@ namespace Horo::Navigation::RecastDetourQueries {
             return Result<FunnelResult>::Success(result);
         }
 
-        [[nodiscard]] Result<void> PopulatePathMetrics(PathBuildContext &context, NavigationPath &path, const FunnelResult &geometry) {
+        [[nodiscard]] Result<void> PopulatePathMetrics(const PathBuildContext &context, NavigationPath &path,
+                                                       const FunnelResult &geometry) {
             auto length = PathLength(path.points);
             if (length.HasError())
                 return Result<void>::Failure(length.ErrorValue());
