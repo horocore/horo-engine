@@ -1545,6 +1545,13 @@ add_executable(HoroRuntimeUiActionsTests
 target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiActionsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiActionsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiFocusGraphTests
+        unit/runtime/ui/UiFocusGraphTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiFocusGraphTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiFocusGraphTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiFocusGraphTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeSaveArchiveMetadataTests
         unit/runtime/save/SaveArchiveMetadataTests.cpp
 )
@@ -2245,6 +2252,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeUiActionsTests
+        HoroRuntimeUiFocusGraphTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests

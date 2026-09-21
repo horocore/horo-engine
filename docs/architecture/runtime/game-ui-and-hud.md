@@ -352,6 +352,22 @@ Pause menu opens
   -> East/B cancels
 ```
 
+The shared `UiFocusGraph` contract keeps this state scoped to one exact runtime
+instance, player audience, and presentation layer. A graph copies a complete
+bounded candidate of stable element IDs and generation-checked current handles;
+it owns neither the retained tree nor renderer/layout state. Authored neighbor
+links and declared defaults are resolved deterministically. Missing or stale
+targets return typed no-target or recovery outcomes, while modal roots form an
+inclusive top-only trap and save a bounded stable-ID restoration path. Reloads
+publish a complete candidate before reconciling by stable ID, and retirement
+closes admission before releasing focus, modal, and restoration state.
+
+Focus changes may include typed bring-into-view evidence for the scroll owner,
+but the graph never calls layout or scroll code. Input consumes the graph's
+owner/revision evidence only for the matching last-presented interaction
+generation; spatial search and gameplay action ownership remain separate
+contracts.
+
 High-frequency pointer movement does not travel through data buses. The UI input
 router consumes input snapshots during VariableUpdate through one per-player/
 viewport `RuntimeUiInputContextId`. It hit-tests the last successfully presented

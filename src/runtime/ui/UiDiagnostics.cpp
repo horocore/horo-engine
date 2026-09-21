@@ -1,85 +1,15 @@
 #include "Horo/Runtime/Ui/UiDiagnostics.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiDiagnosticsInternal.h"
 
 #include <algorithm>
-#include <array>
 #include <limits>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
     namespace {
         constexpr std::string_view UiErrorDomain = "horo.runtime_ui";
-
-        /** @brief Owns the one canonical descriptor table used by implementation and contract tests. */
-        const auto &DiagnosticDescriptors() noexcept {
-            static const std::array descriptors{
-                &UiErrors::IdentityInvalid,
-                &UiErrors::OwnershipGenerationInvalid,
-                &UiErrors::HandleMalformed,
-                &UiErrors::HandleOwnerMismatch,
-                &UiErrors::HandleStale,
-                &UiErrors::RevisionInvalid,
-                &UiErrors::RevisionStale,
-                &UiErrors::GenerationExhausted,
-                &UiErrors::DocumentInvalid,
-                &UiErrors::DocumentDuplicateIdentity,
-                &UiErrors::DependencyInvalid,
-                &UiErrors::CapacityExceeded,
-                &UiErrors::PayloadInvalid,
-                &UiErrors::CanvasReferenceInvalid,
-                &UiErrors::CanvasSpaceInvalid,
-                &UiErrors::CanvasSpaceModeMismatch,
-                &UiErrors::CanvasSpaceOverflow,
-                &UiErrors::InstanceStateInvalid,
-                &UiErrors::ElementTreeInvalid,
-                &UiErrors::ElementTreeIdentityConflict,
-                &UiErrors::StructuralCommandInvalid,
-                &UiErrors::StructuralCommandConflict,
-                &UiErrors::ElementTreeLifecycleUnavailable,
-                &UiErrors::LayoutInvalid,
-                &UiErrors::LayoutSourceStale,
-                &UiErrors::LayoutNonConvergent,
-                &UiErrors::LayoutSnapshotStorageExhausted,
-                &UiErrors::LayoutLifecycleUnavailable,
-                &UiErrors::HitTestInvalid,
-                &UiErrors::HitTestSourceStale,
-                &UiErrors::HitTestNotPresented,
-                &UiErrors::HitTestSnapshotStorageExhausted,
-                &UiErrors::HitTestLifecycleUnavailable,
-                &UiErrors::RenderSnapshotInvalid,
-                &UiErrors::RenderCommandInvalid,
-                &UiErrors::RenderResourceReferenceInvalid,
-                &UiErrors::RenderSnapshotStorageExhausted,
-                &UiErrors::RenderSnapshotLifecycleUnavailable,
-                &UiErrors::RenderCompositionCapacityExceeded,
-                &UiErrors::RenderCompositionInvalid,
-                &UiErrors::RenderPresentationInvalid,
-                &UiErrors::RenderPresentationStale,
-                &UiErrors::EventDispatchInvalid,
-                &UiErrors::EventDispatchSourceStale,
-                &UiErrors::EventDispatchModalBoundaryViolation,
-                &UiErrors::EventDispatchCapacityExceeded,
-                &UiErrors::EventDispatchRouteInvalidated,
-                &UiErrors::EventDispatchReentrant,
-                &UiErrors::EventDispatchHandlerFailed,
-                &UiErrors::EventDispatchLifecycleUnavailable,
-                &UiErrors::ActionInvalid,
-                &UiErrors::ActionPayloadInvalid,
-                &UiErrors::ActionPayloadCapacityExceeded,
-                &UiErrors::ActionCommandInvalid,
-                &UiErrors::ActionQueueCapacityExceeded,
-                &UiErrors::ActionSourceStale,
-                &UiErrors::ActionResultInvalid,
-                &UiErrors::ActionResultStale,
-                &UiErrors::ActionHandlerFailed,
-                &UiErrors::ActionLifecycleUnavailable,
-                &UiErrors::NavigationInvalid,
-                &UiErrors::DiagnosticInvalid,
-                &UiErrors::DiagnosticUnsupported,
-            };
-            return descriptors;
-        }
 
         /** @brief Checks that a correlation value contains one valid identity of the requested Runtime UI domain. */
         template <typename Identity> bool HasValidIdentity(const UiDiagnosticCorrelationValue &value) noexcept {
@@ -158,7 +88,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiDiagnosticErrorDescriptors */
     std::span<const ErrorCodeDescriptor *const> UiDiagnosticErrorDescriptors() noexcept {
-        return DiagnosticDescriptors();
+        return Detail::DiagnosticDescriptors();
     }
 
     /** @copydoc MakeUiDiagnosticRecord */
