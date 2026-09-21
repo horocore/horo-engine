@@ -975,6 +975,8 @@ target_include_directories(HoroRenderBackendRegistry
 target_link_libraries(HoroRenderBackendRegistry PUBLIC HoroEngine::RenderApi)
 
 add_library(HoroRenderFrontend STATIC
+        runtime/renderer/frontend/BoundedRenderQueueCore.h
+        runtime/renderer/frontend/RenderTransferErrorDescriptor.h
         runtime/renderer/frontend/RenderFrontend.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
@@ -982,6 +984,10 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderMemoryBudgetErrors.cpp
         runtime/renderer/frontend/RenderReadback.cpp
         runtime/renderer/frontend/RenderReadbackErrors.cpp
+        runtime/renderer/frontend/RenderUpload.cpp
+        runtime/renderer/frontend/RenderUploadErrors.cpp
+        runtime/renderer/frontend/RenderQuery.cpp
+        runtime/renderer/frontend/RenderQueryErrors.cpp
         runtime/renderer/frontend/RenderResourceOperations.cpp
         runtime/renderer/frontend/RenderResourceRegistry.cpp
         runtime/renderer/frontend/UiRenderComposition.cpp

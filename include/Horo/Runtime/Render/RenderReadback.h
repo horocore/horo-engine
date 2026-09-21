@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderResource.h"
 #include "Horo/Runtime/Render/RenderSubmission.h"
+#include "Horo/Runtime/Render/RenderTransferLimits.h"
 
 #include <chrono>
 #include <cstddef>
@@ -65,9 +66,8 @@ namespace Horo::Render {
 
         /** @brief Reports whether every bound is finite, non-zero, and mutually consistent. @return True for usable limits. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return maximumPendingBytes > 0 && maximumRetainedResultBytes > 0 && maximumRequestBytes > 0 &&
-                   maximumRequestBytes <= maximumPendingBytes && maximumRequestBytes <= maximumRetainedResultBytes &&
-                   maximumAlignment > 0 && (maximumAlignment & (maximumAlignment - 1U)) == 0 && maximumRequests > 0;
+            return detail::IsValidBoundedRenderQueueLimits(maximumPendingBytes, maximumRequestBytes, maximumAlignment, maximumRequests) &&
+                   maximumRetainedResultBytes > 0 && maximumRequestBytes <= maximumRetainedResultBytes;
         }
     };
 

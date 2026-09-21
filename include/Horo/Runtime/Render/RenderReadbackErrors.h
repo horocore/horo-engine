@@ -28,4 +28,6 @@ namespace Horo::Render::RenderReadbackErrors {
     extern const ErrorCodeDescriptor MappingSizeMismatch;
     /** @brief New producer admission is disabled during shutdown. */
     extern const ErrorCodeDescriptor Stopped;
+    /** @brief Queue lifecycle access was attempted from a non-owner thread. */
+    extern const ErrorCodeDescriptor WrongThread;
 }  // namespace Horo::Render::RenderReadbackErrors

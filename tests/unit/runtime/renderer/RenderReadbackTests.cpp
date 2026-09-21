@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
+#include <thread>
 #include <utility>
 
 namespace RenderReadbackTests {
@@ -84,6 +85,15 @@ namespace RenderReadbackTests {
         CHECK(queue->Snapshot().pendingBytes == 0);
         CHECK(queue->Snapshot().retainedResultBytes == 4);
         CHECK(queue->State(request).Value() == RenderReadbackState::Ready);
+        const Error readyFailure{ErrorCode{"render.test.readback_ready_failure"},
+                                 ErrorDomainId{"render.test"},
+                                 ErrorSeverity::Error,
+                                 "Injected ready-state failure.",
+                                 {}};
+        CHECK(queue->Fail(request, readyFailure).ErrorValue().code.Value() == RenderReadbackErrors::InvalidTransition.code.Value());
+        CHECK(queue->Cancel(request).ErrorValue().code.Value() == RenderReadbackErrors::InvalidTransition.code.Value());
+        CHECK(queue->Timeout(request).ErrorValue().code.Value() == RenderReadbackErrors::InvalidTransition.code.Value());
+        CHECK(queue->Retire(request).ErrorValue().code.Value() == RenderReadbackErrors::InvalidTransition.code.Value());
 
         auto acquired = queue->Acquire(request);
         REQUIRE(acquired.HasValue());
@@ -111,6 +121,12 @@ namespace RenderReadbackTests {
         CHECK(queue->Snapshot().pendingBytes == 0);
         CHECK(queue->Acquire(pending.Value()).ErrorValue().code.Value() == RenderReadbackErrors::Cancelled.code.Value());
         REQUIRE(queue->Discard(pending.Value()).HasValue());
+
+        const auto pendingTimeout = queue->Request(Descriptor());
+        REQUIRE(pendingTimeout.HasValue());
+        REQUIRE(queue->Timeout(pendingTimeout.Value()).HasValue());
+        CHECK(queue->Acquire(pendingTimeout.Value()).ErrorValue().code.Value() == RenderReadbackErrors::TimedOut.code.Value());
+        REQUIRE(queue->Discard(pendingTimeout.Value()).HasValue());
 
         const RenderReadbackId submitted = Submit(*queue);
         REQUIRE(queue->Cancel(submitted).HasValue());
@@ -156,6 +172,73 @@ namespace RenderReadbackTests {
         queue->StopAdmission();
         CHECK_FALSE(queue->Snapshot().acceptingRequests);
         CHECK(queue->Request(Descriptor()).ErrorValue().code.Value() == RenderReadbackErrors::Stopped.code.Value());
+    }
+
+    TEST_CASE("Render readback enforces request capacity and owner-thread affinity", "[unit][runtime][renderer][readback]") {
+        auto queue = CreateQueue({.maximumPendingBytes = 8,
+                                  .maximumRetainedResultBytes = 8,
+                                  .maximumRequestBytes = 8,
+                                  .maximumAlignment = 8,
+                                  .maximumRequests = 1});
+        const auto request = queue->Request(Descriptor());
+        REQUIRE(request.HasValue());
+        const auto denied = queue->Request(Descriptor());
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == RenderReadbackErrors::CapacityExceeded.code.Value());
+        CHECK(queue->Snapshot().failedAdmissionCount == 1);
+
+        auto threadRequest = Result<RenderReadbackId>::Success({});
+        auto threadMark = Result<void>::Success();
+        auto threadResult = Result<RenderReadbackState>::Success(RenderReadbackState::Ready);
+        std::thread worker([&] {
+            threadRequest = queue->Request(Descriptor());
+            threadMark = queue->MarkSubmitted(request.Value(), Completion);
+            threadResult = queue->State(request.Value());
+        });
+        worker.join();
+        REQUIRE(threadRequest.HasError());
+        CHECK(threadRequest.ErrorValue().code.Value() == RenderReadbackErrors::WrongThread.code.Value());
+        REQUIRE(threadMark.HasError());
+        CHECK(threadMark.ErrorValue().code.Value() == RenderReadbackErrors::WrongThread.code.Value());
+        REQUIRE(threadResult.HasError());
+        CHECK(threadResult.ErrorValue().code.Value() == RenderReadbackErrors::WrongThread.code.Value());
+    }
+
+    TEST_CASE("Render readback rejects mismatched mappings before publishing a result", "[unit][runtime][renderer][readback]") {
+        auto queue = CreateQueue();
+        const RenderReadbackId request = Submit(*queue);
+        const std::array wrongSize{std::byte{1}, std::byte{2}};
+        CHECK(queue->Complete(request, wrongSize).ErrorValue().code.Value() == RenderReadbackErrors::MappingSizeMismatch.code.Value());
+        CHECK(queue->State(request).Value() == RenderReadbackState::Submitted);
+
+        const std::array mapped{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+        REQUIRE(queue->Complete(request, mapped).HasValue());
+        CHECK(queue->Acquire(request).HasValue());
+    }
+
+    TEST_CASE("Render readback handles repeated cancellation and timeout retirement", "[unit][runtime][renderer][readback]") {
+        auto queue = CreateQueue();
+        const Error backendFailure{ErrorCode{"render.test.readback_failed_again"},
+                                   ErrorDomainId{"render.test"},
+                                   ErrorSeverity::Error,
+                                   "Injected readback failure.",
+                                   {}};
+
+        const auto cancelled = queue->Request(Descriptor());
+        REQUIRE(cancelled.HasValue());
+        CHECK(queue->Complete(cancelled.Value(), {}).ErrorValue().code.Value() == RenderReadbackErrors::InvalidTransition.code.Value());
+        REQUIRE(queue->Cancel(cancelled.Value()).HasValue());
+        REQUIRE(queue->Cancel(cancelled.Value()).HasValue());
+        REQUIRE(queue->Complete(cancelled.Value(), {}).HasValue());
+        REQUIRE(queue->Fail(cancelled.Value(), backendFailure).HasValue());
+        REQUIRE(queue->Discard(cancelled.Value()).HasValue());
+
+        const auto timedOut = Submit(*queue);
+        REQUIRE(queue->Timeout(timedOut).HasValue());
+        REQUIRE(queue->Timeout(timedOut).HasValue());
+        REQUIRE(queue->Fail(timedOut, backendFailure).HasValue());
+        REQUIRE(queue->Retire(timedOut).HasValue());
+        REQUIRE(queue->Discard(timedOut).HasValue());
     }
 
     TEST_CASE("Render readback shutdown stops admission while acquired results remain owned", "[unit][runtime][renderer][readback]") {
