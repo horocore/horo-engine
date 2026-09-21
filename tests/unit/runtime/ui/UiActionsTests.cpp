@@ -243,6 +243,34 @@ namespace Horo::Runtime::Ui {
             ExpectError(router.TryDequeue(), UiErrors::ActionLifecycleUnavailable);
         }
 
+        TEST_CASE("Action router drains admitted work during retirement", "[runtime_ui][actions][router]") {
+            auto router = Router(2);
+            const auto first = router.Enqueue(Source(), UiButtonActionCommand{AuthoredId<UiActionId>(7), {}});
+            REQUIRE(first.HasValue());
+            REQUIRE(router.Enqueue(Source(), UiButtonActionCommand{AuthoredId<UiActionId>(8), {}}).HasValue());
+            REQUIRE(router.BeginRetirement().HasValue());
+
+            RecordingHandler handler;
+            const auto dispatched = router.DispatchNext(handler);
+            REQUIRE(dispatched.HasValue());
+            REQUIRE(dispatched.Value().has_value());
+            CHECK(dispatched.Value()->request == first.Value());
+
+            const auto request = router.TryDequeue();
+            REQUIRE(request.HasValue());
+            REQUIRE(request.Value().has_value());
+            const auto directlyDispatched = router.Dispatch(*request.Value(), handler);
+            REQUIRE(directlyDispatched.HasValue());
+            CHECK(directlyDispatched.Value().kind == UiActionResultKind::Completed);
+            CHECK(router.QueuedCount() == 0);
+
+            const auto empty = router.DispatchNext(handler);
+            REQUIRE(empty.HasValue());
+            CHECK_FALSE(empty.Value().has_value());
+            ExpectError(router.Enqueue(Source(), UiButtonActionCommand{AuthoredId<UiActionId>(9), {}}),
+                        UiErrors::ActionLifecycleUnavailable);
+        }
+
         TEST_CASE("Navigation dispatch returns a typed completed result without allocating in the hot path",
                   "[runtime_ui][actions][navigation]") {
             auto router = Router();

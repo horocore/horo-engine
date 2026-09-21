@@ -524,7 +524,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiActionRouter::Dispatch */
     Result<UiActionResult> UiActionRouter::Dispatch(const UiActionRequest &request, UiActionHandler &handler) {
-        if (!storage_ || storage_->state != UiActionRouterState::Active || storage_->dispatching)
+        if (!storage_ || storage_->state == UiActionRouterState::Stopped || storage_->dispatching)
             return Failure<UiActionResult>(UiErrors::ActionLifecycleUnavailable);
         if (const auto valid = request.Validate(); valid.HasError())
             return Result<UiActionResult>::Failure(valid.ErrorValue());
@@ -552,7 +552,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiActionRouter::DispatchNext */
     Result<std::optional<UiActionResult>> UiActionRouter::DispatchNext(UiActionHandler &handler) {
-        if (!storage_ || storage_->state != UiActionRouterState::Active || storage_->dispatching)
+        if (!storage_ || storage_->state == UiActionRouterState::Stopped || storage_->dispatching)
             return Failure<std::optional<UiActionResult>>(UiErrors::ActionLifecycleUnavailable);
         const auto request = TryDequeue();
         if (request.HasError())
