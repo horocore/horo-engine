@@ -1,11 +1,11 @@
 #pragma once
 
 #include "Horo/Prefab/PrefabDocument.h"
+#include "JsonUtils.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -32,8 +32,8 @@ namespace Horo::Prefab::Detail {
         return Result<T>::Failure(Failure(descriptor, std::move(message)));
     }
 
-    [[nodiscard]] bool HasAllowedFields(const Json &value, std::initializer_list<std::string_view> required,
-                                        std::initializer_list<std::string_view> optional = {});
+    using Horo::Foundation::HasAllowedFields;
+    using Horo::Foundation::JsonParseGuard;
     [[nodiscard]] Result<std::string> ReadString(const Json &value);
 
     template <typename Integer> [[nodiscard]] Result<Integer> ReadUnsigned(const Json &value) {

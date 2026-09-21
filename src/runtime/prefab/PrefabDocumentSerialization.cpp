@@ -6,70 +6,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <initializer_list>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace Horo::Prefab {
     namespace Detail {
-        /** @brief Reports whether an object contains exactly required fields plus an optional field set. */
-        [[nodiscard]] bool HasAllowedFields(const Json &value, const std::initializer_list<std::string_view> required,
-                                            const std::initializer_list<std::string_view> optional) {
-            if (!value.is_object() || value.size() < required.size() || value.size() > required.size() + optional.size())
-                return false;
-            for (const std::string_view field : required) {
-                if (!value.contains(std::string{field}))
-                    return false;
-            }
-            return std::ranges::all_of(value.items(), [&](const auto &entry) {
-                const std::string_view name = entry.key();
-                return std::ranges::find(required, name) != required.end() || std::ranges::find(optional, name) != optional.end();
-            });
-        }
-
-        /** @brief Rejects duplicate object keys and excessive nesting before the JSON DOM is admitted. */
-        class JsonParseGuard final {
-        public:
-            explicit JsonParseGuard(const std::size_t maximumDepth) : maximumDepth_(maximumDepth) {}
-
-            bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || static_cast<std::size_t>(depth) >= maximumDepth_) {
-                    tooDeep_ = true;
-                    return false;
-                }
-                const auto index =
-                    event == Json::parse_event_t::key && depth > 0 ? static_cast<std::size_t>(depth - 1) : static_cast<std::size_t>(depth);
-                if (keys_.size() <= index)
-                    keys_.resize(index + 1);
-                if (event == Json::parse_event_t::object_start)
-                    keys_[index].clear();
-                if (event == Json::parse_event_t::key && !keys_[index].insert(value.get<std::string>()).second)
-                    duplicate_ = true;
-                if (event == Json::parse_event_t::object_end)
-                    keys_[index].clear();
-                return !duplicate_ && !tooDeep_;
-            }
-
-            [[nodiscard]] bool HasDuplicate() const noexcept {
-                return duplicate_;
-            }
-
-            [[nodiscard]] bool IsTooDeep() const noexcept {
-                return tooDeep_;
-            }
-
-        private:
-            std::size_t maximumDepth_{};
-            std::vector<std::unordered_set<std::string>> keys_;
-            bool duplicate_{};
-            bool tooDeep_{};
-        };
-
         /** @brief Validates parser bounds and an optional exact unified project-version expectation. */
         [[nodiscard]] Result<void> ValidateParseLimits(const PrefabSourceParseLimits &limits) {
             if (limits.maximumSourceBytes == 0 || limits.maximumSourceBytes > PrefabHardLimits::SourceDocumentBytes ||
@@ -187,9 +132,9 @@ namespace Horo::Prefab {
                 value.at("bytes").size() > Gameplay::MaximumSerializedComponentBytes)
                 return Failed<std::vector<std::byte>>(PrefabErrors::PayloadTooLarge, "Prefab component payload exceeds its byte bound.");
             const Json &encoded = value.at("bytes");
-            std::vector<std::byte> bytes;
-            bytes.reserve(encoded.size());
-            for (const Json &entry : encoded) {
+            std::vector<std::byte> bytes(encoded.size());
+            for (std::size_t index = 0; index < encoded.size(); ++index) {
+                const Json &entry = encoded.at(index);
                 auto byte = ReadUnsigned<std::uint16_t>(entry);
                 if (byte.HasError())
                     return Failed<std::vector<std::byte>>(PrefabErrors::DocumentInvalid,
@@ -197,12 +142,12 @@ namespace Horo::Prefab {
                 if (byte.Value() > std::numeric_limits<std::uint8_t>::max())
                     return Failed<std::vector<std::byte>>(PrefabErrors::DocumentInvalid,
                                                           "Prefab component payload contains an oversized byte.");
-                bytes.emplace_back(static_cast<std::byte>(byte.Value()));
+                bytes[index] = static_cast<std::byte>(byte.Value());
             }
             return Result<std::vector<std::byte>>::Success(std::move(bytes));
         }
 
-        /** @brief Adds semantic payload bytes without allowing an intermediate parser candidate to exceed policy. */
+        /** @brief Adds semantic payload bytes without allowing an intermediate candidate to exceed policy. */
         [[nodiscard]] bool AddPayloadBytes(std::size_t &total, const std::size_t bytes, const std::size_t maximum) noexcept {
             if (bytes > maximum - total)
                 return false;

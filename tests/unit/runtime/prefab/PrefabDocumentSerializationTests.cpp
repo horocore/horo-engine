@@ -107,6 +107,64 @@ namespace Horo::Prefab {
             source.replace(position, from.size(), to);
             return source;
         }
+
+        std::size_t FindMatchingArrayEnd(const std::string &source, const std::size_t arrayStart) {
+            std::size_t depth{};
+            bool inString{};
+            bool escaped{};
+            for (std::size_t position = arrayStart; position < source.size(); ++position) {
+                const char character = source[position];
+                if (inString) {
+                    if (escaped)
+                        escaped = false;
+                    else if (character == '\\')
+                        escaped = true;
+                    else if (character == '"')
+                        inString = false;
+                    continue;
+                }
+                if (character == '"')
+                    inString = true;
+                else if (character == '[')
+                    ++depth;
+                else if (character == ']' && --depth == 0)
+                    return position;
+            }
+            return std::string::npos;
+        }
+
+        std::string ReplaceByteValue(std::string source, const std::string_view from, const std::string_view to) {
+            std::size_t searchPosition{};
+            while (true) {
+                const std::size_t fieldPosition = source.find("\"bytes\"", searchPosition);
+                if (fieldPosition == std::string::npos)
+                    break;
+                const std::size_t arrayStart = source.find('[', fieldPosition);
+                const std::size_t arrayEnd = FindMatchingArrayEnd(source, arrayStart);
+                if (arrayStart == std::string::npos || arrayEnd == std::string::npos)
+                    return {};
+                const std::size_t valuePosition = source.find(from, arrayStart);
+                if (valuePosition != std::string::npos && valuePosition < arrayEnd) {
+                    source.replace(valuePosition, from.size(), to);
+                    return source;
+                }
+                searchPosition = arrayEnd + 1;
+            }
+            return {};
+        }
+
+        std::string ReplaceArrayWithObject(std::string source, const std::string_view field) {
+            const std::size_t fieldPosition = source.find("\"" + std::string{field} + "\"");
+            if (fieldPosition == std::string::npos)
+                return {};
+            const std::size_t arrayStart = source.find('[', fieldPosition);
+            const std::size_t arrayEnd = FindMatchingArrayEnd(source, arrayStart);
+            if (arrayStart == std::string::npos || arrayEnd == std::string::npos)
+                return {};
+            source[arrayStart] = '{';
+            source[arrayEnd] = '}';
+            return source;
+        }
     }  // namespace
 
     TEST_CASE("Prefab canonical serialization round-trips project identity and opaque bytes", "[unit][prefab][serialization]") {
@@ -212,6 +270,27 @@ namespace Horo::Prefab {
         const std::string pathField = "{\"projectVersion\":\"1.2.3\",\"assetId\":\"" + Asset(1).ToString() +
                                       "\",\"objects\":[],\"referencedAssets\":[],\"sourcePath\":\"assets/prefabs/hero.prefab\"}";
         REQUIRE(PrefabDocument::Parse(pathField, Limits()).HasError());
+    }
+
+    TEST_CASE("Prefab parser enforces byte, object-shape and depth boundaries", "[unit][prefab][serialization]") {
+        const auto encoded = CanonicalSource();
+        REQUIRE(encoded.HasValue());
+
+        const std::string oversizedByte = ReplaceByteValue(encoded.Value(), "66", "256");
+        REQUIRE_FALSE(oversizedByte.empty());
+        REQUIRE(PrefabDocument::Parse(oversizedByte, Limits()).HasError());
+
+        const std::string negativeByte = ReplaceByteValue(encoded.Value(), "66", "-1");
+        REQUIRE_FALSE(negativeByte.empty());
+        REQUIRE(PrefabDocument::Parse(negativeByte, Limits()).HasError());
+
+        const std::string invalidComponents = ReplaceArrayWithObject(encoded.Value(), "components");
+        REQUIRE_FALSE(invalidComponents.empty());
+        REQUIRE(PrefabDocument::Parse(invalidComponents, Limits()).HasError());
+
+        PrefabSourceParseLimits maximumDepth;
+        maximumDepth.maximumJsonDepth = PrefabHardLimits::SourceJsonDepth;
+        REQUIRE(PrefabDocument::Parse(encoded.Value(), Limits(), maximumDepth).HasValue());
     }
 
     TEST_CASE("Prefab parser rejects unsupported versions, non-finite values and invalid UTF-8", "[unit][prefab][serialization]") {

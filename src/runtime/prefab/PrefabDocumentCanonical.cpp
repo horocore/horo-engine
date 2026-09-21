@@ -44,6 +44,7 @@ namespace Horo::Prefab {
         /** @brief Encodes one opaque payload byte-for-byte as unsigned JSON byte values. */
         [[nodiscard]] OrderedJson EncodeComponentBytes(const std::vector<std::byte> &bytes) {
             OrderedJson encoded = OrderedJson::array();
+            encoded.get_ref<OrderedJson::array_t &>().reserve(bytes.size());
             for (const std::byte byte : bytes)
                 encoded.push_back(std::to_integer<unsigned int>(byte));
             return OrderedJson{{"bytes", std::move(encoded)}};

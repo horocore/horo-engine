@@ -16,13 +16,7 @@
 
 namespace Horo::Prefab {
     namespace {
-        /** @brief Adds bytes without exceeding the document payload limit. */
-        [[nodiscard]] bool AddPayloadBytes(std::size_t &total, const std::size_t bytes, const std::size_t maximumPayloadBytes) noexcept {
-            if (bytes > maximumPayloadBytes - total)
-                return false;
-            total += bytes;
-            return true;
-        }
+        using Detail::AddPayloadBytes;
 
         /** @brief Counts dynamic bytes held by a portable behavior field value. */
         [[nodiscard]] std::size_t DynamicValueBytes(const Gameplay::BehaviorFieldValue &value) noexcept {
