@@ -1568,6 +1568,11 @@ add_executable(HoroRuntimeSaveArchiveReaderTests
 )
 target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveArchiveReaderTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveMigrationTests
+        unit/runtime/save/SaveMigrationTests.cpp
+)
+target_compile_features(HoroRuntimeSaveMigrationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveMigrationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCanonicalCodecTests
         unit/runtime/save/SaveCanonicalCodecTests.cpp
 )
@@ -2257,6 +2262,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests
         HoroRuntimeSaveArchiveReaderTests
+        HoroRuntimeSaveMigrationTests
         HoroRuntimeSaveCanonicalCodecTests
         HoroRuntimeSaveReferenceTests
         HoroRuntimeSaveSlotMetadataTests

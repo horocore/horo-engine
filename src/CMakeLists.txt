@@ -211,6 +211,11 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveRestoreTransaction.cpp
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
+        runtime/save/SaveMigration.cpp
+        runtime/save/SaveMigrationExecutor.cpp
+        runtime/save/SaveMigrationPlanner.cpp
+        runtime/save/SaveMigrationRegistry.cpp
+        runtime/save/SaveMigrationValidation.cpp
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveFinalization.cpp
         runtime/save/SaveArchiveFraming.cpp
