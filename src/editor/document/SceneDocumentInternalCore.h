@@ -113,6 +113,12 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::vector<Gameplay::BehaviorComponent> after;
     };
 
+    struct GameplayComponentsChangedDelta {
+        SceneObjectId object;
+        std::vector<Gameplay::SerializedComponent> before;
+        std::vector<Gameplay::SerializedComponent> after;
+    };
+
     struct IndexedSceneObject {
         SceneObjectSnapshot object;
         std::size_t index{0};
@@ -154,8 +160,9 @@ namespace Horo::Editor::SceneDocumentDetail {
     using SceneCommandDelta =
         std::variant<CreatedObjectDelta, RenamedObjectDelta, TransformedObjectDelta, TransformedObjectsDelta, CameraChangedDelta,
                      LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, NavigationComponentsChangedDelta,
-                     EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta, BehaviorsChangedDelta, DeletedObjectsDelta,
-                     CreatedPrefabInstanceDelta, PrefabInstanceTransformDelta, PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta>;
+                     EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta, BehaviorsChangedDelta,
+                     GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta, PrefabInstanceTransformDelta,
+                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta>;
 
     struct HistoryRecord {
         DocumentStateId beforeState;
@@ -276,6 +283,8 @@ namespace Horo::Editor::SceneDocumentDetail {
             }
             behaviorIds.push_back(behavior.instanceId);
         }
+        if (const Result<void> gameplay = Gameplay::ValidateSerializedComponents(components.gameplayComponents); gameplay.HasError())
+            return gameplay;
         return Result<void>::Success();
     }
 

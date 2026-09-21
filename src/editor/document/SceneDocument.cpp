@@ -89,6 +89,42 @@ namespace Horo::Editor {
         return resolved;
     }
 
+    /** @copydoc InspectSceneGameplayComponents */
+    SceneGameplayInspection InspectSceneGameplayComponents(const std::span<const SceneObjectSnapshot> objects,
+                                                           const Gameplay::ComponentRegistry &registry) {
+        SceneGameplayInspection inspection;
+        for (const SceneObjectSnapshot &object : objects) {
+            for (std::size_t componentIndex = 0; componentIndex < object.components.gameplayComponents.size(); ++componentIndex) {
+                const Gameplay::SerializedComponent &component = object.components.gameplayComponents[componentIndex];
+                const Result<Gameplay::ComponentInspection> result = registry.Inspect(component);
+                if (result.HasError()) {
+                    inspection.issues.push_back(SceneGameplayComponentIssue{.object = object.id,
+                                                                            .componentIndex = componentIndex,
+                                                                            .typeId = component.typeId,
+                                                                            .schemaVersion = component.schemaVersion,
+                                                                            .status = Gameplay::ComponentInspectionStatus::InvalidEnvelope,
+                                                                            .validationError = result.ErrorValue()});
+                    continue;
+                }
+                if (result.Value().status != Gameplay::ComponentInspectionStatus::Current) {
+                    inspection.issues.push_back(SceneGameplayComponentIssue{.object = object.id,
+                                                                            .componentIndex = componentIndex,
+                                                                            .typeId = component.typeId,
+                                                                            .schemaVersion = component.schemaVersion,
+                                                                            .status = result.Value().status});
+                }
+            }
+        }
+        std::ranges::sort(inspection.issues, [](const SceneGameplayComponentIssue &left, const SceneGameplayComponentIssue &right) {
+            if (left.object != right.object)
+                return left.object < right.object;
+            if (left.typeId != right.typeId)
+                return left.typeId < right.typeId;
+            return left.componentIndex < right.componentIndex;
+        });
+        return inspection;
+    }
+
     /** @copydoc EditorHistory::EditorHistory */
     EditorHistory::EditorHistory() : m_impl(std::make_unique<Impl>()) {}
 

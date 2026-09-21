@@ -3,6 +3,8 @@
 #include "GameplayIdentityValidation.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 
+#include <algorithm>
+
 namespace Horo::Gameplay {
     /** @copydoc ComponentTypeId::Parse */
     Result<ComponentTypeId> ComponentTypeId::Parse(const std::string_view value) {
@@ -43,6 +45,22 @@ namespace Horo::Gameplay {
         if (!component.typeId.IsValid() || component.schemaVersion == 0 || component.encoding != ComponentPayloadEncoding::CanonicalJson ||
             component.payload.size() > MaximumSerializedComponentBytes)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidSerializedComponent));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateSerializedComponents */
+    Result<void> ValidateSerializedComponents(const std::span<const SerializedComponent> components) {
+        if (components.size() > MaximumSerializedComponentsPerObject)
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidSerializedComponent));
+        for (std::size_t index = 0; index < components.size(); ++index) {
+            const SerializedComponent &component = components[index];
+            if (const Result<void> valid = ValidateSerializedComponent(component); valid.HasError())
+                return valid;
+            if (std::ranges::find_if(components.begin(), components.begin() + index, [&component](const SerializedComponent &other) {
+                return other.typeId == component.typeId;
+            }) != components.begin() + index)
+                return Result<void>::Failure(MakeError(GameplayErrors::DuplicateComponentType));
+        }
         return Result<void>::Success();
     }
 }  // namespace Horo::Gameplay

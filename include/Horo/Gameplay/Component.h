@@ -10,6 +10,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -125,4 +126,11 @@ namespace Horo::Gameplay {
      * @return Success or a stable bounded-data error.
      */
     [[nodiscard]] Result<void> ValidateSerializedComponent(const SerializedComponent &component);
+
+    /**
+     * @brief Validates one bounded, duplicate-free serialized component set.
+     * @param components Opaque envelopes authored on one scene object.
+     * @return Success or a stable bounded-data error.
+     */
+    [[nodiscard]] Result<void> ValidateSerializedComponents(std::span<const SerializedComponent> components);
 }  // namespace Horo::Gameplay

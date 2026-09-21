@@ -1,3 +1,4 @@
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "editor/document/SceneDocumentInternal.h"
 
 namespace Horo::Editor {
@@ -147,6 +148,56 @@ namespace Horo::Editor {
                     MakeDocumentError(SceneDocumentErrors::InvalidBehavior, "Behavior attachment does not exist."));
             return CommitObject({BehaviorsChangedDelta{object.id, object.components.behaviors, std::move(after)}, command.object,
                                  DocumentChangeKind::ComponentChanged});
+        });
+    }
+
+    /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectGameplayComponentCommand&) */
+    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectGameplayComponentCommand &command) {
+        if (const Result<void> valid = Gameplay::ValidateSerializedComponent(command.component); valid.HasError())
+            return Result<SceneCommandResult>::Failure(valid.ErrorValue());
+        return WithEditableObject(m_document, m_document.m_objects, command.object, [this, &command](const SceneObjectSnapshot &object) {
+            auto after = object.components.gameplayComponents;
+            const auto existing = std::ranges::find(after, command.component.typeId, &Gameplay::SerializedComponent::typeId);
+            if (existing != after.end()) {
+                if (*existing == command.component)
+                    return ComponentNoOpResult(m_document, object.id);
+                *existing = command.component;
+            } else {
+                after.push_back(command.component);
+            }
+            std::ranges::sort(after, {}, [](const Gameplay::SerializedComponent &component) {
+                return component.typeId.Value();
+            });
+
+            SceneObjectComponentSet candidate = object.components;
+            candidate.gameplayComponents = after;
+            if (const Result<void> valid = ValidateComponents(candidate); valid.HasError())
+                return Result<SceneCommandResult>::Failure(valid.ErrorValue());
+            SceneCommandDelta delta = GameplayComponentsChangedDelta{object.id, object.components.gameplayComponents, std::move(after)};
+            if (const Result<void> validHistory = ValidateHistoryDelta(delta, 1); validHistory.HasError())
+                return Result<SceneCommandResult>::Failure(validHistory.ErrorValue());
+            return CommitObject({std::move(delta), command.object, DocumentChangeKind::ComponentChanged});
+        });
+    }
+
+    /** @copydoc SceneDocumentCommandExecutor::Execute(const RemoveSceneObjectGameplayComponentCommand&) */
+    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const RemoveSceneObjectGameplayComponentCommand &command) {
+        if (!command.typeId.IsValid())
+            return Result<SceneCommandResult>::Failure(
+                MakeError(Gameplay::GameplayErrors::InvalidComponentTypeId, "Gameplay component type ID is invalid."));
+        return WithEditableObject(m_document, m_document.m_objects, command.object, [this, &command](const SceneObjectSnapshot &object) {
+            auto after = object.components.gameplayComponents;
+            if (const auto removed = std::erase_if(after,
+                                                   [&command](const Gameplay::SerializedComponent &component) {
+                return component.typeId == command.typeId;
+            });
+                removed == 0)
+                return ComponentNoOpResult(m_document, object.id);
+
+            SceneCommandDelta delta = GameplayComponentsChangedDelta{object.id, object.components.gameplayComponents, std::move(after)};
+            if (const Result<void> validHistory = ValidateHistoryDelta(delta, 1); validHistory.HasError())
+                return Result<SceneCommandResult>::Failure(validHistory.ErrorValue());
+            return CommitObject({std::move(delta), command.object, DocumentChangeKind::ComponentChanged});
         });
     }
 
