@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
@@ -117,6 +118,7 @@ namespace Horo::Editor {
         std::vector<Runtime::ColliderComponent> colliders;
         std::vector<Runtime::PhysicsConstraintComponent> physicsConstraints;
         std::vector<Gameplay::BehaviorComponent> behaviors;
+        std::vector<Gameplay::SerializedComponent> gameplayComponents;
 
         [[nodiscard]] bool operator==(const SceneObjectComponentSet &) const noexcept = default;
     };
@@ -159,6 +161,34 @@ namespace Horo::Editor {
         std::vector<SceneObjectSnapshot> objects;
         std::vector<ScenePrefabInstance> prefabInstances;
     };
+
+    /** @brief One authored gameplay component that cannot be activated by the current project generation. */
+    struct SceneGameplayComponentIssue {
+        SceneObjectId object;
+        std::size_t componentIndex{};
+        Gameplay::ComponentTypeId typeId;
+        std::uint32_t schemaVersion{};
+        Gameplay::ComponentInspectionStatus status{Gameplay::ComponentInspectionStatus::MissingDescriptor};
+        std::optional<Error> validationError;
+    };
+
+    /** @brief Deterministically ordered compatibility findings for one scene snapshot. */
+    struct SceneGameplayInspection {
+        std::vector<SceneGameplayComponentIssue> issues;
+
+        [[nodiscard]] bool HasBlockingIssues() const noexcept {
+            return !issues.empty();
+        }
+    };
+
+    /**
+     * @brief Inspects opaque authored gameplay components without mutating their payloads.
+     * @param objects Immutable scene objects from one coherent document snapshot.
+     * @param registry Frozen component descriptors for the active project generation.
+     * @return Stable object/type ordered findings for missing or incompatible components.
+     */
+    [[nodiscard]] SceneGameplayInspection InspectSceneGameplayComponents(std::span<const SceneObjectSnapshot> objects,
+                                                                         const Gameplay::ComponentRegistry &registry);
 
     /** @brief One transient local-transform override keyed by stable scene-object identity. */
     struct SceneObjectTransformPreview {
@@ -349,6 +379,18 @@ namespace Horo::Editor {
     struct RemoveSceneObjectBehaviorCommand {
         SceneObjectId object;
         Gameplay::BehaviorInstanceId behavior;
+    };
+
+    /** @brief Undoable typed replacement used to repair one preserved gameplay component payload. */
+    struct SetSceneObjectGameplayComponentCommand {
+        SceneObjectId object;
+        Gameplay::SerializedComponent component;
+    };
+
+    /** @brief Undoable explicit removal of one preserved gameplay component by stable type identity. */
+    struct RemoveSceneObjectGameplayComponentCommand {
+        SceneObjectId object;
+        Gameplay::ComponentTypeId typeId;
     };
 
     /** @brief Typed request to duplicate one object without duplicating its children. */
@@ -580,6 +622,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectBehaviorCommand &command);
         /** @brief Validates and atomically removes one behavior attachment. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const RemoveSceneObjectBehaviorCommand &command);
+        /** @brief Validates and atomically replaces one opaque gameplay component payload. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectGameplayComponentCommand &command);
+        /** @brief Atomically removes one opaque gameplay component through an undoable repair command. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const RemoveSceneObjectGameplayComponentCommand &command);
 
         /** @brief Validates and atomically commits a shallow duplicate-object command. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const DuplicateSceneObjectCommand &command);

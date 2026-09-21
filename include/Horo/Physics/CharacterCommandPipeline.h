@@ -50,10 +50,11 @@ namespace Horo::Character {
 
     /** @brief Exact host-owned Character tick; no render time or live input state is accepted. */
     struct CharacterFixedTickInput final {
-        std::uint64_t tick{};            /**< One-based next attempted simulation tick. */
-        std::uint64_t sceneGeneration{}; /**< Exact owning scene generation. */
-        Duration fixedDelta{};           /**< Positive immutable host quantum. */
-        CharacterTickObserver observer;  /**< Optional synchronous observation. */
+        std::uint64_t tick{};               /**< One-based next attempted simulation tick. */
+        std::uint64_t sceneGeneration{};    /**< Exact owning scene generation. */
+        Duration fixedDelta{};              /**< Positive immutable host quantum. */
+        CharacterTickObserver observer;     /**< Optional synchronous observation. */
+        CharacterPhysicsQueryContext query; /**< Optional read-only Physics snapshot for Horo movement resolution. */
     };
 
     /** @brief Coherent publication marker for the last successfully scheduled Character tick. */

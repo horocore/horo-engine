@@ -1,8 +1,6 @@
 #pragma once
 
-#include "CharacterWorldInternal.h"
-
-#include <cmath>
+#include "CharacterWorldMovementInternal.h"
 
 namespace Horo::Character::Detail {
     /** @brief Validates immutable request evidence before attempting queue ownership. */
@@ -140,6 +138,14 @@ namespace Horo::Character::Detail {
         return Result<void>::Success();
     }
 
+    /** @brief Validates and owns one completed movement result after its resolver-specific checks. */
+    [[nodiscard]] Result<CharacterMovementResult> FinalizeMovementResult(const auto &impl, CharacterMovementResult result,
+                                                                         const Math::Vec3 previousPosition) {
+        if (const auto valid = ValidateMovementPosition(impl, previousPosition, result.finalPosition); valid.HasError())
+            return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
+        return Result<CharacterMovementResult>::Success(std::move(result));
+    }
+
     /** @brief Produces a deterministic backend-free result when no Physics resolver is attached. */
     [[nodiscard]] Result<CharacterMovementResult> BuildBaselineMovementResult(const auto &impl, const CharacterMovementRequest &command,
                                                                               const CharacterTransformPublication &previous,
@@ -165,9 +171,7 @@ namespace Horo::Character::Detail {
         }
         if (command.desiredHeading.has_value())
             result.finalHeading = *command.desiredHeading;
-        if (const auto valid = ValidateMovementPosition(impl, previous.position, result.finalPosition); valid.HasError())
-            return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
-        return Result<CharacterMovementResult>::Success(std::move(result));
+        return FinalizeMovementResult(impl, std::move(result), previous.position);
     }
 
     /** @brief Resolves and validates one backend-neutral result without mutating the controller. */
@@ -175,9 +179,13 @@ namespace Horo::Character::Detail {
                                                                         const CharacterTransformPublication &previous,
                                                                         const CharacterFixedTickInput &input,
                                                                         const CharacterControllerDescriptor &descriptor) {
-        Result<CharacterMovementResult> resolved = input.observer.movementResult
-                                                       ? input.observer.movementResult(input.observer.context, command, previous)
-                                                       : BuildBaselineMovementResult(impl, command, previous, input);
+        Result<CharacterMovementResult> resolved = [&]() -> Result<CharacterMovementResult> {
+            if (input.observer.movementResult)
+                return input.observer.movementResult(input.observer.context, command, previous);
+            if (input.query.sweep)
+                return BuildCapsuleSweepMovementResult(impl, command, previous, input, descriptor);
+            return BuildBaselineMovementResult(impl, command, previous, input);
+        }();
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult result = std::move(resolved).Value();
@@ -189,9 +197,7 @@ namespace Horo::Character::Detail {
                 MakeError(CharacterErrors::PlacementInvalid, "Movement result changed the controller up axis."));
         if (const auto valid = ValidateCharacterMovementResult(result, descriptor); valid.HasError())
             return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
-        if (const auto valid = ValidateMovementPosition(impl, previous.position, result.finalPosition); valid.HasError())
-            return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
-        return Result<CharacterMovementResult>::Success(std::move(result));
+        return FinalizeMovementResult(impl, std::move(result), previous.position);
     }
 
     /** @brief Identifies the final replacement for one controller in sorted command scratch. */
@@ -254,7 +260,10 @@ namespace Horo::Character::Detail {
                 const auto resolved = ResolveMovementResult(impl, command, previous, input, descriptor);
                 if (resolved.HasError())
                     return Result<std::uint32_t>::Failure(resolved.ErrorValue());
-                movementResults.push_back(std::move(resolved).Value());
+                CharacterMovementResult movement = std::move(resolved).Value();
+                for (std::uint32_t contactIndex{}; contactIndex < movement.contactCount; ++contactIndex)
+                    static_cast<void>(impl.fastPath.TryAppendContact(movement.contacts[contactIndex]));
+                movementResults.push_back(std::move(movement));
             }
             ++applied;
         }

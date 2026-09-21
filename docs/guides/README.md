@@ -54,6 +54,9 @@ workflows.
 - [CPU Particle Spawn Pipeline Migration](./cpu-particle-spawn-pipeline-migration.md):
   prepare deterministic continuous/burst birth, descriptor initialization and expiry
   over fixed SoA capacity without steady-state allocation.
+- [VFX Foundation Qualification](./vfx-foundation-qualification.md): validate the
+  authored particle path end to end through headless domain resolution and CPU simulation,
+  plus hostile-input, tier, and allocation evidence.
 - [Grounded Navigation Provider Composition](./grounded-navigation-provider-composition.md):
   compose the pinned Detour runtime provider from neutral topology with explicit
   capacity, world-generation, cancellation, and teardown behavior.

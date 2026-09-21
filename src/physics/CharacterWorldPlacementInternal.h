@@ -54,6 +54,9 @@ namespace Horo::Character::Detail {
     /** @brief Maps one placement operation to the exact world and Physics snapshot query contract. */
     [[nodiscard]] Result<void> ValidateQueryContext(const auto &impl, const CharacterPhysicsQueryContext &query,
                                                     const std::uint64_t expectedTick) {
+        if (query.overlap == nullptr)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::OperationUnsupported, "Character placement requires a Physics overlap probe."));
         const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
                                                          impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
                                                          impl.descriptor.originGeneration,       expectedTick,

@@ -401,6 +401,7 @@ add_executable(HoroVfxApiTests
         unit/runtime/vfx/CpuParticleBufferTests.cpp
         unit/runtime/vfx/CpuParticleSpawnPipelineTests.cpp
         unit/runtime/vfx/ParticleSystemDescriptorTests.cpp
+        unit/runtime/vfx/VfxFoundationQualificationTests.cpp
         unit/runtime/vfx/VfxIdentityTests.cpp
         unit/runtime/vfx/VfxQualityPolicyTests.cpp
 )
@@ -565,6 +566,7 @@ add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
+        unit/runtime/prefab/PrefabDocumentSerializationTests.cpp
         unit/runtime/prefab/PrefabIdentityTests.cpp
         unit/runtime/prefab/PrefabLimitsTests.cpp
         unit/runtime/prefab/PrefabSceneIdentityRemapTests.cpp
@@ -1229,6 +1231,8 @@ target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
+        unit/editor/SceneDocumentTriggerVolumePersistenceTests.cpp
+        unit/editor/SceneDocumentGameplayPersistenceTests.cpp
         unit/editor/SceneDocumentComparisonPersistenceTests.cpp
         unit/editor/SceneDocumentFileWatchPersistenceTests.cpp
         unit/editor/SceneDocumentPersistenceTestSupport.cpp
@@ -1539,6 +1543,13 @@ add_executable(HoroRuntimeUiEventDispatchTests
 target_compile_features(HoroRuntimeUiEventDispatchTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiEventDispatchTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiEventDispatchTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiActionsTests
+        unit/runtime/ui/UiActionsTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiActionsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiActionsTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeSaveArchiveMetadataTests
         unit/runtime/save/SaveArchiveMetadataTests.cpp
 )
@@ -2239,6 +2250,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiLayoutTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
+        HoroRuntimeUiActionsTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests

@@ -2,6 +2,7 @@
 #include "CharacterWorldTestHelpers.h"
 
 #include <barrier>
+#include <catch2/catch_approx.hpp>
 
 namespace Horo::Character {
     namespace {
@@ -45,6 +46,53 @@ namespace Horo::Character {
             resolver.templateResult.contacts[0].penetrationDepthMeters = 0.1F;
             resolver.templateResult.contactCount = 1;
             return resolver;
+        }
+
+        struct SweepProbe final {
+            std::array<CharacterSweepHit, 4> configuredHits{};
+            std::uint32_t configuredHitCount{};
+            std::uint32_t calls{};
+            bool reverse{};
+
+            static Result<CharacterOverlapProbeResult> NoopOverlap(void *, const CharacterOverlapProbeRequest &) noexcept {
+                return Result<CharacterOverlapProbeResult>::Success({});
+            }
+
+            static Result<CharacterSweepProbeResult> Run(void *context, const CharacterSweepProbeRequest &) noexcept {
+                auto &probe = *static_cast<SweepProbe *>(context);
+                ++probe.calls;
+                CharacterSweepProbeResult result;
+                result.hitCount = probe.configuredHitCount;
+                for (std::uint32_t index{}; index < result.hitCount; ++index) {
+                    const std::uint32_t source = probe.reverse ? result.hitCount - index - 1 : index;
+                    result.hits[index] = probe.configuredHits[source];
+                }
+                return Result<CharacterSweepProbeResult>::Success(std::move(result));
+            }
+
+            [[nodiscard]] CharacterPhysicsQueryContext Context(const CharacterWorldDescriptor &world, const std::uint64_t tick) noexcept {
+                return {world.sceneGeneration,
+                        world.identity,
+                        world.physicsWorld,
+                        this,
+                        NoopOverlap,
+                        world.collisionFilterGeneration,
+                        world.originGeneration,
+                        tick,
+                        world.physicsSnapshotRevision,
+                        Run};
+            }
+        };
+
+        [[nodiscard]] CharacterSweepHit SweepHit(const CharacterWorldDescriptor &world, const std::uint32_t shapeIndex,
+                                                 const Math::Vec3 normal, const float distance) {
+            return {.body = Physics::BodyHandle{world.physicsWorld, {shapeIndex, 2}},
+                    .shape = Physics::ShapeHandle{world.physicsWorld, {shapeIndex, 3}},
+                    .point = {},
+                    .normal = normal,
+                    .material = std::nullopt,
+                    .response = Physics::PhysicsQueryResponse::Block,
+                    .distanceMeters = distance};
         }
 
         enum class InvalidMovementEvidence {
@@ -155,6 +203,87 @@ namespace Horo::Character {
             REQUIRE(transform.authority == CharacterTransformAuthority::CharacterController);
         }
 
+        TEST_CASE("Character capsule sweep advances to the skin boundary and retains collision evidence",
+                  "[physics][character][world][sweep][slide]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            SweepProbe probe;
+            probe.configuredHits[0] = SweepHit(spawned.world->Descriptor(), 7, {-1, 0, 0}, 0.05F);
+            probe.configuredHitCount = 1;
+
+            auto request = Movement(spawned.controller, 1, 1);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{6, 0, 0};
+            auto input = FixedTick(1);
+            input.query = probe.Context(spawned.world->Descriptor(), 1);
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
+
+            const auto snapshot = spawned.world->ControllerLocomotionSnapshot(spawned.controller);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().movement.finalPosition.x == Catch::Approx(0.03F).margin(1.0e-5F));
+            REQUIRE(snapshot.Value().movement.achievedVelocityMetersPerSecond.x == Catch::Approx(1.8F).margin(1.0e-4F));
+            REQUIRE(snapshot.Value().movement.collisions == CharacterCollisionFlags::Sides);
+            REQUIRE(snapshot.Value().movement.contactCount == 1);
+            REQUIRE(snapshot.Value().movement.contacts[0].normal == Math::Vec3{-1, 0, 0});
+            const auto defaultMaterial = spawned.world->ControllerDescriptor(spawned.controller).Value().defaultMaterial;
+            REQUIRE(snapshot.Value().movement.contacts[0].material.asset == defaultMaterial.asset);
+            REQUIRE(snapshot.Value().movement.contacts[0].material.assetGeneration == defaultMaterial.assetGeneration);
+            REQUIRE(snapshot.Value().movement.contacts[0].material.slot == defaultMaterial.slot);
+            REQUIRE(spawned.world->TickStatistics().retainedContacts == 1);
+            REQUIRE(probe.calls == 1);
+        }
+
+        TEST_CASE("Character capsule slide reduction is stable when simultaneous hits change callback order",
+                  "[physics][character][world][sweep][determinism]") {
+            const auto resolve = [](const bool reverse) {
+                auto spawned = SpawnedActiveWorldWithController();
+                SweepProbe probe;
+                probe.configuredHits[0] = SweepHit(spawned.world->Descriptor(), 7, {-1, 0, 0}, 0.05F);
+                probe.configuredHits[1] = SweepHit(spawned.world->Descriptor(), 8, {0, 0, -1}, 0.05F);
+                probe.configuredHitCount = 2;
+                probe.reverse = reverse;
+                auto request = Movement(spawned.controller, 1, 1);
+                request.desiredVelocityMetersPerSecond = Math::Vec3{6, 0, 6};
+                auto input = FixedTick(1);
+                input.query = probe.Context(spawned.world->Descriptor(), 1);
+                REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+                REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
+                return spawned.world->ControllerLocomotionSnapshot(spawned.controller).Value();
+            };
+
+            const auto forward = resolve(false);
+            const auto reversed = resolve(true);
+            REQUIRE(forward.movement.finalPosition == reversed.movement.finalPosition);
+            REQUIRE(forward.movement.achievedVelocityMetersPerSecond == reversed.movement.achievedVelocityMetersPerSecond);
+            REQUIRE(forward.movement.collisions == CharacterCollisionFlags::Sides);
+            REQUIRE(forward.movement.contactCount == 2);
+            REQUIRE(forward.movement.contacts[0].normal == reversed.movement.contacts[0].normal);
+            REQUIRE(forward.movement.contacts[1].normal == reversed.movement.contacts[1].normal);
+            REQUIRE(Math::LengthSquared(forward.movement.achievedVelocityMetersPerSecond) <= 72.0F + 1.0e-4F);
+        }
+
+        TEST_CASE("Character capsule sweep rejects stale snapshots and malformed hit evidence without publication",
+                  "[physics][character][world][sweep][validation]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            SweepProbe probe;
+            probe.configuredHits[0] = SweepHit(spawned.world->Descriptor(), 7, {}, 0.05F);
+            probe.configuredHitCount = 1;
+            auto request = Movement(spawned.controller, 1, 1);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{6, 0, 0};
+            auto input = FixedTick(1);
+            input.query = probe.Context(spawned.world->Descriptor(), 2);
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            RequireError(spawned.world->AdvanceFixedTick(input), CharacterErrors::QuerySnapshotStale);
+            REQUIRE((spawned.world->PublishedTick() == CharacterPublishedTick{}));
+
+            request = Movement(spawned.controller, 2, 2);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{6, 0, 0};
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            input = FixedTick(2);
+            input.query = probe.Context(spawned.world->Descriptor(), 2);
+            RequireError(spawned.world->AdvanceFixedTick(input), CharacterErrors::DescriptorInvalid);
+            REQUIRE((spawned.world->PublishedTick() == CharacterPublishedTick{}));
+        }
+
         TEST_CASE("Character rejects malformed movement evidence without publishing and shuts down terminally",
                   "[physics][character][world][snapshot][lifecycle]") {
             auto spawned = SpawnedActiveWorldWithController();
@@ -197,6 +326,23 @@ namespace Horo::Character {
 
             REQUIRE(world->QueueMovementCommand(Movement(controllers.front(), 1, 1)).HasValue());
             REQUIRE(world->AdvanceFixedTick(FixedTick(1)).HasValue());
+            REQUIRE(Tests::AllocationProbe::Count() == before);
+        }
+
+        TEST_CASE("Character capsule sweep resolution does not allocate after preparation",
+                  "[physics][character][world][sweep][allocation]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            SweepProbe probe;
+            probe.configuredHits[0] = SweepHit(spawned.world->Descriptor(), 7, {-1, 0, 0}, 0.05F);
+            probe.configuredHitCount = 1;
+            auto request = Movement(spawned.controller, 1, 1);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{6, 0, 0};
+            auto input = FixedTick(1);
+            input.query = probe.Context(spawned.world->Descriptor(), 1);
+            const auto before = Tests::AllocationProbe::Count();
+
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
             REQUIRE(Tests::AllocationProbe::Count() == before);
         }
 

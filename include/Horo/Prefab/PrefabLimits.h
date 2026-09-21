@@ -13,6 +13,8 @@
 namespace Horo::Prefab {
     /** @brief Immutable engine safety ceilings for every bounded prefab capability. */
     struct PrefabHardLimits final {
+        static constexpr std::size_t SourceDocumentBytes = 32U * 1024U * 1024U; /**< Encoded UTF-8 source-document bytes. */
+        static constexpr std::size_t SourceJsonDepth = 32;                      /**< Canonical source JSON nesting depth. */
         static constexpr std::size_t SourceHierarchyDepth = 16;
         static constexpr std::size_t SourceObjectCount = 256;
         static constexpr std::size_t SourcePayloadBytes = 4U * 1024U * 1024U;

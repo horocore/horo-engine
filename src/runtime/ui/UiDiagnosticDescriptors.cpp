@@ -59,6 +59,19 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::DiagnosticInvalid,
             &UiErrors::DiagnosticUnsupported,
         };
+        const std::array actions{
+            &UiErrors::ActionInvalid,
+            &UiErrors::ActionPayloadInvalid,
+            &UiErrors::ActionPayloadCapacityExceeded,
+            &UiErrors::ActionCommandInvalid,
+            &UiErrors::ActionQueueCapacityExceeded,
+            &UiErrors::ActionSourceStale,
+            &UiErrors::ActionResultInvalid,
+            &UiErrors::ActionResultStale,
+            &UiErrors::ActionHandlerFailed,
+            &UiErrors::ActionLifecycleUnavailable,
+            &UiErrors::NavigationInvalid,
+        };
         const std::array accessibility{
             &UiErrors::AccessibilitySchemaInvalid,        &UiErrors::AccessibilityRoleInvalid,
             &UiErrors::AccessibilityStateInvalid,         &UiErrors::AccessibilityValueInvalid,
@@ -71,8 +84,9 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + accessibility.size()> combined{};
+            std::array<const ErrorCodeDescriptor *, core.size() + actions.size() + accessibility.size()> combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
+            output = std::ranges::copy(actions, output).out;
             std::ranges::copy(accessibility, output);
             return combined;
         }();

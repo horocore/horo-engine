@@ -90,6 +90,28 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor EventDispatchHandlerFailed;
     /** @brief The event dispatcher is retiring, stopped, or changing lifecycle during dispatch. */
     extern const ErrorCodeDescriptor EventDispatchLifecycleUnavailable;
+    /** @brief A typed Runtime UI action or owner context is malformed. */
+    extern const ErrorCodeDescriptor ActionInvalid;
+    /** @brief A typed Runtime UI action payload contains an invalid value. */
+    extern const ErrorCodeDescriptor ActionPayloadInvalid;
+    /** @brief A typed Runtime UI action payload exceeded its fixed argument bound. */
+    extern const ErrorCodeDescriptor ActionPayloadCapacityExceeded;
+    /** @brief A typed Runtime UI command is malformed or uses an incompatible operation. */
+    extern const ErrorCodeDescriptor ActionCommandInvalid;
+    /** @brief The preallocated Runtime UI action queue is full. */
+    extern const ErrorCodeDescriptor ActionQueueCapacityExceeded;
+    /** @brief An action source belongs to another owner or published revision. */
+    extern const ErrorCodeDescriptor ActionSourceStale;
+    /** @brief A typed action result has an invalid state-specific field combination. */
+    extern const ErrorCodeDescriptor ActionResultInvalid;
+    /** @brief A typed action result does not correlate to the admitted request. */
+    extern const ErrorCodeDescriptor ActionResultStale;
+    /** @brief A Runtime UI action consumer threw across the borrowed callback boundary. */
+    extern const ErrorCodeDescriptor ActionHandlerFailed;
+    /** @brief The Runtime UI action router is retiring, stopped, or dispatching reentrantly. */
+    extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
+    /** @brief A default navigation command or result has invalid focus evidence. */
+    extern const ErrorCodeDescriptor NavigationInvalid;
     /** @brief Immutable Runtime UI render snapshot evidence or table topology is malformed. */
     extern const ErrorCodeDescriptor RenderSnapshotInvalid;
     /** @brief A Runtime UI draw command contains invalid geometry, paint, or table references. */

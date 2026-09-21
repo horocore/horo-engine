@@ -1,6 +1,7 @@
 #include "editor/document/SceneDocumentPersistenceInternal.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <utility>
 #include <variant>
@@ -405,6 +406,45 @@ namespace Horo::Editor::ScenePersistenceDetail {
         value["behaviors"] = std::move(serialized);
     }
 
+    [[nodiscard]] char HexDigit(const unsigned int value) noexcept {
+        return value < 10U ? static_cast<char>('0' + value) : static_cast<char>('a' + value - 10U);
+    }
+
+    [[nodiscard]] std::string PayloadHex(const std::vector<std::byte> &payload) {
+        std::string encoded;
+        encoded.reserve(payload.size() * 2U);
+        for (const std::byte byte : payload) {
+            const unsigned int value = std::to_integer<unsigned int>(byte);
+            encoded.push_back(HexDigit(value >> 4U));
+            encoded.push_back(HexDigit(value & 0x0FU));
+        }
+        return encoded;
+    }
+
+    [[nodiscard]] Json SerializedComponentJson(const Gameplay::SerializedComponent &component) {
+        return Json{{"typeId", component.typeId.Value()},
+                    {"schemaVersion", component.schemaVersion},
+                    {"encoding", "canonical_json"},
+                    {"payloadHex", PayloadHex(component.payload)}};
+    }
+
+    /** @brief Appends opaque gameplay component envelopes in stable type-ID order. */
+    void AppendGameplayComponentsJson(Json &value, const std::vector<Gameplay::SerializedComponent> &components) {
+        if (components.empty())
+            return;
+        std::vector<const Gameplay::SerializedComponent *> sorted;
+        sorted.reserve(components.size());
+        for (const Gameplay::SerializedComponent &component : components)
+            sorted.push_back(&component);
+        std::ranges::sort(sorted, {}, [](const Gameplay::SerializedComponent *component) {
+            return component->typeId.Value();
+        });
+        Json serialized = Json::array();
+        for (const Gameplay::SerializedComponent *component : sorted)
+            serialized.push_back(SerializedComponentJson(*component));
+        value["gameplayComponents"] = std::move(serialized);
+    }
+
     [[nodiscard]] Json ComponentsJson(const SceneObjectComponentSet &components) {
         Json value = Json::object();
         if (components.camera)
@@ -418,6 +458,7 @@ namespace Horo::Editor::ScenePersistenceDetail {
         AppendNavigationComponents(value, components);
         AppendPhysicsComponents(value, components);
         AppendBehaviorsJson(value, components.behaviors);
+        AppendGameplayComponentsJson(value, components.gameplayComponents);
         return value;
     }
 
