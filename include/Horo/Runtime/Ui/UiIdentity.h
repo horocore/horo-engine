@@ -56,6 +56,7 @@ namespace Horo::Runtime::Ui {
     struct UiElementIdentityTag;
     struct UiCanvasIdentityTag;
     struct UiActionIdentityTag;
+    struct UiFontFaceIdentityTag;
 
     /** @brief Stable authored identity of one Runtime UI document. */
     using UiDocumentId = UiStableId<UiDocumentIdentityTag>;
@@ -65,6 +66,8 @@ namespace Horo::Runtime::Ui {
     using UiCanvasId = UiStableId<UiCanvasIdentityTag>;
     /** @brief Stable authored identity shared by a typed Runtime UI action contract. */
     using UiActionId = UiStableId<UiActionIdentityTag>;
+    /** @brief Stable authored identity of one Runtime UI font face instance source. */
+    using UiFontFaceId = UiStableId<UiFontFaceIdentityTag>;
 
     /** @brief Non-zero process-local service/runtime/scope incarnation that must never be serialized. */
     class UiOwnershipGeneration final {
@@ -227,6 +230,9 @@ namespace Horo::Runtime::Ui {
     struct UiInteractionRevisionTag;
     struct UiActionSequenceTag;
     struct UiActionOperationTag;
+    struct UiTextContentRevisionTag;
+    struct UiTextFontRevisionTag;
+    struct UiTextShapeRevisionTag;
     /** @brief Monotonic revision of one authored Runtime UI document. */
     using UiDocumentRevision = UiRevision<UiDocumentRevisionTag>;
     /** @brief Monotonic revision of one published runtime tree generation. */
@@ -237,6 +243,12 @@ namespace Horo::Runtime::Ui {
     using UiActionSequence = UiRevision<UiActionSequenceTag>;
     /** @brief Owner-local identity correlating a pending action with its terminal result. */
     using UiActionOperationSequence = UiRevision<UiActionOperationTag>;
+    /** @brief Monotonic source-content revision consumed by one text shaping request. */
+    using UiTextContentRevision = UiRevision<UiTextContentRevisionTag>;
+    /** @brief Monotonic immutable font-registry revision consumed by one text shaping request. */
+    using UiTextFontRevision = UiRevision<UiTextFontRevisionTag>;
+    /** @brief Monotonic immutable shaped-result revision published by one text shaper. */
+    using UiTextShapeRevision = UiRevision<UiTextShapeRevisionTag>;
 
     /** @brief Requires an expected revision to match the current owner-published revision.
      * @param expected Revision captured when the caller prepared its command.

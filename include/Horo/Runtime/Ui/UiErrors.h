@@ -140,6 +140,22 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ControlSequenceInvalid;
     /** @brief The interactive-control state machine is retiring, stopped, or changing lifecycle during input. */
     extern const ErrorCodeDescriptor ControlLifecycleUnavailable;
+    /** @brief UTF-8 text, script, language, direction, size, or source evidence is malformed. */
+    extern const ErrorCodeDescriptor TextInputInvalid;
+    /** @brief A text feature tag or range is malformed or exceeds the declared feature contract. */
+    extern const ErrorCodeDescriptor TextFeatureInvalid;
+    /** @brief A font face payload is malformed, empty, unsupported, or exceeds its bounded representation. */
+    extern const ErrorCodeDescriptor TextFontInvalid;
+    /** @brief An ordered fallback chain is empty, duplicated, or otherwise malformed. */
+    extern const ErrorCodeDescriptor TextFallbackInvalid;
+    /** @brief A shaping cluster has no covering face and strict missing-glyph policy rejected it. */
+    extern const ErrorCodeDescriptor TextMissingCoverage;
+    /** @brief The shaping backend rejected a bounded buffer or produced invalid glyph evidence. */
+    extern const ErrorCodeDescriptor TextShapeInvalid;
+    /** @brief Every preallocated immutable text-shape slot remains leased. */
+    extern const ErrorCodeDescriptor TextShapeStorageExhausted;
+    /** @brief The text shaper is closed and rejects new shaping work. */
+    extern const ErrorCodeDescriptor TextLifecycleUnavailable;
     /** @brief Immutable Runtime UI render snapshot evidence or table topology is malformed. */
     extern const ErrorCodeDescriptor RenderSnapshotInvalid;
     /** @brief A Runtime UI draw command contains invalid geometry, paint, or table references. */

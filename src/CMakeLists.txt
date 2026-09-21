@@ -299,10 +299,14 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiRenderSnapshot.cpp
         runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiPresentationReceipt.cpp
+        runtime/ui/UiTextShaping.cpp
+        runtime/ui/UiTextErrors.cpp
+        runtime/ui/UiTextShape.cpp
+        runtime/ui/UiTextShaper.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
-target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets PRIVATE utf8proc harfbuzz)
 
 add_library(HoroGameplayApi STATIC
         gameplay/api/BehaviorTypes.cpp
