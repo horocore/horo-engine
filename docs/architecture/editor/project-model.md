@@ -651,6 +651,29 @@ never mutates GUI route state directly. Stateful open requests return typed
 
 ## Security And Portability
 
+### Project source-file policy and open routing
+
+All Asset Browser activations, build diagnostics, and editor commands submit one
+`SourceOpenRequest` to `SourceFileOpenService`. The request carries its origin,
+optional line/column, and whether an external fallback is permitted; callers do
+not validate or launch a path themselves.
+
+`SourceFilePolicy` classifies case-insensitive extensions into native source,
+Horo Script, project text, or unsupported. The policy also owns project-specific
+file-name/extension additions and the availability of the embedded and external
+editor routes. A supported file opens through the embedded workspace and uses the
+existing `DocumentIdentityRegistry`, so relative, absolute, and project-contained
+symlink paths focus one canonical source document. An unsupported file may only
+use the explicit external fallback when the request allows it; `EmbeddedOnly`
+requests return a typed unsupported result.
+
+Before classification or fallback, the service normalizes the project root and
+input path, rejects lexical traversal outside the root, resolves existing path
+components and symlinks, and requires the final regular file to remain inside
+the canonical project root. Internal symlinks are allowed by policy and resolve
+to the target identity; escaping symlinks, missing files, unavailable editor
+capabilities, and unsupported routes return distinct typed source-open errors.
+
 - Portable project files store normalized forward-slash `ProjectPath` values.
   Absolute paths, drive roots, UNC roots, and `..` traversal are rejected.
 - Lexical normalization must not escape the project root. For an existing path,

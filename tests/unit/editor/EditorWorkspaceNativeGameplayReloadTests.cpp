@@ -91,6 +91,35 @@ namespace {
             Send(EditorWorkspaceViewCommand::StopPlay);
         }
 
+        void PausePlay() {
+            Send(EditorWorkspaceViewCommand::PausePlay);
+        }
+
+        void ResumePlay() {
+            Send(EditorWorkspaceViewCommand::ResumePlay);
+        }
+
+        void StepPlay() {
+            Send(EditorWorkspaceViewCommand::StepPlay);
+        }
+
+        void UpdatePlayPresentation(const float elapsedSeconds) {
+            controller_.UpdatePlayPresentation(elapsedSeconds);
+        }
+
+        void UpdatePlayFixed(const double fixedDeltaSeconds) {
+            controller_.UpdatePlayFixed({}, fixedDeltaSeconds);
+        }
+
+        void CreateNativeGameplaySource() const {
+            const std::filesystem::path sourceDirectory = project_.Root() / "source" / "gameplay";
+            std::filesystem::create_directories(sourceDirectory);
+            std::ofstream source{sourceDirectory / "ExistingBehavior.cpp", std::ios::binary | std::ios::trunc};
+            REQUIRE(source.good());
+            source << "int ExistingBehavior() { return 0; }\n";
+            REQUIRE(source.good());
+        }
+
         void RequirePlaying() const {
             REQUIRE(controller_.ViewModel().playState == EditorPlayState::Playing);
             REQUIRE(controller_.ViewModel().playError.empty());
@@ -98,6 +127,15 @@ namespace {
 
         void RequireIdle() const {
             REQUIRE(controller_.ViewModel().playState == EditorPlayState::Idle);
+        }
+
+        void RequirePaused() const {
+            REQUIRE(controller_.ViewModel().playState == EditorPlayState::Paused);
+        }
+
+        void RequireFailed() const {
+            REQUIRE(controller_.ViewModel().playState == EditorPlayState::Failed);
+            REQUIRE_FALSE(controller_.ViewModel().playError.empty());
         }
 
     private:
@@ -150,4 +188,24 @@ TEST_CASE("Native gameplay reload commits compatible generations and rolls back 
     workspace.RequirePlaying();
     workspace.StopPlay();
     workspace.RequireIdle();
+}
+
+TEST_CASE("Workspace play controls pause, step, resume, and reject unavailable native builds", "[unit][editor][gameplay]") {
+    NativeReloadWorkspace workspace;
+    workspace.RequirePlaying();
+
+    workspace.PausePlay();
+    workspace.RequirePaused();
+    workspace.StepPlay();
+    workspace.RequirePaused();
+    workspace.ResumePlay();
+    workspace.RequirePlaying();
+    workspace.UpdatePlayPresentation(-1.0F);
+    workspace.UpdatePlayFixed(0.0);
+
+    workspace.StopPlay();
+    workspace.RequireIdle();
+    workspace.CreateNativeGameplaySource();
+    workspace.StartPlay();
+    workspace.RequireFailed();
 }

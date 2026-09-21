@@ -903,6 +903,11 @@ add_executable(HoroEditorSurfaceIdentityTests
 )
 target_compile_features(HoroEditorSurfaceIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorSurfaceIdentityTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroSourceFileOpenServiceTests
+        unit/editor/SourceFileOpenServiceTests.cpp
+)
+target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroSourceFileOpenServiceTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -923,6 +928,9 @@ target_link_libraries(HoroWorkspaceSplitterInteractionTests PRIVATE HoroEngine::
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
+            unit/editor/EditorWorkspaceControllerPolicyTests.cpp
+            unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
+            unit/editor/EditorWorkspaceControllerTransferPolicyTests.cpp
             unit/editor/EditorWorkspaceNativeGameplayReloadTests.cpp
     )
 
@@ -2146,6 +2154,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroWorkspaceLayoutTests
         HoroWorkspacePanelHostTests
         HoroEditorSurfaceIdentityTests
+        HoroSourceFileOpenServiceTests
         HoroWorkspaceLayoutPersistenceTests
         HoroActivityBarLayoutTests
         HoroWorkspaceSplitterInteractionTests

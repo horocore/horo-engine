@@ -132,11 +132,13 @@ namespace Horo::Editor {
                     drawList->AddRectFilled({position.x, position.y + 3.0F}, {position.x + 2.0F, position.y + 27.0F},
                                             Theme::U32(Theme::Accent()), 0.0F);
                 constexpr float iconSize = 16.0F;
-                Ui::DrawEditorIcon(drawList, icons[index], {position.x + (width - iconSize) * 0.5F, position.y + (30.0F - iconSize) * 0.5F},
-                                   {iconSize, iconSize}, Theme::U32(active || hovered ? Theme::Text() : Theme::Dim()),
-                                   context.theme.fonts.icon);
-                if (hovered)
-                    Ui::ShowTooltip(context.localization.Get("editor", keys[index]).c_str(), &context.theme.fonts);
+                const ImVec2 iconPosition{position.x + (width - iconSize) * 0.5F, position.y + (30.0F - iconSize) * 0.5F};
+                const ImU32 iconColor = Theme::U32(active || hovered ? Theme::Text() : Theme::Dim());
+                Ui::DrawEditorIcon(drawList, icons[index], iconPosition, {iconSize, iconSize}, iconColor, context.theme.fonts.icon);
+                if (hovered) {
+                    const std::string &tooltip = context.localization.Get("editor", keys[index]);
+                    Ui::ShowTooltip(tooltip.c_str(), &context.theme.fonts);
+                }
                 ImGui::PopID();
             }
         }
@@ -277,8 +279,18 @@ namespace Horo::Editor {
                                        .selected = context.interactionSession.State().selectedAbsolutePath == entry.absolutePath,
                                        .dimmed = cut || dragging},
                                       entry);
-            if (entry.kind == ContentBrowserEntryKind::Directory && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                context.command = AssetBrowserInteractionSession::Navigate(entry.absolutePath);
+            if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                if (entry.kind == ContentBrowserEntryKind::Directory) {
+                    context.command = AssetBrowserInteractionSession::Navigate(entry.absolutePath);
+                } else if (entry.kind == ContentBrowserEntryKind::Asset) {
+                    context.command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+                    context.command.sourceOpenRequest = SourceOpenRequest{
+                        .path = entry.absolutePath,
+                        .origin = SourceOpenOrigin::AssetActivation,
+                        .mode = SourceOpenMode::AllowExternalFallback,
+                    };
+                }
+            }
             HandleAssetDragDropSource(entry, context.gui.localization);
             HandleDirectoryDragDropTarget(entry, interactionMin, metrics.cardWidth, metrics.cardHeight, &context.drawList, context.command);
             DrawAssetBrowserEntryActions(entry, context.viewModel, context.interactionSession, context.command, context.gui);
@@ -295,6 +307,81 @@ namespace Horo::Editor {
             ImGui::SetCursorScreenPos({context.origin.x, context.y + gridHeight + AssetBrowserLayout::GridPaddingBottom});
             ImGui::Dummy({context.width, 1.0F});
             HandleAssetBrowserShortcuts(context.visibleEntries, context.viewModel, context.interactionSession, context.command);
+        }
+
+        struct AssetBrowserViewportContext {
+            ImVec2 bodyOrigin;
+            float bodyHeight;
+            float contentWidth;
+            const EditorWorkspaceViewModel &viewModel;
+            EditorWorkspaceViewCommandData &command;
+            const EditorGuiContext &context;
+            AssetBrowserInteractionSession &interactionSession;
+            AssetBrowserCardRenderer &cardRenderer;
+            ImFont *font;
+        };
+
+        void DrawAssetBrowserGridContent(const AssetBrowserViewportContext &viewport, const ContentBrowserDirectory &directory,
+                                         const std::vector<std::size_t> &visibleEntries, const ImVec2 gridViewportOrigin,
+                                         const float gridViewportWidth) {
+            const ILocalizationService &localization = viewport.context.localization;
+            ImGui::SetCursorScreenPos(gridViewportOrigin);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
+            ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 5.0F);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, IM_COL32(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, Theme::BorderStrong());
+            ImGui::BeginChild("##AssetGridViewport", {gridViewportWidth, viewport.bodyHeight}, false,
+                              ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoSavedSettings);
+            ImDrawList *gridDrawList = ImGui::GetWindowDrawList();
+            const ImVec2 gridOrigin{gridViewportOrigin.x + AssetBrowserLayout::GridPaddingX,
+                                    gridViewportOrigin.y + AssetBrowserLayout::GridPaddingTop};
+            const float gridWidth = std::max(1.0F, gridViewportWidth - AssetBrowserLayout::GridPaddingX * 2.0F - 5.0F);
+            float gridY = gridOrigin.y;
+            if (!viewport.viewModel.contentBrowserOperationError.empty()) {
+                const std::string &errorText = localization.Get("editor", viewport.viewModel.contentBrowserOperationError);
+                gridDrawList->AddText(viewport.font, HeaderFontSize(), {gridOrigin.x, gridY}, Theme::U32(Theme::Err()), errorText.c_str());
+                gridY += PreviewRowHeight + 4.0F;
+            }
+
+            if (directory.loadState != ContentBrowserLoadState::Ready || visibleEntries.empty()) {
+                DrawEmptyAssetGrid(gridOrigin, gridWidth, gridY, directory, localization, viewport.font, *gridDrawList);
+            } else {
+                DrawAssetEntries({.origin = gridOrigin,
+                                  .width = gridWidth,
+                                  .y = gridY,
+                                  .visibleEntries = visibleEntries,
+                                  .directory = directory,
+                                  .viewModel = viewport.viewModel,
+                                  .command = viewport.command,
+                                  .gui = viewport.context,
+                                  .interactionSession = viewport.interactionSession,
+                                  .cardRenderer = viewport.cardRenderer,
+                                  .drawList = *gridDrawList,
+                                  .font = viewport.font});
+            }
+            DrawAssetBrowserBackgroundActions(viewport.viewModel, viewport.interactionSession, viewport.command, viewport.context);
+            ImGui::EndChild();
+            ImGui::PopStyleColor(3);
+            ImGui::PopStyleVar(2);
+        }
+
+        void DrawAssetBrowserViewport(const AssetBrowserViewportContext &viewport) {
+            const ContentBrowserDirectory &directory = viewport.viewModel.contentBrowser;
+            const std::vector<std::size_t> visibleEntries = viewport.interactionSession.ProjectEntries(directory);
+            if (AssetBrowserInteractionState &state = viewport.interactionSession.State();
+                !state.selectedAbsolutePath.empty() &&
+                std::ranges::none_of(visibleEntries, [&directory, &state](const std::size_t entryIndex) {
+                return directory.entries[entryIndex].absolutePath == state.selectedAbsolutePath;
+            })) {
+                state.selectedAbsolutePath.clear();
+            }
+            viewport.cardRenderer.RetainVisible(directory, visibleEntries);
+
+            DrawAssetLocationRail(viewport.bodyOrigin, viewport.bodyHeight, viewport.context);
+            const ImVec2 gridViewportOrigin{viewport.bodyOrigin.x + AssetBrowserLayout::LocationRailWidth, viewport.bodyOrigin.y};
+            const float gridViewportWidth = std::max(1.0F, viewport.contentWidth - AssetBrowserLayout::LocationRailWidth);
+            DrawAssetBrowserGridContent(viewport, directory, visibleEntries, gridViewportOrigin, gridViewportWidth);
         }
     }  // namespace
 
@@ -313,7 +400,6 @@ namespace Horo::Editor {
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImFont *font = ResolveFont(context.theme.fonts.sansCompact);
         AssetBrowserInteractionState &state = interactionSession.State();
-        std::string &selectedAssetPath = state.selectedAbsolutePath;
         const ILocalizationService &localization = context.localization;
         const ContentBrowserDirectory &directory = viewModel.contentBrowser;
         const float contentHeight = std::max(1.0F, ImGui::GetContentRegionAvail().y);
@@ -332,58 +418,18 @@ namespace Horo::Editor {
         DrawAssetBrowserToolbar(toolbarPosition, std::max(1.0F, contentWidth - AssetBrowserLayout::ToolbarPaddingX * 2.0F), viewModel,
                                 command, state, context);
 
+        const AssetBrowserViewportContext viewport{.bodyOrigin = bodyOrigin,
+                                                   .bodyHeight = bodyHeight,
+                                                   .contentWidth = contentWidth,
+                                                   .viewModel = viewModel,
+                                                   .command = command,
+                                                   .context = context,
+                                                   .interactionSession = interactionSession,
+                                                   .cardRenderer = cardRenderer,
+                                                   .font = font};
+        DrawAssetBrowserViewport(viewport);
+
         const std::vector<std::size_t> visibleEntries = interactionSession.ProjectEntries(directory);
-        if (!selectedAssetPath.empty() &&
-            std::ranges::none_of(visibleEntries, [&directory, &selectedAssetPath](const std::size_t entryIndex) {
-            return directory.entries[entryIndex].absolutePath == selectedAssetPath;
-        })) {
-            selectedAssetPath.clear();
-        }
-        cardRenderer.RetainVisible(directory, visibleEntries);
-
-        DrawAssetLocationRail(bodyOrigin, bodyHeight, context);
-        const ImVec2 gridViewportOrigin{bodyOrigin.x + AssetBrowserLayout::LocationRailWidth, bodyOrigin.y};
-        const float gridViewportWidth = std::max(1.0F, contentWidth - AssetBrowserLayout::LocationRailWidth);
-        ImGui::SetCursorScreenPos(gridViewportOrigin);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
-        ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 5.0F);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, IM_COL32(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, Theme::BorderStrong());
-        ImGui::BeginChild("##AssetGridViewport", {gridViewportWidth, bodyHeight}, false,
-                          ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoSavedSettings);
-        ImDrawList *gridDrawList = ImGui::GetWindowDrawList();
-        const ImVec2 gridOrigin{gridViewportOrigin.x + AssetBrowserLayout::GridPaddingX,
-                                gridViewportOrigin.y + AssetBrowserLayout::GridPaddingTop};
-        const float gridWidth = std::max(1.0F, gridViewportWidth - AssetBrowserLayout::GridPaddingX * 2.0F - 5.0F);
-        float gridY = gridOrigin.y;
-        if (!viewModel.contentBrowserOperationError.empty()) {
-            const std::string &errorText = localization.Get("editor", viewModel.contentBrowserOperationError);
-            gridDrawList->AddText(font, HeaderFontSize(), {gridOrigin.x, gridY}, Theme::U32(Theme::Err()), errorText.c_str());
-            gridY += PreviewRowHeight + 4.0F;
-        }
-
-        if (const bool drawEntries = directory.loadState == ContentBrowserLoadState::Ready && !visibleEntries.empty(); !drawEntries) {
-            DrawEmptyAssetGrid(gridOrigin, gridWidth, gridY, directory, localization, font, *gridDrawList);
-        } else {
-            DrawAssetEntries({.origin = gridOrigin,
-                              .width = gridWidth,
-                              .y = gridY,
-                              .visibleEntries = visibleEntries,
-                              .directory = directory,
-                              .viewModel = viewModel,
-                              .command = command,
-                              .gui = context,
-                              .interactionSession = interactionSession,
-                              .cardRenderer = cardRenderer,
-                              .drawList = *gridDrawList,
-                              .font = font});
-        }
-        DrawAssetBrowserBackgroundActions(viewModel, interactionSession, command, context);
-        ImGui::EndChild();
-        ImGui::PopStyleColor(3);
-        ImGui::PopStyleVar(2);
-
         DrawAssetFooter(footerOrigin, contentWidth, visibleEntries.size(), directory, localization, font);
         DrawAssetBrowserDialogs(state, directory, command, context);
     }

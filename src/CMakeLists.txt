@@ -1230,6 +1230,7 @@ endif ()
 add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
         editor/EditorSurfaceIdentity.cpp
+        editor/SourceFileOpenService.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceCommon.cpp
@@ -1409,8 +1410,23 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
+            editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
+            editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
+            editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
+            editor/screens/workspace/EditorWorkspaceControllerContentBrowserCommands.cpp
+            editor/screens/workspace/EditorWorkspaceControllerDockCommands.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSceneAssets.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSceneRecovery.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSceneProjection.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPlay.cpp
+            editor/screens/workspace/EditorWorkspaceControllerCommandRouting.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
+            editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
+            editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
+            editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
+            editor/screens/workspace/EditorWorkspaceControllerContentBrowserAssetOperations.cpp
+            editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp

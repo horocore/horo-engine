@@ -1091,6 +1091,10 @@
     "workspace.global_dock.build_output.dropped": {"text": "Eski build çıktıları kaldırıldı:"},
     "workspace.global_dock.build_output.source.invalid": {"text": "Tanı kaynağı kullanılamıyor veya proje dışında."},
     "workspace.global_dock.build_output.source.unavailable": {"text": "Kaynak gezintisi bu platformda kullanılamıyor."},
+    "workspace.source_open.missing": {"text": "Kaynak dosyası projede bulunamıyor."},
+    "workspace.source_open.unsupported": {"text": "Bu dosya türü gömülü düzenleyici tarafından desteklenmiyor."},
+    "workspace.source_open.unsafe": {"text": "Kaynak yolu projenin güvenli sınırı dışında."},
+    "workspace.source_open.unavailable": {"text": "Bu düzenleyici bileşiminde kullanılabilir kaynak düzenleyici rotası yok."},
     "workspace.global_dock.operations.search": {
       "text": "İşlemlerde ara..."
     },

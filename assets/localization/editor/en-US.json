@@ -1091,6 +1091,10 @@
     "workspace.global_dock.build_output.dropped": {"text": "Older build output entries discarded:"},
     "workspace.global_dock.build_output.source.invalid": {"text": "The diagnostic source is unavailable or outside the project."},
     "workspace.global_dock.build_output.source.unavailable": {"text": "Source navigation is unavailable on this platform."},
+    "workspace.source_open.missing": {"text": "The source file is missing from the project."},
+    "workspace.source_open.unsupported": {"text": "This file type is not supported by the embedded editor."},
+    "workspace.source_open.unsafe": {"text": "The source path is outside the project's safe boundary."},
+    "workspace.source_open.unavailable": {"text": "No source editor route is available in this editor composition."},
     "workspace.global_dock.operations.search": {
       "text": "Search operations..."
     },
