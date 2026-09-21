@@ -214,7 +214,14 @@ namespace Horo::Physics {
         constraint.second = PhysicsWorldAnchor{};
         constraint.parameters = PhysicsFixedConstraint{};
         REQUIRE(world->CreateSceneConstraint(constraint).HasValue());
+    }
 
+    TEST_CASE("Canonical scene admission enforces owner-thread boundaries", "[physics][native][scene][thread]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(108).Value()).HasValue());
+        const PhysicsShapeDescriptor sceneShape = PhysicsBoxShape{};
+        const std::span<const PhysicsSceneShapeInstance> emptyInstances{};
         bool shapeRejected = false;
         bool compoundRejected = false;
         bool bodyRejected = false;
