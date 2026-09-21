@@ -100,6 +100,14 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor RenderSnapshotStorageExhausted;
     /** @brief A Runtime UI render extractor is closed and no longer accepts snapshots. */
     extern const ErrorCodeDescriptor RenderSnapshotLifecycleUnavailable;
+    /** @brief Generated Runtime UI geometry or its batch topology is malformed. */
+    extern const ErrorCodeDescriptor RenderGeometryInvalid;
+    /** @brief Generated Runtime UI geometry exceeds its admitted vertex, index, or batch capacity. */
+    extern const ErrorCodeDescriptor RenderGeometryCapacityExceeded;
+    /** @brief Every preallocated Runtime UI geometry plan slot remains leased by an in-flight frame. */
+    extern const ErrorCodeDescriptor RenderGeometryStorageExhausted;
+    /** @brief A Runtime UI geometry arena is closed and no longer accepts plans. */
+    extern const ErrorCodeDescriptor RenderGeometryLifecycleUnavailable;
     /** @brief A Runtime UI render composition request exceeds its declared bounded pass capacity. */
     extern const ErrorCodeDescriptor RenderCompositionCapacityExceeded;
     /** @brief A Runtime UI render composition pass has invalid view, graph, target, ordering, or space policy. */

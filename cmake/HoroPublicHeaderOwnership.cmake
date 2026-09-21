@@ -153,6 +153,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiLayout.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
+    Horo/Runtime/Ui/UiRenderGeometry.h
     Horo/Runtime/Ui/UiPresentationReceipt.h
 )
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
