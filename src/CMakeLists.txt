@@ -546,6 +546,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterControllerRegistry.h
+        physics/CharacterFastPathStorage.h
         physics/CharacterWorld.cpp
         physics/CharacterWorldCommandPipeline.cpp
         physics/CharacterWorldCommandInternal.h

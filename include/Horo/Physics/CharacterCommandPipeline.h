@@ -62,12 +62,23 @@ namespace Horo::Character {
         [[nodiscard]] constexpr auto operator<=>(const CharacterPublishedTick &) const noexcept = default;
     };
 
-    /** @brief Allocation-free cumulative command-pipeline counters. */
+    /** @brief Allocation-free cumulative command and bounded fast-path counters. */
     struct CharacterTickStatistics final {
         std::uint64_t completedTicks{};
         std::uint64_t admittedCommands{};
         std::uint64_t rejectedCommands{};
         std::uint32_t pendingCommands{};
         std::uint32_t maximumCommandDepth{};
+        std::uint64_t commandOverflowCount{}; /**< Full command admissions rejected at the configured bound. */
+        std::uint64_t contactOverflowCount{}; /**< Contacts reduced or rejected at retained capacity. */
+        std::uint64_t hitOverflowCount{};     /**< Query hits reduced or rejected at retained capacity. */
+        std::uint64_t eventOverflowCount{};   /**< Events reduced or rejected at queued capacity. */
+        std::uint64_t impulseOverflowCount{}; /**< Staged impulses reduced or rejected at queued capacity. */
+        std::uint64_t scratchOverflowCount{}; /**< Byte-scratch reservations rejected at the configured bound. */
+        std::uint64_t invalidInputCount{};    /**< Malformed fast-path evidence rejected before retention. */
+        std::uint32_t retainedContacts{};     /**< Current owner-thread contact collection occupancy. */
+        std::uint32_t queuedHits{};           /**< Current owner-thread query-hit collection occupancy. */
+        std::uint32_t queuedEvents{};         /**< Current retained event collection occupancy. */
+        std::uint64_t scratchBytesUsed{};     /**< Current per-tick byte-scratch occupancy. */
     };
 }  // namespace Horo::Character

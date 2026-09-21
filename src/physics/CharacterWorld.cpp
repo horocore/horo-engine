@@ -181,8 +181,7 @@ namespace Horo::Character {
         impl_->acceptingCommands.store(false);
         {
             const auto queueLock = impl_->synchronization.LockCommands();
-            impl_->commands.clear();
-            impl_->scratch.clear();
+            impl_->fastPath.ResetAll();
             impl_->pendingCommands.store(0);
         }
         if (impl_->placementActive || impl_->ticking.load()) {
