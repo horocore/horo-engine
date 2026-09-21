@@ -265,6 +265,8 @@ namespace Horo::Runtime::Ui {
 
     private:
         explicit UiScreenStack(std::unique_ptr<Storage> storage) noexcept;
+        [[nodiscard]] static Result<std::optional<UiRouteInstanceId>> ApplyMutation(Storage &storage, Transaction &transaction);
+        static void Finish(Transaction &transaction) noexcept;
         [[nodiscard]] static Result<UiRouteOperationResult> Commit(Transaction &transaction);
         [[nodiscard]] static Result<UiRouteOperationResult> Cancel(Transaction &transaction);
         static void Abandon(Transaction &transaction) noexcept;

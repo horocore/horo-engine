@@ -181,7 +181,7 @@ namespace Horo::Runtime::Ui {
     }
 
     struct UiScreenStack::Storage final {
-        Storage(const UiScreenStackDescriptor &descriptor)
+        explicit Storage(const UiScreenStackDescriptor &descriptor)
             : ownership(descriptor.ownership), stack(descriptor.stack),
               definitions(descriptor.definitions.begin(), descriptor.definitions.end()) {
             routes.reserve(descriptor.maximumRoutes);
@@ -319,6 +319,50 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiScreenStack::operator= */
     UiScreenStack &UiScreenStack::operator=(UiScreenStack &&) noexcept = default;
 
+    /** @copydoc UiScreenStack::ApplyMutation */
+    Result<std::optional<UiRouteInstanceId>> UiScreenStack::ApplyMutation(Storage &storage, Transaction &transaction) {
+        switch (transaction.request_.kind) {
+            case UiRouteOperationKind::Push:
+            case UiRouteOperationKind::Navigate: {
+                const auto instance = storage.NextInstance();
+                if (instance.HasError())
+                    return Result<std::optional<UiRouteInstanceId>>::Failure(instance.ErrorValue());
+                for (auto &route : storage.routes)
+                    route.visibility = UiRouteVisibilityState::Covered;
+                storage.routes.push_back({instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible});
+                return Result<std::optional<UiRouteInstanceId>>::Success(instance.Value());
+            }
+            case UiRouteOperationKind::Pop:
+            case UiRouteOperationKind::Back:
+                storage.routes.pop_back();
+                if (storage.routes.empty())
+                    return Result<std::optional<UiRouteInstanceId>>::Success(std::nullopt);
+                storage.routes.back().visibility = UiRouteVisibilityState::Visible;
+                return Result<std::optional<UiRouteInstanceId>>::Success(storage.routes.back().id);
+            case UiRouteOperationKind::Replace: {
+                const auto instance = storage.NextInstance();
+                if (instance.HasError())
+                    return Result<std::optional<UiRouteInstanceId>>::Failure(instance.ErrorValue());
+                storage.routes.back() = {instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible};
+                return Result<std::optional<UiRouteInstanceId>>::Success(instance.Value());
+            }
+            case UiRouteOperationKind::Clear:
+                storage.routes.clear();
+                return Result<std::optional<UiRouteInstanceId>>::Success(std::nullopt);
+            case UiRouteOperationKind::Count:
+                return Failure<std::optional<UiRouteInstanceId>>(UiErrors::RouteOperationInvalid);
+        }
+        return Failure<std::optional<UiRouteInstanceId>>(UiErrors::RouteOperationInvalid);
+    }
+
+    /** @copydoc UiScreenStack::Finish */
+    void UiScreenStack::Finish(Transaction &transaction) noexcept {
+        transaction.storage_->busy = false;
+        transaction.storage_->activeOperation = {};
+        transaction.terminal_ = true;
+        transaction.storage_ = nullptr;
+    }
+
     /** @copydoc UiScreenStack::Prepare */
     Result<UiScreenStack::Transaction> UiScreenStack::Prepare(UiRouteOperationRequest request) {
         if (!storage_ || storage_->state != UiScreenStackState::Active)
@@ -425,75 +469,31 @@ namespace Horo::Runtime::Ui {
             transaction.storage_ = nullptr;
             return Failure<UiRouteOperationResult>(UiErrors::RouteOperationLifecycleUnavailable);
         }
-
-        const auto finish = [&transaction, storage]() noexcept {
-            storage->busy = false;
-            storage->activeOperation = {};
-            transaction.terminal_ = true;
-            transaction.storage_ = nullptr;
-        };
         if (transaction.preparedRejection_ != UiRouteOperationRejection::None) {
             const auto result = UiRouteOperationResult::Rejected(transaction.operation_, transaction.request_.kind, storage->revision,
                                                                  transaction.preparedRejection_);
-            finish();
+            Finish(transaction);
             return result;
         }
-
         const bool changesStack = transaction.request_.kind != UiRouteOperationKind::Clear || !storage->routes.empty();
         UiRouteStackRevision nextRevision = storage->revision;
         if (changesStack) {
             const auto next = storage->revision.Next();
             if (next.HasError()) {
-                finish();
+                Finish(transaction);
                 return Failure<UiRouteOperationResult>(UiErrors::GenerationExhausted);
             }
             nextRevision = next.Value();
         }
-
-        std::optional<UiRouteInstanceId> resultRoute;
-        switch (transaction.request_.kind) {
-            case UiRouteOperationKind::Push:
-            case UiRouteOperationKind::Navigate: {
-                const auto instance = storage->NextInstance();
-                if (instance.HasError()) {
-                    finish();
-                    return Failure<UiRouteOperationResult>(UiErrors::GenerationExhausted);
-                }
-                for (auto &route : storage->routes)
-                    route.visibility = UiRouteVisibilityState::Covered;
-                storage->routes.push_back({instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible});
-                resultRoute = instance.Value();
-                break;
-            }
-            case UiRouteOperationKind::Pop:
-            case UiRouteOperationKind::Back:
-                storage->routes.pop_back();
-                if (!storage->routes.empty()) {
-                    storage->routes.back().visibility = UiRouteVisibilityState::Visible;
-                    resultRoute = storage->routes.back().id;
-                }
-                break;
-            case UiRouteOperationKind::Replace: {
-                const auto instance = storage->NextInstance();
-                if (instance.HasError()) {
-                    finish();
-                    return Failure<UiRouteOperationResult>(UiErrors::GenerationExhausted);
-                }
-                storage->routes.back() = {instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible};
-                resultRoute = instance.Value();
-                break;
-            }
-            case UiRouteOperationKind::Clear:
-                storage->routes.clear();
-                break;
-            case UiRouteOperationKind::Count:
-                finish();
-                return Failure<UiRouteOperationResult>(UiErrors::RouteOperationInvalid);
+        auto mutation = ApplyMutation(*storage, transaction);
+        if (mutation.HasError()) {
+            Finish(transaction);
+            return Failure<UiRouteOperationResult>(UiErrors::GenerationExhausted);
         }
         storage->revision = nextRevision;
         const auto result =
-            UiRouteOperationResult::Committed(transaction.operation_, transaction.request_.kind, storage->revision, resultRoute);
-        finish();
+            UiRouteOperationResult::Committed(transaction.operation_, transaction.request_.kind, storage->revision, mutation.Value());
+        Finish(transaction);
         return result;
     }
 
