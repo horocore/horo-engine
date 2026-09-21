@@ -58,7 +58,13 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr auto operator<=>(const LightComponent &) const noexcept = default;
     };
 
-    /** @brief Authored overlap volume awaiting runtime physics conversion. */
+    /**
+     * @brief Legacy authored overlap-volume convenience component.
+     *
+     * Scene-document conversion normalizes enabled values into an explicit static
+     * sensor body and collider before producing a RuntimeSceneDefinition. This
+     * authoring-only value is not part of the runtime component payload.
+     */
     struct TriggerVolumeComponent {
         ColliderShapeType shape{ColliderShapeType::Box};
         bool enabled{true}; /**< Whether runtime overlap behavior is active. */

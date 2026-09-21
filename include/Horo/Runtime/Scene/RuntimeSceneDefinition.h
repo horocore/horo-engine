@@ -22,11 +22,15 @@
 #include <vector>
 
 namespace Horo::Runtime {
-    /** @brief Typed core component payload owned by a definition or runtime scene. */
+    /**
+     * @brief Typed core component payload owned by a definition or runtime scene.
+     *
+     * Authoring conveniences such as TriggerVolumeComponent are normalized by
+     * scene conversion before this runtime-facing payload is constructed.
+     */
     struct RuntimeComponentSet {
         std::optional<CameraComponent> camera;
         std::optional<LightComponent> light;
-        std::optional<TriggerVolumeComponent> triggerVolume;
         std::optional<AudioSourceComponent> audioSource;
         std::optional<UiCanvasComponent> uiCanvas; /**< Optional canvas asset instantiated by the Runtime UI owner. */
         std::optional<NavigationSurfaceComponent> navigationSurface;

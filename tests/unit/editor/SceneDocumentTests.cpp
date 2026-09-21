@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -93,6 +94,93 @@ namespace {
         REQUIRE_FALSE(converted.Value().Entities()[1].components.navigationLink.has_value());
         REQUIRE_FALSE(converted.Value().Entities()[1].components.navigationAgent.has_value());
         REQUIRE(document.objects[1].components.navigationLink.has_value());
+    }
+
+    TEST_CASE("Legacy trigger volumes migrate to explicit static sensor physics producers", "[unit][editor][physics]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        const std::array shapes{
+            Runtime::ColliderShapeType::Box,
+            Runtime::ColliderShapeType::Sphere,
+            Runtime::ColliderShapeType::Capsule,
+            Runtime::ColliderShapeType::StaticPlane,
+        };
+        for (const Runtime::ColliderShapeType shape : shapes) {
+            const SceneDocumentSnapshot document{
+                .revision = DocumentRevision{1},
+                .state = DocumentStateId{1},
+                .objects = {SceneObjectSnapshot{.id = SceneObjectId{27},
+                                                .name = "Legacy Trigger",
+                                                .components = {.triggerVolume = Runtime::TriggerVolumeComponent{shape}}}},
+            };
+
+            const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{1});
+            REQUIRE(converted.HasValue());
+            REQUIRE(document.objects.front().components.triggerVolume.has_value());
+            const auto &components = converted.Value().Entities().front().components;
+            REQUIRE(components.rigidBody.has_value());
+            REQUIRE(components.rigidBody->motion == Runtime::AuthoredPhysicsMotionType::Static);
+            REQUIRE(std::holds_alternative<Runtime::AuthoredPhysicsNoMass>(components.rigidBody->mass));
+            REQUIRE(components.colliders.size() == 1);
+            const auto &collider = components.colliders.front();
+            REQUIRE(collider.sensor);
+            REQUIRE(collider.body.object == Runtime::SceneObjectId{27});
+            REQUIRE(collider.body.body == components.rigidBody->body);
+            REQUIRE((collider.localPose.translation == Math::Vec3{} && collider.localPose.rotation == Math::Quaternion::Identity() &&
+                     collider.scale == Math::Vec3{1.0F, 1.0F, 1.0F}));
+            REQUIRE(Runtime::ValidateRigidBodyComponent(*components.rigidBody).HasValue());
+            REQUIRE(Runtime::ValidateColliderComponent(collider).HasValue());
+
+            const auto &analytic = std::get<Runtime::PhysicsAnalyticCollider>(collider.source);
+            switch (shape) {
+                case Runtime::ColliderShapeType::Box:
+                    REQUIRE(std::holds_alternative<Runtime::PhysicsBoxCollider>(analytic));
+                    break;
+                case Runtime::ColliderShapeType::Sphere:
+                    REQUIRE(std::holds_alternative<Runtime::PhysicsSphereCollider>(analytic));
+                    break;
+                case Runtime::ColliderShapeType::Capsule:
+                    REQUIRE(std::holds_alternative<Runtime::PhysicsCapsuleCollider>(analytic));
+                    break;
+                case Runtime::ColliderShapeType::StaticPlane:
+                    REQUIRE(std::holds_alternative<Runtime::PhysicsStaticPlaneCollider>(analytic));
+                    break;
+            }
+        }
+    }
+
+    TEST_CASE("Disabled and conflicting legacy trigger volumes have explicit conversion outcomes", "[unit][editor][physics]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        SceneDocumentSnapshot disabled{
+            .revision = DocumentRevision{1},
+            .state = DocumentStateId{1},
+            .objects = {SceneObjectSnapshot{.id = SceneObjectId{1},
+                                            .name = "Disabled Trigger",
+                                            .components = {.triggerVolume =
+                                                               Runtime::TriggerVolumeComponent{.shape = Runtime::ColliderShapeType::Sphere,
+                                                                                               .enabled = false}}}},
+        };
+        const auto disabledRuntime = ConvertSceneDocumentToRuntime(disabled, Runtime::SceneDefinitionId{1});
+        REQUIRE(disabledRuntime.HasValue());
+        REQUIRE_FALSE(disabledRuntime.Value().Entities().front().components.rigidBody.has_value());
+        REQUIRE(disabledRuntime.Value().Entities().front().components.colliders.empty());
+
+        SceneDocumentSnapshot conflict = disabled;
+        conflict.objects.front().components.triggerVolume->enabled = true;
+        conflict.objects.front().components.rigidBody = Runtime::RigidBodyComponent{.id = {9}, .body = {10}};
+        const auto conflictingRuntime = ConvertSceneDocumentToRuntime(conflict, Runtime::SceneDefinitionId{1});
+        REQUIRE(conflictingRuntime.HasError());
+        REQUIRE(conflictingRuntime.ErrorValue().code.Value() == "scene_conversion.trigger_volume_canonical_conflict");
+
+        SceneDocumentSnapshot malformed = disabled;
+        malformed.objects.front().components.triggerVolume->enabled = true;
+        malformed.objects.front().components.triggerVolume->shape = static_cast<Runtime::ColliderShapeType>(255);
+        const auto malformedRuntime = ConvertSceneDocumentToRuntime(malformed, Runtime::SceneDefinitionId{1});
+        REQUIRE(malformedRuntime.HasError());
+        REQUIRE(malformedRuntime.ErrorValue().code.Value() == "scene_conversion.trigger_volume_schema_unsupported");
     }
 
     TEST_CASE("Scene navigation commands preserve committed generations through undo redo and runtime conversion",
