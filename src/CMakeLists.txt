@@ -280,11 +280,8 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
-        runtime/ui/UiDiagnosticDescriptors.cpp
-        runtime/ui/UiAccessibility.cpp
-        runtime/ui/UiAccessibilityPolicy.cpp
-        runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiCanvasSpace.cpp
@@ -293,11 +290,17 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
+        runtime/ui/UiDiagnosticDescriptors.cpp
+        runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityPolicy.cpp
+        runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiFocusGraph.cpp
+        runtime/ui/UiFocusGraphOperations.cpp
         runtime/ui/UiControls.cpp
         runtime/ui/UiControlStateMachine.cpp
         runtime/ui/UiControlStateMachineInput.cpp

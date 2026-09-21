@@ -176,6 +176,24 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ControlSequenceInvalid;
     /** @brief The interactive-control state machine is retiring, stopped, or changing lifecycle during input. */
     extern const ErrorCodeDescriptor ControlLifecycleUnavailable;
+    /** @brief A Runtime UI focus graph, node, scope, or transition is malformed. */
+    extern const ErrorCodeDescriptor FocusInvalid;
+    /** @brief Focus owner, tree, interaction, or handle evidence belongs to another generation. */
+    extern const ErrorCodeDescriptor FocusSourceStale;
+    /** @brief A requested focus target is absent, disabled, hidden, or otherwise unavailable. */
+    extern const ErrorCodeDescriptor FocusTargetUnavailable;
+    /** @brief A focus transition would escape the active inclusive modal boundary. */
+    extern const ErrorCodeDescriptor FocusModalBoundaryViolation;
+    /** @brief The bounded focus graph node capacity was exceeded or could not be allocated. */
+    extern const ErrorCodeDescriptor FocusCapacityExceeded;
+    /** @brief The bounded modal or restoration stack cannot admit another scope. */
+    extern const ErrorCodeDescriptor FocusModalCapacityExceeded;
+    /** @brief A modal close identity is stale or is not the current top modal. */
+    extern const ErrorCodeDescriptor FocusModalStale;
+    /** @brief A reload attempted to change the player, presentation layer, or owner scope. */
+    extern const ErrorCodeDescriptor FocusScopeMismatch;
+    /** @brief The focus graph is retiring or stopped and rejects the request. */
+    extern const ErrorCodeDescriptor FocusLifecycleUnavailable;
     /** @brief Immutable Runtime UI render snapshot evidence or table topology is malformed. */
     extern const ErrorCodeDescriptor RenderSnapshotInvalid;
     /** @brief A Runtime UI draw command contains invalid geometry, paint, or table references. */
