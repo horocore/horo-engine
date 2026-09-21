@@ -4,14 +4,18 @@
  * @brief Native-free declarations for private canonical process and world ownership.
  */
 
+#include "Horo/Physics/PhysicsEvents.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string_view>
 
 namespace Horo::Physics::Detail {
+    class PhysicsEventProjection;
+
     /** @brief Private deterministic rollback probe; production entry points use None. */
     enum class CanonicalFailurePoint : std::uint8_t {
         None,
@@ -38,6 +42,13 @@ namespace Horo::Physics::Detail {
 
     struct CanonicalWorldHandle final {
         void *value{};
+    };
+
+    /** @brief Non-owning callback seam for copied contact evidence produced during one native step. */
+    struct CanonicalContactSink final {
+        PhysicsEventProjection *context{}; /**< Owner-thread projection state, valid until the joined step returns. */
+        bool (*append)(PhysicsEventProjection *context, const PhysicsContactObservation &observation) noexcept {};
+        /**< Copies one complete Horo observation; the native adapter never retains the value. */
     };
 
     /** @brief Admits one owner-thread query fixture without exposing its native representation. */
@@ -70,8 +81,18 @@ namespace Horo::Physics::Detail {
                                                                     CanonicalFailurePoint failurePoint = CanonicalFailurePoint::None);
     /** @brief Releases one native world in reverse dependency order. */
     void DestroyCanonicalWorld(CanonicalWorldHandle world) noexcept;
-    /** @brief Runs and joins one serial native fixed step before returning to publication code. */
-    [[nodiscard]] Result<CanonicalStepOutcome> StepCanonicalWorld(CanonicalWorldHandle world, float fixedDeltaSeconds);
+    /** @brief Runs and joins one serial native fixed step before returning to publication code.
+     * @param world Prepared native world.
+     * @param fixedDeltaSeconds Exact validated world fixed delta.
+     * @param simulationTick Tick identity copied into every callback observation.
+     * @param contactSink Non-owning projection seam active only until the joined step returns.
+     */
+    [[nodiscard]] Result<CanonicalStepOutcome> StepCanonicalWorld(CanonicalWorldHandle world, float fixedDeltaSeconds,
+                                                                  std::uint64_t simulationTick = 0, CanonicalContactSink contactSink = {});
+    /** @brief Invokes the installed contact listener with copied native evidence for boundary regression coverage. */
+    [[nodiscard]] bool InvokeCanonicalContactCallbackForTesting(CanonicalWorldHandle world, const PhysicsQueryFixture &first,
+                                                                const PhysicsQueryFixture &second, std::uint64_t simulationTick,
+                                                                bool sensor, bool persisted, CanonicalContactSink contactSink);
     /** @brief Exercises the same bounded callback inbox from native-boundary tests. */
     void SubmitCanonicalDiagnosticForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message) noexcept;
     /** @brief Invokes the installed native callback hook under a bounded test route. */

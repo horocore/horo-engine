@@ -67,7 +67,7 @@ until a qualified profile names them; native defaults never silently widen this 
 The snapshot also owns gravity, all world/resource limits, the `8192 m` local hard
 half-extent, the `4096 m` dynamic-contact radius, and the selected non-finite policy.
 
-Settings identity is SHA-256 over schema 1's fixed ordered field words encoded as
+Settings identity is SHA-256 over schema 2's fixed ordered field words encoded as
 little-endian 64-bit values; float bit patterns are widened and signed zero is
 canonicalized. It never hashes structure padding or native state. Diagnostics and
 reference fixtures retain this identity, but checkpoint compatibility additionally
@@ -464,18 +464,22 @@ Tick events include:
 - trigger entered
 - trigger exited
 
-```cpp
-struct PhysicsContactEvent {
-    SimulationTick tick;
-    EntityId first;
-    EntityId second;
-    ContactEventKind kind;
-    ContactSummary contact;
-};
-```
+The native adapter copies body/shape handles, authored subshape and material
+evidence, filter-schema generation, contact position/normal/penetration and
+sensor state while the solver callback owns a locked manifold. No native body,
+manifold pointer, callback-order token or consumer call crosses that boundary.
+After the solver joins, Physics canonically orders each pair by its typed Horo
+endpoint identity, coalesces duplicate manifold callbacks, and reconciles the
+current pair set against the prior published set. A solid pair emits exactly one
+`ContactBegin`, zero or more `ContactPersist`, and one `ContactEnd` over its
+overlap lifetime. A sensor pair emits `TriggerEnter` and `TriggerExit` only;
+sensors never receive a physical response. A solid shape therefore remains a
+contact record even when its material/filter data is otherwise optional.
 
-Events are stored in a world-owned bounded buffer and consumed during the
-declared post-physics phase. They are not individually published to the
+Events are stored in a world-owned bounded double buffer and consumed during the
+declared post-physics phase. The owner swaps the immutable completed buffer only
+after reconciliation, so no consumer observes native callback memory or a
+partially reduced lifecycle table. They are not individually published to the
 process-wide data bus.
 
 An immersive editor agent admitted under
@@ -484,7 +488,14 @@ may consume bounded, generation-checked query or contact summaries as context.
 Physics events remain simulation facts: contact, overlap, grab and throw evidence
 never grants agent intent, proposal approval or solver-mutation authority.
 
-If overflow occurs, the world records a metric and emits one diagnostic summary.
+`maximumInFlightPairs` bounds copied callback evidence and `maximumEvents` bounds
+the published records. `PhysicsEventOverflowPolicy::DropNewest` retains the
+canonical output prefix, increments dropped-record telemetry, emits one bounded
+event diagnostic summary and advances the lifecycle table from the retained
+evidence. `FailTick` suppresses that tick's event publication and fails the
+world while preserving the prior coherent publication. Neither policy grows a
+callback buffer, invokes a consumer from the solver, or leaves solver-owned
+manifold storage in the event result.
 
 ## Queries
 
@@ -706,9 +717,12 @@ storage. These initial resource ceilings bound admission but do not establish
 total native allocation size, a wall-clock tick deadline or qualified throughput.
 World creation still accounts for all native overhead and process-wide budgets.
 
-Shape, command and query admission rejects before exceeding capacity. Required
-contact/event tick-output overflow suppresses tick publication rather than
-dropping records or publishing a partial result. The pinned native temporary
+Shape, command and query admission rejects before exceeding capacity. Event
+evidence/publication overflow follows the captured
+`PhysicsEventOverflowPolicy`: `DropNewest` retains a deterministic canonical
+prefix and publishes a coherent reduced lifecycle with dropped-record
+telemetry, while `FailTick` suppresses tick publication and preserves the prior
+coherent result. The pinned native temporary
 allocator cannot recover from overflow: `PhysicsScratchExhaustionPolicy::FatalProcess`
 is its explicit supported policy and the initial default. `FailTick` is rejected
 before native allocation until a qualified recoverable allocator/solver path

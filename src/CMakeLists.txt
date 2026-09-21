@@ -569,6 +569,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
         physics/PhysicsDeterminismPolicy.cpp
+        physics/PhysicsEventProjection.cpp
+        physics/PhysicsEventProjection.h
         physics/PhysicsHandleRegistry.h
         physics/PhysicsIdentity.cpp
         physics/PhysicsMetrics.cpp
@@ -576,10 +578,12 @@ add_library(HoroPhysics STATIC
         physics/PhysicsMassProperties.cpp
         physics/PhysicsPose.cpp
         physics/PhysicsQuery.cpp
+        physics/PhysicsSaturatingAdd.h
         physics/PhysicsShapeDescriptor.cpp
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
         physics/PhysicsWorldSettings.cpp
@@ -590,11 +594,17 @@ target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Asse
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/CanonicalPhysicsRuntimeDiagnostics.h
+        physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQuery.h
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/CanonicalPhysicsRuntimeQuery.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp
         PROPERTIES

@@ -108,6 +108,8 @@ namespace Horo::Physics {
         std::uint64_t queryTick{};           /**< Tick owning the visible query snapshot. */
         std::uint64_t eventTick{};           /**< Tick owning the visible event batch. */
         std::uint32_t appliedCommands{};     /**< Eligible commands processed at this tick's safe points. */
+        std::uint32_t eventCount{};          /**< Number of immutable contact/trigger records in the event batch. */
+        std::uint64_t droppedEventCount{};   /**< Records omitted while capturing or publishing this tick. */
     };
 
     /** @brief Allocation-free cumulative fixed-tick and command-buffer metrics. */
@@ -116,7 +118,10 @@ namespace Horo::Physics {
         std::uint64_t admittedCommands{};      /**< Commands copied into bounded storage. */
         std::uint64_t rejectedCommands{};      /**< Full-buffer admissions retaining caller ownership. */
         std::uint64_t destructionRetryCount{}; /**< Destructions returned for mandatory retry. */
+        std::uint64_t droppedEventCount{};     /**< Cumulative copied or projected records omitted by policy. */
         std::uint32_t pendingCommands{};       /**< Current deferred depth. */
         std::uint32_t maximumCommandDepth{};   /**< High-water mark since world preparation. */
+        std::uint32_t eventDepth{};            /**< Number of records in the last published event batch. */
+        std::uint32_t maximumEventDepth{};     /**< High-water mark of one published event batch. */
     };
 }  // namespace Horo::Physics

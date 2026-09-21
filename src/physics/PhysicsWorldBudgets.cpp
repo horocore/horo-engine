@@ -20,6 +20,8 @@ namespace Horo::Physics {
         if (budgets.scratchExhaustion != PhysicsScratchExhaustionPolicy::FatalProcess)
             return Result<void>::Failure(
                 MakeError(PhysicsErrors::OperationUnsupported, "The pinned scratch allocator supports fatal process exhaustion only."));
+        if (budgets.eventOverflow > PhysicsEventOverflowPolicy::FailTick)
+            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown Physics event overflow policy."));
         const std::array limits{
             ResourceLimit{budgets.maximumShapes, MaximumPhysicsResourceRecords, "shape count"},
             ResourceLimit{budgets.maximumContactPairs, MaximumPhysicsResourceRecords, "contact pair count"},

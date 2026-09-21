@@ -46,9 +46,9 @@ namespace Horo::Physics {
     TEST_CASE("World settings identity has an independently encoded default fixture", "[physics][settings]") {
         const auto result = PhysicsWorldSettings::Capture({});
         REQUIRE(result.HasValue());
-        // SHA-256 of schema-1's 33 little-endian uint64 words, independently encoded with Python struct.pack.
+        // SHA-256 of schema-2's 34 little-endian uint64 words, independently encoded with Python struct.pack.
         REQUIRE(FormatSha256(result.Value().Identity().digest) ==
-                "sha256:dc94eec0194ac0c31247b37759c4be60ce60353814cef0b79c39a3ef8eb9dc9a");
+                "sha256:dacddeeb7448d68bce46ef935e79acc15fca20fc3adcaed465411b9d5e7016ea");
         const auto repeated = PhysicsWorldSettings::Capture({});
         REQUIRE(repeated.HasValue());
         REQUIRE(repeated.Value().Identity() == result.Value().Identity());
@@ -103,7 +103,7 @@ namespace Horo::Physics {
     }
 
     TEST_CASE("Every resource reservation contributes to settings identity", "[physics][settings]") {
-        const std::array<SettingsMutation, 11> mutations{
+        const std::array<SettingsMutation, 12> mutations{
             [](auto &v) {
             --v.budgets.maximumShapes;
         },
@@ -136,6 +136,9 @@ namespace Horo::Physics {
         },
             [](auto &v) {
             --v.budgets.residentShapeBytes;
+        },
+            [](auto &v) {
+            v.budgets.eventOverflow = PhysicsEventOverflowPolicy::FailTick;
         },
         };
         RequireDistinctSettings(mutations);

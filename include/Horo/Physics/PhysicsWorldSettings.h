@@ -10,6 +10,8 @@
 #include "Horo/Physics/PhysicsWorldDescriptor.h"
 
 namespace Horo::Physics {
+    /** @brief Canonical encoding version for captured Physics world settings. */
+    inline constexpr std::uint32_t PhysicsWorldSettingsSchemaVersion = 2;
     /** @brief Normative hard origin-relative half extent in meters. */
     inline constexpr float MaximumPhysicsLocalHalfExtentMeters = 8'192.0F;
     /** @brief Normative high-fidelity dynamic-contact radius in meters. */
@@ -51,7 +53,7 @@ namespace Horo::Physics {
      * defaults. Fields are const and assignment is disabled. A host rebuilds a world to adopt another
      * snapshot rather than mutating live policy. Construction owns no native resources or threads.
      *
-     * The identity uses canonical little-endian field encoding with schema version 1 and normalized
+     * The identity uses canonical little-endian field encoding with the current schema version and normalized
      * signed zero. It excludes process IDs, padding, pointers and secrets. Equal identity does not
      * prove identical native build, origin/scene generation or deterministic checkpoint compatibility;
      * those additional identities remain required. Runtime must implement the selected containment

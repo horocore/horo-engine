@@ -329,6 +329,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsCookedShapeCacheTests.cpp
         unit/runtime/physics/PhysicsCookedShapeDescriptorTests.cpp
         unit/runtime/physics/PhysicsDeterminismPolicyTests.cpp
+        unit/runtime/physics/PhysicsEventProjectionTests.cpp
         unit/runtime/physics/PhysicsDiagnosticsTests.cpp
         unit/runtime/physics/PhysicsFoundationQualificationTests.cpp
         unit/runtime/physics/PhysicsHandleRegistryTests.cpp
@@ -344,7 +345,9 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsTransformAuthorityTests.cpp
         unit/runtime/physics/PhysicsWorldBudgetsTests.cpp
         unit/runtime/physics/PhysicsWorldDescriptorTests.cpp
+        unit/runtime/physics/PhysicsWorldLifecycleTests.cpp
         unit/runtime/physics/PhysicsWorldSettingsTests.cpp
+        unit/runtime/physics/PhysicsWorldSolverJobTests.cpp
         unit/runtime/physics/PhysicsWorldTests.cpp
 )
 target_compile_features(HoroPhysicsTests PRIVATE cxx_std_20)
