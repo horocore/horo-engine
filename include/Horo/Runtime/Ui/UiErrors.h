@@ -142,6 +142,18 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief A route-stack descriptor or operation request is malformed. */
+    extern const ErrorCodeDescriptor RouteStackInvalid;
+    /** @brief A route operation has invalid fields or targets an unsupported route. */
+    extern const ErrorCodeDescriptor RouteOperationInvalid;
+    /** @brief A route operation guard no longer matches the committed stack generation. */
+    extern const ErrorCodeDescriptor RouteOperationStale;
+    /** @brief A route operation was attempted while another transaction is preparing or committing. */
+    extern const ErrorCodeDescriptor RouteOperationReentrant;
+    /** @brief A route transaction was used after its terminal result was produced. */
+    extern const ErrorCodeDescriptor RouteOperationAlreadyCompleted;
+    /** @brief The route stack is retiring, stopped, or cannot admit another operation. */
+    extern const ErrorCodeDescriptor RouteOperationLifecycleUnavailable;
     /** @brief A typed interactive-control descriptor is malformed or incompatible with its control kind. */
     extern const ErrorCodeDescriptor ControlDescriptorInvalid;
     /** @brief A normalized control input has invalid kind, source, sequence, tick, or payload evidence. */
