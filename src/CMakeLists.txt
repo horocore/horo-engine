@@ -583,6 +583,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldInternal.h
+        physics/PhysicsWorldScene.cpp
         physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp

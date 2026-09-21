@@ -141,7 +141,7 @@ namespace Horo::Physics {
         auto runtime = std::move(created).Value();
         REQUIRE(runtime->Availability() == PhysicsAvailability::Available);
         REQUIRE(runtime->Capability(PhysicsCapability::WorldCreation) == PhysicsCapabilitySupport::Available);
-        REQUIRE(runtime->Capability(PhysicsCapability::RigidBodies) == PhysicsCapabilitySupport::Unsupported);
+        REQUIRE(runtime->Capability(PhysicsCapability::RigidBodies) == PhysicsCapabilitySupport::Available);
         const auto duplicate = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
         REQUIRE(duplicate.HasError());
         REQUIRE(duplicate.ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());

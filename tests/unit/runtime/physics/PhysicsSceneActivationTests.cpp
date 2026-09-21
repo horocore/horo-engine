@@ -111,6 +111,72 @@ namespace Horo::Physics {
                     .sensor = sensor};
         }
 
+        void AddFirstAnalyticEntity(Runtime::SceneDefinitionBuilder &builder, const Assets::AssetId material) {
+            Runtime::RigidBodyComponent body{.id = {10}, .body = {100}};
+            body.motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
+            body.mass = Runtime::AuthoredPhysicsDensity{500.0F};
+            Runtime::RuntimeEntityDefinition entity;
+            entity.object = {1};
+            entity.components.rigidBody = body;
+            entity.components.colliders = {Collider(20, 200, 1, 100, material,
+                                                    Runtime::PhysicsColliderSource{
+                                                        Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.6F}}}),
+                                           Collider(21, 201, 1, 100, material,
+                                                    Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{
+                                                        Runtime::PhysicsBoxCollider{{0.5F, 0.25F, 0.5F}}}})};
+            Runtime::PhysicsConstraintComponent constraint;
+            constraint.id = {50};
+            constraint.constraint = {500};
+            constraint.first.body = {.object = {1}, .body = {100}};
+            constraint.second = Runtime::PhysicsConstraintBodyEndpoint{.body = {.object = {2}, .body = {101}},
+                                                                       .localFrame = {.translation = {0.0F, 0.5F, 0.0F}}};
+            constraint.parameters = Runtime::PhysicsFixedConstraint{};
+            entity.components.physicsConstraints.push_back(std::move(constraint));
+            builder.Add(std::move(entity));
+        }
+
+        void AddSecondAnalyticEntity(Runtime::SceneDefinitionBuilder &builder, const Assets::AssetId material) {
+            Runtime::RuntimeEntityDefinition entity;
+            entity.object = {2};
+            entity.parent = Runtime::SceneObjectId{1};
+            entity.localTransform = Math::Transform{.translation = {0.0F, 2.0F, 0.0F}};
+            entity.components.rigidBody = Runtime::RigidBodyComponent{.id = {11}, .body = {101}};
+            entity.components.colliders = {
+                Collider(22, 202, 2, 101, material,
+                         Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{Runtime::PhysicsCapsuleCollider{0.4F, 0.8F}}})};
+            Runtime::PhysicsConstraintComponent constraint;
+            constraint.id = {51};
+            constraint.constraint = {501};
+            constraint.first.body = {.object = {2}, .body = {101}};
+            constraint.second = Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 0.0F, 0.0F}}};
+            constraint.parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.0F, .maximumMeters = 4.0F};
+            entity.components.physicsConstraints.push_back(std::move(constraint));
+            builder.Add(std::move(entity));
+        }
+
+        void AddThirdAnalyticEntity(Runtime::SceneDefinitionBuilder &builder, const Assets::AssetId material) {
+            Runtime::RuntimeEntityDefinition entity;
+            entity.object = {3};
+            entity.localTransform = Math::Transform{.translation = {0.0F, -2.0F, 0.0F}};
+            entity.components.rigidBody = Runtime::RigidBodyComponent{.id = {12}, .body = {102}};
+            entity.components.colliders = {Collider(23, 203, 3, 102, material,
+                                                    Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{
+                                                        Runtime::PhysicsStaticPlaneCollider{{0.0F, 1.0F, 0.0F}, 0.0F}}})};
+            builder.Add(std::move(entity));
+        }
+
+        [[nodiscard]] Runtime::RuntimeSceneDefinition AnalyticVariantDefinition(const Assets::AssetId material,
+                                                                                const Assets::AssetTypeId materialType) {
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{4}};
+            AddFirstAnalyticEntity(builder, material);
+            AddSecondAnalyticEntity(builder, material);
+            AddThirdAnalyticEntity(builder, material);
+            REQUIRE(builder.RequireAsset({material, materialType}).HasValue());
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            return std::move(definition).Value();
+        }
+
         [[nodiscard]] PhysicsSceneActivationSettings Settings(const std::uint32_t maximumBodies = 16) {
             PhysicsWorldSettingsDescriptor physicsDescriptor;
             physicsDescriptor.world.capacity = {maximumBodies, 32, 16, 4096};
@@ -288,64 +354,12 @@ namespace Horo::Physics {
             auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
             REQUIRE(runtime.HasValue());
             AssetSceneFixture assets;
-
-            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{4}};
-            Runtime::RigidBodyComponent firstBody{.id = {10}, .body = {100}};
-            firstBody.motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
-            firstBody.mass = Runtime::AuthoredPhysicsDensity{500.0F};
-            Runtime::RuntimeEntityDefinition first;
-            first.object = {1};
-            first.components.rigidBody = firstBody;
-            first.components.colliders = {Collider(20, 200, 1, 100, assets.material,
-                                                   Runtime::PhysicsColliderSource{
-                                                       Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.6F}}}),
-                                          Collider(21, 201, 1, 100, assets.material,
-                                                   Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{
-                                                       Runtime::PhysicsBoxCollider{{0.5F, 0.25F, 0.5F}}}})};
-            Runtime::PhysicsConstraintComponent fixed;
-            fixed.id = {50};
-            fixed.constraint = {500};
-            fixed.first.body = {.object = {1}, .body = {100}};
-            fixed.second = Runtime::PhysicsConstraintBodyEndpoint{.body = {.object = {2}, .body = {101}},
-                                                                  .localFrame = {.translation = {0.0F, 0.5F, 0.0F}}};
-            fixed.parameters = Runtime::PhysicsFixedConstraint{};
-            first.components.physicsConstraints.push_back(fixed);
-
-            Runtime::RuntimeEntityDefinition second;
-            second.object = {2};
-            second.parent = Runtime::SceneObjectId{1};
-            second.localTransform = Math::Transform{.translation = {0.0F, 2.0F, 0.0F}};
-            second.components.rigidBody = Runtime::RigidBodyComponent{.id = {11}, .body = {101}};
-            second.components.colliders = {
-                Collider(22, 202, 2, 101, assets.material,
-                         Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{Runtime::PhysicsCapsuleCollider{0.4F, 0.8F}}})};
-            Runtime::PhysicsConstraintComponent distance;
-            distance.id = {51};
-            distance.constraint = {501};
-            distance.first.body = {.object = {2}, .body = {101}};
-            distance.second = Runtime::PhysicsConstraintWorldEndpoint{.frame = {.translation = {0.0F, 0.0F, 0.0F}}};
-            distance.parameters = Runtime::PhysicsDistanceConstraint{.minimumMeters = 0.0F, .maximumMeters = 4.0F};
-            second.components.physicsConstraints.push_back(distance);
-
-            Runtime::RuntimeEntityDefinition third;
-            third.object = {3};
-            third.localTransform = Math::Transform{.translation = {0.0F, -2.0F, 0.0F}};
-            third.components.rigidBody = Runtime::RigidBodyComponent{.id = {12}, .body = {102}};
-            third.components.colliders = {Collider(23, 203, 3, 102, assets.material,
-                                                   Runtime::PhysicsColliderSource{Runtime::PhysicsAnalyticCollider{
-                                                       Runtime::PhysicsStaticPlaneCollider{{0.0F, 1.0F, 0.0F}, 0.0F}}})};
-
-            builder.Add(std::move(first));
-            builder.Add(std::move(second));
-            builder.Add(std::move(third));
-            REQUIRE(builder.RequireAsset({assets.material, assets.materialType}).HasValue());
-            auto definition = std::move(builder).Build();
-            REQUIRE(definition.HasValue());
-            const auto view = assets.Prepare(definition.Value());
+            const auto definition = AnalyticVariantDefinition(assets.material, assets.materialType);
+            const auto view = assets.Prepare(definition);
             PhysicsSceneActivationAuthority authority;
             PhysicsSceneActivationParticipant participant{*runtime.Value(), authority, Settings()};
 
-            auto prepared = participant.Prepare(definition.Value(), view);
+            auto prepared = participant.Prepare(definition, view);
             if (prepared.HasError())
                 FAIL(prepared.ErrorValue().message);
             REQUIRE(prepared.HasValue());
