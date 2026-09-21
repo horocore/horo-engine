@@ -146,6 +146,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiErrors.h
+    Horo/Runtime/Ui/UiAccessibility.h
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiCanvasSpace.h
     Horo/Runtime/Ui/UiAssetDependency.h
@@ -617,6 +618,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProject.h
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
+    Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h
     Horo/Editor/WorkspaceDockArea.h
     Horo/Editor/WorkspaceLayout.h

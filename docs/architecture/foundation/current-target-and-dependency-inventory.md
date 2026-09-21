@@ -116,7 +116,7 @@ device backend.
 | `HoroEditorModel` (`HoroEngine::EditorModel`) | Always | Owns scene-document, selection, and viewport model code. Its intended contract spans selected `Editor/**` headers and internal `src/editor/**` headers; all of `src/` is currently exported to consumers. | Foundation, SceneModel, RuntimeScene (public) |
 | `HoroEditorViewportScene` (`HoroEngine::EditorViewportScene`) | Always | Owns backend-neutral editor viewport scene/camera/light visualization geometry. It has no isolated installed public surface and exports `src/`. | EditorModel (public) |
 | `HoroEditorRenderExtraction` (`HoroEngine::EditorRenderExtraction`) | Always | Owns editor-to-render snapshot extraction, mesh cache, picking, and asset drop conversion. It has no isolated installed public surface and exports `src/`. | EditorModel, EditorViewportScene (public) |
-| `HoroEditorServices` (`HoroEngine::EditorServices`) | Always | Owns current GUI-neutral project, settings, localization, input orchestration, workspace model, editor bus, modal host, notification, menu, hierarchy, and status contracts under `Editor/**`. It also exports `src/`. | Foundation, Application, Platform, EditorModel, GameplayLua, GameplayModuleHost, GameplayBuild, Input, ProjectMigrations (public); Assets (private) |
+| `HoroEditorServices` (`HoroEngine::EditorServices`) | Always | Owns current GUI-neutral project, settings, localization, input orchestration, workspace model, editor bus, modal host, notification, menu, hierarchy, and status contracts under `Editor/**`, including the persistent UI Canvas document/session boundary. It also exports `src/`. | Foundation, Application, Platform, RuntimeUi, EditorModel, GameplayLua, GameplayModuleHost, GameplayBuild, Input, ProjectMigrations (public); Assets (private) |
 | `HoroEditorViewportOpenGL` (`HoroEngine::EditorViewportOpenGL`) | GUI and OpenGL | Owns the OpenGL ImGui/viewport/presentation bridge. Backend, SDL, GLAD, and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderOpenGL (public) |
 | `HoroEditorViewportMetal` (`HoroEngine::EditorViewportMetal`) | Apple, GUI, and Metal | Owns the Metal ImGui/viewport/presentation bridge. Objective-C++ and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderMetal (public) |
 | `HoroGui` (`HoroEngine::Gui`) | Editor GUI only | Owns ImGui screens, modals, panels, workspace controllers, and design-system implementation. ImGui is private, while all of `include/` and `src/` are exported as public include roots. | EditorServices, Foundation (public); EditorRenderExtraction and Extensions (private) |
@@ -138,7 +138,7 @@ There are 388 non-placeholder headers under `include/Horo/` at this snapshot:
 | `Cinematic/` | 9 | CinematicModel and CinematicRuntime |
 | `Cli/` | 5 | CliHost |
 | `Destruction/` | 7 | DestructionApi and DestructionRuntime |
-| `Editor/` | 48 | EditorModel, EditorServices, and Gui |
+| `Editor/` | 49 | EditorModel, EditorServices, and Gui |
 | `Extensions/` | 12 | Extensions |
 | `Foundation/` | 34 | Foundation, except the optional OpenTelemetry sink header |
 | `Gameplay/` | 17 | GameplayApi, GameplayRuntime, GameplayModuleHost, GameplayBuild, and GameplayLua |

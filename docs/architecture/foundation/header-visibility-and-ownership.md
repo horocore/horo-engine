@@ -128,6 +128,18 @@ actual owning target. White-box tests that need implementation details must use 
 narrow test-private include path or an explicit internal interface rather than
 depending on production transitivity.
 
+## RUI-009.1 Migration Notes
+
+`HoroEngine::EditorServices` owns the new `Horo/Editor/UiCanvasDocument.h`
+contract and publicly depends on `HoroEngine::RuntimeUi` for the backend-neutral
+authored document model. Existing source-open callers continue to use
+`SourceFileOpenService`; `.uicanvas` paths now resolve to `DocumentKind::UiCanvas`
+through the shared workspace identity registry, while session-local instances,
+dirty state, durable fingerprints, and close/reload decisions remain editor-owned.
+There are no existing UI Canvas callers to migrate. The generated
+EditorServices public-header consumer compiles the new contract through its sole
+owner, and the UI Canvas persistence and workspace tests cover the typed boundary.
+
 Legacy editor white-box tests use the non-installed `HoroEditorTestInternals`
 interface as an explicit migration boundary. It is test-only and may expose the
 source root to its listed consumers while their historical `editor/...` include

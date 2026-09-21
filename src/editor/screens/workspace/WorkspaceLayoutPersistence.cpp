@@ -40,9 +40,21 @@ namespace Horo::Editor {
                     return std::nullopt;
                 }
                 auto root = Node(error);
-                if (!root || !ObjectEnd())
+                if (!root)
                     return std::nullopt;
                 layout.root = std::move(*root);
+                if (Take(',')) {
+                    if (!Key("documents") || !Take('[')) {
+                        error = "workspace document tabs invalid";
+                        return std::nullopt;
+                    }
+                    auto documents = ParseDocumentList(error);
+                    if (!documents)
+                        return std::nullopt;
+                    layout.openDocuments = std::move(*documents);
+                }
+                if (!ObjectEnd())
+                    return std::nullopt;
                 if (layout.schemaVersion != WorkspaceLayoutPersistence::CurrentSchemaVersion) {
                     error = "unsupported workspace schema version";
                     return std::nullopt;
@@ -172,6 +184,34 @@ namespace Horo::Editor {
                         return stack;
                     if (!Comma()) {
                         error = "tab separator missing";
+                        return std::nullopt;
+                    }
+                }
+            }
+
+            /**
+             * @brief Parses persisted document open keys without restoring session-local instances.
+             */
+            std::optional<std::vector<SerializedDocumentOpenKey>> ParseDocumentList(std::string &error) {
+                std::vector<SerializedDocumentOpenKey> documents;
+                Skip();
+                if (Take(']'))
+                    return documents;
+                while (true) {
+                    if (!ObjectStart()) {
+                        error = "workspace document tab must be an object";
+                        return std::nullopt;
+                    }
+                    SerializedDocumentOpenKey document;
+                    if (!Key("kind") || !String(document.kind) || !Comma() || !Key("source") || !String(document.source) || !ObjectEnd()) {
+                        error = "workspace document tab invalid";
+                        return std::nullopt;
+                    }
+                    documents.push_back(std::move(document));
+                    if (Take(']'))
+                        return documents;
+                    if (!Comma()) {
+                        error = "workspace document tab separator missing";
                         return std::nullopt;
                     }
                 }
@@ -317,6 +357,14 @@ namespace Horo::Editor {
         std::ostringstream out;
         out << "{\"schemaVersion\":" << CurrentSchemaVersion << ",\"root\":";
         WriteNode(out, layout.root);
+        out << R"(,"documents":[)";
+        for (std::size_t index = 0; index < layout.openDocuments.size(); ++index) {
+            if (index)
+                out << ',';
+            const SerializedDocumentOpenKey &document = layout.openDocuments[index];
+            out << R"({"kind":")" << Escape(document.kind) << R"(","source":")" << Escape(document.source) << R"("})";
+        }
+        out << ']';
         out << '}';
         return out.str();
     }

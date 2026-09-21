@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Editor/UiCanvasDocument.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -141,6 +142,7 @@ namespace Horo::Editor {
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
         Assets::AssetRegistrySnapshot m_assetRegistry;
+        DocumentIdentityRegistry m_documentRegistry;
         SourceFileOpenService m_sourceOpenService;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         ProjectMutationCoordinator *m_mutations{};
@@ -194,6 +196,7 @@ namespace Horo::Editor {
         };
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
+        std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_autosaveElapsedSeconds{0.0F};
         float m_autosaveRetryDelaySeconds{0.0F};
         float m_sceneFileWatchElapsedSeconds{0.0F};
@@ -378,6 +381,8 @@ namespace Horo::Editor {
         void DegradeNativeGameplayReload(NativeGameplayReloadTransaction &transaction, Error error);
         void ReimportContentBrowserAsset(const std::filesystem::path &absolutePath);
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
+        /** @brief Loads and focuses one validated embedded UI Canvas source result. */
+        void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
