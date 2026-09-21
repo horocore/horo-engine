@@ -79,8 +79,9 @@ namespace Horo::Runtime {
     /**
      * @brief Detached save state used as both a read-only source and an owned candidate.
      *
-     * The executor copies this state before invoking any migration function. Migration functions
-     * therefore receive no reference to the caller's source archive or live runtime state.
+     * The executor copies this state once before invoking migration functions. Each function then
+     * receives ownership of the detached candidate, never a reference to the caller's source archive
+     * or live runtime state.
      */
     struct SaveMigrationState final {
         ArchiveFormatVersion archiveFormatVersion;
@@ -105,8 +106,8 @@ namespace Horo::Runtime {
         std::optional<SaveParticipantId> participant;
     };
 
-    /** @brief Function executed against an immutable candidate copy and returning a new candidate. */
-    using SaveMigrationFn = std::function<Result<SaveMigrationCandidate>(const SaveMigrationCandidate &, const SaveMigrationStepContext &)>;
+    /** @brief Function receiving ownership of the current detached candidate and returning its replacement. */
+    using SaveMigrationFn = std::function<Result<SaveMigrationCandidate>(SaveMigrationCandidate, const SaveMigrationStepContext &)>;
 
     /** @brief One archive-format migration edge. */
     struct ArchiveMigrationStep final {
@@ -307,8 +308,9 @@ namespace Horo::Runtime {
     /**
      * @brief Validates and executes a frozen plan entirely in detached owned staging.
      *
-     * The source is copied before the first callback. Successful execution returns a new candidate;
-     * no callback can receive a mutable reference to the source state or to live runtime memory.
+     * The source is copied once before the first callback. Each callback receives ownership of the
+     * current detached candidate, so successful execution returns a new candidate without an
+     * additional full-state copy between migration steps.
      */
     class SaveMigrationExecutor final {
     public:

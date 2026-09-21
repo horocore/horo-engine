@@ -75,8 +75,7 @@ namespace {
     }
 
     [[nodiscard]] SaveMigrationFn BumpArchive(const std::uint32_t target, const std::string_view suffix = {}) {
-        return [target, suffix](const SaveMigrationCandidate &source, const SaveMigrationStepContext &) {
-            auto candidate = source;
+        return [target, suffix](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
             candidate.archiveFormatVersion = V<ArchiveFormatVersion>(target);
             const auto bytes = Bytes(suffix);
             candidate.archiveBytes.insert(candidate.archiveBytes.end(), bytes.begin(), bytes.end());
@@ -85,9 +84,8 @@ namespace {
     }
 
     [[nodiscard]] SaveMigrationFn BumpParticipant(const char *participant, const std::uint32_t target, const std::string_view suffix = {}) {
-        return [participant = std::string{participant}, target, suffix](const SaveMigrationCandidate &source,
-                                                                        const SaveMigrationStepContext &) {
-            auto candidate = source;
+        return
+            [participant = std::string{participant}, target, suffix](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
             auto found =
                 std::ranges::find(candidate.participants, Participant(participant.c_str()), &SaveMigrationParticipantState::participant);
             if (found == candidate.participants.end())
@@ -281,8 +279,7 @@ namespace {
 
     TEST_CASE("Executor rejects participant steps that modify unrelated state", "[runtime][save][migration]") {
         auto invalidParticipant = ParticipantStep("scene.1_to_2", "horo.scene.core.v1", 1, 2);
-        invalidParticipant.migrate = [](const SaveMigrationCandidate &source, const SaveMigrationStepContext &) {
-            auto candidate = source;
+        invalidParticipant.migrate = [](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
             candidate.participants.back().payload.push_back(std::byte{0x7f});
             candidate.participants.front().schemaVersion = V<ParticipantSchemaVersion>(2);
             return Result<SaveMigrationCandidate>::Success(std::move(candidate));
@@ -293,6 +290,24 @@ namespace {
         REQUIRE(snapshot.HasValue());
         auto support = Support(1, 1, 2, 1);
         const auto plan = snapshot.Value().Plan(Source(), support);
+        REQUIRE(plan.HasValue());
+        const auto result = SaveMigrationExecutor::Migrate(Source(), plan.Value());
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == "save.migration.candidate_invalid");
+    }
+
+    TEST_CASE("Executor rejects participant steps that modify archive bytes", "[runtime][save][migration]") {
+        auto invalidParticipant = ParticipantStep("scene.1_to_2", "horo.scene.core.v1", 1, 2);
+        invalidParticipant.migrate = [](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
+            candidate.archiveBytes.push_back(std::byte{0x7f});
+            candidate.participants.front().schemaVersion = V<ParticipantSchemaVersion>(2);
+            return Result<SaveMigrationCandidate>::Success(std::move(candidate));
+        };
+        auto registry = SaveMigrationRegistry::Create(std::vector<SaveMigrationDefinition>{invalidParticipant});
+        REQUIRE(registry.HasValue());
+        auto snapshot = registry.Value().Snapshot();
+        REQUIRE(snapshot.HasValue());
+        const auto plan = snapshot.Value().Plan(Source(), Support(1, 1, 2, 1));
         REQUIRE(plan.HasValue());
         const auto result = SaveMigrationExecutor::Migrate(Source(), plan.Value());
         REQUIRE(result.HasError());
