@@ -41,6 +41,30 @@ namespace Horo::Vfx {
         using CpuParticleSimulatorDetail::RunKillStage;
         using CpuParticleSimulatorDetail::RunSpawnStage;
         using CpuParticleSimulatorDetail::ValidateOperationalState;
+
+        [[nodiscard]] Result<CpuParticleSimulationStepResult> CommitCandidate(Detail::CpuParticleSimulatorState &state,
+                                                                              const Detail::CpuParticleSpawnStageResult &spawn,
+                                                                              const std::uint32_t killed, const std::uint32_t collisions) {
+            std::swap(state.committed, state.candidate);
+            std::swap(state.committedOffset, state.candidateOffset);
+            state.spawnCarry = spawn.plan.carry;
+            state.nextSimulationIdentity = spawn.nextSimulationIdentity;
+            ++state.nextTick;
+            ++state.committedGeneration;
+            ++state.steps;
+            state.spawned += spawn.plan.admitted;
+            state.dropped += spawn.plan.requested - spawn.plan.admitted;
+            state.killed += killed;
+            state.collisions += collisions;
+            state.killRequests.clear();
+            return Result<CpuParticleSimulationStepResult>::Success({.requestedBirths = spawn.plan.requested,
+                                                                     .spawned = spawn.plan.admitted,
+                                                                     .dropped = spawn.plan.requested - spawn.plan.admitted,
+                                                                     .killed = killed,
+                                                                     .collisions = collisions,
+                                                                     .active = state.committed.Statistics().active,
+                                                                     .committedGeneration = state.committedGeneration});
+        }
     }  // namespace
 
     /** @copydoc CpuParticleSimulator::~CpuParticleSimulator */
@@ -99,25 +123,7 @@ namespace Horo::Vfx {
         if (auto extracted = Observe(*state_, CpuParticleStage::Extract); extracted.HasError())
             return Result<CpuParticleSimulationStepResult>::Failure(extracted.ErrorValue());
 
-        std::swap(state_->committed, state_->candidate);
-        std::swap(state_->committedOffset, state_->candidateOffset);
-        state_->spawnCarry = spawn.Value().plan.carry;
-        state_->nextSimulationIdentity = spawn.Value().nextSimulationIdentity;
-        ++state_->nextTick;
-        ++state_->committedGeneration;
-        ++state_->steps;
-        state_->spawned += spawn.Value().plan.admitted;
-        state_->dropped += spawn.Value().plan.requested - spawn.Value().plan.admitted;
-        state_->killed += killed.Value();
-        state_->collisions += collisions.Value();
-        state_->killRequests.clear();
-        return Result<CpuParticleSimulationStepResult>::Success({.requestedBirths = spawn.Value().plan.requested,
-                                                                 .spawned = spawn.Value().plan.admitted,
-                                                                 .dropped = spawn.Value().plan.requested - spawn.Value().plan.admitted,
-                                                                 .killed = killed.Value(),
-                                                                 .collisions = collisions.Value(),
-                                                                 .active = state_->committed.Statistics().active,
-                                                                 .committedGeneration = state_->committedGeneration});
+        return CommitCandidate(*state_, spawn.Value(), killed.Value(), collisions.Value());
     }
 
     /** @copydoc CpuParticleSimulator::SignalKill */
