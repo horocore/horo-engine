@@ -284,6 +284,12 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutTypes.cpp
         runtime/ui/UiStyle.cpp
+        runtime/ui/UiStyleHash.cpp
+        runtime/ui/UiStyleRegistry.cpp
+        runtime/ui/UiStyleResolution.cpp
+        runtime/ui/UiStyleResolver.cpp
+        runtime/ui/UiStyleSnapshot.cpp
+        runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
         runtime/ui/UiPresentationReceipt.cpp
