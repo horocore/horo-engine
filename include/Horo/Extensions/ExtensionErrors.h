@@ -17,6 +17,46 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor ScriptExportDescriptorIncompatible;
     /** @brief A script export descriptor or generation exceeded an explicit finite bound. */
     extern const ErrorCodeDescriptor ScriptExportDescriptorCapacityExceeded;
+    /** @brief A script value or structured error is malformed or outside its closed value algebra. */
+    extern const ErrorCodeDescriptor ScriptValueInvalid;
+    /** @brief A script value, result, or codec operation exceeded an explicit finite bound. */
+    extern const ErrorCodeDescriptor ScriptValueCapacityExceeded;
+    /** @brief A script value wire payload is truncated, has an unknown tag, or has trailing bytes. */
+    extern const ErrorCodeDescriptor ScriptValueEncodingInvalid;
+    /** @brief A script value does not match the declared language-neutral type. */
+    extern const ErrorCodeDescriptor ScriptValueTypeMismatch;
+    /** @brief A script error or call result has malformed structure or evidence. */
+    extern const ErrorCodeDescriptor ScriptCallResultInvalid;
+    /** @brief A script invocation request is malformed or targets a missing declaration. */
+    extern const ErrorCodeDescriptor ScriptInvocationInvalid;
+    /** @brief A script invocation was attempted from outside its context owner thread. */
+    extern const ErrorCodeDescriptor ScriptInvocationThreadViolation;
+    /** @brief A script invocation attempted a forbidden recursive lifecycle transition. */
+    extern const ErrorCodeDescriptor ScriptInvocationReentrant;
+    /** @brief A script provider generation or context is unavailable or revoked. */
+    extern const ErrorCodeDescriptor ScriptInvocationUnavailable;
+    /** @brief A script provider generation is already registered in the invocation registry. */
+    extern const ErrorCodeDescriptor ScriptInvocationProviderDuplicate;
+    /** @brief Script invocation admission exceeded a host or provider/context bound. */
+    extern const ErrorCodeDescriptor ScriptInvocationCapacityExceeded;
+    /** @brief Script invocation registration and new call admission are closed. */
+    extern const ErrorCodeDescriptor ScriptInvocationShutdown;
+    /** @brief Script invocation completion delivery was closed or context event capacity was exhausted. */
+    extern const ErrorCodeDescriptor ScriptInvocationBackpressure;
+    /** @brief A script invocation was cooperatively cancelled. */
+    extern const ErrorCodeDescriptor ScriptInvocationCancelled;
+    /** @brief A script invocation exceeded its finite timeout. */
+    extern const ErrorCodeDescriptor ScriptInvocationTimeout;
+    /** @brief A script invocation provider generation was revoked before completion. */
+    extern const ErrorCodeDescriptor ScriptInvocationProviderRevoked;
+    /** @brief A script invocation context was revoked before completion delivery. */
+    extern const ErrorCodeDescriptor ScriptInvocationContextRevoked;
+    /** @brief A script invocation was abandoned before its producer published a terminal result. */
+    extern const ErrorCodeDescriptor ScriptInvocationAbandoned;
+    /** @brief A script opaque handle is malformed, stale, or no longer owned by its context. */
+    extern const ErrorCodeDescriptor ScriptHandleInvalid;
+    /** @brief A script opaque handle was revoked with its provider or context generation. */
+    extern const ErrorCodeDescriptor ScriptHandleRevoked;
     extern const ErrorCodeDescriptor InvocationFailed;
     extern const ErrorCodeDescriptor ModuleResolutionFailed;
     /** @brief A lifecycle transition used the wrong owner, ordering, or state evidence. */
