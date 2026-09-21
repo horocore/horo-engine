@@ -93,6 +93,47 @@ namespace Horo::Character {
             RequireError(ValidateCharacterPhysicsQueryContext(context, expected), CharacterErrors::QuerySnapshotStale);
         }
 
+        TEST_CASE("Character capsule sweep evidence enforces typed bounds and fixed response capacity",
+                  "[physics][character][sweep][validation]") {
+            const auto descriptor = Descriptor();
+            const CharacterSweepProbeRequest request{Controller(descriptor),
+                                                     descriptor.sceneGeneration,
+                                                     descriptor.characterWorld,
+                                                     descriptor.physicsWorld,
+                                                     descriptor.capsule,
+                                                     {},
+                                                     descriptor.up,
+                                                     {1, 0, 0},
+                                                     2.0F,
+                                                     descriptor.collisionProfile,
+                                                     descriptor.queryChannel,
+                                                     0};
+            CharacterSweepProbeResult result;
+            result.hits[0] = {.body = Physics::BodyHandle{descriptor.physicsWorld, {3, 6}},
+                              .shape = Physics::ShapeHandle{descriptor.physicsWorld, {4, 8}},
+                              .point = {},
+                              .normal = {-1, 0, 0},
+                              .material = Material(),
+                              .response = Physics::PhysicsQueryResponse::Block,
+                              .distanceMeters = 1.0F};
+            result.hitCount = 1;
+            REQUIRE(ValidateCharacterSweepProbeResult(result, request).HasValue());
+
+            result.hits[0].normal = {};
+            RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::DescriptorInvalid);
+            result.hits[0].normal = {-1, 0, 0};
+            result.hits[0].distanceMeters = 3.0F;
+            RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::DescriptorInvalid);
+            result.hits[0].distanceMeters = 1.0F;
+            result.hitCount = MaximumCharacterSweepHits;
+            result.truncated = true;
+            for (std::uint32_t index = 1; index < result.hitCount; ++index)
+                result.hits[index] = result.hits[0];
+            REQUIRE(ValidateCharacterSweepProbeResult(result, request).HasValue());
+            result.hitCount = MaximumCharacterSweepHits - 1;
+            RequireError(ValidateCharacterSweepProbeResult(result, request), CharacterErrors::DescriptorInvalid);
+        }
+
         TEST_CASE("Character identities retain scene world slot and generation", "[physics][character][identity]") {
             REQUIRE_FALSE(CharacterWorldId{}.IsValid());
             RequireError(Result<void>::Failure(CharacterWorldId::Create(0).ErrorValue()), CharacterErrors::WorldInvalid);

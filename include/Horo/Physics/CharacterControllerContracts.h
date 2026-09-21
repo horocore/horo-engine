@@ -17,6 +17,8 @@
 namespace Horo::Character {
     /** @brief Absolute fixed capacity of one owned movement result. */
     inline constexpr std::uint32_t MaximumCharacterContacts = 32;
+    /** @brief Absolute fixed capacity of one retained capsule-sweep response. */
+    inline constexpr std::uint32_t MaximumCharacterSweepHits = MaximumCharacterContacts;
     /** @brief Maximum squared-norm error admitted for controller unit vectors and headings. */
     inline constexpr double CharacterUnitSquaredNormTolerance = 1.0e-6;
 
@@ -162,7 +164,60 @@ namespace Horo::Character {
                                                                           const CharacterOverlapProbeRequest &request) noexcept;
 
     /**
-     * @brief World- and tick-affine read-only query context for placement validation.
+     * @brief One backend-neutral blocking or overlap hit returned by a capsule sweep probe.
+     *
+     * The Physics adapter copies stable Horo identity, contact, material and travel evidence into this
+     * value before returning. A missing material is intentional and lets Character apply the descriptor
+     * fallback material. Character never retains native collector state.
+     */
+    struct CharacterSweepHit final {
+        std::optional<Physics::BodyHandle> body;
+        Physics::ShapeHandle shape;
+        Math::Vec3 point;
+        Math::Vec3 normal{0, 1, 0};
+        std::optional<Physics::PhysicsQueryMaterial> material;
+        Physics::PhysicsQueryResponse response{Physics::PhysicsQueryResponse::Block};
+        float distanceMeters{};
+    };
+
+    /** @brief Read-only capsule sweep request for one bounded movement iteration. */
+    struct CharacterSweepProbeRequest final {
+        CharacterControllerHandle controller;
+        std::uint64_t sceneGeneration{};
+        CharacterWorldId characterWorld;
+        Physics::PhysicsWorldId physicsWorld;
+        Physics::PhysicsCapsuleShape capsule;
+        Math::Vec3 position;
+        Math::Vec3 up{0, 1, 0};
+        Math::Vec3 direction{0, 0, -1};
+        float maximumDistanceMeters{};
+        Physics::CollisionProfileId collisionProfile;
+        Physics::PhysicsQueryChannelId queryChannel;
+        std::uint32_t iteration{};
+    };
+
+    /**
+     * @brief Fixed-capacity capsule-sweep evidence reduced by the private Physics adapter.
+     *
+     * Only the first `hitCount` entries are active. `truncated` reports that the adapter's fixed
+     * response capacity dropped later evidence; no callback may return an unbounded collection.
+     */
+    struct CharacterSweepProbeResult final {
+        std::array<CharacterSweepHit, MaximumCharacterSweepHits> hits{};
+        std::uint32_t hitCount{};
+        bool truncated{};
+    };
+
+    /**
+     * @brief Callback used by the private Physics adapter to answer one capsule sweep.
+     * @param context Adapter-owned state; Character retains no ownership or lifetime of it.
+     * @param request Backend-neutral candidate pose, travel and filter evidence.
+     * @return Bounded sweep evidence or the original typed Physics failure.
+     */
+    using CharacterSweepProbe = Result<CharacterSweepProbeResult> (*)(void *context, const CharacterSweepProbeRequest &request) noexcept;
+
+    /**
+     * @brief World- and tick-affine read-only query context for placement and movement resolution.
      *
      * This is a borrowed adapter seam. It carries no backend-native handle and is valid only for the
      * owner-thread operation that receives it.
@@ -177,9 +232,10 @@ namespace Horo::Character {
         std::uint64_t originGeneration{};
         std::uint64_t tick{};
         std::uint64_t physicsSnapshotRevision{};
+        CharacterSweepProbe sweep{};
     };
 
-    /** @brief Exact world and snapshot identity expected by one placement query operation. */
+    /** @brief Exact world and snapshot identity expected by one Character query operation. */
     struct CharacterPhysicsQueryExpectations final {
         std::uint64_t sceneGeneration{};
         CharacterWorldId characterWorld;
@@ -228,6 +284,15 @@ namespace Horo::Character {
      * @return Success or a stable placement/recovery error.
      */
     [[nodiscard]] Result<void> ValidateCharacterOverlapProbeResult(const CharacterOverlapProbeResult &result);
+
+    /**
+     * @brief Validates bounded capsule-sweep evidence against the exact request that produced it.
+     * @param result Adapter-reduced sweep evidence.
+     * @param request World, geometry, filter and travel bound used by the adapter.
+     * @return Success or a stable malformed, stale, capacity or placement error.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterSweepProbeResult(const CharacterSweepProbeResult &result,
+                                                                 const CharacterSweepProbeRequest &request);
 
     /**
      * @brief Validates a coherent Character transform publication.
