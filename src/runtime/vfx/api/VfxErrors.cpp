@@ -229,4 +229,62 @@ namespace Horo::Vfx::VfxErrors {
                                       .summary = "The stable particle spawn ordinal cannot advance without wrapping.",
                                       .remediationHint =
                                           "Retire the emitter activation and create a new generation; never wrap the ordinal."};
+    const ErrorCodeDescriptor ParticleStableCompactionInvalid{.domain = VfxDomain,
+                                                              .code = ErrorCode{"vfx.particle_simulation.stable_compaction_invalid"},
+                                                              .defaultSeverity = ErrorSeverity::Error,
+                                                              .summary = "The CPU particle survivor order is invalid for stable compaction.",
+                                                              .remediationHint =
+                                                                  "Submit each current survivor exactly once in increasing dense order."};
+    const ErrorCodeDescriptor ParticleStageContractViolation{.domain = VfxDomain,
+                                                             .code = ErrorCode{"vfx.particle_simulation.stage_contract_violation"},
+                                                             .defaultSeverity = ErrorSeverity::Error,
+                                                             .summary = "A CPU particle simulation stage contract was violated.",
+                                                             .remediationHint =
+                                                                 "Keep stage callbacks observational and preserve the fixed seven-stage order."};
+    const ErrorCodeDescriptor ParticleGameplayAccessDenied{.domain = VfxDomain,
+                                                           .code = ErrorCode{"vfx.particle_simulation.gameplay_access_denied"},
+                                                           .defaultSeverity = ErrorSeverity::Error,
+                                                           .summary = "Gameplay accessed a private or mutable particle payload.",
+                                                           .remediationHint =
+                                                               "Use bounded inputs before the step and schema-limited outputs after commit."};
+    const ErrorCodeDescriptor ParticlePayloadSchemaMismatch{.domain = VfxDomain,
+                                                            .code = ErrorCode{"vfx.particle_simulation.payload_schema_mismatch"},
+                                                            .defaultSeverity = ErrorSeverity::Error,
+                                                            .summary = "A particle payload channel does not match its prepared schema.",
+                                                            .remediationHint =
+                                                                "Use the exact prepared channel class and finite value range."};
+    const ErrorCodeDescriptor ParticleGenerationStale{.domain = VfxDomain,
+                                                      .code = ErrorCode{"vfx.particle_simulation.generation_stale"},
+                                                      .defaultSeverity = ErrorSeverity::Warning,
+                                                      .summary = "A particle read references a generation older than the committed step.",
+                                                      .remediationHint = "Refresh the post-commit extraction generation before reading again."};
+    const ErrorCodeDescriptor ParticleStepCapacityExceeded{.domain = VfxDomain,
+                                                            .code = ErrorCode{"vfx.particle_simulation.step_capacity_exceeded"},
+                                                            .defaultSeverity = ErrorSeverity::Error,
+                                                            .summary = "A mandatory CPU particle step exceeds prepared capacity.",
+                                                            .remediationHint =
+                                                                "Increase the admitted capacity or reduce the gameplay-mandatory birth request."};
+    const ErrorCodeDescriptor ParticleSimulationStepCancelled{.domain = VfxDomain,
+                                                              .code = ErrorCode{"vfx.particle_simulation.step_cancelled"},
+                                                              .defaultSeverity = ErrorSeverity::Info,
+                                                              .summary = "The CPU particle candidate step was cancelled before commit.",
+                                                              .remediationHint = "Retry from the unchanged committed generation when cancellation clears."};
+    const ErrorCodeDescriptor ParticleCollisionQueryUnavailable{.domain = VfxDomain,
+                                                                .code = ErrorCode{"vfx.particle_simulation.collision_query_unavailable"},
+                                                                .defaultSeverity = ErrorSeverity::Error,
+                                                                .summary = "A required typed particle collision query seam is unavailable.",
+                                                                .remediationHint =
+                                                                    "Provide a stable scene or physics snapshot adapter before stepping."};
+    const ErrorCodeDescriptor ParticleCollisionQueryFailed{.domain = VfxDomain,
+                                                           .code = ErrorCode{"vfx.particle_simulation.collision_query_failed"},
+                                                           .defaultSeverity = ErrorSeverity::Error,
+                                                           .summary = "A typed particle collision query failed.",
+                                                           .remediationHint =
+                                                               "Preserve the query error and retry with a valid immutable snapshot."};
+    const ErrorCodeDescriptor ParticleSimulationDescriptorInvalid{.domain = VfxDomain,
+                                                                  .code = ErrorCode{"vfx.particle_simulation.descriptor_invalid"},
+                                                                  .defaultSeverity = ErrorSeverity::Error,
+                                                                  .summary = "The prepared CPU particle simulation descriptor is invalid.",
+                                                                  .remediationHint =
+                                                                      "Use finite bounded forces, curves, payloads, and collision adapters."};
 }  // namespace Horo::Vfx::VfxErrors

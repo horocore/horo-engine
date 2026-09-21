@@ -289,6 +289,85 @@ namespace Horo::Vfx {
         return ResolveHandle(*state_, handle);
     }
 
+    /** @copydoc CpuParticleBuffer::CopyFrom */
+    Result<void> CpuParticleBuffer::CopyFrom(const CpuParticleBuffer &source) {
+        if (const auto state = ValidateOperationalState(state_.get()); state.HasError())
+            return state;
+        if (const auto sourceState = ValidateOperationalState(source.state_.get()); sourceState.HasError())
+            return sourceState;
+        if (this == &source)
+            return Result<void>::Success();
+        if (state_->buffer != source.state_->buffer || state_->capacity != source.state_->capacity ||
+            state_->customFloatStreamCount != source.state_->customFloatStreamCount ||
+            state_->allocatedBytes != source.state_->allocatedBytes)
+            return Failure<void>(VfxErrors::ParticleBufferInvalid);
+
+        std::memcpy(state_->storage, source.state_->storage, state_->allocatedBytes);
+        state_->lastSimulationIdentity = source.state_->lastSimulationIdentity;
+        state_->active = source.state_->active;
+        state_->freeCount = source.state_->freeCount;
+        state_->retired = source.state_->retired;
+        state_->metrics = source.state_->metrics;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc CpuParticleBuffer::CompactStable */
+    Result<void> CpuParticleBuffer::CompactStable(const std::span<const CpuParticleHandle> survivors) {
+        if (auto state = ValidateOperationalState(state_.get()); state.HasError())
+            return state;
+        if (survivors.size() > state_->capacity)
+            return Failure<void>(VfxErrors::ParticleStableCompactionInvalid);
+
+        const std::uint32_t oldActive = state_->active;
+        std::uint32_t previousDense = InvalidDenseIndex;
+        for (std::size_t index = 0; index < survivors.size(); ++index) {
+            const auto resolved = ResolveHandle(*state_, survivors[index]);
+            if (resolved.HasError())
+                return Result<void>::Failure(resolved.ErrorValue());
+            const std::uint32_t sourceDense = resolved.Value();
+            if (previousDense != InvalidDenseIndex && sourceDense <= previousDense)
+                return Failure<void>(VfxErrors::ParticleStableCompactionInvalid);
+            state_->streams.freeSlots[index] = sourceDense;
+            previousDense = sourceDense;
+        }
+
+        for (std::uint32_t dense = 0; dense < oldActive; ++dense) {
+            const std::uint32_t slot = state_->streams.denseToSlot[dense];
+            state_->streams.slotToDense[slot] = InvalidDenseIndex;
+        }
+
+        const auto newActive = static_cast<std::uint32_t>(survivors.size());
+        for (std::uint32_t dense = 0; dense < newActive; ++dense) {
+            const CpuParticleHandle &handle = survivors[dense];
+            MoveDenseParticle(*state_, dense, state_->streams.freeSlots[dense]);
+            state_->streams.denseToSlot[dense] = handle.slot;
+            state_->streams.slotToDense[handle.slot] = dense;
+            state_->streams.simulationBySlot[handle.slot] = handle.particle.Value();
+        }
+
+        for (std::uint32_t slot = 0; slot < state_->capacity; ++slot) {
+            if (state_->streams.slotToDense[slot] != InvalidDenseIndex || state_->streams.simulationBySlot[slot] == 0)
+                continue;
+            state_->streams.simulationBySlot[slot] = 0;
+            if (state_->streams.slotGeneration[slot] == std::numeric_limits<std::uint32_t>::max())
+                ++state_->retired;
+            else
+                ++state_->streams.slotGeneration[slot];
+        }
+
+        for (std::uint32_t dense = newActive; dense < oldActive; ++dense)
+            ZeroDenseParticle(*state_, dense);
+        state_->active = newActive;
+        state_->freeCount = 0;
+        for (std::uint32_t slot = state_->capacity; slot > 0; --slot) {
+            const std::uint32_t index = slot - 1U;
+            if (state_->streams.slotToDense[index] == InvalidDenseIndex &&
+                state_->streams.slotGeneration[index] != std::numeric_limits<std::uint32_t>::max())
+                state_->streams.freeSlots[state_->freeCount++] = index;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc CpuParticleBuffer::View */
     Result<CpuParticleSoAView> CpuParticleBuffer::View() {
         if (const auto state = ValidateOperationalState(state_.get()); state.HasError())
