@@ -58,7 +58,7 @@ jobs:
           # Only dependency declarations affect this cache. Hashing every
           # CMakeLists.txt created a new ~925 MB cache for unrelated target
           # changes and crowded out the CFamily analysis cache.
-          key: sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/HoroNavigationDependency.cmake', 'cmake/HoroPhysicsDependency.cmake') }}
+          key: sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmake/Dependencies.cmake', 'cmake/Horo*Dependency.cmake') }}
           restore-keys: |
             sonar-v2-deps-${{ runner.os }}-${{ runner.arch }}-
             sonar-v1-deps-${{ runner.os }}-${{ runner.arch }}-
