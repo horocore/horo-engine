@@ -232,6 +232,9 @@ namespace Horo::Character {
             auto result = MovementResult(descriptor);
             result.grounded = true;
             result.groundMaterial = Material();
+            result.groundBody = Physics::BodyHandle{descriptor.physicsWorld, {3, 6}};
+            result.groundShape = Physics::ShapeHandle{descriptor.physicsWorld, {4, 8}};
+            result.groundDistanceMeters = descriptor.skinWidthMeters;
             result.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
             REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
             REQUIRE(result.contactCount == 1);
@@ -239,6 +242,9 @@ namespace Horo::Character {
             REQUIRE(result.contacts[0].body->slot.index == 3);
             result.grounded = false;
             result.groundMaterial.reset();
+            result.groundBody.reset();
+            result.groundShape = {};
+            result.groundDistanceMeters = 0.0F;
             REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
         }
 
@@ -271,6 +277,35 @@ namespace Horo::Character {
             REQUIRE(result.contacts[0].shape.world == PhysicsWorld(12));
         }
 
+        TEST_CASE("Character ground evidence validates identity distance velocity and slope coherence",
+                  "[physics][character][result][grounding]") {
+            const auto descriptor = Descriptor();
+            auto result = MovementResult(descriptor);
+            result.grounded = true;
+            result.groundMaterial = Material();
+            result.groundBody = Physics::BodyHandle{descriptor.physicsWorld, {3, 6}};
+            result.groundShape = Physics::ShapeHandle{descriptor.physicsWorld, {4, 8}};
+            result.groundDistanceMeters = 0.02F;
+            result.collisions = CharacterCollisionFlags::Ground;
+            REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
+
+            result.groundShape.world = PhysicsWorld(12);
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+            result.groundShape.world = descriptor.physicsWorld;
+            result.groundRelativeVelocityMetersPerSecond.x = std::numeric_limits<float>::infinity();
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+            result.groundRelativeVelocityMetersPerSecond = {};
+            result.groundSlopeDegrees = 1.0F;
+            RequireError(ValidateCharacterMovementResult(result, descriptor), CharacterErrors::DescriptorInvalid);
+            result.groundSlopeDegrees = 0.0F;
+            result.grounded = false;
+            result.groundShape = {};
+            result.groundBody.reset();
+            result.groundMaterial.reset();
+            result.groundDistanceMeters = 0.0F;
+            REQUIRE(ValidateCharacterMovementResult(result, descriptor).HasValue());
+        }
+
         TEST_CASE("Character locomotion snapshots bind stable identity support evidence and authority", "[physics][character][snapshot]") {
             const auto descriptor = Descriptor();
             auto movement = MovementResult(descriptor);
@@ -278,6 +313,9 @@ namespace Horo::Character {
             movement.grounded = true;
             movement.platformAttached = true;
             movement.groundMaterial = Material();
+            movement.groundBody = Physics::BodyHandle{descriptor.physicsWorld, {3, 6}};
+            movement.groundShape = Physics::ShapeHandle{descriptor.physicsWorld, {4, 8}};
+            movement.groundDistanceMeters = descriptor.skinWidthMeters;
             movement.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
 
             CharacterLocomotionSnapshot snapshot;

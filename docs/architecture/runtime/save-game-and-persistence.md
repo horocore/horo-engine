@@ -644,6 +644,54 @@ Temporary or migration files are never catalogued as save slots. Cleanup is not 
 from a synchronous EnumerateSaveSlots call. No portable crash guarantee is assumed
 for an unqualified filesystem/platform container.
 
+### Bounded Last-Known-Good Slot Recovery
+
+Last-known-good recovery is a detached planning stage under the exact namespace and
+slot lease; it is not an alternate publication authority. Storage supplies the current
+artifact, recovery backups and already quarantined evidence together with a non-zero,
+trusted retention sequence. The planner bounds the total observations and orders them
+by that sequence only. Archive timestamps, slot-generation bytes, filenames and scan
+order never establish retention causality.
+
+`SaveArchiveRecoveryValidator` admits each backup with the bounded archive reader,
+matches its immutable archive evidence to trusted catalog metadata, and evaluates the
+active compatibility policy before the artifact can be offered for recovery. The
+result remains typed: `Valid` is eligible for promotion, malformed/truncated,
+integrity-mismatched or contradictory data is `Corrupt`, and unsupported reader or
+compatibility policy is `Incompatible`. Corrupt and incompatible evidence is retained
+as different quarantine diagnostics; neither can become a promotion candidate.
+
+A catalog/archive pair that is internally consistent but addresses a different
+requested logical slot is also `Incompatible`: it is wrong-scope input, not damaged
+bytes, and must not be silently offered as a recovery source. A mismatch between the
+archive and the trusted catalog for the same requested slot is `Corrupt`. This keeps
+wrong-scope current data on the explicit-confirmation path while preserving automatic
+corrupt-current recovery for genuinely damaged evidence.
+
+The default recovery policy retains three valid backups and eight quarantine artifacts
+within a bounded observation budget. Retention is deterministic across enumeration
+orders: newest valid backups are kept first, invalid evidence is ordered by retention
+sequence, and the invalid current artifact is protected before other quarantine
+cleanup. If the policy cannot preserve that current evidence, planning fails closed
+without cleanup. A valid current artifact suppresses recovery and produces no cleanup
+plan when no recovery publication is needed.
+
+Promotion is represented as immutable input to `SaveSlotCommitTransaction`. The
+transaction journals the candidate, prepares a complete hidden generation, and keeps
+the current publication selected until the candidate is durably published. Therefore
+validation failure, user cancellation, quota failure and an unknown publication
+outcome cannot overwrite the only valid generation; an unknown outcome is reconciled
+under the same lease. Planned backup/quarantine cleanup is applied only after durable
+publication succeeds, never before. Recovery copies preserve the embedded
+`SlotGenerationId` as replicas of that logical publication, consistent with
+[ADR-112](../../adr/112-save-archive-container-and-compatibility-policy.md).
+
+Automatic promotion is limited to the explicit policy: corrupt-current recovery is
+enabled by default, while interrupted-publication recovery requires opt-in. An
+incompatible current artifact always requires an explicit host/UI confirmation. The
+planner returns typed decision reasons; presentation adapters own localized
+explanation and confirmation, and cannot publish or delete recovery evidence.
+
 Cloud registration occurs only for the final validated local slot generation after
 PublishedDurable. The coordinator durably journals the exact address, generation,
 parent, archive hash, expected provider revision and retry identity, then pins or
@@ -852,6 +900,17 @@ ECS, account profiles or source files. Archive migration changes container struc
 save-schema migration changes root composition; participant migration advances only
 that participant (for example quests 7 -> 8 independently of inventory 2 -> 5). No
 implicit backward schema downgrade is permitted.
+
+The runtime contract is exposed by `Horo/Runtime/Save/SaveMigration.h`. Its
+`SaveMigrationRegistry` is mutable only during composition and produces an
+immutable generation-pinned snapshot for planning. The snapshot canonicalizes
+definition order and identity, validates one forward edge per typed range,
+selects one sequential route or an explicitly declared checkpoint, and returns
+typed diagnostics for gaps, ambiguity, unsupported source/newer versions, and
+non-equivalent checkpoints. `SaveMigrationExecutor` copies the validated source
+into bounded detached staging and returns a new candidate; callbacks cannot
+receive a mutable source or live runtime reference, and the source is checked
+again before success.
 
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic

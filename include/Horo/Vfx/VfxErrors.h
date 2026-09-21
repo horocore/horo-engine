@@ -82,4 +82,24 @@ namespace Horo::Vfx::VfxErrors {
     extern const ErrorCodeDescriptor ParticleSpawnStepCancelled;
     /** @brief The stable particle spawn ordinal cannot advance without wrapping. */
     extern const ErrorCodeDescriptor ParticleSpawnOrdinalExhausted;
+    /** @brief A stable survivor list is malformed or not in current dense order. */
+    extern const ErrorCodeDescriptor ParticleStableCompactionInvalid;
+    /** @brief A simulation stage callback or stage sentinel violated the fixed contract. */
+    extern const ErrorCodeDescriptor ParticleStageContractViolation;
+    /** @brief Gameplay attempted to access a private or mutable simulation payload. */
+    extern const ErrorCodeDescriptor ParticleGameplayAccessDenied;
+    /** @brief A gameplay payload channel does not match its prepared schema. */
+    extern const ErrorCodeDescriptor ParticlePayloadSchemaMismatch;
+    /** @brief A committed-generation read is stale. */
+    extern const ErrorCodeDescriptor ParticleGenerationStale;
+    /** @brief A mandatory step request cannot fit the prepared capacity. */
+    extern const ErrorCodeDescriptor ParticleStepCapacityExceeded;
+    /** @brief A simulation step was cancelled before its candidate generation committed. */
+    extern const ErrorCodeDescriptor ParticleSimulationStepCancelled;
+    /** @brief A required typed collision query seam is not available. */
+    extern const ErrorCodeDescriptor ParticleCollisionQueryUnavailable;
+    /** @brief A typed collision query seam rejected or failed the request. */
+    extern const ErrorCodeDescriptor ParticleCollisionQueryFailed;
+    /** @brief CPU simulation preparation inputs are malformed or exceed fixed limits. */
+    extern const ErrorCodeDescriptor ParticleSimulationDescriptorInvalid;
 }  // namespace Horo::Vfx::VfxErrors
