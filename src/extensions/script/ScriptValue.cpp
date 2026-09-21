@@ -8,11 +8,11 @@ namespace Horo::Extensions {
         [[nodiscard]] bool EqualMaps(const ScriptValue &left, const ScriptValue &right) noexcept {
             if (left.AsMap().size() != right.AsMap().size())
                 return false;
-            for (const auto &entry : left.AsMap()) {
-                const auto found = std::find_if(right.AsMap().begin(), right.AsMap().end(), [&entry](const auto &candidate) {
-                    return entry.first == candidate.first;
+            for (const auto &[entryKey, entryValue] : left.AsMap()) {
+                const auto found = std::ranges::find_if(right.AsMap(), [&entryKey](const auto &candidate) {
+                    return entryKey == candidate.first;
                 });
-                if (found == right.AsMap().end() || entry.second != found->second)
+                if (found == right.AsMap().end() || entryValue != found->second)
                     return false;
             }
             return true;
@@ -21,11 +21,11 @@ namespace Horo::Extensions {
         [[nodiscard]] bool EqualStructs(const ScriptValue &left, const ScriptValue &right) noexcept {
             if (left.StructType() != right.StructType() || left.AsStruct().size() != right.AsStruct().size())
                 return false;
-            for (const auto &field : left.AsStruct()) {
-                const auto found = std::find_if(right.AsStruct().begin(), right.AsStruct().end(), [&field](const auto &candidate) {
-                    return field.first == candidate.first;
+            for (const auto &[fieldId, fieldValue] : left.AsStruct()) {
+                const auto found = std::ranges::find_if(right.AsStruct(), [&fieldId](const auto &candidate) {
+                    return fieldId == candidate.first;
                 });
-                if (found == right.AsStruct().end() || field.second != found->second)
+                if (found == right.AsStruct().end() || fieldValue != found->second)
                     return false;
             }
             return true;
@@ -74,17 +74,17 @@ namespace Horo::Extensions {
 
     /** @copydoc ScriptValue::Array */
     ScriptValue ScriptValue::Array(ArrayElements values) {
-        return ScriptValue{std::make_shared<const ScriptArray>(ScriptArray{std::move(values)})};
+        return ScriptValue{std::make_shared<const ScriptArray>(std::move(values))};
     }
 
     /** @copydoc ScriptValue::Map */
     ScriptValue ScriptValue::Map(MapEntries values) {
-        return ScriptValue{std::make_shared<const ScriptMap>(ScriptMap{std::move(values)})};
+        return ScriptValue{std::make_shared<const ScriptMap>(std::move(values))};
     }
 
     /** @copydoc ScriptValue::Struct */
     ScriptValue ScriptValue::Struct(std::string type, StructFields fields) {
-        return ScriptValue{std::make_shared<const ScriptStruct>(ScriptStruct{std::move(type), std::move(fields)})};
+        return ScriptValue{std::make_shared<const ScriptStruct>(std::move(type), std::move(fields))};
     }
 
     /** @copydoc ScriptValue::GetKind */
@@ -215,13 +215,13 @@ namespace Horo::Extensions {
             case String:
                 return AsString() == other.AsString();
             case Bytes:
-                return std::equal(AsBytes().begin(), AsBytes().end(), other.AsBytes().begin(), other.AsBytes().end());
+                return std::ranges::equal(AsBytes(), other.AsBytes());
             case Handle:
                 return *AsHandle() == *other.AsHandle();
             case Enum:
                 return *AsEnum() == *other.AsEnum();
             case Array:
-                return std::equal(AsArray().begin(), AsArray().end(), other.AsArray().begin(), other.AsArray().end());
+                return std::ranges::equal(AsArray(), other.AsArray());
             case Map:
                 return EqualMaps(*this, other);
             case Struct:

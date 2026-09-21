@@ -112,8 +112,7 @@ namespace Horo::Extensions {
             const auto elements = value.AsArray();
             if (elements.size() > context.limits.maximumArrayElements)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, "Script array bound was exceeded."));
-            auto count = AddElements(context, elements.size());
-            if (count.HasError())
+            if (auto count = AddElements(context, elements.size()); count.HasError())
                 return count;
             for (const auto &element : elements) {
                 auto result = ValidateValueImpl(element, context, depth + 1);
@@ -127,8 +126,7 @@ namespace Horo::Extensions {
             const auto entries = value.AsMap();
             if (entries.size() > context.limits.maximumMapEntries)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, "Script map bound was exceeded."));
-            auto count = AddElements(context, entries.size());
-            if (count.HasError())
+            if (auto count = AddElements(context, entries.size()); count.HasError())
                 return count;
             for (std::size_t index = 0; index < entries.size(); ++index) {
                 if (!IsScalarMapKey(entries[index].first.GetKind()))
@@ -137,11 +135,9 @@ namespace Horo::Extensions {
                     if (entries[index].first == entries[prior].first)
                         return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script map contains duplicate keys."));
                 }
-                auto key = ValidateValueImpl(entries[index].first, context, depth + 1);
-                if (key.HasError())
+                if (auto key = ValidateValueImpl(entries[index].first, context, depth + 1); key.HasError())
                     return key;
-                auto mapped = ValidateValueImpl(entries[index].second, context, depth + 1);
-                if (mapped.HasError())
+                if (auto mapped = ValidateValueImpl(entries[index].second, context, depth + 1); mapped.HasError())
                     return mapped;
             }
             return Result<void>::Success();
@@ -151,20 +147,17 @@ namespace Horo::Extensions {
             const auto type = value.StructType();
             if (!IsValidIdentity(type, context.limits.maximumTypeIdentityBytes))
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script struct type identity is malformed."));
-            auto typeBytes = AddRawBytes(context, type.size());
-            if (typeBytes.HasError())
+            if (auto typeBytes = AddRawBytes(context, type.size()); typeBytes.HasError())
                 return typeBytes;
             const auto fields = value.AsStruct();
             if (fields.size() > context.limits.maximumStructFields)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, "Script struct field bound was exceeded."));
-            auto count = AddElements(context, fields.size());
-            if (count.HasError())
+            if (auto count = AddElements(context, fields.size()); count.HasError())
                 return count;
             for (std::size_t index = 0; index < fields.size(); ++index) {
                 if (!IsValidIdentity(fields[index].first, context.limits.maximumTypeIdentityBytes))
                     return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script struct field identity is malformed."));
-                auto fieldBytes = AddRawBytes(context, fields[index].first.size());
-                if (fieldBytes.HasError())
+                if (auto fieldBytes = AddRawBytes(context, fields[index].first.size()); fieldBytes.HasError())
                     return fieldBytes;
                 for (std::size_t prior = 0; prior < index; ++prior) {
                     if (fields[index].first == fields[prior].first)
@@ -180,8 +173,7 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> ValidateValueImpl(const ScriptValue &value, ValidationContext &context, std::size_t depth) {
             if (depth > context.limits.maximumDepth)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, "Script value nesting depth was exceeded."));
-            auto work = ConsumeWork(context);
-            if (work.HasError())
+            if (auto work = ConsumeWork(context); work.HasError())
                 return work;
 
             using enum ScriptValue::Kind;
@@ -216,8 +208,7 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] Result<void> ValidateErrorImpl(const ScriptError &error, ValidationContext &context) {
-            auto work = ConsumeWork(context);
-            if (work.HasError())
+            if (auto work = ConsumeWork(context); work.HasError())
                 return work;
             if (!IsValidIdentity(error.domain, context.limits.maximumTypeIdentityBytes) ||
                 !IsValidIdentity(error.code, context.limits.maximumTypeIdentityBytes))
@@ -226,20 +217,18 @@ namespace Horo::Extensions {
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script error message is not valid UTF-8."));
             if (error.message.size() > context.limits.maximumStringBytes)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, "Script error message bound was exceeded."));
-            auto identityBytes = AddRawBytes(context, error.domain.size() + error.code.size() + error.message.size());
-            if (identityBytes.HasError())
+            if (auto identityBytes = AddRawBytes(context, error.domain.size() + error.code.size() + error.message.size());
+                identityBytes.HasError())
                 return identityBytes;
             if (error.details.size() > context.limits.maximumErrorDetails)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, "Script error detail bound was exceeded."));
-            auto count = AddElements(context, error.details.size());
-            if (count.HasError())
+            if (auto count = AddElements(context, error.details.size()); count.HasError())
                 return count;
             for (std::size_t index = 0; index < error.details.size(); ++index) {
                 const auto &detail = error.details[index];
                 if (!IsValidIdentity(detail.id, context.limits.maximumTypeIdentityBytes))
                     return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script error detail identity is malformed."));
-                auto detailBytes = AddRawBytes(context, detail.id.size());
-                if (detailBytes.HasError())
+                if (auto detailBytes = AddRawBytes(context, detail.id.size()); detailBytes.HasError())
                     return detailBytes;
                 for (std::size_t prior = 0; prior < index; ++prior) {
                     if (detail.id == error.details[prior].id)
@@ -294,16 +283,16 @@ namespace Horo::Extensions {
             if (value.GetKind() != ScriptValue::Kind::Struct || value.StructType() != named.id)
                 return TypeMismatch<void>("Script struct value does not match its declared type.");
             const auto fields = value.AsStruct();
-            for (const auto &field : fields) {
-                const auto *declaration = FindField(named, field.first);
+            for (const auto &[fieldId, fieldValue] : fields) {
+                const auto *declaration = FindField(named, fieldId);
                 if (declaration == nullptr)
                     return TypeMismatch<void>("Script struct contains an undeclared field.");
-                auto result = ValidateValueForTypeImpl(field.second, declaration->type, descriptor, limits, depth + 1, activeTypes);
+                auto result = ValidateValueForTypeImpl(fieldValue, declaration->type, descriptor, limits, depth + 1, activeTypes);
                 if (result.HasError())
                     return result;
             }
             for (const auto &declaration : named.fields) {
-                const auto found = std::find_if(fields.begin(), fields.end(), [&declaration](const auto &field) {
+                const auto found = std::ranges::find_if(fields, [&declaration](const auto &field) {
                     return field.first == declaration.id;
                 });
                 if (found == fields.end() && declaration.requirement == ScriptExportParameterRequirement::Required)
@@ -330,12 +319,12 @@ namespace Horo::Extensions {
                                                     std::size_t depth, std::vector<std::string> &activeTypes) {
             if (value.GetKind() != ScriptValue::Kind::Map || value.AsMap().size() > named.maximumElements)
                 return TypeMismatch<void>("Script map value does not match its declared bound.");
-            for (const auto &entry : value.AsMap()) {
-                auto key = ValidateValueForTypeImpl(entry.first, named.keyType, descriptor, limits, depth + 1, activeTypes);
-                if (key.HasError())
+            for (const auto &[keyValue, mappedValue] : value.AsMap()) {
+                if (auto key = ValidateValueForTypeImpl(keyValue, named.keyType, descriptor, limits, depth + 1, activeTypes);
+                    key.HasError())
                     return key;
-                auto mapped = ValidateValueForTypeImpl(entry.second, named.valueType, descriptor, limits, depth + 1, activeTypes);
-                if (mapped.HasError())
+                if (auto mapped = ValidateValueForTypeImpl(mappedValue, named.valueType, descriptor, limits, depth + 1, activeTypes);
+                    mapped.HasError())
                     return mapped;
             }
             return Result<void>::Success();
@@ -349,25 +338,26 @@ namespace Horo::Extensions {
             const auto *named = FindType(descriptor, typeId);
             if (named == nullptr)
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script named type is not declared."));
-            if (std::find(activeTypes.begin(), activeTypes.end(), named->id) != activeTypes.end())
+            if (std::ranges::find(activeTypes, named->id) != activeTypes.end())
                 return Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script named type reference is cyclic."));
             activeTypes.emplace_back(named->id);
 
             Result<void> result = Result<void>::Success();
+            using enum ScriptExportNamedTypeKind;
             switch (named->kind) {
-                case ScriptExportNamedTypeKind::Enum:
+                case Enum:
                     result = ValidateNamedEnum(value, *named);
                     break;
-                case ScriptExportNamedTypeKind::Struct:
+                case Struct:
                     result = ValidateNamedStruct(value, *named, descriptor, limits, depth, activeTypes);
                     break;
-                case ScriptExportNamedTypeKind::Array:
+                case Array:
                     result = ValidateNamedArray(value, *named, descriptor, limits, depth, activeTypes);
                     break;
-                case ScriptExportNamedTypeKind::Map:
+                case Map:
                     result = ValidateNamedMap(value, *named, descriptor, limits, depth, activeTypes);
                     break;
-                case ScriptExportNamedTypeKind::Count:
+                case Count:
                     result = Result<void>::Failure(MakeBoundaryError(ScriptValueInvalid, "Script named type kind is invalid."));
                     break;
             }
@@ -443,12 +433,10 @@ namespace Horo::Extensions {
                     MakeBoundaryError(ScriptCallResultInvalid, "A failed script result cannot carry success values."));
             return ValidateErrorImpl(*result.error, context);
         }
-        auto count = AddElements(context, result.values.size());
-        if (count.HasError())
+        if (auto count = AddElements(context, result.values.size()); count.HasError())
             return count;
         for (const auto &value : result.values) {
-            auto valid = ValidateValueImpl(value, context, 0);
-            if (valid.HasError())
+            if (auto valid = ValidateValueImpl(value, context, 0); valid.HasError())
                 return valid;
         }
         return Result<void>::Success();
@@ -457,8 +445,7 @@ namespace Horo::Extensions {
     /** @copydoc ValidateScriptValueForType */
     Result<void> ValidateScriptValueForType(const ScriptValue &value, const ScriptExportTypeReference &type,
                                             const ScriptExportDescriptor &descriptor, const ScriptValueLimits &limits) {
-        auto structural = ValidateScriptValue(value, limits);
-        if (structural.HasError())
+        if (auto structural = ValidateScriptValue(value, limits); structural.HasError())
             return structural;
         std::vector<std::string> activeTypes;
         return ValidateValueForTypeImpl(value, type, descriptor, limits, 0, activeTypes);
@@ -475,8 +462,8 @@ namespace Horo::Extensions {
                     return TypeMismatch<void>("Script call is missing a required argument.");
                 continue;
             }
-            auto valid = ValidateScriptValueForType(arguments[index], function.parameters[index].type, descriptor, limits);
-            if (valid.HasError())
+            if (auto valid = ValidateScriptValueForType(arguments[index], function.parameters[index].type, descriptor, limits);
+                valid.HasError())
                 return valid;
         }
         return Result<void>::Success();
@@ -485,16 +472,15 @@ namespace Horo::Extensions {
     /** @copydoc ValidateScriptResult */
     Result<void> ValidateScriptResult(const ScriptExportFunctionDescriptor &function, const ScriptCallResult &result,
                                       const ScriptExportDescriptor &descriptor, const ScriptValueLimits &limits) {
-        auto structural = ValidateScriptCallResult(result, limits);
-        if (structural.HasError())
+        if (auto structural = ValidateScriptCallResult(result, limits); structural.HasError())
             return structural;
         if (result.IsFailure())
             return Result<void>::Success();
         if (result.values.size() != function.results.size())
             return TypeMismatch<void>("Script call result count does not match the declaration.");
         for (std::size_t index = 0; index < result.values.size(); ++index) {
-            auto valid = ValidateScriptValueForType(result.values[index], function.results[index].type, descriptor, limits);
-            if (valid.HasError())
+            if (auto valid = ValidateScriptValueForType(result.values[index], function.results[index].type, descriptor, limits);
+                valid.HasError())
                 return valid;
         }
         return Result<void>::Success();
@@ -514,8 +500,7 @@ namespace Horo::Extensions {
                 return CapacityExceeded<ScriptError>("Script error cause bound was exceeded.");
             result.details.push_back({.id = "cause." + cause->domain.Value(), .value = ScriptValue::String(cause->code.Value())});
         }
-        auto valid = ValidateScriptError(result, limits);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptError(result, limits); valid.HasError())
             return Result<ScriptError>::Failure(valid.ErrorValue());
         return Result<ScriptError>::Success(std::move(result));
     }

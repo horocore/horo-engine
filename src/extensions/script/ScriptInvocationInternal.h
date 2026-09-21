@@ -19,17 +19,22 @@
 namespace Horo::Extensions {
     struct ScriptInvocationProviderState final {
         std::weak_ptr<ScriptInvocationRegistryState> registry;
-        mutable std::mutex mutex;
         std::uint64_t generation{};
         std::size_t maximumInvocations{};
         bool active{true};
         CancellationSource cancellation;
         std::unordered_map<std::uint64_t, std::weak_ptr<ScriptInvocationState>> invocations;
+
+        [[nodiscard]] std::mutex &Mutex() const noexcept {
+            return mutex;
+        }
+
+    private:
+        mutable std::mutex mutex;
     };
 
     struct ScriptInvocationContextState final {
         std::weak_ptr<ScriptInvocationRegistryState> registry;
-        mutable std::mutex mutex;
         ScriptContextId id;
         std::thread::id ownerThread;
         std::size_t maximumInvocations{};
@@ -46,9 +51,16 @@ namespace Horo::Extensions {
         std::uint64_t nextHandleGeneration{1};
         std::vector<ScriptHandle> handles;
 
+        [[nodiscard]] std::mutex &Mutex() const noexcept {
+            return mutex;
+        }
+
         ScriptInvocationContextState(std::weak_ptr<ScriptInvocationRegistryState> registryIn, ScriptContextId context,
-                                     ScriptInvocationContextDescriptor descriptor, std::thread::id owner, std::size_t maximumQueued,
+                                     const ScriptInvocationContextDescriptor &descriptor, std::thread::id owner, std::size_t maximumQueued,
                                      std::size_t maximumProgress, ScriptValueLimits valueLimitsIn);
+
+    private:
+        mutable std::mutex mutex;
     };
 
     struct ScriptInvocationExecutionContext final {
@@ -91,13 +103,19 @@ namespace Horo::Extensions {
     struct ScriptInvocationRegistryState final {
         explicit ScriptInvocationRegistryState(ScriptInvocationRegistryLimits limitsIn) : limits(std::move(limitsIn)) {}
 
-        mutable std::mutex mutex;
         ScriptInvocationRegistryLimits limits;
         bool shutdown{};
         std::uint64_t nextInvocation{1};
         std::unordered_map<std::uint64_t, std::shared_ptr<ScriptInvocationProviderState>> providers;
         std::unordered_map<std::uint64_t, std::shared_ptr<ScriptInvocationContextState>> contexts;
         std::atomic<std::size_t> activeInvocations{};
+
+        [[nodiscard]] std::mutex &Mutex() const noexcept {
+            return mutex;
+        }
+
+    private:
+        mutable std::mutex mutex;
     };
 
     namespace Detail {
@@ -114,7 +132,7 @@ namespace Horo::Extensions {
                                         const std::shared_ptr<ScriptInvocationRegistryState> &registry) noexcept;
         [[nodiscard]] std::uint64_t AllocateScriptContextId() noexcept;
 
-        extern thread_local std::uint64_t ActiveDrainContext;
+        [[nodiscard]] std::uint64_t &ActiveDrainContext() noexcept;
 
         [[nodiscard]] ScriptInvocationCancellationReason PendingCancellationLocked(const ScriptInvocationState &state) noexcept;
         [[nodiscard]] bool HasUnreservedEventSlot(const ScriptInvocationContextState &context) noexcept;

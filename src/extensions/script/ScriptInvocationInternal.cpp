@@ -11,7 +11,7 @@
 
 namespace Horo::Extensions {
     ScriptInvocationContextState::ScriptInvocationContextState(std::weak_ptr<ScriptInvocationRegistryState> registryIn,
-                                                               ScriptContextId context, ScriptInvocationContextDescriptor descriptor,
+                                                               ScriptContextId context, const ScriptInvocationContextDescriptor &descriptor,
                                                                std::thread::id owner, std::size_t maximumQueued,
                                                                std::size_t maximumProgress, ScriptValueLimits valueLimitsIn)
         : registry(std::move(registryIn)), id(context), ownerThread(owner), maximumInvocations(descriptor.maximumInvocations),
@@ -29,8 +29,10 @@ namespace Horo::Extensions {
     namespace Detail {
         using namespace ExtensionErrors;
 
-        std::atomic<std::uint64_t> NextScriptContextId{1};
-        thread_local std::uint64_t ActiveDrainContext{};
+        std::uint64_t &ActiveDrainContext() noexcept {
+            thread_local std::uint64_t active{};
+            return active;
+        }
 
         ScriptError InvocationScriptError(const ErrorCodeDescriptor &descriptor, std::string message, bool cancelled) {
             return ScriptError{
@@ -53,27 +55,29 @@ namespace Horo::Extensions {
         }
 
         std::uint64_t AllocateScriptContextId() noexcept {
-            auto current = NextScriptContextId.load(std::memory_order_relaxed);
+            static std::atomic<std::uint64_t> nextScriptContextId{1};
+            auto current = nextScriptContextId.load();
             while (current != 0) {
                 const auto next = current == std::numeric_limits<std::uint64_t>::max() ? 0 : current + 1;
-                if (NextScriptContextId.compare_exchange_weak(current, next, std::memory_order_relaxed))
+                if (nextScriptContextId.compare_exchange_weak(current, next))
                     return current;
             }
             return 0;
         }
 
         ScriptInvocationCancellationReason PendingCancellationLocked(const ScriptInvocationState &state) noexcept {
+            using enum ScriptInvocationCancellationReason;
             if (!state.context->active)
-                return ScriptInvocationCancellationReason::Context;
+                return Context;
             if (!state.provider->active)
-                return ScriptInvocationCancellationReason::Provider;
+                return Provider;
             if (state.context->cancellation.Token().IsCancellationRequested())
-                return ScriptInvocationCancellationReason::Context;
+                return Context;
             if (state.callerRequested || state.callerCancellation.Token().IsCancellationRequested())
-                return ScriptInvocationCancellationReason::Caller;
+                return Caller;
             if (state.hasDeadline && std::chrono::steady_clock::now() >= state.deadline)
-                return ScriptInvocationCancellationReason::Timeout;
-            return ScriptInvocationCancellationReason::None;
+                return Timeout;
+            return None;
         }
 
         bool HasUnreservedEventSlot(const ScriptInvocationContextState &context) noexcept {
@@ -83,18 +87,19 @@ namespace Horo::Extensions {
         }
 
         ScriptError CancellationError(ScriptInvocationCancellationReason reason) {
+            using enum ScriptInvocationCancellationReason;
             switch (reason) {
-                case ScriptInvocationCancellationReason::Caller:
+                case Caller:
                     return InvocationScriptError(ScriptInvocationCancelled, {}, true);
-                case ScriptInvocationCancellationReason::Context:
+                case Context:
                     return InvocationScriptError(ScriptInvocationContextRevoked, {}, true);
-                case ScriptInvocationCancellationReason::Provider:
+                case Provider:
                     return InvocationScriptError(ScriptInvocationProviderRevoked, {}, true);
-                case ScriptInvocationCancellationReason::Timeout:
+                case Timeout:
                     return InvocationScriptError(ScriptInvocationTimeout, {}, true);
-                case ScriptInvocationCancellationReason::Shutdown:
+                case Shutdown:
                     return InvocationScriptError(ScriptInvocationShutdown, {}, true);
-                case ScriptInvocationCancellationReason::None:
+                case None:
                     break;
             }
             return InvocationScriptError(ScriptInvocationCancelled, {}, true);
@@ -125,8 +130,7 @@ namespace Horo::Extensions {
                 state.terminalSlotReserved = false;
             }
 
-            const bool deliver = context.active && context.events.size() < context.maximumQueuedEvents;
-            if (deliver) {
+            if (const bool deliver = context.active && context.events.size() < context.maximumQueuedEvents; deliver) {
                 context.events.push_back(ScriptInvocationEvent{
                     .kind = ScriptInvocationEventKind::Completed,
                     .invocation = state.id,
@@ -148,7 +152,7 @@ namespace Horo::Extensions {
             if (reason == ScriptInvocationCancellationReason::None)
                 return;
             state->callerCancellation.RequestCancellation();
-            std::scoped_lock lock(state->provider->mutex, state->context->mutex);
+            std::scoped_lock lock(state->provider->Mutex(), state->context->Mutex());
             if (state->terminalResult.has_value())
                 return;
             ApplyTerminalLocked(*state, ScriptInvocationStateKind::Cancelled, ScriptCallResult::Failure(CancellationError(reason)), reason);
@@ -157,7 +161,7 @@ namespace Horo::Extensions {
         ScriptInvocationCancellationReason ObserveAndMaybeCancel(const std::shared_ptr<ScriptInvocationState> &state) {
             ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
             {
-                std::scoped_lock lock(state->provider->mutex, state->context->mutex);
+                std::scoped_lock lock(state->provider->Mutex(), state->context->Mutex());
                 if (!state->terminalResult.has_value())
                     reason = PendingCancellationLocked(*state);
             }
@@ -203,12 +207,11 @@ namespace Horo::Extensions {
                                                                        ScriptExportInvocationMode invocationMode) {
             std::shared_ptr<ScriptInvocationState> invocation;
             {
-                std::lock_guard registryLock(registry->mutex);
+                std::scoped_lock lock(registry->Mutex(), provider->Mutex(), context->Mutex());
                 if (registry->shutdown)
                     return InvocationFailure<std::shared_ptr<ScriptInvocationState>>(ScriptInvocationShutdown);
                 if (registry->activeInvocations.load() >= registry->limits.maximumInvocations)
                     return InvocationFailure<std::shared_ptr<ScriptInvocationState>>(ScriptInvocationCapacityExceeded);
-                std::scoped_lock lock(provider->mutex, context->mutex);
                 if (!provider->active || !context->active)
                     return InvocationFailure<std::shared_ptr<ScriptInvocationState>>(ScriptInvocationUnavailable);
                 if (context->invocations.size() >= context->maximumInvocations ||
@@ -238,8 +241,8 @@ namespace Horo::Extensions {
                     .valueLimits = registry->limits.value,
                 };
                 invocation = std::make_shared<ScriptInvocationState>(std::move(execution));
-                context->invocations.emplace(id.value, invocation);
-                provider->invocations.emplace(id.value, invocation);
+                context->invocations.try_emplace(id.value, invocation);
+                provider->invocations.try_emplace(id.value, invocation);
                 ++context->reservedTerminalSlots;
                 registry->activeInvocations.fetch_add(1);
             }
@@ -283,12 +286,11 @@ namespace Horo::Extensions {
         void RevokeHandlesForProvider(const std::vector<std::shared_ptr<ScriptInvocationContextState>> &contexts,
                                       std::uint64_t generation) noexcept {
             for (const auto &context : contexts) {
-                std::lock_guard lock(context->mutex);
-                context->handles.erase(std::remove_if(context->handles.begin(), context->handles.end(),
-                                                      [generation](const ScriptHandle &handle) {
+                std::lock_guard lock(context->Mutex());
+                const auto removed = std::ranges::remove_if(context->handles, [generation](const ScriptHandle &handle) {
                     return handle.providerGeneration == generation;
-                }),
-                                       context->handles.end());
+                });
+                context->handles.erase(removed.begin(), removed.end());
             }
         }
     }  // namespace Detail

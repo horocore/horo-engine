@@ -192,7 +192,7 @@ namespace Horo::Extensions {
         ScriptInvocationProviderRegistration &operator=(ScriptInvocationProviderRegistration &&other) noexcept;
 
         /** @brief Revokes new admission and terminalizes active invocations without invoking provider code. */
-        void Reset() noexcept;
+        void Reset() const noexcept;
         /** @brief Reports whether this generation is still admitted. @return True while registered. */
         [[nodiscard]] bool IsRegistered() const noexcept;
         /** @brief Returns the immutable generation identity. @return Zero for moved-from registration. */
@@ -217,7 +217,7 @@ namespace Horo::Extensions {
         ScriptInvocationContextRegistration &operator=(ScriptInvocationContextRegistration &&other) noexcept;
 
         /** @brief Revokes delivery first, cancels active work, and invalidates all context handles. */
-        void Reset() noexcept;
+        void Reset() const noexcept;
         /** @brief Reports whether the context still admits calls and completion delivery. @return True while registered. */
         [[nodiscard]] bool IsRegistered() const noexcept;
         /** @brief Returns the immutable context identity. @return Invalid identity for moved-from registration. */
@@ -309,14 +309,14 @@ namespace Horo::Extensions {
          * @param descriptor Non-zero generation and finite concurrent-call bound.
          * @return Move-only registration or a typed invalid, duplicate, capacity, or shutdown error.
          */
-        [[nodiscard]] Result<ScriptInvocationProviderRegistration> RegisterProvider(ScriptInvocationProviderDescriptor descriptor);
+        [[nodiscard]] Result<ScriptInvocationProviderRegistration> RegisterProvider(ScriptInvocationProviderDescriptor descriptor) const;
 
         /**
          * @brief Registers a context on the calling thread, which becomes its completion owner.
          * @param descriptor Parent cancellation and finite context bounds.
          * @return Move-only context registration or a typed invalid, capacity, or shutdown error.
          */
-        [[nodiscard]] Result<ScriptInvocationContextRegistration> RegisterContext(ScriptInvocationContextDescriptor descriptor = {});
+        [[nodiscard]] Result<ScriptInvocationContextRegistration> RegisterContext(ScriptInvocationContextDescriptor descriptor = {}) const;
 
         /**
          * @brief Validates and admits one copied call against an exact descriptor generation.
@@ -327,7 +327,7 @@ namespace Horo::Extensions {
          */
         [[nodiscard]] Result<ScriptInvocationController> Begin(const ScriptInvocationContextRegistration &context,
                                                                const ScriptInvocationProviderRegistration &provider,
-                                                               ScriptInvocationRequest request);
+                                                               ScriptInvocationRequest request) const;
 
         /**
          * @brief Drains bounded progress and terminal events on the context owner safe point.
@@ -336,7 +336,7 @@ namespace Horo::Extensions {
          * @return Owned events or a typed invalid/wrong-thread/revoked failure.
          */
         [[nodiscard]] Result<std::vector<ScriptInvocationEvent>> Drain(const ScriptInvocationContextRegistration &context,
-                                                                       std::size_t maximumEvents = 64);
+                                                                       std::size_t maximumEvents = 64) const;
 
         /**
          * @brief Issues one generation-safe opaque handle for a live context/provider pair.
@@ -346,14 +346,14 @@ namespace Horo::Extensions {
          * @return Opaque identifier or a typed invalid, revoked, capacity, or shutdown failure.
          */
         [[nodiscard]] Result<ScriptHandle> IssueHandle(const ScriptInvocationContextRegistration &context,
-                                                       const ScriptInvocationProviderRegistration &provider, std::string type);
+                                                       const ScriptInvocationProviderRegistration &provider, std::string type) const;
 
         /**
          * @brief Releases one exact live opaque handle from its owning context.
          * @param handle Handle identity copied from the runtime adapter.
          * @return Success or a typed malformed, stale, or revoked failure.
          */
-        [[nodiscard]] Result<void> ReleaseHandle(const ScriptHandle &handle);
+        [[nodiscard]] Result<void> ReleaseHandle(const ScriptHandle &handle) const;
 
         /**
          * @brief Validates that an opaque handle still belongs to a live context/provider generation.
@@ -363,7 +363,7 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> ValidateHandle(const ScriptHandle &handle) const;
 
         /** @brief Closes admission and revokes every provider/context without invoking external code. */
-        void BeginShutdown() noexcept;
+        void BeginShutdown() const noexcept;
         /** @brief Reports whether registration and invocation admission are closed. */
         [[nodiscard]] bool IsShutdown() const noexcept;
 

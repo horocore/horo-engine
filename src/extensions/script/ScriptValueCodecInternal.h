@@ -12,8 +12,6 @@
 #include <vector>
 
 namespace Horo::Extensions::Detail {
-    using namespace ExtensionErrors;
-
     inline constexpr std::uint8_t ValueMagic0 = 0x53;
     inline constexpr std::uint8_t ValueMagic1 = 0x56;
     inline constexpr std::uint8_t ValueCodecVersion = 1;
@@ -26,11 +24,11 @@ namespace Horo::Extensions::Detail {
     }
 
     template <typename T> [[nodiscard]] inline Result<T> CapacityExceeded(std::string message) {
-        return Result<T>::Failure(MakeBoundaryError(ScriptValueCapacityExceeded, std::move(message)));
+        return Result<T>::Failure(MakeBoundaryError(ExtensionErrors::ScriptValueCapacityExceeded, std::move(message)));
     }
 
     template <typename T> [[nodiscard]] inline Result<T> InvalidEncoding(std::string message) {
-        return Result<T>::Failure(MakeBoundaryError(ScriptValueEncodingInvalid, std::move(message)));
+        return Result<T>::Failure(MakeBoundaryError(ExtensionErrors::ScriptValueEncodingInvalid, std::move(message)));
     }
 
     [[nodiscard]] inline bool IsScalarMapKey(ScriptValue::Kind kind) noexcept {
@@ -89,7 +87,7 @@ namespace Horo::Extensions::Detail {
         [[nodiscard]] bool ReadBytes(ScriptValue::Bytes &value);
         [[nodiscard]] bool AddElements(std::size_t count) noexcept;
         [[nodiscard]] Result<ScriptValue> DecodeValue(std::size_t depth);
-        [[nodiscard]] Result<ScriptValue> DecodeNullOrBoolean(std::uint8_t tag);
+        [[nodiscard]] Result<ScriptValue> DecodeNullOrBoolean(std::uint8_t tag) const;
         [[nodiscard]] Result<ScriptValue> DecodeInteger(bool signedInteger);
         [[nodiscard]] Result<ScriptValue> DecodeNumber();
         [[nodiscard]] Result<ScriptValue> DecodeStringValue();

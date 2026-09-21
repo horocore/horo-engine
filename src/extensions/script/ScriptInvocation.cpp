@@ -19,7 +19,7 @@ namespace Horo::Extensions {
 
         ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
         {
-            std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+            std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
             if (state_->terminalResult.has_value())
                 return Result<ScriptInvocationProgressDisposition>::Success(ScriptInvocationProgressDisposition::AlreadyTerminal);
             reason = PendingCancellationLocked(*state_);
@@ -56,7 +56,7 @@ namespace Horo::Extensions {
         if (state_ == nullptr)
             return InvocationFailure<ScriptInvocationCancellationObservation>(ScriptInvocationInvalid, "Moved-from invocation controller.");
         const auto reason = ObserveAndMaybeCancel(state_);
-        std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+        std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
         if (reason != ScriptInvocationCancellationReason::None || state_->state == ScriptInvocationStateKind::Cancelled)
             return Result<ScriptInvocationCancellationObservation>::Success(ScriptInvocationCancellationObservation::Cancelled);
         if (state_->terminalResult.has_value())
@@ -76,7 +76,7 @@ namespace Horo::Extensions {
             return Result<ScriptInvocationTransitionResult>::Failure(valid.ErrorValue());
         ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
         {
-            std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+            std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
             if (state_->terminalResult.has_value())
                 return Result<ScriptInvocationTransitionResult>::Success(ScriptInvocationTransitionResult::AlreadyTerminal);
             reason = PendingCancellationLocked(*state_);
@@ -100,7 +100,7 @@ namespace Horo::Extensions {
         const bool errorCancelled = error.cancelled;
         ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
         {
-            std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+            std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
             if (state_->terminalResult.has_value())
                 return Result<ScriptInvocationTransitionResult>::Success(ScriptInvocationTransitionResult::AlreadyTerminal);
             reason = PendingCancellationLocked(*state_);
@@ -130,7 +130,7 @@ namespace Horo::Extensions {
             return;
         (void)ObserveAndMaybeCancel(state_);
         {
-            std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+            std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
             if (!state_->terminalResult.has_value())
                 ApplyTerminalLocked(*state_, ScriptInvocationStateKind::Failed,
                                     ScriptCallResult::Failure(InvocationScriptError(ScriptInvocationAbandoned)),
@@ -157,13 +157,14 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ScriptInvocationRegistry::RegisterProvider */
-    Result<ScriptInvocationProviderRegistration> ScriptInvocationRegistry::RegisterProvider(ScriptInvocationProviderDescriptor descriptor) {
+    Result<ScriptInvocationProviderRegistration> ScriptInvocationRegistry::RegisterProvider(
+        ScriptInvocationProviderDescriptor descriptor) const {
         if (descriptor.generation == 0)
             return InvocationFailure<ScriptInvocationProviderRegistration>(ScriptInvocationInvalid,
                                                                            "Script provider generation is invalid.");
         if (state_ == nullptr)
             return InvocationFailure<ScriptInvocationProviderRegistration>(ScriptInvocationShutdown);
-        std::lock_guard lock(state_->mutex);
+        std::lock_guard lock(state_->Mutex());
         if (state_->shutdown)
             return InvocationFailure<ScriptInvocationProviderRegistration>(ScriptInvocationShutdown);
         if (state_->providers.contains(descriptor.generation))
@@ -180,10 +181,11 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ScriptInvocationRegistry::RegisterContext */
-    Result<ScriptInvocationContextRegistration> ScriptInvocationRegistry::RegisterContext(ScriptInvocationContextDescriptor descriptor) {
+    Result<ScriptInvocationContextRegistration> ScriptInvocationRegistry::RegisterContext(
+        ScriptInvocationContextDescriptor descriptor) const {
         if (state_ == nullptr)
             return InvocationFailure<ScriptInvocationContextRegistration>(ScriptInvocationShutdown);
-        std::lock_guard lock(state_->mutex);
+        std::lock_guard lock(state_->Mutex());
         if (state_->shutdown)
             return InvocationFailure<ScriptInvocationContextRegistration>(ScriptInvocationShutdown);
         if (state_->contexts.size() >= state_->limits.maximumContexts)
@@ -199,7 +201,7 @@ namespace Horo::Extensions {
         descriptor.maximumInvocations = NormalizeBound(descriptor.maximumInvocations, state_->limits.maximumInvocations);
         descriptor.maximumHandles = NormalizeBound(descriptor.maximumHandles, state_->limits.maximumHandlesPerContext);
         auto context =
-            std::make_shared<ScriptInvocationContextState>(state_, id, std::move(descriptor), std::this_thread::get_id(),
+            std::make_shared<ScriptInvocationContextState>(state_, id, descriptor, std::this_thread::get_id(),
                                                            state_->limits.maximumQueuedEvents,
                                                            state_->limits.maximumProgressEventsPerInvocation, state_->limits.value);
         state_->contexts.emplace(id.value, context);
@@ -209,7 +211,7 @@ namespace Horo::Extensions {
     /** @copydoc ScriptInvocationRegistry::Begin */
     Result<ScriptInvocationController> ScriptInvocationRegistry::Begin(const ScriptInvocationContextRegistration &contextRegistration,
                                                                        const ScriptInvocationProviderRegistration &providerRegistration,
-                                                                       ScriptInvocationRequest request) {
+                                                                       ScriptInvocationRequest request) const {
         if (state_ == nullptr)
             return InvocationFailure<ScriptInvocationController>(ScriptInvocationShutdown);
         const auto context = contextRegistration.context_;
@@ -218,10 +220,10 @@ namespace Horo::Extensions {
             !SameRegistry(provider->registry, state_))
             return InvocationFailure<ScriptInvocationController>(ScriptInvocationUnavailable,
                                                                  "Script context or provider belongs to another registry.");
-        if (ActiveDrainContext == context->id.value)
+        if (ActiveDrainContext() == context->id.value)
             return InvocationFailure<ScriptInvocationController>(ScriptInvocationReentrant);
         {
-            std::lock_guard contextLock(context->mutex);
+            std::lock_guard contextLock(context->Mutex());
             if (context->ownerThread != std::this_thread::get_id())
                 return InvocationFailure<ScriptInvocationController>(ScriptInvocationThreadViolation);
             if (!context->active)
@@ -230,7 +232,7 @@ namespace Horo::Extensions {
                 return InvocationFailure<ScriptInvocationController>(ScriptInvocationCancelled);
         }
         {
-            std::lock_guard providerLock(provider->mutex);
+            std::lock_guard providerLock(provider->Mutex());
             if (!provider->active)
                 return InvocationFailure<ScriptInvocationController>(ScriptInvocationProviderRevoked);
         }
@@ -255,32 +257,38 @@ namespace Horo::Extensions {
 
     /** @copydoc ScriptInvocationRegistry::Drain */
     Result<std::vector<ScriptInvocationEvent>> ScriptInvocationRegistry::Drain(
-        const ScriptInvocationContextRegistration &contextRegistration, std::size_t maximumEvents) {
+        const ScriptInvocationContextRegistration &contextRegistration, std::size_t maximumEvents) const {
         if (state_ == nullptr)
             return InvocationFailure<std::vector<ScriptInvocationEvent>>(ScriptInvocationShutdown);
         const auto context = contextRegistration.context_;
         if (context == nullptr || !SameRegistry(context->registry, state_))
             return InvocationFailure<std::vector<ScriptInvocationEvent>>(ScriptInvocationUnavailable);
         {
-            std::lock_guard lock(context->mutex);
+            std::lock_guard lock(context->Mutex());
             if (context->ownerThread != std::this_thread::get_id())
                 return InvocationFailure<std::vector<ScriptInvocationEvent>>(ScriptInvocationThreadViolation);
             if (!context->active)
                 return InvocationFailure<std::vector<ScriptInvocationEvent>>(ScriptInvocationContextRevoked);
-            if (ActiveDrainContext == context->id.value)
+            if (ActiveDrainContext() == context->id.value)
                 return InvocationFailure<std::vector<ScriptInvocationEvent>>(ScriptInvocationReentrant);
         }
-        ActiveDrainContext = context->id.value;
+        ActiveDrainContext() = context->id.value;
 
         struct DrainReset final {
+            DrainReset() = default;
+            DrainReset(const DrainReset &) = delete;
+            DrainReset &operator=(const DrainReset &) = delete;
+
             ~DrainReset() {
-                ActiveDrainContext = 0;
+                ActiveDrainContext() = 0;
             }
-        } reset;
+        };
+
+        DrainReset reset;
 
         std::vector<std::shared_ptr<ScriptInvocationState>> active;
         {
-            std::lock_guard lock(context->mutex);
+            std::lock_guard lock(context->Mutex());
             active.reserve(context->invocations.size());
             for (const auto &[id, invocation] : context->invocations)
                 active.push_back(invocation);
@@ -290,7 +298,7 @@ namespace Horo::Extensions {
 
         std::vector<ScriptInvocationEvent> events;
         {
-            std::lock_guard lock(context->mutex);
+            std::lock_guard lock(context->Mutex());
             const auto count = std::min(maximumEvents, context->events.size());
             events.reserve(count);
             for (std::size_t index = 0; index < count; ++index) {
@@ -304,7 +312,7 @@ namespace Horo::Extensions {
     /** @copydoc ScriptInvocationRegistry::IssueHandle */
     Result<ScriptHandle> ScriptInvocationRegistry::IssueHandle(const ScriptInvocationContextRegistration &contextRegistration,
                                                                const ScriptInvocationProviderRegistration &providerRegistration,
-                                                               std::string type) {
+                                                               std::string type) const {
         if (state_ == nullptr)
             return InvocationFailure<ScriptHandle>(ScriptInvocationShutdown);
         const auto context = contextRegistration.context_;
@@ -316,7 +324,7 @@ namespace Horo::Extensions {
             return InvocationFailure<ScriptHandle>(ScriptHandleInvalid, "Script handle type identity is malformed.");
         if (context->ownerThread != std::this_thread::get_id())
             return InvocationFailure<ScriptHandle>(ScriptInvocationThreadViolation);
-        std::scoped_lock lock(provider->mutex, context->mutex);
+        std::scoped_lock lock(provider->Mutex(), context->Mutex());
         if (!provider->active)
             return InvocationFailure<ScriptHandle>(ScriptHandleRevoked);
         if (!context->active)
@@ -337,7 +345,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ScriptInvocationRegistry::ReleaseHandle */
-    Result<void> ScriptInvocationRegistry::ReleaseHandle(const ScriptHandle &handle) {
+    Result<void> ScriptInvocationRegistry::ReleaseHandle(const ScriptHandle &handle) const {
         if (state_ == nullptr)
             return InvocationFailure<void>(ScriptInvocationShutdown);
         if (!handle.IsValid())
@@ -345,7 +353,7 @@ namespace Horo::Extensions {
         std::shared_ptr<ScriptInvocationContextState> context;
         std::shared_ptr<ScriptInvocationProviderState> provider;
         {
-            std::lock_guard lock(state_->mutex);
+            std::lock_guard lock(state_->Mutex());
             const auto contextFound = state_->contexts.find(handle.context.value);
             const auto providerFound = state_->providers.find(handle.providerGeneration);
             if (contextFound == state_->contexts.end() || providerFound == state_->providers.end())
@@ -353,7 +361,7 @@ namespace Horo::Extensions {
             context = contextFound->second;
             provider = providerFound->second;
         }
-        std::scoped_lock lock(provider->mutex, context->mutex);
+        std::scoped_lock lock(provider->Mutex(), context->Mutex());
         if (!provider->active || !context->active)
             return InvocationFailure<void>(ScriptHandleRevoked);
         const auto found = std::find(context->handles.begin(), context->handles.end(), handle);
@@ -372,7 +380,7 @@ namespace Horo::Extensions {
         std::shared_ptr<ScriptInvocationContextState> context;
         std::shared_ptr<ScriptInvocationProviderState> provider;
         {
-            std::lock_guard lock(state_->mutex);
+            std::lock_guard lock(state_->Mutex());
             const auto contextFound = state_->contexts.find(handle.context.value);
             const auto providerFound = state_->providers.find(handle.providerGeneration);
             if (contextFound == state_->contexts.end() || providerFound == state_->providers.end())
@@ -380,7 +388,7 @@ namespace Horo::Extensions {
             context = contextFound->second;
             provider = providerFound->second;
         }
-        std::scoped_lock lock(provider->mutex, context->mutex);
+        std::scoped_lock lock(provider->Mutex(), context->Mutex());
         if (!provider->active || !context->active)
             return InvocationFailure<void>(ScriptHandleRevoked);
         return std::find(context->handles.begin(), context->handles.end(), handle) == context->handles.end()
@@ -395,7 +403,7 @@ namespace Horo::Extensions {
             return;
         std::vector<std::shared_ptr<ScriptInvocationState>> active;
         {
-            std::lock_guard lock(provider->mutex);
+            std::lock_guard lock(provider->Mutex());
             if (!provider->active)
                 return;
             provider->active = false;
@@ -410,7 +418,7 @@ namespace Horo::Extensions {
 
         std::vector<std::shared_ptr<ScriptInvocationContextState>> contexts;
         {
-            std::lock_guard lock(registry->mutex);
+            std::lock_guard lock(registry->Mutex());
             for (const auto &[id, context] : registry->contexts)
                 contexts.push_back(context);
             const auto found = registry->providers.find(provider->generation);
@@ -427,7 +435,7 @@ namespace Horo::Extensions {
             return;
         std::vector<std::shared_ptr<ScriptInvocationState>> active;
         {
-            std::lock_guard lock(context->mutex);
+            std::lock_guard lock(context->Mutex());
             if (!context->active)
                 return;
             context->active = false;
@@ -440,7 +448,7 @@ namespace Horo::Extensions {
         for (const auto &invocation : active)
             ApplyCancellation(invocation, reason);
         {
-            std::lock_guard lock(registry->mutex);
+            std::lock_guard lock(registry->Mutex());
             const auto found = registry->contexts.find(context->id.value);
             if (found != registry->contexts.end() && found->second.get() == context.get())
                 registry->contexts.erase(found);
@@ -448,13 +456,13 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ScriptInvocationRegistry::BeginShutdown */
-    void ScriptInvocationRegistry::BeginShutdown() noexcept {
+    void ScriptInvocationRegistry::BeginShutdown() const noexcept {
         if (state_ == nullptr)
             return;
         std::vector<std::shared_ptr<ScriptInvocationProviderState>> providers;
         std::vector<std::shared_ptr<ScriptInvocationContextState>> contexts;
         {
-            std::lock_guard lock(state_->mutex);
+            std::lock_guard lock(state_->Mutex());
             if (state_->shutdown)
                 return;
             state_->shutdown = true;
@@ -467,7 +475,7 @@ namespace Horo::Extensions {
             ResetProviderState(state_, provider, ScriptInvocationCancellationReason::Shutdown);
         for (const auto &context : contexts)
             ResetContextState(state_, context, ScriptInvocationCancellationReason::Shutdown);
-        std::lock_guard lock(state_->mutex);
+        std::lock_guard lock(state_->Mutex());
         state_->providers.clear();
         state_->contexts.clear();
     }
@@ -476,7 +484,7 @@ namespace Horo::Extensions {
     bool ScriptInvocationRegistry::IsShutdown() const noexcept {
         if (state_ == nullptr)
             return true;
-        std::lock_guard lock(state_->mutex);
+        std::lock_guard lock(state_->Mutex());
         return state_->shutdown;
     }
 }  // namespace Horo::Extensions

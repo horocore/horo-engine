@@ -89,7 +89,10 @@ namespace Horo::Extensions::Detail {
         std::size_t length{};
         if (!ReadLength(encodedLength, limits.maximumStringBytes, length) || !CanRead(length))
             return false;
-        value.assign(reinterpret_cast<const char *>(input.data() + position), length);
+        value.clear();
+        value.reserve(length);
+        for (const auto byte : input.subspan(position, length))
+            value.push_back(static_cast<char>(std::to_integer<unsigned char>(byte)));
         position += length;
         if (length > limits.maximumBytes - std::min(rawBytes, limits.maximumBytes))
             return false;
@@ -123,11 +126,9 @@ namespace Horo::Extensions::Detail {
         const auto elements = value.AsArray();
         if (!AppendByte(10) || !AppendU64(elements.size()))
             return false;
-        for (const auto &element : elements) {
-            if (!EncodeValue(element))
-                return false;
-        }
-        return true;
+        return std::ranges::all_of(elements, [this](const ScriptValue &element) {
+            return EncodeValue(element);
+        });
     }
 
     [[nodiscard]] bool Encoder::EncodeMapValue(const ScriptValue &value) {
@@ -138,19 +139,19 @@ namespace Horo::Extensions::Detail {
 
         std::vector<EncodedEntry> encoded;
         encoded.reserve(value.AsMap().size());
-        for (const auto &entry : value.AsMap()) {
-            encoded.push_back({});
+        for (const auto &[key, mappedValue] : value.AsMap()) {
+            encoded.emplace_back();
             Encoder keyEncoder{encoded.back().key, limits, work};
-            if (!keyEncoder.EncodeValue(entry.first))
+            if (!keyEncoder.EncodeValue(key))
                 return false;
             work = keyEncoder.work;
             Encoder valueEncoder{encoded.back().value, limits, work};
-            if (!valueEncoder.EncodeValue(entry.second))
+            if (!valueEncoder.EncodeValue(mappedValue))
                 return false;
             work = valueEncoder.work;
         }
-        std::sort(encoded.begin(), encoded.end(), [](const EncodedEntry &left, const EncodedEntry &right) {
-            return std::lexicographical_compare(left.key.begin(), left.key.end(), right.key.begin(), right.key.end());
+        std::ranges::sort(encoded, [](const EncodedEntry &left, const EncodedEntry &right) {
+            return std::ranges::lexicographical_compare(left.key, right.key);
         });
         for (std::size_t index = 1; index < encoded.size(); ++index) {
             if (encoded[index - 1].key == encoded[index].key)
@@ -158,18 +159,16 @@ namespace Horo::Extensions::Detail {
         }
         if (!AppendByte(11) || !AppendU64(encoded.size()))
             return false;
-        for (const auto &entry : encoded) {
-            if (!AppendBytes(entry.key) || !AppendBytes(entry.value))
-                return false;
-        }
-        return true;
+        return std::ranges::all_of(encoded, [this](const EncodedEntry &entry) {
+            return AppendBytes(entry.key) && AppendBytes(entry.value);
+        });
     }
 
     [[nodiscard]] bool Encoder::EncodeStructValue(const ScriptValue &value) {
         std::vector<std::size_t> order(value.AsStruct().size());
         for (std::size_t index = 0; index < order.size(); ++index)
             order[index] = index;
-        std::sort(order.begin(), order.end(), [&value](std::size_t left, std::size_t right) {
+        std::ranges::sort(order, [&value](std::size_t left, std::size_t right) {
             return value.AsStruct()[left].first < value.AsStruct()[right].first;
         });
         for (std::size_t index = 1; index < order.size(); ++index) {
@@ -178,11 +177,9 @@ namespace Horo::Extensions::Detail {
         }
         if (!AppendByte(12) || !AppendString(value.StructType()) || !AppendU64(order.size()))
             return false;
-        for (const auto index : order) {
-            if (!AppendString(value.AsStruct()[index].first) || !EncodeValue(value.AsStruct()[index].second))
-                return false;
-        }
-        return true;
+        return std::ranges::all_of(order, [this, &value](const auto index) {
+            return AppendString(value.AsStruct()[index].first) && EncodeValue(value.AsStruct()[index].second);
+        });
     }
 
     [[nodiscard]] bool Encoder::EncodeValue(const ScriptValue &value) {
@@ -226,7 +223,7 @@ namespace Horo::Extensions::Detail {
         return false;
     }
 
-    [[nodiscard]] Result<ScriptValue> Decoder::DecodeNullOrBoolean(std::uint8_t tag) {
+    [[nodiscard]] Result<ScriptValue> Decoder::DecodeNullOrBoolean(std::uint8_t tag) const {
         if (tag == 0)
             return Result<ScriptValue>::Success(ScriptValue::Null());
         return Result<ScriptValue>::Success(ScriptValue{tag == 2});
@@ -245,7 +242,7 @@ namespace Horo::Extensions::Detail {
         std::uint64_t encoded{};
         if (!ReadU64(encoded))
             return InvalidEncoding<ScriptValue>("Script number payload is truncated.");
-        const double number = std::bit_cast<double>(encoded);
+        const auto number = std::bit_cast<double>(encoded);
         if (!std::isfinite(number))
             return InvalidEncoding<ScriptValue>("Script number payload is not finite.");
         return Result<ScriptValue>::Success(ScriptValue{number});
@@ -318,7 +315,7 @@ namespace Horo::Extensions::Detail {
             if (index > 0) {
                 const auto previous = input.subspan(previousKeyStart, previousKeyEnd - previousKeyStart);
                 const auto current = input.subspan(keyStart, keyEnd - keyStart);
-                if (!std::lexicographical_compare(previous.begin(), previous.end(), current.begin(), current.end()))
+                if (!std::ranges::lexicographical_compare(previous, current))
                     return InvalidEncoding<ScriptValue>("Script map keys are not in canonical order.");
             }
             auto mapped = DecodeValue(depth + 1);

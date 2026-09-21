@@ -16,8 +16,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ScriptInvocationSnapshot::IsTerminal */
     bool ScriptInvocationSnapshot::IsTerminal() const noexcept {
-        return state == ScriptInvocationStateKind::Completed || state == ScriptInvocationStateKind::Failed ||
-               state == ScriptInvocationStateKind::Cancelled;
+        using enum ScriptInvocationStateKind;
+        return state == Completed || state == Failed || state == Cancelled;
     }
 
     ScriptInvocationProviderRegistration::ScriptInvocationProviderRegistration(
@@ -45,13 +45,13 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ScriptInvocationProviderRegistration::Reset */
-    void ScriptInvocationProviderRegistration::Reset() noexcept {
+    void ScriptInvocationProviderRegistration::Reset() const noexcept {
         if (provider_ == nullptr)
             return;
         if (const auto registry = registry_.lock(); registry != nullptr) {
             ScriptInvocationRegistry::ResetProviderState(registry, provider_, ScriptInvocationCancellationReason::Provider);
         } else {
-            std::lock_guard lock(provider_->mutex);
+            std::lock_guard lock(provider_->Mutex());
             provider_->active = false;
             provider_->cancellation.RequestCancellation();
         }
@@ -61,7 +61,7 @@ namespace Horo::Extensions {
     bool ScriptInvocationProviderRegistration::IsRegistered() const noexcept {
         if (provider_ == nullptr)
             return false;
-        std::lock_guard lock(provider_->mutex);
+        std::lock_guard lock(provider_->Mutex());
         return provider_->active;
     }
 
@@ -95,13 +95,13 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ScriptInvocationContextRegistration::Reset */
-    void ScriptInvocationContextRegistration::Reset() noexcept {
+    void ScriptInvocationContextRegistration::Reset() const noexcept {
         if (context_ == nullptr)
             return;
         if (const auto registry = registry_.lock(); registry != nullptr) {
             ScriptInvocationRegistry::ResetContextState(registry, context_, ScriptInvocationCancellationReason::Context);
         } else {
-            std::lock_guard lock(context_->mutex);
+            std::lock_guard lock(context_->Mutex());
             context_->active = false;
             context_->cancellation.RequestCancellation();
             context_->events.clear();
@@ -113,7 +113,7 @@ namespace Horo::Extensions {
     bool ScriptInvocationContextRegistration::IsRegistered() const noexcept {
         if (context_ == nullptr)
             return false;
-        std::lock_guard lock(context_->mutex);
+        std::lock_guard lock(context_->Mutex());
         return context_->active;
     }
 
@@ -139,7 +139,7 @@ namespace Horo::Extensions {
         if (state_ == nullptr)
             return std::nullopt;
         (void)ObserveAndMaybeCancel(state_);
-        std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+        std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
         return SnapshotLocked(*state_);
     }
 
@@ -148,25 +148,26 @@ namespace Horo::Extensions {
         if (state_ == nullptr)
             return std::nullopt;
         (void)ObserveAndMaybeCancel(state_);
-        std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+        std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
         return state_->revision;
     }
 
     /** @copydoc ScriptInvocationHandle::RequestCancellation */
     ScriptInvocationCancellationRequestResult ScriptInvocationHandle::RequestCancellation() const noexcept {
+        using enum ScriptInvocationCancellationRequestResult;
         if (state_ == nullptr)
-            return ScriptInvocationCancellationRequestResult::InvalidHandle;
+            return InvalidHandle;
         {
-            std::scoped_lock lock(state_->provider->mutex, state_->context->mutex);
+            std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
             if (state_->terminalResult.has_value())
-                return ScriptInvocationCancellationRequestResult::AlreadyTerminal;
+                return AlreadyTerminal;
             if (state_->callerRequested)
-                return ScriptInvocationCancellationRequestResult::AlreadyRequested;
+                return AlreadyRequested;
             state_->callerRequested = true;
             state_->callerCancellation.RequestCancellation();
         }
         ApplyCancellation(state_, ScriptInvocationCancellationReason::Caller);
-        return ScriptInvocationCancellationRequestResult::Requested;
+        return Requested;
     }
 
     ScriptInvocationController::ScriptInvocationController(std::shared_ptr<ScriptInvocationState> state) noexcept

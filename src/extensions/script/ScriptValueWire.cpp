@@ -9,14 +9,12 @@ namespace Horo::Extensions {
 
     /** @copydoc EncodeScriptValue */
     Result<std::vector<std::byte>> EncodeScriptValue(const ScriptValue &value, const ScriptValueLimits &limits) {
-        auto valid = ValidateScriptValue(value, limits);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptValue(value, limits); valid.HasError())
             return Result<std::vector<std::byte>>::Failure(valid.ErrorValue());
         std::vector<std::byte> output;
         output.reserve(std::min<std::size_t>(limits.maximumEncodedBytes, 256));
-        Encoder encoder{output, limits};
-        if (!encoder.AppendByte(ValueMagic0) || !encoder.AppendByte(ValueMagic1) || !encoder.AppendByte(ValueCodecVersion) ||
-            !encoder.EncodeValue(value))
+        if (Encoder encoder{output, limits}; !encoder.AppendByte(ValueMagic0) || !encoder.AppendByte(ValueMagic1) ||
+                                             !encoder.AppendByte(ValueCodecVersion) || !encoder.EncodeValue(value))
             return CapacityExceeded<std::vector<std::byte>>("Script value encoded payload bound was exceeded.");
         return Result<std::vector<std::byte>>::Success(std::move(output));
     }
@@ -28,25 +26,22 @@ namespace Horo::Extensions {
         Decoder decoder{bytes, limits};
         std::uint8_t magic0{};
         std::uint8_t magic1{};
-        std::uint8_t version{};
-        if (!decoder.ReadByte(magic0) || !decoder.ReadByte(magic1) || !decoder.ReadByte(version) || magic0 != ValueMagic0 ||
-            magic1 != ValueMagic1 || version != ValueCodecVersion)
+        if (std::uint8_t version{}; !decoder.ReadByte(magic0) || !decoder.ReadByte(magic1) || !decoder.ReadByte(version) ||
+                                    magic0 != ValueMagic0 || magic1 != ValueMagic1 || version != ValueCodecVersion)
             return InvalidEncoding<ScriptValue>("Script value codec header is invalid.");
         auto value = decoder.DecodeValue(0);
         if (value.HasError())
             return value;
         if (decoder.position != bytes.size())
             return InvalidEncoding<ScriptValue>("Script value payload has trailing bytes.");
-        auto valid = ValidateScriptValue(value.Value(), limits);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptValue(value.Value(), limits); valid.HasError())
             return Result<ScriptValue>::Failure(valid.ErrorValue());
         return value;
     }
 
     /** @copydoc EncodeScriptCallResult */
     Result<std::vector<std::byte>> EncodeScriptCallResult(const ScriptCallResult &result, const ScriptValueLimits &limits) {
-        auto valid = ValidateScriptCallResult(result, limits);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptCallResult(result, limits); valid.HasError())
             return Result<std::vector<std::byte>>::Failure(valid.ErrorValue());
         std::vector<std::byte> output;
         output.reserve(std::min<std::size_t>(limits.maximumEncodedBytes, 256));
@@ -101,8 +96,7 @@ namespace Horo::Extensions {
         }
         if (decoder.position != bytes.size())
             return InvalidEncoding<ScriptCallResult>("Script result payload has trailing bytes.");
-        auto valid = ValidateScriptCallResult(result, limits);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptCallResult(result, limits); valid.HasError())
             return Result<ScriptCallResult>::Failure(valid.ErrorValue());
         return Result<ScriptCallResult>::Success(std::move(result));
     }
