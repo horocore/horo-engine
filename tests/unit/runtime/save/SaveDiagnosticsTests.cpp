@@ -73,9 +73,6 @@ namespace Horo::Runtime {
                 std::pair{&SaveErrors::SlotCommitInvalid, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::SlotCommitOutcomeUnknown, SaveFailureCategory::Storage},
                 std::pair{&SaveErrors::SlotCommitRecoveryFailed, SaveFailureCategory::Storage},
-                std::pair{&SaveErrors::SlotRecoveryInvalid, SaveFailureCategory::Validation},
-                std::pair{&SaveErrors::SlotRecoveryLimitExceeded, SaveFailureCategory::Quota},
-                std::pair{&SaveErrors::SlotRecoveryAllocationFailed, SaveFailureCategory::Quota},
                 std::pair{&SaveErrors::StoragePolicyInvalid, SaveFailureCategory::Validation},
                 std::pair{&SaveErrors::StorageDiskFull, SaveFailureCategory::Quota},
                 std::pair{&SaveErrors::StorageQuotaExceeded, SaveFailureCategory::Quota},
@@ -113,6 +110,19 @@ namespace Horo::Runtime {
                 const auto record = MakeSaveDiagnosticRecord(MakeError(SaveErrors::IdentityInvalid), {.stage = stage});
                 REQUIRE(record.HasValue());
                 REQUIRE(record.Value().Stage() == stage);
+            }
+        }
+
+        TEST_CASE("Runtime Save diagnostics categorize slot recovery failures", "[save][diagnostics]") {
+            const std::array cases{
+                std::pair{&SaveErrors::SlotRecoveryInvalid, SaveFailureCategory::Validation},
+                std::pair{&SaveErrors::SlotRecoveryLimitExceeded, SaveFailureCategory::Quota},
+                std::pair{&SaveErrors::SlotRecoveryAllocationFailed, SaveFailureCategory::Quota},
+            };
+            for (const auto &[descriptor, expected] : cases) {
+                const auto record = Record(MakeError(*descriptor));
+                REQUIRE(record.HasValue());
+                CHECK(record.Value().Category() == expected);
             }
         }
 

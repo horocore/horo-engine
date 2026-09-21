@@ -89,8 +89,8 @@ namespace Horo::Runtime {
             if (request.quarantined.size() > policy.maximumObservedArtifacts - currentAndBackups)
                 return Result<void>::Failure(LimitExceeded("Save-slot recovery observations exceed the configured bound."));
 
-            std::vector<std::uint64_t> sequences;
             try {
+                std::vector<std::uint64_t> sequences;
                 sequences.reserve(currentCount + request.backups.size() + request.quarantined.size());
                 if (request.current) {
                     if (request.current->retentionSequence == 0)
@@ -151,6 +151,148 @@ namespace Horo::Runtime {
             if (validation.state >= SaveSlotRecoveryValidationState::Count)
                 return Result<SaveSlotRecoveryValidation>::Failure(Invalid("Recovery validator returned an unknown validation state."));
             return Result<SaveSlotRecoveryValidation>::Success(std::move(validation));
+        }
+
+        [[nodiscard]] Result<void> ValidateCurrent(const SaveSlotRecoveryRequest &request, const ISaveSlotRecoveryValidator &validator,
+                                                   SaveSlotRecoveryPlan &plan) {
+            if (!request.current) {
+                if (request.trigger != SaveSlotRecoveryTrigger::InterruptedPublication)
+                    return Result<void>::Failure(
+                        Invalid("Corrupt or incompatible recovery requires the original current artifact as evidence."));
+                return Result<void>::Success();
+            }
+
+            auto currentValidation = AdmitValidation(validator.Validate(*request.current, request.slot));
+            if (currentValidation.HasError())
+                return Result<void>::Failure(std::move(currentValidation).ErrorValue());
+            plan.currentValidation = std::move(currentValidation).Value();
+            if (request.trigger == SaveSlotRecoveryTrigger::CorruptCurrent &&
+                plan.currentValidation->state != SaveSlotRecoveryValidationState::Corrupt)
+                return Result<void>::Failure(Invalid("Recovery trigger says the current archive is corrupt, but validation disagrees."));
+            if (request.trigger == SaveSlotRecoveryTrigger::IncompatibleCurrent &&
+                plan.currentValidation->state != SaveSlotRecoveryValidationState::Incompatible)
+                return Result<void>::Failure(
+                    Invalid("Recovery trigger says the current archive is incompatible, but validation disagrees."));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<std::vector<std::size_t>> InspectBackups(const SaveSlotRecoveryRequest &request,
+                                                                      const ISaveSlotRecoveryValidator &validator,
+                                                                      SaveSlotRecoveryPlan &plan) {
+            plan.inspectedBackups.reserve(request.backups.size());
+            for (const auto &artifact : request.backups) {
+                auto validation = AdmitValidation(validator.Validate(artifact, request.slot));
+                if (validation.HasError())
+                    return Result<std::vector<std::size_t>>::Failure(std::move(validation).ErrorValue());
+                plan.inspectedBackups.push_back({.artifact = artifact, .validation = std::move(validation).Value()});
+            }
+            std::ranges::sort(plan.inspectedBackups, [](const SaveSlotRecoveryCandidate &left, const SaveSlotRecoveryCandidate &right) {
+                return Newer(left.artifact, right.artifact);
+            });
+
+            std::vector<std::size_t> validIndices;
+            validIndices.reserve(plan.inspectedBackups.size());
+            for (std::size_t index = 0; index < plan.inspectedBackups.size(); ++index) {
+                const auto &candidate = plan.inspectedBackups[index];
+                if (candidate.validation.state == SaveSlotRecoveryValidationState::Valid)
+                    validIndices.push_back(index);
+                else {
+                    if (auto added = AddQuarantineCandidate(plan, candidate); added.HasError())
+                        return Result<std::vector<std::size_t>>::Failure(std::move(added).ErrorValue());
+                }
+            }
+            return Result<std::vector<std::size_t>>::Success(std::move(validIndices));
+        }
+
+        [[nodiscard]] std::vector<QuarantineEntry> MakeQuarantinePool(const SaveSlotRecoveryRequest &request,
+                                                                      const SaveSlotRecoveryPlan &plan) {
+            std::vector<QuarantineEntry> quarantinePool;
+            quarantinePool.reserve(request.quarantined.size() + plan.quarantine.size() + 1U);
+            if (plan.currentValidation && plan.currentValidation->state != SaveSlotRecoveryValidationState::Valid)
+                quarantinePool.push_back({*request.current, true});
+            for (const auto &candidate : plan.quarantine)
+                quarantinePool.push_back({candidate.artifact, false});
+            for (const auto &artifact : request.quarantined)
+                quarantinePool.push_back({artifact, false});
+            return quarantinePool;
+        }
+
+        void RetainBackups(SaveSlotRecoveryPlan &plan, const std::vector<std::size_t> &validIndices, const SaveSlotRecoveryPolicy &policy) {
+            const std::size_t retainedBackupCount = std::min(policy.maximumBackups, validIndices.size());
+            plan.retainedBackups.reserve(retainedBackupCount);
+            for (std::size_t index = 0; index < validIndices.size(); ++index) {
+                const auto &artifact = plan.inspectedBackups[validIndices[index]].artifact;
+                if (index < retainedBackupCount)
+                    plan.retainedBackups.push_back(artifact);
+                else
+                    plan.cleanup.push_back({.kind = SaveSlotRecoveryArtifactKind::Backup, .artifact = artifact});
+            }
+        }
+
+        [[nodiscard]] Result<void> RetainQuarantine(SaveSlotRecoveryPlan &plan, std::vector<QuarantineEntry> quarantinePool,
+                                                    const SaveSlotRecoveryPolicy &policy) {
+            std::ranges::sort(quarantinePool, [](const QuarantineEntry &left, const QuarantineEntry &right) {
+                return Newer(left.artifact, right.artifact);
+            });
+            std::size_t protectedCount = 0;
+            for (const auto &entry : quarantinePool)
+                protectedCount += entry.protectedEvidence ? 1U : 0U;
+            if (protectedCount > policy.maximumQuarantined)
+                return Result<void>::Failure(
+                    LimitExceeded("Recovery retention cannot preserve the current evidence within the quarantine bound."));
+
+            plan.retainedQuarantine.reserve(std::min(policy.maximumQuarantined, quarantinePool.size()));
+            std::size_t retainedQuarantineCount = 0;
+            for (const auto &entry : quarantinePool) {
+                if (!entry.protectedEvidence)
+                    continue;
+                plan.retainedQuarantine.push_back(entry.artifact);
+                ++retainedQuarantineCount;
+            }
+            for (const auto &entry : quarantinePool) {
+                if (entry.protectedEvidence || retainedQuarantineCount >= policy.maximumQuarantined) {
+                    if (!entry.protectedEvidence)
+                        plan.cleanup.push_back({.kind = SaveSlotRecoveryArtifactKind::Quarantine, .artifact = entry.artifact});
+                    continue;
+                }
+                plan.retainedQuarantine.push_back(entry.artifact);
+                ++retainedQuarantineCount;
+            }
+            std::ranges::sort(plan.retainedQuarantine, [](const SaveSlotRecoveryArtifact &left, const SaveSlotRecoveryArtifact &right) {
+                return Newer(left, right);
+            });
+            return Result<void>::Success();
+        }
+
+        void SelectDecision(SaveSlotRecoveryPlan &plan, const SaveSlotRecoveryRequest &request, const SaveSlotRecoveryPolicy &policy,
+                            const std::vector<std::size_t> &validIndices) {
+            const bool currentValid = plan.currentValidation && plan.currentValidation->state == SaveSlotRecoveryValidationState::Valid;
+            if (currentValid) {
+                plan.cleanup.clear();
+                plan.decision = SaveSlotRecoveryDecision::NoRecovery;
+                plan.decisionReason = SaveSlotRecoveryDecisionReason::CurrentValid;
+                return;
+            }
+            if (validIndices.empty()) {
+                plan.cleanup.clear();
+                plan.decision = SaveSlotRecoveryDecision::NoRecovery;
+                plan.decisionReason = NoPromotionReason(plan);
+                return;
+            }
+
+            plan.promotion = plan.inspectedBackups[validIndices.front()];
+            if (request.trigger == SaveSlotRecoveryTrigger::IncompatibleCurrent) {
+                plan.decision = SaveSlotRecoveryDecision::UserConfirmationRequired;
+                plan.decisionReason = SaveSlotRecoveryDecisionReason::IncompatibleCurrentRequiresConfirmation;
+            } else if (AutomaticAllowed(policy.automaticPromotion, request.trigger)) {
+                plan.decision = SaveSlotRecoveryDecision::AutomaticPromotion;
+                plan.decisionReason = SaveSlotRecoveryDecisionReason::AutomaticPolicy;
+            } else {
+                plan.decision = SaveSlotRecoveryDecision::UserConfirmationRequired;
+                plan.decisionReason = request.trigger == SaveSlotRecoveryTrigger::InterruptedPublication
+                                          ? SaveSlotRecoveryDecisionReason::InterruptedPublicationRequiresConfirmation
+                                          : SaveSlotRecoveryDecisionReason::AutomaticPolicyDisabled;
+            }
         }
     }  // namespace
 
@@ -230,124 +372,20 @@ namespace Horo::Runtime {
 
         try {
             SaveSlotRecoveryPlan plan;
-            if (request.current) {
-                auto currentValidation = AdmitValidation(validator_->Validate(*request.current, request.slot));
-                if (currentValidation.HasError())
-                    return Result<SaveSlotRecoveryPlan>::Failure(currentValidation.ErrorValue());
-                plan.currentValidation = std::move(currentValidation).Value();
-                if (request.trigger == SaveSlotRecoveryTrigger::CorruptCurrent &&
-                    plan.currentValidation->state != SaveSlotRecoveryValidationState::Corrupt)
-                    return Result<SaveSlotRecoveryPlan>::Failure(
-                        Invalid("Recovery trigger says the current archive is corrupt, but validation disagrees."));
-                if (request.trigger == SaveSlotRecoveryTrigger::IncompatibleCurrent &&
-                    plan.currentValidation->state != SaveSlotRecoveryValidationState::Incompatible)
-                    return Result<SaveSlotRecoveryPlan>::Failure(
-                        Invalid("Recovery trigger says the current archive is incompatible, but validation disagrees."));
-            } else if (request.trigger != SaveSlotRecoveryTrigger::InterruptedPublication) {
-                return Result<SaveSlotRecoveryPlan>::Failure(
-                    Invalid("Corrupt or incompatible recovery requires the original current artifact as evidence."));
-            }
+            if (auto current = ValidateCurrent(request, *validator_, plan); current.HasError())
+                return Result<SaveSlotRecoveryPlan>::Failure(std::move(current).ErrorValue());
 
-            plan.inspectedBackups.reserve(request.backups.size());
-            for (const auto &artifact : request.backups) {
-                auto validation = AdmitValidation(validator_->Validate(artifact, request.slot));
-                if (validation.HasError())
-                    return Result<SaveSlotRecoveryPlan>::Failure(validation.ErrorValue());
-                plan.inspectedBackups.push_back({.artifact = artifact, .validation = std::move(validation).Value()});
-            }
-            std::ranges::sort(plan.inspectedBackups, [](const SaveSlotRecoveryCandidate &left, const SaveSlotRecoveryCandidate &right) {
-                return Newer(left.artifact, right.artifact);
-            });
+            auto validIndicesResult = InspectBackups(request, *validator_, plan);
+            if (validIndicesResult.HasError())
+                return Result<SaveSlotRecoveryPlan>::Failure(std::move(validIndicesResult).ErrorValue());
+            auto validIndices = std::move(validIndicesResult).Value();
 
-            std::vector<std::size_t> validIndices;
-            validIndices.reserve(plan.inspectedBackups.size());
-            std::vector<QuarantineEntry> quarantinePool;
-            quarantinePool.reserve(request.quarantined.size() + plan.inspectedBackups.size() + 1U);
+            RetainBackups(plan, validIndices, policy_);
 
-            if (plan.currentValidation && plan.currentValidation->state != SaveSlotRecoveryValidationState::Valid)
-                quarantinePool.push_back({*request.current, true});
+            if (auto retained = RetainQuarantine(plan, MakeQuarantinePool(request, plan), policy_); retained.HasError())
+                return Result<SaveSlotRecoveryPlan>::Failure(std::move(retained).ErrorValue());
 
-            for (std::size_t index = 0; index < plan.inspectedBackups.size(); ++index) {
-                const auto &candidate = plan.inspectedBackups[index];
-                if (candidate.validation.state == SaveSlotRecoveryValidationState::Valid)
-                    validIndices.push_back(index);
-                else {
-                    if (auto added = AddQuarantineCandidate(plan, candidate); added.HasError())
-                        return Result<SaveSlotRecoveryPlan>::Failure(added.ErrorValue());
-                    quarantinePool.push_back({candidate.artifact, false});
-                }
-            }
-            for (const auto &artifact : request.quarantined)
-                quarantinePool.push_back({artifact, false});
-
-            const std::size_t retainedBackupCount = std::min(policy_.maximumBackups, validIndices.size());
-            plan.retainedBackups.reserve(retainedBackupCount);
-            for (std::size_t index = 0; index < validIndices.size(); ++index) {
-                const auto &artifact = plan.inspectedBackups[validIndices[index]].artifact;
-                if (index < retainedBackupCount)
-                    plan.retainedBackups.push_back(artifact);
-                else
-                    plan.cleanup.push_back({.kind = SaveSlotRecoveryArtifactKind::Backup, .artifact = artifact});
-            }
-
-            std::ranges::sort(quarantinePool, [](const QuarantineEntry &left, const QuarantineEntry &right) {
-                return Newer(left.artifact, right.artifact);
-            });
-            std::size_t protectedCount = 0;
-            for (const auto &entry : quarantinePool)
-                protectedCount += entry.protectedEvidence ? 1U : 0U;
-            if (protectedCount > policy_.maximumQuarantined)
-                return Result<SaveSlotRecoveryPlan>::Failure(
-                    LimitExceeded("Recovery retention cannot preserve the current evidence within the quarantine bound."));
-
-            plan.retainedQuarantine.reserve(std::min(policy_.maximumQuarantined, quarantinePool.size()));
-            std::size_t retainedQuarantineCount = 0;
-            for (const auto &entry : quarantinePool) {
-                if (!entry.protectedEvidence)
-                    continue;
-                plan.retainedQuarantine.push_back(entry.artifact);
-                ++retainedQuarantineCount;
-            }
-            for (const auto &entry : quarantinePool) {
-                if (entry.protectedEvidence || retainedQuarantineCount >= policy_.maximumQuarantined) {
-                    if (!entry.protectedEvidence)
-                        plan.cleanup.push_back({.kind = SaveSlotRecoveryArtifactKind::Quarantine, .artifact = entry.artifact});
-                    continue;
-                }
-                plan.retainedQuarantine.push_back(entry.artifact);
-                ++retainedQuarantineCount;
-            }
-            std::ranges::sort(plan.retainedQuarantine, [](const SaveSlotRecoveryArtifact &left, const SaveSlotRecoveryArtifact &right) {
-                return Newer(left, right);
-            });
-
-            const bool currentValid = plan.currentValidation && plan.currentValidation->state == SaveSlotRecoveryValidationState::Valid;
-            if (currentValid) {
-                plan.cleanup.clear();
-                plan.decision = SaveSlotRecoveryDecision::NoRecovery;
-                plan.decisionReason = SaveSlotRecoveryDecisionReason::CurrentValid;
-                return Result<SaveSlotRecoveryPlan>::Success(std::move(plan));
-            }
-            if (validIndices.empty()) {
-                plan.cleanup.clear();
-                plan.decision = SaveSlotRecoveryDecision::NoRecovery;
-                plan.decisionReason = NoPromotionReason(plan);
-                return Result<SaveSlotRecoveryPlan>::Success(std::move(plan));
-            }
-
-            plan.promotion = plan.inspectedBackups[validIndices.front()];
-            if (request.trigger == SaveSlotRecoveryTrigger::IncompatibleCurrent) {
-                plan.decision = SaveSlotRecoveryDecision::UserConfirmationRequired;
-                plan.decisionReason = SaveSlotRecoveryDecisionReason::IncompatibleCurrentRequiresConfirmation;
-            } else if (AutomaticAllowed(policy_.automaticPromotion, request.trigger)) {
-                plan.decision = SaveSlotRecoveryDecision::AutomaticPromotion;
-                plan.decisionReason = SaveSlotRecoveryDecisionReason::AutomaticPolicy;
-            } else {
-                plan.decision = SaveSlotRecoveryDecision::UserConfirmationRequired;
-                plan.decisionReason = request.trigger == SaveSlotRecoveryTrigger::InterruptedPublication
-                                          ? SaveSlotRecoveryDecisionReason::InterruptedPublicationRequiresConfirmation
-                                          : SaveSlotRecoveryDecisionReason::AutomaticPolicyDisabled;
-            }
+            SelectDecision(plan, request, policy_, validIndices);
             return Result<SaveSlotRecoveryPlan>::Success(std::move(plan));
         } catch (const std::bad_alloc &) {
             return Result<SaveSlotRecoveryPlan>::Failure(MakeError(SaveErrors::SlotRecoveryAllocationFailed));
