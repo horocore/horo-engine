@@ -86,7 +86,7 @@ namespace Horo::WorldStreaming {
                     .packageMode = WorldPartitionPackageMode::ArchiveChunk};
         }
 
-        TEST_CASE("World streaming foundation composes deterministic identities through registry snapshots",
+        TEST_CASE("World streaming foundation composes deterministic identities",
                   "[unit][world_streaming][qualification][headless][identity]") {
             const auto partition = World(42);
             const auto base = Layer(2);
@@ -126,7 +126,12 @@ namespace Horo::WorldStreaming {
             REQUIRE(NextStreamingGeneration(IdentityFrom<StreamingGeneration>(std::numeric_limits<std::uint64_t>::max()))
                         .ErrorValue()
                         .code.Value() == WorldStreamingErrors::GenerationExhausted.code.Value());
+        }
 
+        TEST_CASE("World streaming foundation keeps registry snapshots stable across publication",
+                  "[unit][world_streaming][qualification][headless][registry]") {
+            const auto partition = World(42);
+            const auto base = Layer(2);
             auto descriptor = QualificationDescriptor(partition).Value();
             const auto owner = RuntimeOwner(partition);
             auto registry = WorldPartitionRegistry::Create(IdentityFrom<WorldPartitionRegistryId>(51), owner, {4, 4}).Value();
@@ -165,7 +170,7 @@ namespace Horo::WorldStreaming {
             REQUIRE(outputWithNoCapacity.front() == sentinel);
         }
 
-        TEST_CASE("World streaming foundation preserves immutable authored references and policy boundaries",
+        TEST_CASE("World streaming foundation preserves authored spatial references",
                   "[unit][world_streaming][qualification][headless][references]") {
             const auto partition = World(43);
             const auto layer = Layer(2);
@@ -207,14 +212,37 @@ namespace Horo::WorldStreaming {
                                                                                    .objectCapacity = 2,
                                                                                    .ownerState = WorldSpatialObjectOwnerState::Active})
                         .Value() == WorldSpatialObjectAdmissionKind::Insert);
+        }
 
+        TEST_CASE("World streaming foundation enforces dependency revision policy",
+                  "[unit][world_streaming][qualification][headless][dependencies]") {
+            const auto partition = World(43);
+            const auto descriptor = QualificationDescriptor(partition).Value();
+            const auto page = Asset(40);
+            const auto firstRevision = IdentityFrom<WorldAuthoringRevision>(1);
+            const auto secondRevision = IdentityFrom<WorldAuthoringRevision>(2);
+            const std::array candidates{
+                WorldSpatialAssignmentCandidate{{page, 1},
+                                                firstRevision,
+                                                {Math::WorldCoordinate64::FromMillimeters(0, 0, 0),
+                                                 Math::WorldCoordinate64::FromMillimeters(999, 999, 999)},
+                                                Layer(2),
+                                                0},
+                WorldSpatialAssignmentCandidate{{page, 2},
+                                                secondRevision,
+                                                {Math::WorldCoordinate64::FromMillimeters(1'000, 0, 0),
+                                                 Math::WorldCoordinate64::FromMillimeters(1'999, 999, 999)},
+                                                Layer(2),
+                                                0},
+            };
+            const auto assignments = WorldSpatialAssignment::Create(descriptor, candidates, {2, 2, 4}).Value();
             const std::array dependencies{
                 WorldDependencyCandidate{{{page, 1}, firstRevision}, {{page, 2}, secondRevision}, WorldDependencyKind::Hard},
                 WorldDependencyCandidate{{{page, 2}, secondRevision},
                                          {{Asset(42), 3}, IdentityFrom<WorldAuthoringRevision>(9)},
                                          WorldDependencyKind::Soft},
             };
-            const auto plan = WorldDependencyPlan::Create(assignments.Value(), dependencies, {4, 2, 2, 2});
+            const auto plan = WorldDependencyPlan::Create(assignments, dependencies, {4, 2, 2, 2});
             REQUIRE(plan.HasValue());
             REQUIRE(plan.Value().Bundles().size() == 1);
             REQUIRE(plan.Value().MembersForBundle(0).size() == 2);
@@ -223,13 +251,13 @@ namespace Horo::WorldStreaming {
 
             auto stale = dependencies[0];
             stale.source.revision = IdentityFrom<WorldAuthoringRevision>(99);
-            RequireError(WorldDependencyPlan::Create(assignments.Value(), std::array{stale}, {4, 2, 2, 2}),
+            RequireError(WorldDependencyPlan::Create(assignments, std::array{stale}, {4, 2, 2, 2}),
                          WorldStreamingErrors::DependencyPlanRevisionStale);
-            REQUIRE(assignments.Value().Objects().size() == 2);
+            REQUIRE(assignments.Objects().size() == 2);
         }
 
-        TEST_CASE("World streaming foundation qualifies exact profiles and the non-streamed fallback",
-                  "[unit][world_streaming][qualification][headless][fallback]") {
+        TEST_CASE("World streaming foundation qualifies exact capability profiles",
+                  "[unit][world_streaming][qualification][headless][fallback][profiles]") {
             const auto capabilities = Capabilities();
             auto request = SettingsRequest();
             const auto settings = WorldPartitionProjectSettings::Create(request, capabilities);
@@ -244,7 +272,10 @@ namespace Horo::WorldStreaming {
             request = SettingsRequest();
             request.packageMode = WorldPartitionPackageMode::StandaloneCellFile;
             RequireError(WorldPartitionProjectSettings::Create(request, capabilities), WorldStreamingErrors::PartitionSettingsUnsupported);
+        }
 
+        TEST_CASE("World streaming foundation provides the non-streamed fallback",
+                  "[unit][world_streaming][qualification][headless][fallback][provider]") {
             const auto partition = World(44);
             const auto owner = SourceOwner(partition);
             auto nullResult = FallbackStreamingProvider::Create({.owner = owner,
