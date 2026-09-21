@@ -129,12 +129,14 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveArchiveFraming.h
     Horo/Runtime/Save/SaveArchiveFinalization.h
     Horo/Runtime/Save/SaveArchiveReader.h
+    Horo/Runtime/Save/SaveMigration.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h
     Horo/Runtime/Save/SaveSlotMetadata.h
     Horo/Runtime/Save/SaveSlotIndex.h
     Horo/Runtime/Save/SaveStorageAdapter.h
     Horo/Runtime/Save/SaveSlotCommitTransaction.h
+    Horo/Runtime/Save/SaveSlotRecovery.h
     Horo/Runtime/Save/SaveStoragePolicy.h
     Horo/Runtime/Save/SaveOperation.h
     Horo/Runtime/Save/SaveOperationArbiter.h
@@ -150,10 +152,13 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiDiagnostics.h
     Horo/Runtime/Ui/UiElementTree.h
     Horo/Runtime/Ui/UiEventDispatch.h
+    Horo/Runtime/Ui/UiPointerCapture.h
     Horo/Runtime/Ui/UiActions.h
+    Horo/Runtime/Ui/UiControls.h
     Horo/Runtime/Ui/UiLayout.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
+    Horo/Runtime/Ui/UiRenderGeometry.h
     Horo/Runtime/Ui/UiPresentationReceipt.h
 )
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
@@ -366,6 +371,7 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
+    Horo/Vfx/CpuParticleSimulator.h
     Horo/Vfx/CpuParticleSpawnPipeline.h
     Horo/Vfx/ParticleSystemDescriptor.h
     Horo/Vfx/VfxErrors.h

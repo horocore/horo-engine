@@ -158,8 +158,7 @@ namespace Horo::Character::Detail {
         result.finalHeading = previous.heading;
         result.achievedVelocityMetersPerSecond = {};
         result.up = previous.up;
-        result.groundNormal = previous.up;
-        result.groundingRevalidationRequired = true;
+        ClearGroundEvidence(result, previous.up);
         if (command.desiredVelocityMetersPerSecond.has_value()) {
             const double seconds = static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0;
             if (!std::isfinite(seconds) || seconds > static_cast<double>(std::numeric_limits<float>::max()))

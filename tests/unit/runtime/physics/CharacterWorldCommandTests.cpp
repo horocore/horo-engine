@@ -3,6 +3,7 @@
 
 #include <barrier>
 #include <catch2/catch_approx.hpp>
+#include <cmath>
 
 namespace Horo::Character {
     namespace {
@@ -39,6 +40,9 @@ namespace Horo::Character {
             MovementResolver resolver;
             resolver.templateResult.grounded = true;
             resolver.templateResult.groundMaterial = Material();
+            resolver.templateResult.groundBody = Physics::BodyHandle{world.physicsWorld, {7, 2}};
+            resolver.templateResult.groundShape = Physics::ShapeHandle{world.physicsWorld, {8, 3}};
+            resolver.templateResult.groundDistanceMeters = 0.02F;
             resolver.templateResult.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
             resolver.templateResult.contacts[0].body = Physics::BodyHandle{world.physicsWorld, {7, 2}};
             resolver.templateResult.contacts[0].shape = Physics::ShapeHandle{world.physicsWorld, {8, 3}};
@@ -229,7 +233,7 @@ namespace Horo::Character {
             REQUIRE(snapshot.Value().movement.contacts[0].material.assetGeneration == defaultMaterial.assetGeneration);
             REQUIRE(snapshot.Value().movement.contacts[0].material.slot == defaultMaterial.slot);
             REQUIRE(spawned.world->TickStatistics().retainedContacts == 1);
-            REQUIRE(probe.calls == 1);
+            REQUIRE(probe.calls == 2);
         }
 
         TEST_CASE("Character capsule slide reduction is stable when simultaneous hits change callback order",
