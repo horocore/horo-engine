@@ -90,6 +90,18 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor EventDispatchHandlerFailed;
     /** @brief The event dispatcher is retiring, stopped, or changing lifecycle during dispatch. */
     extern const ErrorCodeDescriptor EventDispatchLifecycleUnavailable;
+    /** @brief A pointer-capture context, pointer, button, or cancellation reason is malformed. */
+    extern const ErrorCodeDescriptor PointerCaptureInvalid;
+    /** @brief Pointer-capture owner, tree, target, or route evidence is stale or foreign. */
+    extern const ErrorCodeDescriptor PointerCaptureSourceStale;
+    /** @brief Pointer capture was requested against an interaction generation that was not presented. */
+    extern const ErrorCodeDescriptor PointerCaptureInteractionStale;
+    /** @brief The requested pointer is already captured by the same Runtime UI context. */
+    extern const ErrorCodeDescriptor PointerCaptureBusy;
+    /** @brief Every preallocated pointer-capture slot is occupied or retired. */
+    extern const ErrorCodeDescriptor PointerCaptureCapacityExceeded;
+    /** @brief The pointer-capture store is retiring, stopped, or otherwise unavailable. */
+    extern const ErrorCodeDescriptor PointerCaptureLifecycleUnavailable;
     /** @brief A typed Runtime UI action or owner context is malformed. */
     extern const ErrorCodeDescriptor ActionInvalid;
     /** @brief A typed Runtime UI action payload contains an invalid value. */
