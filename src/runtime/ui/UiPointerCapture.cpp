@@ -342,22 +342,24 @@ namespace Horo::Runtime::Ui {
         if (const auto source = ValidateCaptureSource(descriptor, request, tree, presented); source.HasError())
             return Result<UiPointerCaptureToken>::Failure(source.ErrorValue());
 
-        for (const Detail::CaptureSlot &entry : storage_->slots) {
+        const std::uint32_t availableSlot = static_cast<std::uint32_t>(storage_->slots.size());
+        std::uint32_t freeSlot = availableSlot;
+        for (std::uint32_t index = 0; index < storage_->slots.size(); ++index) {
+            const Detail::CaptureSlot &entry = storage_->slots[index];
             if (entry.state == Detail::CaptureSlotState::Active && entry.request.context == request.context &&
                 entry.request.pointer == request.pointer)
                 return Failure<UiPointerCaptureToken>(UiErrors::PointerCaptureBusy);
+            if (freeSlot == availableSlot && entry.state == Detail::CaptureSlotState::Free)
+                freeSlot = index;
         }
 
-        for (std::uint32_t index = 0; index < storage_->slots.size(); ++index) {
-            Detail::CaptureSlot &entry = storage_->slots[index];
-            if (entry.state != Detail::CaptureSlotState::Free)
-                continue;
-            entry.request = request;
-            entry.cancellation = UiPointerCaptureCancellationReason::Count;
-            entry.state = Detail::CaptureSlotState::Active;
-            return Result<UiPointerCaptureToken>::Success(UiPointerCaptureToken{storage_, index, entry.generation, request});
-        }
-        return Failure<UiPointerCaptureToken>(UiErrors::PointerCaptureCapacityExceeded);
+        if (freeSlot == availableSlot)
+            return Failure<UiPointerCaptureToken>(UiErrors::PointerCaptureCapacityExceeded);
+        Detail::CaptureSlot &entry = storage_->slots[freeSlot];
+        entry.request = request;
+        entry.cancellation = UiPointerCaptureCancellationReason::Count;
+        entry.state = Detail::CaptureSlotState::Active;
+        return Result<UiPointerCaptureToken>::Success(UiPointerCaptureToken{storage_, freeSlot, entry.generation, request});
     }
 
     /** @copydoc UiPointerCaptureStore::ReleasePointer */
