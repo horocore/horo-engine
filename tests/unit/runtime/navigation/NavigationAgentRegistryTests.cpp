@@ -31,6 +31,7 @@ namespace Horo::Navigation {
     static_assert(!std::is_copy_assignable_v<NavigationAgentRegistry>);
     static_assert(std::is_nothrow_move_constructible_v<NavigationAgentRegistry>);
     static_assert(!std::is_move_assignable_v<NavigationAgentRegistry>);
+    static_assert(!std::is_default_constructible_v<NavigationAgentSceneCandidate::CreationKey>);
 
     TEST_CASE("Navigation agent registration publishes a complete deterministic population", "[unit][navigation][headless]") {
         auto registry = std::move(NavigationAgentRegistry::Create({.maximumAgents = 4})).Value();
