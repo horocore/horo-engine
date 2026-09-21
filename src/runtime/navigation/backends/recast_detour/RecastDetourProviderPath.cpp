@@ -148,6 +148,43 @@ namespace Horo::Navigation::RecastDetourQueries {
             return Result<SharedEdge>::Success(*result);
         }
 
+        struct OrderedPortal final {
+            Math::Vec3 left{};
+            Math::Vec3 right{};
+            std::uint32_t leftVertex{};
+            std::uint32_t rightVertex{};
+            double rawLength{};
+        };
+
+        [[nodiscard]] Result<OrderedPortal> MakeOrderedPortal(const PathBuildContext &context, const std::uint32_t fromIndex,
+                                                              const std::uint32_t toIndex, const SharedEdge shared) {
+            if (shared.first >= context.vertices.size() || shared.second >= context.vertices.size())
+                return Failure<OrderedPortal>(NavigationErrors::ProviderFailed);
+            const Math::Vec3 first = context.vertices[shared.first];
+            const Math::Vec3 second = context.vertices[shared.second];
+            if (!Math::IsFinite(first) || !Math::IsFinite(second))
+                return Failure<OrderedPortal>(NavigationErrors::ProviderFailed);
+            const double rawLength = std::hypot(static_cast<double>(second.x) - first.x, static_cast<double>(second.y) - first.y,
+                                                static_cast<double>(second.z) - first.z);
+            if (!std::isfinite(rawLength) || rawLength <= PortalLengthEpsilon)
+                return Failure<OrderedPortal>(NavigationErrors::PathPortalDegenerate);
+
+            Math::Vec3 travel = context.centers[toIndex] - context.centers[fromIndex];
+            if (std::hypot(static_cast<double>(travel.x), static_cast<double>(travel.z)) <= FunnelEpsilon)
+                travel = context.request.destination - context.request.start;
+            const double travelLength = std::hypot(static_cast<double>(travel.x), static_cast<double>(travel.z));
+            const double orientation = CrossXZ(travel, second - first);
+            if (!std::isfinite(travelLength) || travelLength <= FunnelEpsilon || !std::isfinite(orientation) ||
+                std::abs(orientation) <= FunnelEpsilon)
+                return Failure<OrderedPortal>(NavigationErrors::PathPortalDegenerate);
+            const bool reverse = orientation < 0.0;
+            return Result<OrderedPortal>::Success({.left = reverse ? first : second,
+                                                   .right = reverse ? second : first,
+                                                   .leftVertex = reverse ? shared.first : shared.second,
+                                                   .rightVertex = reverse ? shared.second : shared.first,
+                                                   .rawLength = rawLength});
+        }
+
         [[nodiscard]] Result<NavigationPathPortal> MakePortal(const PathBuildContext &context, const std::uint32_t corridorIndex) {
             if (corridorIndex + 1U >= context.search.polygonCount)
                 return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
@@ -160,44 +197,20 @@ namespace Horo::Navigation::RecastDetourQueries {
             const auto shared = FindSharedEdge(from, to);
             if (shared.HasError())
                 return Result<NavigationPathPortal>::Failure(shared.ErrorValue());
-            if (shared.Value().first >= context.vertices.size() || shared.Value().second >= context.vertices.size())
-                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
-
-            const Math::Vec3 first = context.vertices[shared.Value().first];
-            const Math::Vec3 second = context.vertices[shared.Value().second];
-            if (!Math::IsFinite(first) || !Math::IsFinite(second))
-                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
-            const double rawLength = std::hypot(static_cast<double>(second.x) - first.x, static_cast<double>(second.y) - first.y,
-                                                static_cast<double>(second.z) - first.z);
-            if (!std::isfinite(rawLength) || rawLength <= PortalLengthEpsilon)
-                return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
-
-            Math::Vec3 travel = context.centers[toIndex] - context.centers[fromIndex];
-            if (std::hypot(static_cast<double>(travel.x), static_cast<double>(travel.z)) <= FunnelEpsilon)
-                travel = context.request.destination - context.request.start;
-            const double travelLength = std::hypot(static_cast<double>(travel.x), static_cast<double>(travel.z));
-            const Math::Vec3 edge = second - first;
-            const double orientation = CrossXZ(travel, edge);
-            if (!std::isfinite(travelLength) || travelLength <= FunnelEpsilon || !std::isfinite(orientation) ||
-                std::abs(orientation) <= FunnelEpsilon)
-                return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
-
-            Math::Vec3 left = orientation < 0.0 ? first : second;
-            Math::Vec3 right = orientation < 0.0 ? second : first;
-            const std::uint32_t leftVertex = orientation < 0.0 ? shared.Value().first : shared.Value().second;
-            const std::uint32_t rightVertex = orientation < 0.0 ? shared.Value().second : shared.Value().first;
+            const auto geometry = MakeOrderedPortal(context, fromIndex, toIndex, shared.Value());
+            if (geometry.HasError())
+                return Result<NavigationPathPortal>::Failure(geometry.ErrorValue());
             const float clearance =
                 context.request.clearanceMeters == 0.0F ? context.defaultClearanceMeters : context.request.clearanceMeters;
             if (!std::isfinite(clearance) || clearance < 0.0F)
                 return Failure<NavigationPathPortal>(NavigationErrors::CapabilityDescriptorInvalid);
-            if (static_cast<double>(clearance) * 2.0 + PortalLengthEpsilon >= rawLength)
+            if (static_cast<double>(clearance) * 2.0 + PortalLengthEpsilon >= geometry.Value().rawLength)
                 return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
 
-            const float ratio = static_cast<float>(static_cast<double>(clearance) / rawLength);
-            const Math::Vec3 originalLeft = left;
-            const Math::Vec3 originalRight = right;
-            left = originalLeft + (originalRight - originalLeft) * ratio;
-            right = originalRight - (originalRight - originalLeft) * ratio;
+            const float ratio = static_cast<float>(static_cast<double>(clearance) / geometry.Value().rawLength);
+            const Math::Vec3 edge = geometry.Value().right - geometry.Value().left;
+            const Math::Vec3 left = geometry.Value().left + edge * ratio;
+            const Math::Vec3 right = geometry.Value().right - edge * ratio;
             const double width = std::hypot(static_cast<double>(right.x) - left.x, static_cast<double>(right.y) - left.y,
                                             static_cast<double>(right.z) - left.z);
             if (!Math::IsFinite(left) || !Math::IsFinite(right) || !std::isfinite(width) || width <= PortalLengthEpsilon)
@@ -205,8 +218,8 @@ namespace Horo::Navigation::RecastDetourQueries {
             return Result<NavigationPathPortal>::Success({.kind = NavigationPathPortalKind::SharedPolygonEdge,
                                                           .fromPolygonIndex = corridorIndex,
                                                           .toPolygonIndex = corridorIndex + 1U,
-                                                          .leftVertexIndex = leftVertex,
-                                                          .rightVertexIndex = rightVertex,
+                                                          .leftVertexIndex = geometry.Value().leftVertex,
+                                                          .rightVertexIndex = geometry.Value().rightVertex,
                                                           .left = left,
                                                           .right = right,
                                                           .widthMeters = static_cast<float>(width),
@@ -316,6 +329,74 @@ namespace Horo::Navigation::RecastDetourQueries {
             std::uint32_t costPolygonCount{};
         };
 
+        struct FunnelState final {
+            Math::Vec3 apex{};
+            Math::Vec3 left{};
+            Math::Vec3 right{};
+            std::uint32_t leftPortal{NavigationPathNoPortal};
+            std::uint32_t rightPortal{NavigationPathNoPortal};
+        };
+
+        struct FunnelProgress final {
+            bool pointBudgetExceeded{};
+            bool restart{};
+            std::uint32_t restartPortal{};
+        };
+
+        [[nodiscard]] WaypointAppendResult AppendFunnelCorner(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
+                                                              const std::uint32_t cornerPortal, const bool useLeft,
+                                                              const std::uint32_t maximumWaypoints) {
+            const Math::Vec3 corner = useLeft ? funnel.left : funnel.right;
+            const std::uint32_t corridorIndex = cornerPortal == NavigationPathNoPortal ? 0U : cornerPortal;
+            const std::uint32_t vertexIndex = cornerPortal < path.portals.size() ? (useLeft ? path.portals[cornerPortal].leftVertexIndex
+                                                                                            : path.portals[cornerPortal].rightVertexIndex)
+                                                                                 : NavigationPathNoVertex;
+            const auto waypoint =
+                MakeWaypoint(path, corner, NavigationPathWaypointKind::PortalCorner, corridorIndex, cornerPortal, vertexIndex);
+            const auto result = AppendWaypoint(context.slot.waypoints, waypoint, maximumWaypoints);
+            if (result == WaypointAppendResult::BudgetExceeded)
+                return result;
+            funnel.apex = corner;
+            funnel.left = corner;
+            funnel.right = corner;
+            funnel.leftPortal = cornerPortal;
+            funnel.rightPortal = cornerPortal;
+            return result;
+        }
+
+        [[nodiscard]] FunnelProgress ProcessFunnelPortal(PathBuildContext &context, const NavigationPath &path, FunnelState &funnel,
+                                                         const Math::Vec3 target, const std::uint32_t portalIndex,
+                                                         const std::uint32_t maximumWaypoints) {
+            const bool isTargetPortal = portalIndex == path.portals.size();
+            const Math::Vec3 newLeft = isTargetPortal ? target : path.portals[portalIndex].left;
+            const Math::Vec3 newRight = isTargetPortal ? target : path.portals[portalIndex].right;
+            if (TriangleAreaXZ(funnel.apex, funnel.right, newRight) <= FunnelEpsilon) {
+                if (SamePoint(funnel.apex, funnel.right) || TriangleAreaXZ(funnel.apex, funnel.left, newRight) > FunnelEpsilon) {
+                    funnel.right = newRight;
+                    funnel.rightPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
+                } else {
+                    const std::uint32_t cornerPortal = funnel.leftPortal == NavigationPathNoPortal ? portalIndex : funnel.leftPortal;
+                    if (AppendFunnelCorner(context, path, funnel, cornerPortal, true, maximumWaypoints) ==
+                        WaypointAppendResult::BudgetExceeded)
+                        return {.pointBudgetExceeded = true};
+                    return {.restart = true, .restartPortal = cornerPortal};
+                }
+            }
+            if (TriangleAreaXZ(funnel.apex, funnel.left, newLeft) >= -FunnelEpsilon) {
+                if (SamePoint(funnel.apex, funnel.left) || TriangleAreaXZ(funnel.apex, funnel.right, newLeft) < -FunnelEpsilon) {
+                    funnel.left = newLeft;
+                    funnel.leftPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
+                } else {
+                    const std::uint32_t cornerPortal = funnel.rightPortal == NavigationPathNoPortal ? portalIndex : funnel.rightPortal;
+                    if (AppendFunnelCorner(context, path, funnel, cornerPortal, false, maximumWaypoints) ==
+                        WaypointAppendResult::BudgetExceeded)
+                        return {.pointBudgetExceeded = true};
+                    return {.restart = true, .restartPortal = cornerPortal};
+                }
+            }
+            return {};
+        }
+
         [[nodiscard]] Result<FunnelResult> BuildWaypoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target) {
             if (path.corridor.empty())
                 return Failure<FunnelResult>(NavigationErrors::ProviderFailed);
@@ -329,64 +410,17 @@ namespace Horo::Navigation::RecastDetourQueries {
             if (AppendWaypoint(context.slot.waypoints, start, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
                 return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
 
-            Math::Vec3 apex = context.start.projected;
-            Math::Vec3 left = apex;
-            Math::Vec3 right = apex;
-            std::uint32_t leftPortal = NavigationPathNoPortal;
-            std::uint32_t rightPortal = NavigationPathNoPortal;
+            FunnelState funnel{.apex = context.start.projected, .left = context.start.projected, .right = context.start.projected};
             bool pointBudgetExceeded{};
             for (std::uint32_t portalIndex = 0; portalIndex <= path.portals.size(); ++portalIndex) {
-                const bool isTargetPortal = portalIndex == path.portals.size();
-                const Math::Vec3 newLeft = isTargetPortal ? target : path.portals[portalIndex].left;
-                const Math::Vec3 newRight = isTargetPortal ? target : path.portals[portalIndex].right;
-
-                if (TriangleAreaXZ(apex, right, newRight) <= FunnelEpsilon) {
-                    if (SamePoint(apex, right) || TriangleAreaXZ(apex, left, newRight) > FunnelEpsilon) {
-                        right = newRight;
-                        rightPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
-                    } else {
-                        const std::uint32_t cornerPortal = leftPortal == NavigationPathNoPortal ? portalIndex : leftPortal;
-                        const std::uint32_t cornerCorridor = cornerPortal == NavigationPathNoPortal ? 0U : cornerPortal;
-                        const auto corner = MakeWaypoint(path, left, NavigationPathWaypointKind::PortalCorner, cornerCorridor, cornerPortal,
-                                                         cornerPortal < path.portals.size() ? path.portals[cornerPortal].leftVertexIndex
-                                                                                            : NavigationPathNoVertex);
-                        if (AppendWaypoint(context.slot.waypoints, corner, maximumWaypoints) == WaypointAppendResult::BudgetExceeded) {
-                            pointBudgetExceeded = true;
-                            break;
-                        }
-                        apex = left;
-                        left = apex;
-                        right = apex;
-                        leftPortal = cornerPortal;
-                        rightPortal = cornerPortal;
-                        portalIndex = cornerPortal;
-                        continue;
-                    }
+                const FunnelProgress progress = ProcessFunnelPortal(context, path, funnel, target, portalIndex, maximumWaypoints);
+                if (progress.pointBudgetExceeded) {
+                    pointBudgetExceeded = true;
+                    break;
                 }
-
-                if (TriangleAreaXZ(apex, left, newLeft) >= -FunnelEpsilon) {
-                    if (SamePoint(apex, left) || TriangleAreaXZ(apex, right, newLeft) < -FunnelEpsilon) {
-                        left = newLeft;
-                        leftPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
-                    } else {
-                        const std::uint32_t cornerPortal = rightPortal == NavigationPathNoPortal ? portalIndex : rightPortal;
-                        const std::uint32_t cornerCorridor = cornerPortal == NavigationPathNoPortal ? 0U : cornerPortal;
-                        const auto corner =
-                            MakeWaypoint(path, right, NavigationPathWaypointKind::PortalCorner, cornerCorridor, cornerPortal,
-                                         cornerPortal < path.portals.size() ? path.portals[cornerPortal].rightVertexIndex
-                                                                            : NavigationPathNoVertex);
-                        if (AppendWaypoint(context.slot.waypoints, corner, maximumWaypoints) == WaypointAppendResult::BudgetExceeded) {
-                            pointBudgetExceeded = true;
-                            break;
-                        }
-                        apex = right;
-                        left = apex;
-                        right = apex;
-                        leftPortal = cornerPortal;
-                        rightPortal = cornerPortal;
-                        portalIndex = cornerPortal;
-                        continue;
-                    }
+                if (progress.restart) {
+                    portalIndex = progress.restartPortal;
+                    continue;
                 }
             }
 
