@@ -176,8 +176,8 @@ namespace Horo::Runtime::Ui {
     /**
      * @brief Owner-thread preallocated frame arena for Runtime UI geometry generation and batching.
      * @details Creation reserves every vertex, index, batch, and plan slot. Build performs a bounded command scan without I/O,
-     *          blocking, fallback allocation, or reordering. Close stops admission while outstanding plans retain their source
-     *          snapshot and geometry storage until the final immutable lease retires.
+     *          blocking, fallback allocation, or reordering. Arena control calls are serialized on the owner thread while
+     *          outstanding plans may retain their source snapshot and geometry storage until the final immutable lease retires.
      */
     class UiRenderGeometryArena final {
     public:
@@ -209,7 +209,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns current arena admission state. @return Active or Closed. */
         [[nodiscard]] UiRenderGeometryArenaState State() const noexcept;
-        /** @brief Returns bounded capacity, usage, peak, and failure evidence without allocating. @return Immutable statistics. */
+        /**
+         * @brief Returns bounded capacity, usage, peak, and failure evidence without allocating.
+         * @pre Calls for one arena are serialized on its owner thread.
+         * @return Immutable statistics.
+         */
         [[nodiscard]] UiRenderGeometryStatistics Statistics() const noexcept;
 
     private:

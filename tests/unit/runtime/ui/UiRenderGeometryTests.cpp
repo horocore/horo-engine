@@ -49,26 +49,18 @@ namespace Horo::Runtime::Ui {
             return std::move(treeResult).Value();
         }
 
-        UiRenderSnapshot MakeSnapshot(const std::uint64_t revision) {
-            auto tree = MakeTree();
-            const auto root = tree.Root().Value().handle;
-            const auto child = tree.Find(Element(3)).Value();
-            const UiRenderSnapshotLimits limits{7, 1, 2, 0, 0, 1, 2};
-            auto extractorResult = UiRenderExtractor::Create({{Owner(), 9, 1}, limits, 1});
-            REQUIRE(extractorResult.HasValue());
-            auto extractor = std::move(extractorResult).Value();
+        std::array<UiRenderResourceReference, 2> MakeResources() {
+            return {UiRenderResourceReference{Asset(1), UiRenderResourceRevision::Create(3).Value(), UiRenderResourceRole::Image},
+                    UiRenderResourceReference{Asset(2), UiRenderResourceRevision::Create(3).Value(), UiRenderResourceRole::FontFace}};
+        }
 
-            const std::array resources{UiRenderResourceReference{Asset(1), UiRenderResourceRevision::Create(3).Value(),
-                                                                 UiRenderResourceRole::Image},
-                                       UiRenderResourceReference{Asset(2), UiRenderResourceRevision::Create(3).Value(),
-                                                                 UiRenderResourceRole::FontFace}};
-            const std::array transforms{UiLogicalTransform{}};
-            const std::array glyphs{UiPositionedGlyph{17, 0, {320, 0}, {32, 16}, {0.0F, 0.0F, 0.5F, 1.0F}},
-                                    UiPositionedGlyph{18, 1, {352, 0}, {32, 16}, {0.5F, 0.0F, 1.0F, 1.0F}}};
-            const std::array textRuns{UiTextRun{1, 0, 2, {1.0F, 1.0F, 1.0F, 1.0F}}};
-            const std::array<UiClip, 0> clips{};
-            const std::array<UiMask, 0> masks{};
-            const std::array commands{
+        std::array<UiPositionedGlyph, 2> MakeGlyphs() {
+            return {UiPositionedGlyph{17, 0, {320, 0}, {32, 16}, {0.0F, 0.0F, 0.5F, 1.0F}},
+                    UiPositionedGlyph{18, 1, {352, 0}, {32, 16}, {0.5F, 0.0F, 1.0F, 1.0F}}};
+        }
+
+        std::array<UiDrawCommand, 7> MakeCommands(const UiElementHandle root, const UiElementHandle child, const std::int32_t borderWidth) {
+            return {
                 UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}},
                 UiDrawCommand{root,
                               {{100, 0}, {100, 50}},
@@ -83,7 +75,7 @@ namespace Horo::Runtime::Ui {
                               NoUiRenderIndex,
                               NoUiRenderIndex,
                               1.0F,
-                              UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, 4}},
+                              UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, borderWidth}},
                 UiDrawCommand{child,
                               {{0, 64}, {64, 64}},
                               0,
@@ -107,6 +99,24 @@ namespace Horo::Runtime::Ui {
                               UiSpriteDraw{0, {0.25F, 0.0F, 0.75F, 1.0F}, {1.0F, 1.0F, 1.0F, 1.0F}}},
                 UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}},
             };
+        }
+
+        UiRenderSnapshot MakeSnapshot(const std::uint64_t revision, const std::int32_t borderWidth = 4) {
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Element(3)).Value();
+            const UiRenderSnapshotLimits limits{7, 1, 2, 0, 0, 1, 2};
+            auto extractorResult = UiRenderExtractor::Create({{Owner(), 9, 1}, limits, 1});
+            REQUIRE(extractorResult.HasValue());
+            auto extractor = std::move(extractorResult).Value();
+
+            const auto resources = MakeResources();
+            const std::array transforms{UiLogicalTransform{}};
+            const auto glyphs = MakeGlyphs();
+            const std::array textRuns{UiTextRun{1, 0, 2, {1.0F, 1.0F, 1.0F, 1.0F}}};
+            const std::array<UiClip, 0> clips{};
+            const std::array<UiMask, 0> masks{};
+            const auto commands = MakeCommands(root, child, borderWidth);
             const UiRenderSnapshotDescriptor descriptor{.instance = tree.Instance(),
                                                         .canvas = tree.Canvas(),
                                                         .document = tree.SourceDocument(),
@@ -171,6 +181,21 @@ namespace Horo::Runtime::Ui {
                 REQUIRE(batch.IsValid(plan.Vertices().size(), plan.Indices().size(), plan.Descriptor().commandCount));
         }
 
+        TEST_CASE("UI geometry clamps oversized border strips without edge overlap", "[runtime_ui][render_geometry][edge]") {
+            const auto snapshot = MakeSnapshot(2, 200);
+            auto arena = MakeArena();
+            auto planResult = arena.Build(snapshot);
+            REQUIRE(planResult.HasValue());
+            const auto plan = std::move(planResult).Value();
+
+            REQUIRE(plan.Vertices()[8].y == 0.0F);
+            REQUIRE(plan.Vertices()[10].y == 25.0F);
+            REQUIRE(plan.Vertices()[12].y == 25.0F);
+            REQUIRE(plan.Vertices()[14].y == 50.0F);
+            REQUIRE(plan.Vertices()[16].y == 25.0F);
+            REQUIRE(plan.Vertices()[17].y == 25.0F);
+        }
+
         TEST_CASE("UI geometry rejects capacity pressure without fallback allocation", "[runtime_ui][render_geometry][limits]") {
             const auto snapshot = MakeSnapshot(2);
             auto arenaResult = UiRenderGeometryArena::Create({{Owner(), 9, 1}, {8, 12, 4}, 1});
@@ -185,6 +210,23 @@ namespace Horo::Runtime::Ui {
 
             const auto invalid = UiRenderGeometryArena::Create({{Owner(), 9, 1}, {0, 12, 4}, 1});
             REQUIRE(invalid.HasError());
+        }
+
+        TEST_CASE("UI geometry reports leased plan-slot exhaustion", "[runtime_ui][render_geometry][limits]") {
+            const auto snapshot = MakeSnapshot(2);
+            auto arena = MakeArena(1);
+            auto retainedResult = arena.Build(snapshot);
+            REQUIRE(retainedResult.HasValue());
+            std::optional<UiRenderGeometryPlan> retained{std::move(retainedResult).Value()};
+
+            const auto failed = arena.Build(snapshot);
+            REQUIRE(failed.HasError());
+            REQUIRE(failed.ErrorValue().code.Value() == UiErrors::RenderGeometryStorageExhausted.code.Value());
+            REQUIRE(arena.Statistics().failedBuilds == 1);
+            REQUIRE(arena.Statistics().activeLeases == 1);
+
+            retained.reset();
+            REQUIRE(arena.Build(snapshot).HasValue());
         }
 
         TEST_CASE("UI geometry plans retain source leases across reload and shutdown", "[runtime_ui][render_geometry][lifecycle]") {

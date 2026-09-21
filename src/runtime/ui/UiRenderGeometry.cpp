@@ -21,6 +21,8 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
+        inline constexpr std::uint64_t BuildingLease = std::numeric_limits<std::uint64_t>::max();
+
         [[nodiscard]] constexpr bool IsKnown(const UiRenderGeometryPrimitive value) noexcept {
             return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::TextGlyphs;
         }
@@ -38,6 +40,14 @@ namespace Horo::Runtime::Ui {
         struct FloatPoint final {
             float x{};
             float y{};
+        };
+
+        struct QuadDescriptor final {
+            const UiLogicalTransform *transform{};
+            FloatPoint origin;
+            FloatPoint extent;
+            std::array<float, 4> uv;
+            UiLinearColor color;
         };
 
         [[nodiscard]] FloatPoint TransformPoint(const UiLogicalTransform &transform, const float x, const float y) noexcept {
@@ -101,21 +111,19 @@ namespace Horo::Runtime::Ui {
             }, command.payload);
         }
 
-        void AppendQuad(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const UiLogicalTransform &transform,
-                        const float x, const float y, const float width, const float height, const std::array<float, 4> &uv,
-                        const UiLinearColor color) {
-            const auto corners = RectangleCorners(x, y, width, height);
+        void AppendQuad(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const QuadDescriptor &quad) {
+            const auto corners = RectangleCorners(quad.origin.x, quad.origin.y, quad.extent.x, quad.extent.y);
             const std::array<FloatPoint, 4> transformed{
-                TransformPoint(transform, corners[0].x, corners[0].y),
-                TransformPoint(transform, corners[1].x, corners[1].y),
-                TransformPoint(transform, corners[2].x, corners[2].y),
-                TransformPoint(transform, corners[3].x, corners[3].y),
+                TransformPoint(*quad.transform, corners[0].x, corners[0].y),
+                TransformPoint(*quad.transform, corners[1].x, corners[1].y),
+                TransformPoint(*quad.transform, corners[2].x, corners[2].y),
+                TransformPoint(*quad.transform, corners[3].x, corners[3].y),
             };
             const auto first = static_cast<std::uint32_t>(vertices.size());
-            vertices.push_back({transformed[0].x, transformed[0].y, uv[0], uv[1], color});
-            vertices.push_back({transformed[1].x, transformed[1].y, uv[2], uv[1], color});
-            vertices.push_back({transformed[2].x, transformed[2].y, uv[2], uv[3], color});
-            vertices.push_back({transformed[3].x, transformed[3].y, uv[0], uv[3], color});
+            vertices.push_back({transformed[0].x, transformed[0].y, quad.uv[0], quad.uv[1], quad.color});
+            vertices.push_back({transformed[1].x, transformed[1].y, quad.uv[2], quad.uv[1], quad.color});
+            vertices.push_back({transformed[2].x, transformed[2].y, quad.uv[2], quad.uv[3], quad.color});
+            vertices.push_back({transformed[3].x, transformed[3].y, quad.uv[0], quad.uv[3], quad.color});
             indices.insert(indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
         }
 
@@ -129,14 +137,14 @@ namespace Horo::Runtime::Ui {
             if (border <= 0.0F || extentX <= 0.0F || extentY <= 0.0F)
                 return;
 
-            const float horizontal = std::min(extentY, border);
-            const float vertical = std::min(extentX, border);
+            const float horizontal = std::min(extentY * 0.5F, border);
+            const float vertical = std::min(extentX * 0.5F, border);
             const float innerHeight = std::max(0.0F, extentY - 2.0F * horizontal);
             const std::array<float, 4> uv{0.0F, 0.0F, 0.0F, 0.0F};
-            AppendQuad(vertices, indices, transform, x, y, extentX, horizontal, uv, color);
-            AppendQuad(vertices, indices, transform, x, y + extentY - horizontal, extentX, horizontal, uv, color);
-            AppendQuad(vertices, indices, transform, x, y + horizontal, vertical, innerHeight, uv, color);
-            AppendQuad(vertices, indices, transform, x + extentX - vertical, y + horizontal, vertical, innerHeight, uv, color);
+            AppendQuad(vertices, indices, {&transform, {x, y}, {extentX, horizontal}, uv, color});
+            AppendQuad(vertices, indices, {&transform, {x, y + extentY - horizontal}, {extentX, horizontal}, uv, color});
+            AppendQuad(vertices, indices, {&transform, {x, y + horizontal}, {vertical, innerHeight}, uv, color});
+            AppendQuad(vertices, indices, {&transform, {x + extentX - vertical, y + horizontal}, {vertical, innerHeight}, uv, color});
         }
 
         [[nodiscard]] Result<void> ValidateGenerated(const std::span<const UiRenderVertex> vertices,
@@ -209,10 +217,11 @@ namespace Horo::Runtime::Ui {
 
             ~PublishLease() {
                 if (storage_ != nullptr)
-                    storage_->leases.store(0);
+                    storage_->leases.store(0, std::memory_order_release);
             }
 
             void Commit() noexcept {
+                storage_->leases.store(1, std::memory_order_release);
                 storage_ = nullptr;
             }
 
@@ -255,6 +264,46 @@ namespace Horo::Runtime::Ui {
             return Result<UiRenderGeometryBatch *>::Success(&batches.back());
         }
 
+        [[nodiscard]] Result<void> AppendCommand(const UiRenderSnapshot &snapshot, const UiDrawCommand &command,
+                                                 const UiLogicalTransform &transform) {
+            const auto appendRectangle = [this, &command, &transform](const std::array<float, 4> &uv, const UiLinearColor color) {
+                AppendQuad(vertices, indices,
+                           {&transform,
+                            {static_cast<float>(command.rect.origin.x), static_cast<float>(command.rect.origin.y)},
+                            {static_cast<float>(command.rect.extent.width), static_cast<float>(command.rect.extent.height)},
+                            uv,
+                            WithOpacity(color, command.opacity)});
+            };
+            return std::visit([this, &snapshot, &command, &transform, &appendRectangle](const auto &draw) -> Result<void> {
+                using Draw = std::decay_t<decltype(draw)>;
+                if constexpr (std::is_same_v<Draw, UiSolidDraw>) {
+                    appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, draw.color);
+                } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
+                    AppendBorder(vertices, indices, transform, command.rect, draw.width, WithOpacity(draw.color, command.opacity));
+                } else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
+                    appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, draw.tint);
+                } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
+                    appendRectangle(draw.uv, draw.tint);
+                } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
+                    if (draw.run >= snapshot.TextRuns().size())
+                        return Failure(UiErrors::RenderGeometryInvalid);
+                    const auto &run = snapshot.TextRuns()[draw.run];
+                    if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
+                        return Failure(UiErrors::RenderGeometryInvalid);
+                    for (std::uint32_t glyphOffset = 0; glyphOffset < run.glyphCount; ++glyphOffset) {
+                        const auto &glyph = snapshot.Glyphs()[run.firstGlyph + glyphOffset];
+                        AppendQuad(vertices, indices,
+                                   {&transform,
+                                    {static_cast<float>(glyph.origin.x), static_cast<float>(glyph.origin.y)},
+                                    {static_cast<float>(glyph.extent.width), static_cast<float>(glyph.extent.height)},
+                                    glyph.uv,
+                                    WithOpacity(run.color, command.opacity)});
+                    }
+                }
+                return Result<void>::Success();
+            }, command.payload);
+        }
+
         [[nodiscard]] Result<void> Build(const UiRenderSnapshot &snapshot) {
             Reset();
             source.emplace(snapshot);
@@ -263,10 +312,11 @@ namespace Horo::Runtime::Ui {
                 return Failure(UiErrors::RenderGeometryCapacityExceeded);
 
             for (std::uint32_t commandIndex = 0; commandIndex < commands.size(); ++commandIndex) {
-                const auto keyResult = MakeBatchKey(snapshot, commands[commandIndex]);
+                const auto &command = commands[commandIndex];
+                const auto keyResult = MakeBatchKey(snapshot, command);
                 if (keyResult.HasError())
                     return Result<void>::Failure(keyResult.ErrorValue());
-                const auto required = RequiredGeometry(snapshot, commands[commandIndex]);
+                const auto required = RequiredGeometry(snapshot, command);
                 if (required.HasError())
                     return Result<void>::Failure(required.ErrorValue());
                 if (vertices.size() > limits.vertices || indices.size() > limits.indices ||
@@ -278,41 +328,8 @@ namespace Horo::Runtime::Ui {
                 auto *batch = batchResult.Value();
                 const auto firstVertex = vertices.size();
                 const auto firstIndex = indices.size();
-                const auto &command = commands[commandIndex];
                 const auto &transform = snapshot.Transforms()[command.transform];
-                const auto appendResult = std::visit([this, &command, &snapshot, &transform](const auto &draw) -> Result<void> {
-                    using Draw = std::decay_t<decltype(draw)>;
-                    const auto color = [&draw, &command](const UiLinearColor value) {
-                        return WithOpacity(value, command.opacity);
-                    };
-                    const auto appendRectangle = [this, &command, &transform](const std::array<float, 4> &uv, const UiLinearColor value) {
-                        AppendQuad(vertices, indices, transform, static_cast<float>(command.rect.origin.x),
-                                   static_cast<float>(command.rect.origin.y), static_cast<float>(command.rect.extent.width),
-                                   static_cast<float>(command.rect.extent.height), uv, value);
-                    };
-                    if constexpr (std::is_same_v<Draw, UiSolidDraw>) {
-                        appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, color(draw.color));
-                    } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
-                        AppendBorder(vertices, indices, transform, command.rect, draw.width, color(draw.color));
-                    } else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
-                        appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, color(draw.tint));
-                    } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
-                        appendRectangle(draw.uv, color(draw.tint));
-                    } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
-                        if (draw.run >= snapshot.TextRuns().size())
-                            return Failure(UiErrors::RenderGeometryInvalid);
-                        const auto &run = snapshot.TextRuns()[draw.run];
-                        if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
-                            return Failure(UiErrors::RenderGeometryInvalid);
-                        for (std::uint32_t glyphOffset = 0; glyphOffset < run.glyphCount; ++glyphOffset) {
-                            const auto &glyph = snapshot.Glyphs()[run.firstGlyph + glyphOffset];
-                            AppendQuad(vertices, indices, transform, static_cast<float>(glyph.origin.x), static_cast<float>(glyph.origin.y),
-                                       static_cast<float>(glyph.extent.width), static_cast<float>(glyph.extent.height), glyph.uv,
-                                       color(run.color));
-                        }
-                    }
-                    return Result<void>::Success();
-                }, command.payload);
+                const auto appendResult = AppendCommand(snapshot, command, transform);
                 if (appendResult.HasError())
                     return appendResult;
                 batch->vertexCount += static_cast<std::uint32_t>(vertices.size() - firstVertex);
@@ -352,7 +369,7 @@ namespace Horo::Runtime::Ui {
             for (std::size_t offset = 0; offset < slots.size(); ++offset) {
                 const auto index = (nextSlot + offset) % slots.size();
                 std::uint64_t expected{};
-                if (slots[index]->leases.compare_exchange_strong(expected, 1)) {
+                if (slots[index]->leases.compare_exchange_strong(expected, BuildingLease, std::memory_order_acq_rel)) {
                     nextSlot = (index + 1) % slots.size();
                     return slots[index];
                 }
@@ -405,9 +422,9 @@ namespace Horo::Runtime::Ui {
     void UiRenderGeometryPlan::Retain() const noexcept {
         if (!storage_)
             return;
-        auto current = storage_->leases.load();
-        while (current != std::numeric_limits<std::uint64_t>::max()) {
-            if (storage_->leases.compare_exchange_weak(current, current + 1))
+        auto current = storage_->leases.load(std::memory_order_acquire);
+        while (current > 0 && current < BuildingLease - 1) {
+            if (storage_->leases.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel))
                 return;
         }
         std::terminate();
@@ -417,7 +434,7 @@ namespace Horo::Runtime::Ui {
     void UiRenderGeometryPlan::Release() noexcept {
         if (!storage_)
             return;
-        storage_->leases.fetch_sub(1);
+        storage_->leases.fetch_sub(1, std::memory_order_acq_rel);
         storage_.reset();
     }
 
@@ -538,13 +555,17 @@ namespace Horo::Runtime::Ui {
         result.peakBatches = storage_->peakBatches;
         std::uint64_t activeLeases{};
         for (const auto &slot : storage_->slots) {
-            const auto leases = slot->leases.load();
-            activeLeases += leases;
-            if (leases == 0)
-                continue;
-            result.usedVertices += static_cast<std::uint32_t>(slot->vertices.size());
-            result.usedIndices += static_cast<std::uint32_t>(slot->indices.size());
-            result.usedBatches += static_cast<std::uint32_t>(slot->batches.size());
+            auto leases = slot->leases.load(std::memory_order_acquire);
+            while (leases > 0 && leases < BuildingLease - 1) {
+                if (!slot->leases.compare_exchange_weak(leases, leases + 1, std::memory_order_acq_rel, std::memory_order_acquire))
+                    continue;
+                activeLeases += leases;
+                result.usedVertices += static_cast<std::uint32_t>(slot->vertices.size());
+                result.usedIndices += static_cast<std::uint32_t>(slot->indices.size());
+                result.usedBatches += static_cast<std::uint32_t>(slot->batches.size());
+                slot->leases.fetch_sub(1, std::memory_order_release);
+                break;
+            }
         }
         result.activeLeases = static_cast<std::uint32_t>(std::min<std::uint64_t>(activeLeases, std::numeric_limits<std::uint32_t>::max()));
         return result;
