@@ -256,56 +256,70 @@ namespace Horo::Runtime::Ui {
         FlowTo,
     };
 
+    namespace Detail {
+        /** @brief Shared representation for bounded non-zero accessibility identities. */
+        template <typename Derived, typename Scalar> class UiAccessibilityNumericId {
+        public:
+            constexpr UiAccessibilityNumericId() noexcept = default;
+
+            /** @brief Returns the stable numeric identity. @return Zero only for the invalid identity. */
+            [[nodiscard]] constexpr Scalar Value() const noexcept {
+                return value_;
+            }
+
+            /** @brief Checks representation, not registry residency. @return Whether the identity is non-zero. */
+            [[nodiscard]] constexpr bool IsValid() const noexcept {
+                return value_ != 0;
+            }
+
+            [[nodiscard]] friend constexpr auto operator<=>(const Derived &left, const Derived &right) noexcept {
+                return left.Value() <=> right.Value();
+            }
+
+            [[nodiscard]] friend constexpr bool operator==(const Derived &left, const Derived &right) noexcept {
+                return left.Value() == right.Value();
+            }
+
+        protected:
+            explicit constexpr UiAccessibilityNumericId(const Scalar value) noexcept : value_(value) {}
+
+        private:
+            Scalar value_{};
+        };
+    }  // namespace Detail
+
     /** @brief Bounded stable action identity supplied by the control owner. */
-    class UiAccessibilityActionId final {
+    class UiAccessibilityActionId final : public Detail::UiAccessibilityNumericId<UiAccessibilityActionId, std::uint32_t> {
+        using Base = Detail::UiAccessibilityNumericId<UiAccessibilityActionId, std::uint32_t>;
+
     public:
         /** @brief Constructs the reserved invalid identity. */
         UiAccessibilityActionId() = default;
         /** @brief Creates a non-zero action identity. @param value Stable owner-assigned action number. */
         [[nodiscard]] static Result<UiAccessibilityActionId> Create(std::uint32_t value);
 
-        /** @brief Returns the stable action number. @return Zero only for the invalid identity. */
-        [[nodiscard]] constexpr std::uint32_t Value() const noexcept {
-            return value_;
-        }
-
-        /** @brief Checks representation, not node residency. @return Whether the identity is non-zero. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return value_ != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const UiAccessibilityActionId &) const noexcept = default;
+        using Base::IsValid;
+        using Base::Value;
 
     private:
-        explicit constexpr UiAccessibilityActionId(const std::uint32_t value) noexcept : value_(value) {}
-
-        std::uint32_t value_{};
+        explicit constexpr UiAccessibilityActionId(const std::uint32_t value) noexcept : Base(value) {}
     };
 
     /** @brief Bounded stable identity of a package/module contributing a control projection. */
-    class UiAccessibilityContributorId final {
+    class UiAccessibilityContributorId final : public Detail::UiAccessibilityNumericId<UiAccessibilityContributorId, std::uint64_t> {
+        using Base = Detail::UiAccessibilityNumericId<UiAccessibilityContributorId, std::uint64_t>;
+
     public:
         /** @brief Constructs the reserved core/no-contributor identity. */
         UiAccessibilityContributorId() = default;
         /** @brief Creates a non-zero contributor identity. @param value Stable host-issued contributor number. */
         [[nodiscard]] static Result<UiAccessibilityContributorId> Create(std::uint64_t value);
 
-        /** @brief Returns the contributor number. @return Zero only for the invalid identity. */
-        [[nodiscard]] constexpr std::uint64_t Value() const noexcept {
-            return value_;
-        }
-
-        /** @brief Checks representation, not module liveness. @return Whether the identity is non-zero. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return value_ != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const UiAccessibilityContributorId &) const noexcept = default;
+        using Base::IsValid;
+        using Base::Value;
 
     private:
-        explicit constexpr UiAccessibilityContributorId(const std::uint64_t value) noexcept : value_(value) {}
-
-        std::uint64_t value_{};
+        explicit constexpr UiAccessibilityContributorId(const std::uint64_t value) noexcept : Base(value) {}
     };
 
     /** @brief Closed action vocabulary that maps to typed Runtime UI commands. */
