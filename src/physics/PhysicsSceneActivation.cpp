@@ -72,8 +72,8 @@ namespace Horo::Physics::Detail {
                     if (shape.HasError())
                         return Result<void>::Failure(
                             AddActivationContext(shape.ErrorValue(), "shape", collider.object, collider.component.value, std::nullopt));
-                    instances.emplace_back(PhysicsSceneShapeInstance{shape.Value(), collider.localPose});
-                    shapeBindings.emplace_back(PhysicsSceneShapeBinding{collider.object, collider.collider, shape.Value()});
+                    instances.emplace_back(shape.Value(), collider.localPose);
+                    shapeBindings.emplace_back(collider.object, collider.collider, shape.Value());
                 }
                 ShapeHandle bodyShape = instances.front().shape;
                 if (instances.size() > 1) {
@@ -95,7 +95,7 @@ namespace Horo::Physics::Detail {
                     return Result<void>::Failure(
                         AddActivationContext(nativeBody.ErrorValue(), "body", body.object, body.component.value, std::nullopt));
                 bodyHandles.emplace_back(nativeBody.Value());
-                bodyBindings.emplace_back(PhysicsSceneBodyBinding{body.object, body.slot, nativeBody.Value()});
+                bodyBindings.emplace_back(body.object, body.slot, nativeBody.Value());
             }
             return Result<void>::Success();
         }
@@ -111,8 +111,7 @@ namespace Horo::Physics::Detail {
                 if (nativeConstraint.HasError())
                     return Result<void>::Failure(AddActivationContext(nativeConstraint.ErrorValue(), "constraint", constraint.object,
                                                                       constraint.component.value, std::nullopt));
-                constraintBindings.emplace_back(
-                    PhysicsSceneConstraintBinding{constraint.object, constraint.slot, nativeConstraint.Value()});
+                constraintBindings.emplace_back(constraint.object, constraint.slot, nativeConstraint.Value());
             }
             return Result<void>::Success();
         }

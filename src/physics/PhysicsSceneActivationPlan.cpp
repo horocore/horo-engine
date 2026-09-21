@@ -280,10 +280,10 @@ namespace Horo::Physics::Detail {
                 geometry = ToPhysicsShape(*analytic);
             } else {
                 const Runtime::PhysicsShapeAssetReference &asset = std::get<Runtime::PhysicsShapeAssetReference>(collider.source);
-                const Result<Runtime::RuntimeSceneAssetView> resolved =
-                    ResolveAsset(definition, scene, asset.asset, PhysicsErrors::ShapeArtifactInvalid, "shape", reference.object,
-                                 collider.id.value);
-                if (resolved.HasError())
+                if (const Result<Runtime::RuntimeSceneAssetView> resolved =
+                        ResolveAsset(definition, scene, asset.asset, PhysicsErrors::ShapeArtifactInvalid, "shape", reference.object,
+                                     collider.id.value);
+                    resolved.HasError())
                     return Result<PlannedCollider>::Failure(resolved.ErrorValue());
                 return ContextFailure<PlannedCollider>(PhysicsErrors::OperationUnsupported, "shape", reference.object, collider.id.value,
                                                        asset.asset,
