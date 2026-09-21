@@ -122,8 +122,8 @@ namespace Horo::Physics::Detail {
         manifold.mBaseOffset = JPH::RVec3::sZero();
         manifold.mWorldSpaceNormal = JPH::Vec3::sAxisY();
         manifold.mPenetrationDepth = 0.1F;
-        manifold.mRelativeContactPointsOn1.push_back(JPH::Vec3::sZero());
-        manifold.mRelativeContactPointsOn2.push_back(JPH::Vec3::sZero());
+        manifold.mRelativeContactPointsOn1.emplace_back(JPH::Vec3::sZero());
+        manifold.mRelativeContactPointsOn2.emplace_back(JPH::Vec3::sZero());
         JPH::ContactSettings settings{};
         settings.mIsSensor = sensor;
         if (persisted)

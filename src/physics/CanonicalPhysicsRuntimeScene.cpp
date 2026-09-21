@@ -115,7 +115,7 @@ namespace Horo::Physics::Detail {
             const std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint> &parameters) {
             JPH::Body &body1 = firstLock.GetBody();
             JPH::Body &body2 = second != nullptr ? secondLock.GetBody() : JPH::Body::sFixedToWorld;
-            const JPH::Ref<JPH::Constraint> nativeConstraint = std::visit([&]<typename Parameter>(const Parameter &value) {
+            JPH::Ref<JPH::Constraint> nativeConstraint = std::visit([&]<typename Parameter>(const Parameter &value) {
                 using ParameterType = std::decay_t<Parameter>;
                 if constexpr (std::is_same_v<ParameterType, PhysicsFixedConstraint>)
                     return CreateNativeFixedConstraint(body1, body2, firstFrame, secondFrame);
@@ -146,7 +146,7 @@ namespace Horo::Physics::Detail {
 
         const std::uint32_t slot = canonical.scene.nextShapeSlot++;
         const ShapeHandle identity{owner, {slot, 1}};
-        canonical.scene.shapes.push_back({.handle = identity, .shape = nativeShape.Value()});
+        canonical.scene.shapes.emplace_back(CanonicalSceneShapeRecord{.handle = identity, .shape = nativeShape.Value()});
         return Result<ShapeHandle>::Success(identity);
     }
 
@@ -173,7 +173,7 @@ namespace Horo::Physics::Detail {
 
         const std::uint32_t slot = canonical.scene.nextShapeSlot++;
         const ShapeHandle identity{owner, {slot, 1}};
-        canonical.scene.shapes.push_back({.handle = identity, .shape = created.Get()});
+        canonical.scene.shapes.emplace_back(CanonicalSceneShapeRecord{.handle = identity, .shape = created.Get()});
         return Result<ShapeHandle>::Success(identity);
     }
 
@@ -220,7 +220,8 @@ namespace Horo::Physics::Detail {
 
         const std::uint32_t slot = canonical.scene.nextBodySlot++;
         const BodyHandle identity{owner, {slot, 1}};
-        canonical.scene.bodies.push_back({.handle = identity, .nativeBody = nativeBody, .pose = descriptor.body.pose});
+        canonical.scene.bodies.emplace_back(
+            CanonicalSceneBodyRecord{.handle = identity, .nativeBody = nativeBody, .pose = descriptor.body.pose});
         return Result<BodyHandle>::Success(identity);
     }
 
@@ -256,7 +257,8 @@ namespace Horo::Physics::Detail {
         canonical.native.system->AddConstraint(nativeConstraint.Value().GetPtr());
         const std::uint32_t slot = canonical.scene.nextConstraintSlot++;
         const ConstraintHandle identity{owner, {slot, 1}};
-        canonical.scene.constraints.push_back({.handle = identity, .constraint = nativeConstraint.Value()});
+        canonical.scene.constraints.emplace_back(
+            CanonicalSceneConstraintRecord{.handle = identity, .constraint = nativeConstraint.Value()});
         return Result<ConstraintHandle>::Success(identity);
     }
 }  // namespace Horo::Physics::Detail

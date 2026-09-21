@@ -318,7 +318,11 @@ namespace Horo::Physics {
             REQUIRE(firstShape->world == candidate->WorldIdentity());
             REQUIRE(secondShape->world == candidate->WorldIdentity());
             REQUIRE(constraint->world == candidate->WorldIdentity());
+            REQUIRE_FALSE(candidate->FindBody({99}, {999}).has_value());
+            REQUIRE_FALSE(candidate->FindShape({99}, {999}).has_value());
+            REQUIRE_FALSE(candidate->FindConstraint({99}, {999}).has_value());
             candidate->Shutdown();
+            Test::RequireError(candidate->ValidatePublication(), PhysicsErrors::InvalidState);
         }
 
         TEST_CASE("Canonical Physics scene activation rolls back staged capacity failures and accepts a corrected retry",
@@ -461,6 +465,22 @@ namespace Horo::Physics {
             REQUIRE(authority.AdvanceOriginGeneration().HasValue());
             Test::RequireError(candidate.Value()->ValidatePublication(), PhysicsErrors::QuerySnapshotStale);
             candidate.Value()->Shutdown();
+        }
+
+        TEST_CASE("Physics scene generation authority rejects foreign-thread advancement", "[physics][scene][activation][thread]") {
+            PhysicsSceneActivationAuthority authority;
+            bool collisionRejected = false;
+            bool originRejected = false;
+            std::thread foreign([&] {
+                collisionRejected = authority.AdvanceCollisionFilterGeneration().ErrorValue().code.Value() ==
+                                    PhysicsErrors::ThreadAffinityViolation.code.Value();
+                originRejected =
+                    authority.AdvanceOriginGeneration().ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            });
+            foreign.join();
+            REQUIRE(collisionRejected);
+            REQUIRE(originRejected);
+            REQUIRE(authority.Capture() == PhysicsSceneActivationEvidence{1, 1});
         }
 
         TEST_CASE("Runtime scene replaces and tears down real Physics aggregate candidates", "[physics][scene][activation][replacement]") {

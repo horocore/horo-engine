@@ -89,8 +89,21 @@ namespace Horo::Physics {
      * never become native handles and no partial table is returned from Prepare.
      */
     class PhysicsSceneActivationCandidate final : public Runtime::SceneActivationCandidate {
+        struct ConstructionData final {
+            std::unique_ptr<PhysicsWorld> physics;
+            std::unique_ptr<Character::CharacterWorld> character;
+            const PhysicsSceneActivationAuthority *authority{};
+            PhysicsSceneActivationEvidence evidence;
+            std::vector<PhysicsSceneBodyBinding> bodyBindings;
+            std::vector<PhysicsSceneShapeBinding> shapeBindings;
+            std::vector<PhysicsSceneConstraintBinding> constraintBindings;
+        };
+
     public:
         ~PhysicsSceneActivationCandidate() override;
+
+        /** @brief Takes one fully staged aggregate; only the participant can form the private payload. */
+        explicit PhysicsSceneActivationCandidate(ConstructionData data) noexcept;
 
         /** @copydoc Runtime::SceneActivationCandidate::ValidatePublication */
         [[nodiscard]] Result<void> ValidatePublication() const override;
@@ -117,16 +130,7 @@ namespace Horo::Physics {
     private:
         friend class PhysicsSceneActivationParticipant;
 
-        [[nodiscard]] static std::unique_ptr<PhysicsSceneActivationCandidate> Create(
-            std::unique_ptr<PhysicsWorld> physics, std::unique_ptr<Character::CharacterWorld> character,
-            const PhysicsSceneActivationAuthority &authority, PhysicsSceneActivationEvidence evidence,
-            std::vector<PhysicsSceneBodyBinding> bodies, std::vector<PhysicsSceneShapeBinding> shapes,
-            std::vector<PhysicsSceneConstraintBinding> constraints);
-
-        PhysicsSceneActivationCandidate(std::unique_ptr<PhysicsWorld> physics, std::unique_ptr<Character::CharacterWorld> character,
-                                        const PhysicsSceneActivationAuthority &authority, PhysicsSceneActivationEvidence evidence,
-                                        std::vector<PhysicsSceneBodyBinding> bodies, std::vector<PhysicsSceneShapeBinding> shapes,
-                                        std::vector<PhysicsSceneConstraintBinding> constraints) noexcept;
+        [[nodiscard]] static std::unique_ptr<PhysicsSceneActivationCandidate> Create(ConstructionData data);
 
         std::unique_ptr<PhysicsWorld> physics_;
         std::unique_ptr<Character::CharacterWorld> character_;

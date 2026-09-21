@@ -123,7 +123,7 @@ namespace Horo::Physics::Detail {
                                                  std::unique_ptr<Character::CharacterWorld> character, const PhysicsWorldId identity,
                                                  const PhysicsScenePlan &plan) {
         StagedPhysicsScene staged{.physics = std::move(physics), .character = std::move(character)};
-        const auto abort = [&](Error error) -> Result<StagedPhysicsScene> {
+        const auto abort = [&](Error error) {
             if (staged.character)
                 staged.character->Shutdown();
             if (staged.physics)
@@ -184,10 +184,13 @@ namespace Horo::Physics {
             if (staged.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(staged.ErrorValue());
             Detail::StagedPhysicsScene resources = std::move(staged).Value();
-            auto candidate =
-                PhysicsSceneActivationCandidate::Create(std::move(resources.physics), std::move(resources.character), *authority_, evidence,
-                                                        std::move(resources.bodyBindings), std::move(resources.shapeBindings),
-                                                        std::move(resources.constraintBindings));
+            auto candidate = PhysicsSceneActivationCandidate::Create({.physics = std::move(resources.physics),
+                                                                      .character = std::move(resources.character),
+                                                                      .authority = authority_,
+                                                                      .evidence = evidence,
+                                                                      .bodyBindings = std::move(resources.bodyBindings),
+                                                                      .shapeBindings = std::move(resources.shapeBindings),
+                                                                      .constraintBindings = std::move(resources.constraintBindings)});
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(

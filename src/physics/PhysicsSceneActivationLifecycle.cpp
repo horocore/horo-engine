@@ -9,26 +9,13 @@
 
 namespace Horo::Physics {
     /** @copydoc PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate */
-    PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(std::unique_ptr<PhysicsWorld> physics,
-                                                                     std::unique_ptr<Character::CharacterWorld> character,
-                                                                     const PhysicsSceneActivationAuthority &authority,
-                                                                     const PhysicsSceneActivationEvidence evidence,
-                                                                     std::vector<PhysicsSceneBodyBinding> bodies,
-                                                                     std::vector<PhysicsSceneShapeBinding> shapes,
-                                                                     std::vector<PhysicsSceneConstraintBinding> constraints) noexcept
-        : physics_(std::move(physics)), character_(std::move(character)), authority_(&authority), evidence_(evidence),
-          bodyBindings_(std::move(bodies)), shapeBindings_(std::move(shapes)), constraintBindings_(std::move(constraints)) {}
+    PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(ConstructionData data) noexcept
+        : physics_(std::move(data.physics)), character_(std::move(data.character)), authority_(data.authority), evidence_(data.evidence),
+          bodyBindings_(std::move(data.bodyBindings)), shapeBindings_(std::move(data.shapeBindings)),
+          constraintBindings_(std::move(data.constraintBindings)) {}
 
-    std::unique_ptr<PhysicsSceneActivationCandidate> PhysicsSceneActivationCandidate::Create(
-        std::unique_ptr<PhysicsWorld> physics, std::unique_ptr<Character::CharacterWorld> character,
-        const PhysicsSceneActivationAuthority &authority, const PhysicsSceneActivationEvidence evidence,
-        std::vector<PhysicsSceneBodyBinding> bodies, std::vector<PhysicsSceneShapeBinding> shapes,
-        std::vector<PhysicsSceneConstraintBinding> constraints) {
-        std::unique_ptr<PhysicsSceneActivationCandidate> candidate{
-            new PhysicsSceneActivationCandidate(std::move(physics), std::move(character), authority, evidence, std::move(bodies),
-                                                std::move(shapes),
-                                                std::move(constraints))};  // The factory owns the private-constructor access.
-        return candidate;
+    std::unique_ptr<PhysicsSceneActivationCandidate> PhysicsSceneActivationCandidate::Create(ConstructionData data) {
+        return std::make_unique<PhysicsSceneActivationCandidate>(std::move(data));
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::~PhysicsSceneActivationCandidate */
