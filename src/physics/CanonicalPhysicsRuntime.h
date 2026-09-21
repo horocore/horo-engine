@@ -4,9 +4,9 @@
  * @brief Native-free declarations for private canonical process and world ownership.
  */
 
-#include "Horo/Physics/PhysicsEvents.h"
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
+#include "Horo/Physics/PhysicsEvents.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsWorld.h"
