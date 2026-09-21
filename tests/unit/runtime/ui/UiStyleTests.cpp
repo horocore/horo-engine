@@ -1,5 +1,4 @@
 #include "Horo/Runtime/Ui/UiStyle.h"
-
 #include "UiTestUtils.h"
 
 #include <array>
@@ -21,11 +20,11 @@ namespace Horo::Runtime::Ui {
 
         UiElementTree MakeTree() {
             const UiElementTreeDescriptor descriptor{.instance = {Owner(), 1, 1},
-                                                      .canvas = {Owner(), 2, 1},
-                                                      .document = Stable<UiDocumentId>(1),
-                                                      .documentRevision = Rev<UiDocumentRevision>(1),
-                                                      .treeRevision = Rev<UiRuntimeTreeRevision>(1),
-                                                      .limits = {2, 4, 4}};
+                                                     .canvas = {Owner(), 2, 1},
+                                                     .document = Stable<UiDocumentId>(1),
+                                                     .documentRevision = Rev<UiDocumentRevision>(1),
+                                                     .treeRevision = Rev<UiRuntimeTreeRevision>(1),
+                                                     .limits = {2, 4, 4}};
             const std::array elements{UiElementDescriptor{Stable<UiElementId>(1), {}},
                                       UiElementDescriptor{Stable<UiElementId>(2), Stable<UiElementId>(1)}};
             auto allocator = UiElementSlotAllocator::Create(Owner());
@@ -66,49 +65,45 @@ namespace Horo::Runtime::Ui {
             const auto border = Property(3);
             const auto opacity = Property(4);
             UiStyleAssetDefinition asset{.id = Asset(10)};
-            asset.tokens.push_back({Token(1), UiStyleValueCategory::Color,
-                                    UiStyleValueSource::Literal(UiStyleValue{Color(0.8F, 0.1F, 0.1F)}), false});
-            asset.tokens.push_back({Token(2), UiStyleValueCategory::Color,
-                                    UiStyleValueSource::Token({Asset(10), Token(1)}), false});
+            asset.tokens.push_back(
+                {Token(1), UiStyleValueCategory::Color, UiStyleValueSource::Literal(UiStyleValue{Color(0.8F, 0.1F, 0.1F)}), false});
+            asset.tokens.push_back({Token(2), UiStyleValueCategory::Color, UiStyleValueSource::Token({Asset(10), Token(1)}), false});
             asset.assignments.push_back(Assignment(text, UiStyleValue{Color(0.1F, 0.1F, 0.1F)}));
             asset.classes.push_back({Class(20), {}, false, {}, {}});
             asset.classes.back().assignments.push_back(Assignment(padding, UiStyleValue{UiStyleDimension{8}}));
             asset.classes.push_back({Class(21), {}, false, {}, {}});
             asset.classes.back().assignments.push_back(Assignment(text, UiStyleValue{Color(0.2F, 0.2F, 0.9F)}));
-            asset.classes.back().states.push_back({UiVisualStateMask{UiVisualState::Invalid}, {}, UiStateLayer::Validation,
+            asset.classes.back().states.push_back({UiVisualStateMask{UiVisualState::Invalid},
+                                                   {},
+                                                   UiStateLayer::Validation,
                                                    {Assignment(border, UiStyleValue{Color(0.9F, 0.0F, 0.0F)})}});
-            asset.classes.back().states.push_back({UiVisualStateMask{UiVisualState::Disabled}, {}, UiStateLayer::Availability,
+            asset.classes.back().states.push_back({UiVisualStateMask{UiVisualState::Disabled},
+                                                   {},
+                                                   UiStateLayer::Availability,
                                                    {Assignment(border, UiStyleValue{Color(0.0F, 0.8F, 0.0F)})}});
-            return {.properties = {{text, UiStyleValueCategory::Color, UiStyleValue{Color(0.0F, 0.0F, 0.0F)},
-                                     {.paint = true}, true, false},
-                                    {padding, UiStyleValueCategory::Dimension, UiStyleValue{UiStyleDimension{0}},
-                                     {.measure = true}, false, false},
-                                    {border, UiStyleValueCategory::Color, UiStyleValue{Color(1.0F, 1.0F, 1.0F)},
-                                     {.paint = true}, false, false},
-                                    {opacity, UiStyleValueCategory::Scalar, UiStyleValue{UiStyleScalar{1.0F}},
-                                     {.paint = true}, false, false}},
+            return {.properties =
+                        {{text, UiStyleValueCategory::Color, UiStyleValue{Color(0.0F, 0.0F, 0.0F)}, {.paint = true}, true, false},
+                         {padding, UiStyleValueCategory::Dimension, UiStyleValue{UiStyleDimension{0}}, {.measure = true}, false, false},
+                         {border, UiStyleValueCategory::Color, UiStyleValue{Color(1.0F, 1.0F, 1.0F)}, {.paint = true}, false, false},
+                         {opacity, UiStyleValueCategory::Scalar, UiStyleValue{UiStyleScalar{1.0F}}, {.paint = true}, false, false}},
                     .assets = {std::move(asset)}};
         }
 
         UiStyleSourceRevisions Sources(const std::uint64_t interaction = 1) {
-            return {Rev<UiDocumentRevision>(1),
-                    Rev<UiRuntimeTreeRevision>(1),
-                    Rev<RuntimeStyleGeneration>(1),
-                    Rev<UiStyleContentRevision>(1),
-                    Rev<UiStylePolicyRevision>(1),
-                    Rev<UiInteractionRevision>(interaction)};
+            return {Rev<UiDocumentRevision>(1),     Rev<UiRuntimeTreeRevision>(1), Rev<RuntimeStyleGeneration>(1),
+                    Rev<UiStyleContentRevision>(1), Rev<UiStylePolicyRevision>(1), Rev<UiInteractionRevision>(interaction)};
         }
 
         UiStyleResolver MakeResolver() {
             const auto descriptor = UiStyleResolverDescriptor{.instance = {Owner(), 1, 1},
-                                                               .canvas = {Owner(), 2, 1},
-                                                               .document = Stable<UiDocumentId>(1),
-                                                               .elementCapacity = 2,
-                                                               .propertyCapacity = 4,
-                                                               .invalidationCapacity = 4,
-                                                               .concurrentSnapshots = 3,
-                                                               .initialRegistryGeneration = Rev<RuntimeStyleGeneration>(1),
-                                                               .initialPublication = Rev<UiStylePublicationRevision>(1)};
+                                                              .canvas = {Owner(), 2, 1},
+                                                              .document = Stable<UiDocumentId>(1),
+                                                              .elementCapacity = 2,
+                                                              .propertyCapacity = 4,
+                                                              .invalidationCapacity = 4,
+                                                              .concurrentSnapshots = 3,
+                                                              .initialRegistryGeneration = Rev<RuntimeStyleGeneration>(1),
+                                                              .initialPublication = Rev<UiStylePublicationRevision>(1)};
             auto result = UiStyleResolver::Create(descriptor);
             REQUIRE(result.HasValue());
             return std::move(result).Value();
@@ -140,10 +135,15 @@ namespace Horo::Runtime::Ui {
             const auto root = tree.Root().Value().handle;
             const auto child = tree.Find(Stable<UiElementId>(2)).Value();
             const std::array<UiStyleClassReference, 1> rootClasses{{{Asset(10), Class(21)}}};
-            const std::array<UiStyleElementInput, 2> elements{
-                UiStyleElementInput{root, Asset(10), {}, rootClasses, {}, {}, UiVisualStateMask{UiVisualState::Invalid} |
-                                                                                UiVisualState::Disabled},
-                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            const std::array<UiStyleElementInput, 2> elements{UiStyleElementInput{root,
+                                                                                  Asset(10),
+                                                                                  {},
+                                                                                  rootClasses,
+                                                                                  {},
+                                                                                  {},
+                                                                                  UiVisualStateMask{UiVisualState::Invalid} |
+                                                                                      UiVisualState::Disabled},
+                                                              UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
             auto resolver = MakeResolver();
             const auto request = UiStyleUpdateRequest{Sources(), elements};
             auto snapshotResult = resolver.Update(tree, registry, request);
@@ -181,9 +181,8 @@ namespace Horo::Runtime::Ui {
             auto tree = MakeTree();
             const auto root = tree.Root().Value().handle;
             const auto child = tree.Find(Stable<UiElementId>(2)).Value();
-            const std::array<UiStyleElementInput, 2> elements{
-                UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}},
-                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            const std::array<UiStyleElementInput, 2> elements{UiStyleElementInput{root, Asset(10), {}, {}, {}, {}, {}},
+                                                              UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
             auto resolver = MakeResolver();
             auto first = resolver.Update(tree, registry, {Sources(), elements});
             REQUIRE(first.HasValue());
@@ -211,10 +210,8 @@ namespace Horo::Runtime::Ui {
             REQUIRE(firstRegistryResult.HasValue());
             auto firstRegistry = std::move(firstRegistryResult).Value();
             auto replacementDefinition = Definition();
-            replacementDefinition.assets[0].classes[1].assignments[0] =
-                Assignment(Property(1), UiStyleValue{Color(0.7F, 0.7F, 0.2F)});
-            auto replacementRegistryResult =
-                RuntimeStyleRegistry::Create(std::move(replacementDefinition), Rev<RuntimeStyleGeneration>(2));
+            replacementDefinition.assets[0].classes[1].assignments[0] = Assignment(Property(1), UiStyleValue{Color(0.7F, 0.7F, 0.2F)});
+            auto replacementRegistryResult = RuntimeStyleRegistry::Create(std::move(replacementDefinition), Rev<RuntimeStyleGeneration>(2));
             REQUIRE(replacementRegistryResult.HasValue());
             auto replacementRegistry = std::move(replacementRegistryResult).Value();
 
@@ -222,9 +219,8 @@ namespace Horo::Runtime::Ui {
             const auto root = tree.Root().Value().handle;
             const auto child = tree.Find(Stable<UiElementId>(2)).Value();
             const std::array<UiStyleClassReference, 1> rootClasses{{{Asset(10), Class(21)}}};
-            const std::array<UiStyleElementInput, 2> elements{
-                UiStyleElementInput{root, Asset(10), {}, rootClasses, {}, {}, {}},
-                UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
+            const std::array<UiStyleElementInput, 2> elements{UiStyleElementInput{root, Asset(10), {}, rootClasses, {}, {}, {}},
+                                                              UiStyleElementInput{child, Asset(10), {}, {}, {}, {}, {}}};
             auto resolver = MakeResolver();
             auto first = resolver.Update(tree, firstRegistry, {Sources(), elements});
             REQUIRE(first.HasValue());
@@ -246,5 +242,5 @@ namespace Horo::Runtime::Ui {
             REQUIRE(replacement.Descriptor().sources.registry == Rev<RuntimeStyleGeneration>(2));
             REQUIRE(replacement.Descriptor().publication == Rev<UiStylePublicationRevision>(2));
         }
-    }
+    }  // namespace
 }  // namespace Horo::Runtime::Ui

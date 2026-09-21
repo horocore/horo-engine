@@ -66,6 +66,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return asset.IsValid() && id.IsValid();
         }
+
         [[nodiscard]] auto operator<=>(const UiStyleClassReference &) const noexcept = default;
     };
 
@@ -78,6 +79,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return asset.IsValid() && id.IsValid();
         }
+
         [[nodiscard]] auto operator<=>(const UiStyleTokenReference &) const noexcept = default;
     };
 
@@ -249,11 +251,15 @@ namespace Horo::Runtime::Ui {
         std::uint16_t bits{};
 
         constexpr UiVisualStateMask() noexcept = default;
+
         constexpr explicit UiVisualStateMask(const std::uint16_t value) noexcept : bits(value) {}
+
         constexpr explicit UiVisualStateMask(const UiVisualState state) noexcept : bits(static_cast<std::uint16_t>(state)) {}
+
         [[nodiscard]] constexpr bool Contains(const UiVisualStateMask other) const noexcept {
             return (bits & other.bits) == other.bits;
         }
+
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiVisualStateMask &) const noexcept = default;
     };
@@ -275,6 +281,7 @@ namespace Horo::Runtime::Ui {
     [[nodiscard]] constexpr UiVisualStateMask operator|(const UiVisualState left, const UiVisualState right) noexcept {
         return UiVisualStateMask{static_cast<std::uint16_t>(static_cast<std::uint16_t>(left) | static_cast<std::uint16_t>(right))};
     }
+
     /** @brief Combines one mask with a named state bit. @param left Existing bits. @param right Additional bit. */
     [[nodiscard]] constexpr UiVisualStateMask operator|(const UiVisualStateMask left, const UiVisualState right) noexcept {
         return UiVisualStateMask{static_cast<std::uint16_t>(left.bits | static_cast<std::uint16_t>(right))};

@@ -39,25 +39,23 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool IsValueValid(const UiStyleValue &value) noexcept {
-            return std::visit(
-                [](const auto &typed) noexcept {
-                    using Value = std::decay_t<decltype(typed)>;
-                    if constexpr (std::is_same_v<Value, UiStyleColor>)
-                        return typed.IsValid();
-                    else if constexpr (std::is_same_v<Value, UiStyleTypography>)
-                        return typed.IsValid();
-                    else if constexpr (std::is_same_v<Value, UiStyleImage>)
-                        return typed.IsValid();
-                    else if constexpr (std::is_same_v<Value, UiStyleShape>)
-                        return typed.IsValid();
-                    else if constexpr (std::is_same_v<Value, UiStyleScalar>)
-                        return typed.IsValid();
-                    else if constexpr (std::is_same_v<Value, UiStyleMotionReference>)
-                        return typed.durationMicroseconds <= 60'000'000U && typed.easing <= 4095U;
-                    else
-                        return true;
-                },
-                value);
+            return std::visit([](const auto &typed) noexcept {
+                using Value = std::decay_t<decltype(typed)>;
+                if constexpr (std::is_same_v<Value, UiStyleColor>)
+                    return typed.IsValid();
+                else if constexpr (std::is_same_v<Value, UiStyleTypography>)
+                    return typed.IsValid();
+                else if constexpr (std::is_same_v<Value, UiStyleImage>)
+                    return typed.IsValid();
+                else if constexpr (std::is_same_v<Value, UiStyleShape>)
+                    return typed.IsValid();
+                else if constexpr (std::is_same_v<Value, UiStyleScalar>)
+                    return typed.IsValid();
+                else if constexpr (std::is_same_v<Value, UiStyleMotionReference>)
+                    return typed.durationMicroseconds <= 60'000'000U && typed.easing <= 4095U;
+                else
+                    return true;
+            }, value);
         }
 
         [[nodiscard]] bool IsValueCompatible(const UiStylePropertyDescriptor &descriptor, const UiStyleValue &value) noexcept {
@@ -91,42 +89,39 @@ namespace Horo::Runtime::Ui {
         void HashValue(std::uint64_t &hash, const UiStyleValue &value) noexcept {
             hash ^= static_cast<std::uint8_t>(UiStyleValueCategoryOf(value));
             hash *= 1099511628211ULL;
-            std::visit(
-                [&hash](const auto &typed) noexcept {
-                    using Value = std::decay_t<decltype(typed)>;
-                    if constexpr (std::is_same_v<Value, UiStyleColor>) {
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.red), sizeof(float));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.green), sizeof(float));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.blue), sizeof(float));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.alpha), sizeof(float));
-                        hash ^= static_cast<std::uint8_t>(typed.role);
-                    } else if constexpr (std::is_same_v<Value, UiStyleDimension>) {
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.value), sizeof(typed.value));
-                    } else if constexpr (std::is_same_v<Value, UiStyleTypography>) {
-                        HashIdentity(hash, typed.family);
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.weight), sizeof(typed.weight));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.stretch), sizeof(typed.stretch));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.style), sizeof(typed.style));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.size), sizeof(typed.size));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.lineHeight), sizeof(typed.lineHeight));
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.letterSpacing), sizeof(typed.letterSpacing));
-                    } else if constexpr (std::is_same_v<Value, UiStyleImage>) {
-                        HashIdentity(hash, typed.asset);
-                        hash ^= static_cast<std::uint8_t>(typed.fit);
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(typed.nineSlice.data()),
-                                  sizeof(typed.nineSlice));
-                        HashValue(hash, UiStyleValue{typed.tint});
-                    } else if constexpr (std::is_same_v<Value, UiStyleShape>) {
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed), sizeof(typed));
-                    } else if constexpr (std::is_same_v<Value, UiStyleScalar>) {
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.value), sizeof(typed.value));
-                    } else if constexpr (std::is_same_v<Value, UiStyleEnumValue>) {
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.value), sizeof(typed.value));
-                    } else if constexpr (std::is_same_v<Value, UiStyleMotionReference>) {
-                        HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed), sizeof(typed));
-                    }
-                },
-                value);
+            std::visit([&hash](const auto &typed) noexcept {
+                using Value = std::decay_t<decltype(typed)>;
+                if constexpr (std::is_same_v<Value, UiStyleColor>) {
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.red), sizeof(float));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.green), sizeof(float));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.blue), sizeof(float));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.alpha), sizeof(float));
+                    hash ^= static_cast<std::uint8_t>(typed.role);
+                } else if constexpr (std::is_same_v<Value, UiStyleDimension>) {
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.value), sizeof(typed.value));
+                } else if constexpr (std::is_same_v<Value, UiStyleTypography>) {
+                    HashIdentity(hash, typed.family);
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.weight), sizeof(typed.weight));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.stretch), sizeof(typed.stretch));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.style), sizeof(typed.style));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.size), sizeof(typed.size));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.lineHeight), sizeof(typed.lineHeight));
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.letterSpacing), sizeof(typed.letterSpacing));
+                } else if constexpr (std::is_same_v<Value, UiStyleImage>) {
+                    HashIdentity(hash, typed.asset);
+                    hash ^= static_cast<std::uint8_t>(typed.fit);
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(typed.nineSlice.data()), sizeof(typed.nineSlice));
+                    HashValue(hash, UiStyleValue{typed.tint});
+                } else if constexpr (std::is_same_v<Value, UiStyleShape>) {
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed), sizeof(typed));
+                } else if constexpr (std::is_same_v<Value, UiStyleScalar>) {
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.value), sizeof(typed.value));
+                } else if constexpr (std::is_same_v<Value, UiStyleEnumValue>) {
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed.value), sizeof(typed.value));
+                } else if constexpr (std::is_same_v<Value, UiStyleMotionReference>) {
+                    HashBytes(hash, reinterpret_cast<const std::uint8_t *>(&typed), sizeof(typed));
+                }
+            }, value);
         }
 
         void HashSource(std::uint64_t &hash, const UiStyleValueSource &source) noexcept {
@@ -175,56 +170,56 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] const UiStylePropertyDescriptor *FindProperty(const std::span<const UiStylePropertyDescriptor> properties,
-                                                                     const UiStylePropertyId id) noexcept {
+                                                                    const UiStylePropertyId id) noexcept {
             const auto found = std::lower_bound(properties.begin(), properties.end(), id,
                                                 [](const UiStylePropertyDescriptor &property, const UiStylePropertyId value) {
-                                                    return property.id < value;
-                                                });
+                return property.id < value;
+            });
             return found != properties.end() && found->id == id ? &*found : nullptr;
         }
 
         [[nodiscard]] const UiStyleAssetDefinition *FindAsset(const UiStyleRegistryDefinition &definition,
-                                                               const RuntimeStyleAssetId id) noexcept {
+                                                              const RuntimeStyleAssetId id) noexcept {
             const auto found = std::lower_bound(definition.assets.begin(), definition.assets.end(), id,
                                                 [](const UiStyleAssetDefinition &asset, const RuntimeStyleAssetId value) {
-                                                    return asset.id < value;
-                                                });
+                return asset.id < value;
+            });
             return found != definition.assets.end() && found->id == id ? &*found : nullptr;
         }
 
         [[nodiscard]] const UiStyleAssetDefinition *FindAsset(const std::span<const UiStyleAssetDefinition> assets,
-                                                               const RuntimeStyleAssetId id) noexcept {
+                                                              const RuntimeStyleAssetId id) noexcept {
             const auto found = std::lower_bound(assets.begin(), assets.end(), id,
                                                 [](const UiStyleAssetDefinition &asset, const RuntimeStyleAssetId value) {
-                                                    return asset.id < value;
-                                                });
+                return asset.id < value;
+            });
             return found != assets.end() && found->id == id ? &*found : nullptr;
         }
 
         [[nodiscard]] const UiStyleClassDefinition *FindClass(const UiStyleAssetDefinition &asset, const UiStyleClassId id) noexcept {
             const auto found = std::lower_bound(asset.classes.begin(), asset.classes.end(), id,
                                                 [](const UiStyleClassDefinition &styleClass, const UiStyleClassId value) {
-                                                    return styleClass.id < value;
-                                                });
+                return styleClass.id < value;
+            });
             return found != asset.classes.end() && found->id == id ? &*found : nullptr;
         }
 
         [[nodiscard]] const UiStyleTokenDefinition *FindToken(const UiStyleAssetDefinition &asset, const UiStyleTokenId id) noexcept {
             const auto found = std::lower_bound(asset.tokens.begin(), asset.tokens.end(), id,
                                                 [](const UiStyleTokenDefinition &token, const UiStyleTokenId value) {
-                                                    return token.id < value;
-                                                });
+                return token.id < value;
+            });
             return found != asset.tokens.end() && found->id == id ? &*found : nullptr;
         }
 
         [[nodiscard]] const UiStyleClassDefinition *FindClass(const std::span<const UiStyleAssetDefinition> assets,
-                                                               const UiStyleClassReference reference) noexcept {
+                                                              const UiStyleClassReference reference) noexcept {
             const auto *asset = FindAsset(assets, reference.asset);
             return asset == nullptr ? nullptr : FindClass(*asset, reference.id);
         }
 
         [[nodiscard]] const UiStyleTokenDefinition *FindToken(const std::span<const UiStyleAssetDefinition> assets,
-                                                               const UiStyleTokenReference reference) noexcept {
+                                                              const UiStyleTokenReference reference) noexcept {
             const auto *asset = FindAsset(assets, reference.asset);
             return asset == nullptr ? nullptr : FindToken(*asset, reference.id);
         }
@@ -236,9 +231,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> ValidateStateShape(const UiStyleStateOverride &state) {
-            if (!state.required.IsValid() || !state.forbidden.IsValid() ||
-                (state.required.bits & state.forbidden.bits) != 0 || !IsKnownLayer(state.layer) ||
-                state.assignments.empty() || state.assignments.size() > MaximumUiStyleProperties)
+            if (!state.required.IsValid() || !state.forbidden.IsValid() || (state.required.bits & state.forbidden.bits) != 0 ||
+                !IsKnownLayer(state.layer) || state.assignments.empty() || state.assignments.size() > MaximumUiStyleProperties)
                 return Failure(UiErrors::StyleStateInvalid);
             for (const auto &assignment : state.assignments)
                 if (const auto valid = ValidateAssignmentShape(assignment); valid.HasError())
@@ -247,8 +241,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> ValidateAssetAndClassShape(const UiStyleRegistryDefinition &definition) {
-            if (definition.properties.empty() || definition.properties.size() > MaximumUiStyleProperties ||
-                definition.assets.empty() || definition.assets.size() > MaximumUiStyleAssets)
+            if (definition.properties.empty() || definition.properties.size() > MaximumUiStyleProperties || definition.assets.empty() ||
+                definition.assets.size() > MaximumUiStyleAssets)
                 return Failure(UiErrors::StyleInvalid);
 
             for (std::size_t index = 0; index < definition.properties.size(); ++index) {
@@ -265,9 +259,8 @@ namespace Horo::Runtime::Ui {
             std::size_t stateCount = 0;
             for (std::size_t assetIndex = 0; assetIndex < definition.assets.size(); ++assetIndex) {
                 const auto &asset = definition.assets[assetIndex];
-                if (!asset.id.IsValid() || asset.tokens.size() > MaximumUiStyleTokens ||
-                    asset.classes.size() > MaximumUiStyleClasses || asset.states.size() > MaximumUiStyleStateBlocks ||
-                    asset.assignments.size() > MaximumUiStyleProperties)
+                if (!asset.id.IsValid() || asset.tokens.size() > MaximumUiStyleTokens || asset.classes.size() > MaximumUiStyleClasses ||
+                    asset.states.size() > MaximumUiStyleStateBlocks || asset.assignments.size() > MaximumUiStyleProperties)
                     return Failure(UiErrors::StyleInvalid);
                 for (std::size_t previous = 0; previous < assetIndex; ++previous)
                     if (definition.assets[previous].id == asset.id)
@@ -351,8 +344,7 @@ namespace Horo::Runtime::Ui {
                             if (classChain[previous] == currentClass)
                                 return Failure(UiErrors::StyleCycle);
                         classChain[classDepth++] = currentClass;
-                        const auto *currentDefinition =
-                            FindClass(std::span<const UiStyleAssetDefinition>{definition.assets}, currentClass);
+                        const auto *currentDefinition = FindClass(std::span<const UiStyleAssetDefinition>{definition.assets}, currentClass);
                         if (currentDefinition == nullptr)
                             return Failure(UiErrors::StyleReferenceInvalid);
                         if (currentClass != UiStyleClassReference{asset.id, styleClass.id} && currentDefinition->sealed)
@@ -366,8 +358,7 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<UiStyleValue> ResolveTokenDefinition(const UiStyleRegistryDefinition &definition,
                                                                   const UiStyleTokenReference reference,
-                                                                  std::vector<UiStyleTokenReference> &path,
-                                                                  const std::size_t depth) {
+                                                                  std::vector<UiStyleTokenReference> &path, const std::size_t depth) {
             if (!reference.IsValid())
                 return Failure<UiStyleValue>(UiErrors::StyleReferenceInvalid);
             if (depth >= MaximumUiStyleInheritanceDepth)
@@ -417,9 +408,9 @@ namespace Horo::Runtime::Ui {
             }
         };
 
-        [[nodiscard]] Result<void> ApplyValue(WorkingStyle &style, const UiStylePropertyDescriptor &descriptor,
-                                               const UiStyleValue &value, const UiStyleProvenance &provenance,
-                                               const bool sealed, const std::uint32_t propertyCapacity) {
+        [[nodiscard]] Result<void> ApplyValue(WorkingStyle &style, const UiStylePropertyDescriptor &descriptor, const UiStyleValue &value,
+                                              const UiStyleProvenance &provenance, const bool sealed,
+                                              const std::uint32_t propertyCapacity) {
             if (!IsValueCompatible(descriptor, value))
                 return Failure(UiErrors::StyleTypeMismatch);
             auto *existing = style.Find(descriptor.id);
@@ -464,8 +455,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> BuildAssetChain(const RuntimeStyleRegistry &registry, const RuntimeStyleAssetId asset,
-                                                    std::array<RuntimeStyleAssetId, MaximumUiStyleInheritanceDepth> &chain,
-                                                    std::uint32_t &count) {
+                                                   std::array<RuntimeStyleAssetId, MaximumUiStyleInheritanceDepth> &chain,
+                                                   std::uint32_t &count) {
             count = 0;
             auto current = asset;
             while (current.IsValid()) {
@@ -486,8 +477,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> BuildClassChain(const RuntimeStyleRegistry &registry, const UiStyleClassReference classReference,
-                                                    std::array<UiStyleClassReference, MaximumUiStyleInheritanceDepth> &chain,
-                                                    std::uint32_t &count) {
+                                                   std::array<UiStyleClassReference, MaximumUiStyleInheritanceDepth> &chain,
+                                                   std::uint32_t &count) {
             count = 0;
             auto current = classReference;
             while (current.IsValid()) {
@@ -527,9 +518,10 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> AddClassStateApplications(
-            const RuntimeStyleRegistry &registry, const UiStyleClassReference classReference, const UiStyleOrigin origin,
-            std::array<StateApplication, MaximumUiStyleStateBlocks> &applications, std::uint32_t &count, std::uint32_t &order) {
+        [[nodiscard]] Result<void> AddClassStateApplications(const RuntimeStyleRegistry &registry,
+                                                             const UiStyleClassReference classReference, const UiStyleOrigin origin,
+                                                             std::array<StateApplication, MaximumUiStyleStateBlocks> &applications,
+                                                             std::uint32_t &count, std::uint32_t &order) {
             std::array<UiStyleClassReference, MaximumUiStyleInheritanceDepth> chain{};
             std::uint32_t chainCount = 0;
             if (const auto result = BuildClassChain(registry, classReference, chain, chainCount); result.HasError())
@@ -548,7 +540,7 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> ValidateElementInput(const RuntimeStyleRegistry &registry, const UiStyleElementInput &input,
-                                                         const std::uint32_t propertyCapacity) {
+                                                        const std::uint32_t propertyCapacity) {
             if (!input.element.IsValid() || !input.asset.IsValid() || !registry.HasAsset(input.asset) || !input.state.IsValid() ||
                 input.classes.size() > MaximumUiStyleClasses || input.inlineProperties.size() > propertyCapacity ||
                 input.policyProperties.size() > propertyCapacity)
@@ -585,11 +577,8 @@ namespace Horo::Runtime::Ui {
                                                           const WorkingStyle *parent, const std::uint32_t propertyCapacity) {
             WorkingStyle style{};
             for (const auto &property : registry.Properties()) {
-                const UiStyleProvenance provenance{UiStyleOrigin::RegisteredDefault,
-                                                   RuntimeStyleAssetId{},
-                                                   UiStyleClassId{},
-                                                   UiStyleTokenId{},
-                                                   registry.Generation()};
+                const UiStyleProvenance provenance{UiStyleOrigin::RegisteredDefault, RuntimeStyleAssetId{}, UiStyleClassId{},
+                                                   UiStyleTokenId{}, registry.Generation()};
                 if (const auto result = ApplyValue(style, property, property.defaultValue, provenance, false, propertyCapacity);
                     result.HasError())
                     return Result<WorkingStyle>::Failure(result.ErrorValue());
@@ -663,8 +652,8 @@ namespace Horo::Runtime::Ui {
             }
 
             for (const auto &assignment : input.inlineProperties) {
-                if (const auto result = ApplyAssignment(style, registry, assignment, UiStyleOrigin::Inline, input.asset,
-                                                        UiStyleClassId{}, propertyCapacity);
+                if (const auto result = ApplyAssignment(style, registry, assignment, UiStyleOrigin::Inline, input.asset, UiStyleClassId{},
+                                                        propertyCapacity);
                     result.HasError())
                     return Result<WorkingStyle>::Failure(result.ErrorValue());
             }
@@ -676,24 +665,24 @@ namespace Horo::Runtime::Ui {
                 const auto *asset = FindAsset(registry.Assets(), assetChain[index]);
                 if (asset == nullptr)
                     return Failure<WorkingStyle>(UiErrors::StyleReferenceInvalid);
-                if (const auto result = AddStateApplications(*asset, UiStyleOrigin::VisualState, UiStyleClassId{}, applications,
-                                                              applicationCount, order);
+                if (const auto result =
+                        AddStateApplications(*asset, UiStyleOrigin::VisualState, UiStyleClassId{}, applications, applicationCount, order);
                     result.HasError())
                     return Result<WorkingStyle>::Failure(result.ErrorValue());
             }
             if (input.typeClass.IsValid())
                 if (const auto result = AddClassStateApplications(registry, input.typeClass, UiStyleOrigin::VisualState, applications,
-                                                                    applicationCount, order);
+                                                                  applicationCount, order);
                     result.HasError())
                     return Result<WorkingStyle>::Failure(result.ErrorValue());
             for (const auto classReference : input.classes)
                 if (const auto result = AddClassStateApplications(registry, classReference, UiStyleOrigin::VisualState, applications,
-                                                                    applicationCount, order);
+                                                                  applicationCount, order);
                     result.HasError())
                     return Result<WorkingStyle>::Failure(result.ErrorValue());
 
-            std::sort(applications.begin(), applications.begin() + applicationCount, [](const StateApplication &left,
-                                                                                          const StateApplication &right) {
+            std::sort(applications.begin(), applications.begin() + applicationCount,
+                      [](const StateApplication &left, const StateApplication &right) {
                 if (left.state->layer != right.state->layer)
                     return left.state->layer < right.state->layer;
                 const auto leftSpecificity = std::popcount(left.state->required.bits);
@@ -704,8 +693,7 @@ namespace Horo::Runtime::Ui {
             });
             for (std::uint32_t index = 0; index < applicationCount; ++index) {
                 const auto &application = applications[index];
-                if (!input.state.Contains(application.state->required) ||
-                    (input.state.bits & application.state->forbidden.bits) != 0)
+                if (!input.state.Contains(application.state->required) || (input.state.bits & application.state->forbidden.bits) != 0)
                     continue;
                 for (const auto &assignment : application.state->assignments) {
                     if (const auto result = ApplyAssignment(style, registry, assignment, application.origin, application.asset,
@@ -727,8 +715,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiStyleColor::IsValid */
     bool UiStyleColor::IsValid() const noexcept {
-        return std::isfinite(red) && std::isfinite(green) && std::isfinite(blue) && std::isfinite(alpha) && red >= 0.0F &&
-               red <= 1.0F && green >= 0.0F && green <= 1.0F && blue >= 0.0F && blue <= 1.0F && alpha >= 0.0F && alpha <= 1.0F &&
+        return std::isfinite(red) && std::isfinite(green) && std::isfinite(blue) && std::isfinite(alpha) && red >= 0.0F && red <= 1.0F &&
+               green >= 0.0F && green <= 1.0F && blue >= 0.0F && blue <= 1.0F && alpha >= 0.0F && alpha <= 1.0F &&
                static_cast<std::uint8_t>(role) <= static_cast<std::uint8_t>(UiStyleColorRole::Status);
     }
 
@@ -740,13 +728,15 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiStyleImage::IsValid */
     bool UiStyleImage::IsValid() const noexcept {
         return asset.IsValid() && static_cast<std::uint8_t>(fit) <= static_cast<std::uint8_t>(UiStyleImageFit::Tile) &&
-               std::all_of(nineSlice.begin(), nineSlice.end(), [](const std::int32_t value) { return value >= 0; }) && tint.IsValid();
+               std::all_of(nineSlice.begin(), nineSlice.end(), [](const std::int32_t value) {
+            return value >= 0;
+        }) && tint.IsValid();
     }
 
     /** @copydoc UiStyleShape::IsValid */
     bool UiStyleShape::IsValid() const noexcept {
-        return radius >= 0 && borderWidth >= 0 && outlineWidth >= 0 && shadowOffsetX >= -1'000'000 &&
-               shadowOffsetX <= 1'000'000 && shadowOffsetY >= -1'000'000 && shadowOffsetY <= 1'000'000 && shadowBlur >= 0;
+        return radius >= 0 && borderWidth >= 0 && outlineWidth >= 0 && shadowOffsetX >= -1'000'000 && shadowOffsetX <= 1'000'000 &&
+               shadowOffsetY >= -1'000'000 && shadowOffsetY <= 1'000'000 && shadowBlur >= 0;
     }
 
     /** @copydoc UiStyleScalar::IsValid */
@@ -756,27 +746,25 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiStyleValueCategoryOf */
     UiStyleValueCategory UiStyleValueCategoryOf(const UiStyleValue &value) noexcept {
-        return std::visit(
-            [](const auto &typed) noexcept {
-                using Value = std::decay_t<decltype(typed)>;
-                if constexpr (std::is_same_v<Value, UiStyleColor>)
-                    return UiStyleValueCategory::Color;
-                else if constexpr (std::is_same_v<Value, UiStyleDimension>)
-                    return UiStyleValueCategory::Dimension;
-                else if constexpr (std::is_same_v<Value, UiStyleTypography>)
-                    return UiStyleValueCategory::Typography;
-                else if constexpr (std::is_same_v<Value, UiStyleImage>)
-                    return UiStyleValueCategory::Imagery;
-                else if constexpr (std::is_same_v<Value, UiStyleShape>)
-                    return UiStyleValueCategory::Shape;
-                else if constexpr (std::is_same_v<Value, UiStyleScalar>)
-                    return UiStyleValueCategory::Scalar;
-                else if constexpr (std::is_same_v<Value, UiStyleEnumValue>)
-                    return UiStyleValueCategory::Enum;
-                else
-                    return UiStyleValueCategory::Motion;
-            },
-            value);
+        return std::visit([](const auto &typed) noexcept {
+            using Value = std::decay_t<decltype(typed)>;
+            if constexpr (std::is_same_v<Value, UiStyleColor>)
+                return UiStyleValueCategory::Color;
+            else if constexpr (std::is_same_v<Value, UiStyleDimension>)
+                return UiStyleValueCategory::Dimension;
+            else if constexpr (std::is_same_v<Value, UiStyleTypography>)
+                return UiStyleValueCategory::Typography;
+            else if constexpr (std::is_same_v<Value, UiStyleImage>)
+                return UiStyleValueCategory::Imagery;
+            else if constexpr (std::is_same_v<Value, UiStyleShape>)
+                return UiStyleValueCategory::Shape;
+            else if constexpr (std::is_same_v<Value, UiStyleScalar>)
+                return UiStyleValueCategory::Scalar;
+            else if constexpr (std::is_same_v<Value, UiStyleEnumValue>)
+                return UiStyleValueCategory::Enum;
+            else
+                return UiStyleValueCategory::Motion;
+        }, value);
     }
 
     /** @copydoc UiStyleValueSource::Literal */
@@ -834,7 +822,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc RuntimeStyleRegistry::Create */
     Result<RuntimeStyleRegistry> RuntimeStyleRegistry::Create(UiStyleRegistryDefinition definition,
-                                                               const RuntimeStyleGeneration generation) {
+                                                              const RuntimeStyleGeneration generation) {
         if (!generation.IsValid())
             return Failure<RuntimeStyleRegistry>(UiErrors::StyleInvalid);
         try {
@@ -890,13 +878,13 @@ namespace Horo::Runtime::Ui {
     /** @copydoc RuntimeStyleRegistry::Properties */
     std::span<const UiStylePropertyDescriptor> RuntimeStyleRegistry::Properties() const noexcept {
         return storage_ && storage_->lifecycle == RuntimeStyleRegistryState::Active ? storage_->definition.properties
-                                                                                     : std::span<const UiStylePropertyDescriptor>{};
+                                                                                    : std::span<const UiStylePropertyDescriptor>{};
     }
 
     /** @copydoc RuntimeStyleRegistry::Assets */
     std::span<const UiStyleAssetDefinition> RuntimeStyleRegistry::Assets() const noexcept {
         return storage_ && storage_->lifecycle == RuntimeStyleRegistryState::Active ? storage_->definition.assets
-                                                                                     : std::span<const UiStyleAssetDefinition>{};
+                                                                                    : std::span<const UiStyleAssetDefinition>{};
     }
 
     /** @copydoc RuntimeStyleRegistry::HasAsset */
@@ -921,9 +909,9 @@ namespace Horo::Runtime::Ui {
         if (!tokenReference.IsValid())
             return Failure<UiStyleValue>(UiErrors::StyleReferenceInvalid);
         const auto found = std::find_if(storage_->flattenedTokens.begin(), storage_->flattenedTokens.end(),
-                                       [tokenReference](const Storage::FlattenedToken &token) {
-                                           return token.reference == tokenReference;
-                                       });
+                                        [tokenReference](const Storage::FlattenedToken &token) {
+            return token.reference == tokenReference;
+        });
         if (found == storage_->flattenedTokens.end())
             return Failure<UiStyleValue>(UiErrors::StyleReferenceInvalid);
         return Result<UiStyleValue>::Success(found->value);
@@ -1061,8 +1049,8 @@ namespace Horo::Runtime::Ui {
             return Failure<UiComputedStyleRecord>(UiErrors::StyleInvalid);
         const auto found = std::lower_bound(storage_->lookup.begin(), storage_->lookup.end(), element,
                                             [this](const std::uint32_t index, const UiElementHandle value) {
-                                                return storage_->records[index].element < value;
-                                            });
+            return storage_->records[index].element < value;
+        });
         if (found == storage_->lookup.end() || storage_->records[*found].element != element)
             return Failure<UiComputedStyleRecord>(UiErrors::HandleStale);
         return Result<UiComputedStyleRecord>::Success(storage_->records[*found]);
@@ -1091,8 +1079,7 @@ namespace Horo::Runtime::Ui {
         bool hasPublication{};
         std::size_t nextSlot{};
 
-        explicit Storage(const UiStyleResolverDescriptor &source)
-            : descriptor(source), publication(source.initialPublication) {
+        explicit Storage(const UiStyleResolverDescriptor &source) : descriptor(source), publication(source.initialPublication) {
             activeNodes.reserve(source.elementCapacity);
             candidateNodes.reserve(source.elementCapacity);
             traversalScratch.resize(source.elementCapacity);
@@ -1216,8 +1203,7 @@ namespace Horo::Runtime::Ui {
             return ApplyInvalidations(request.sources.tree);
         }
 
-        [[nodiscard]] Result<void> ResolveCandidate(const RuntimeStyleRegistry &registry,
-                                                     const UiStyleUpdateRequest &request) {
+        [[nodiscard]] Result<void> ResolveCandidate(const RuntimeStyleRegistry &registry, const UiStyleUpdateRequest &request) {
             for (std::uint32_t index = 0; index < candidateNodes.size(); ++index) {
                 auto &node = candidateNodes[index];
                 if (!node.dirty)
@@ -1250,8 +1236,7 @@ namespace Horo::Runtime::Ui {
             }
         }
 
-        [[nodiscard]] Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>> Publish(
-            const UiStyleUpdateRequest &request) {
+        [[nodiscard]] Result<std::shared_ptr<UiComputedStyleSnapshot::Storage>> Publish(const UiStyleUpdateRequest &request) {
             UiStylePublicationRevision nextPublication = descriptor.initialPublication;
             if (hasPublication) {
                 const auto next = publication.Next();
@@ -1293,10 +1278,9 @@ namespace Horo::Runtime::Ui {
                     }
                 }
                 if (range == nullptr) {
-                    if (slot->styles.size() >= descriptor.elementCapacity || slot->properties.size() + working.count >
-                                                                             static_cast<std::size_t>(descriptor.elementCapacity) *
-                                                                                 descriptor.propertyCapacity)
-                    {
+                    if (slot->styles.size() >= descriptor.elementCapacity ||
+                        slot->properties.size() + working.count >
+                            static_cast<std::size_t>(descriptor.elementCapacity) * descriptor.propertyCapacity) {
                         releaseSlotOnFailure();
                         return Failure<std::shared_ptr<UiComputedStyleSnapshot::Storage>>(UiErrors::CapacityExceeded);
                     }
@@ -1312,10 +1296,7 @@ namespace Horo::Runtime::Ui {
                     slot->styles.push_back({styleId.Value(), firstProperty, working.count});
                     range = &slot->styles.back();
                 }
-                slot->records[index] = {candidateNodes[index].element,
-                                        range->id,
-                                        request.elements[index].state,
-                                        range->firstProperty,
+                slot->records[index] = {candidateNodes[index].element, range->id, request.elements[index].state, range->firstProperty,
                                         range->propertyCount};
                 slot->lookup[index] = index;
             }
@@ -1374,8 +1355,8 @@ namespace Horo::Runtime::Ui {
         }
         const auto existing = std::find_if(storage_->invalidations.begin(), storage_->invalidations.end(),
                                            [&invalidation](const UiStyleInvalidation &queued) {
-                                               return queued.tree == invalidation.tree && queued.element == invalidation.element;
-                                           });
+            return queued.tree == invalidation.tree && queued.element == invalidation.element;
+        });
         if (existing != storage_->invalidations.end()) {
             const auto strength = [](const UiStyleInvalidationKind kind) {
                 switch (kind) {
@@ -1433,7 +1414,9 @@ namespace Horo::Runtime::Ui {
         if (const auto prepared = storage_->PrepareCandidate(tree, request); prepared.HasError())
             return Result<UiComputedStyleSnapshot>::Failure(prepared.ErrorValue());
         const bool sourcesChanged = !storage_->hasPublication || storage_->sources != request.sources;
-        const bool anyDirty = std::ranges::any_of(storage_->candidateNodes, [](const Storage::Node &node) { return node.dirty; });
+        const bool anyDirty = std::ranges::any_of(storage_->candidateNodes, [](const Storage::Node &node) {
+            return node.dirty;
+        });
         if (!sourcesChanged && !anyDirty && storage_->invalidations.empty()) {
             storage_->current->leases.fetch_add(1);
             return Result<UiComputedStyleSnapshot>::Success(UiComputedStyleSnapshot{storage_->current});
