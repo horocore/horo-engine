@@ -5,12 +5,24 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
 #include <thread>
 #include <utility>
 
 namespace Horo::Navigation {
     namespace {
         using TestSupport::RequireError;
+
+        class InvalidCapabilitiesBackend final : public INavigationQueryBackend {
+        public:
+            [[nodiscard]] NavigationProviderCapabilities Capabilities() const noexcept override {
+                return {};
+            }
+
+            [[nodiscard]] Result<NavigationPath> FindPath(const NavigationPathRequest &, const CancellationToken &) const override {
+                return Result<NavigationPath>::Failure(MakeError(NavigationErrors::ProviderFailed));
+            }
+        };
     }  // namespace
 
     TEST_CASE("Navigation world activation validates bounded owner storage", "[unit][navigation][headless][lifecycle]") {
@@ -55,6 +67,32 @@ namespace Horo::Navigation {
         REQUIRE(lifecycle.CommitAtSafePoint(replacement.scene, replacement.sceneGeneration).HasValue());
         REQUIRE(lifecycle.ActiveDescriptor().Value() == replacement);
         REQUIRE(destructions->load() == 1);
+    }
+
+    TEST_CASE("Rejected provider activation preserves the published navigation world",
+              "[unit][navigation][headless][lifecycle][rollback]") {
+        auto lifecycle = std::move(NavigationWorldLifecycle::Create(1)).Value();
+        const auto destructions = std::make_shared<std::atomic<std::uint32_t>>(0);
+        const auto active = TestSupport::Activation(15, 1, 151, 1);
+        const auto replacement = TestSupport::Activation(15, 2, 152, 2);
+
+        REQUIRE(lifecycle.Stage(active, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(active.scene, active.sceneGeneration).HasValue());
+
+        RequireError(lifecycle.Stage(replacement, std::make_unique<InvalidCapabilitiesBackend>()),
+                     NavigationErrors::CapabilityDescriptorInvalid);
+        REQUIRE(lifecycle.ActiveDescriptor().Value() == active);
+        REQUIRE_FALSE(lifecycle.HasStagedCandidate());
+        REQUIRE(lifecycle.Acquire(active.world).HasValue());
+        REQUIRE(destructions->load() == 0);
+
+        REQUIRE(lifecycle.Stage(replacement, TestSupport::MakeObservedNavigationBackend(destructions)).HasValue());
+        RequireError(lifecycle.CommitAtSafePoint(replacement.scene, NavigationSceneGeneration::Create(3).Value()),
+                     NavigationErrors::StaleSnapshot);
+        REQUIRE(lifecycle.ActiveDescriptor().Value() == active);
+        REQUIRE(lifecycle.HasStagedCandidate());
+        REQUIRE(lifecycle.CommitAtSafePoint(replacement.scene, replacement.sceneGeneration).HasValue());
+        REQUIRE(lifecycle.ActiveDescriptor().Value() == replacement);
     }
 
     TEST_CASE("Revoked navigation worlds remain pinned until worker leases drain", "[unit][navigation][headless][lifecycle]") {
