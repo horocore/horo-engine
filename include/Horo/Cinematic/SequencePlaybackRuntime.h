@@ -563,7 +563,7 @@ namespace Horo::Cinematic {
             bool suppressNextPlayBoundary{};
             bool restoreApplied{};
 
-            Instance(SequencePlayer playerValue, SequenceFrameCursor cursorValue, SequencePlaybackActivation activationValue,
+            Instance(SequencePlayer playerValue, const SequenceFrameCursor &cursorValue, SequencePlaybackActivation activationValue,
                      std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
                      std::optional<SequenceCoordinationLease> hudSuppressionLeaseValue) noexcept;
         };
@@ -574,19 +574,19 @@ namespace Horo::Cinematic {
             bool hasRetiredHandle{};
         };
 
-        explicit CinematicRuntimeService(CinematicRuntimeSessionId session, SequenceEvaluationBudget budget,
+        explicit CinematicRuntimeService(CinematicRuntimeSessionId session, const SequenceEvaluationBudget &budget,
                                          std::vector<Slot> slots) noexcept;
 
         [[nodiscard]] Result<std::size_t> ResolveSlot(const SequencePlayerHandle &handle) const;
-        [[nodiscard]] Result<void> SynchronizeCursor(Instance &instance, SequenceCursorResetPolicy resetPolicy);
-        [[nodiscard]] Result<void> RebindCursorFence(Instance &instance);
+        [[nodiscard]] Result<void> SynchronizeCursor(Instance &instance, SequenceCursorResetPolicy resetPolicy) const;
+        [[nodiscard]] Result<void> RebindCursorFence(Instance &instance) const;
         [[nodiscard]] Result<void> ValidateActivation(const SequencePlaybackActivation &activation) const;
         [[nodiscard]] Result<void> AdmitActivation(const SequencePlaybackActivation &activation, SequenceEvaluationUsage &additional,
                                                    std::size_t &slotIndex) const;
         [[nodiscard]] Result<void> AcquireCoordinationLeases(const SequencePlaybackActivation &activation,
                                                              std::optional<SequenceCoordinationLease> &gameplayPauseLease,
                                                              std::optional<SequenceCoordinationLease> &hudSuppressionLease) const;
-        void ReleaseCoordination(Instance &instance) noexcept;
+        void ReleaseCoordination(Instance &instance) const noexcept;
         void RecalculateMaximumLoopCrossings() noexcept;
 
         CinematicRuntimeSessionId session_;

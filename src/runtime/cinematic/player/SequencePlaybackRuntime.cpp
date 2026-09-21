@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace Horo::Cinematic {
@@ -102,6 +103,47 @@ namespace Horo::Cinematic {
             return canonical.HasValue() && canonical.Value() == budget;
         }
 
+        [[nodiscard]] Result<void> ValidateAuthorityClaim(const SequenceAuthorityClaim &claim, const std::uint64_t authorityRevision,
+                                                          const std::uint64_t eligibleSimulationTick) {
+            using enum CinematicClaimMode;
+            if (!claim.player.IsValid() || !claim.target.IsValid() || !IsValidChannel(claim.channel) || !IsValidClaimMode(claim.mode) ||
+                claim.authorityRevision != authorityRevision || claim.eligibleSimulationTick != eligibleSimulationTick)
+                return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
+            if (claim.mode == PresentationOverlay && claim.channel != CinematicControlChannel::SkeletalPose)
+                return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            if (claim.mode == Blend && !IsBlendableChannel(claim.channel))
+                return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateAuthorityClaimPair(const SequenceAuthorityClaim &left, const SequenceAuthorityClaim &right) {
+            using enum CinematicClaimMode;
+            if (left.target.generation != right.target.generation)
+                return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            if (left.required && right.required && left.mode == Exclusive && right.mode == Exclusive && left.priority == right.priority)
+                return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            const bool requiredExclusiveBlendConflict =
+                left.required && right.required &&
+                ((left.mode == Exclusive && right.mode == Blend) || (left.mode == Blend && right.mode == Exclusive));
+            if (requiredExclusiveBlendConflict)
+                return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateAuthorityClaims(const std::span<const SequenceAuthorityClaim> claims) {
+            for (std::size_t index = 1; index < claims.size(); ++index) {
+                if (SamePlayerClaim(claims[index - 1], claims[index]))
+                    return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            }
+            for (std::size_t left = 0; left < claims.size(); ++left) {
+                for (std::size_t right = left + 1; right < claims.size() && SameAuthorityKey(claims[left], claims[right]); ++right) {
+                    if (auto valid = ValidateAuthorityClaimPair(claims[left], claims[right]); valid.HasError())
+                        return valid;
+                }
+            }
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc GetSequenceEvaluationBudget */
@@ -125,8 +167,8 @@ namespace Horo::Cinematic {
                                               const SequenceEvaluationBudget &budget) {
         if (!IsCanonicalBudget(budget))
             return Failed<void>(SequencePlaybackRuntimeErrors::BudgetInvalid);
-        const SequenceEvaluationUsage total = AddUsage(current, additional);
-        if (total.activePlayers > budget.maximumActivePlayers || total.aggregateTracks > budget.maximumAggregateTracks ||
+        if (const SequenceEvaluationUsage total = AddUsage(current, additional);
+            total.activePlayers > budget.maximumActivePlayers || total.aggregateTracks > budget.maximumAggregateTracks ||
             total.boundaryOccurrences > budget.maximumBoundaryOccurrences || total.retainedBytes > budget.maximumRetainedBytes ||
             total.maximumLoopCrossings > budget.maximumLoopCrossings)
             return Failed<void>(SequencePlaybackRuntimeErrors::CapacityExceeded);
@@ -135,14 +177,15 @@ namespace Horo::Cinematic {
 
     /** @copydoc ValidateSequencePlaybackBlendSettings */
     Result<void> ValidateSequencePlaybackBlendSettings(const SequencePlaybackBlendSettings &settings) {
-        const auto validateWindow = [](const SequenceBlendWindow &window) {
+        if (const auto validateWindow =
+                [](const SequenceBlendWindow &window) {
             if (window.mode >= SequenceBlendMode::Count || window.duration < 0)
                 return false;
             if (window.mode == SequenceBlendMode::Cut)
                 return window.duration == 0;
             return window.duration > 0;
         };
-        if (!validateWindow(settings.blendIn) || !validateWindow(settings.blendOut) ||
+            !validateWindow(settings.blendIn) || !validateWindow(settings.blendOut) ||
             settings.restorePolicy >= SequenceRestorePolicy::Count)
             return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         return Result<void>::Success();
@@ -164,7 +207,7 @@ namespace Horo::Cinematic {
     Result<float> BlendSequenceScalar(const float baseline, const float cinematic, const float weight) {
         if (!std::isfinite(baseline) || !std::isfinite(cinematic) || !std::isfinite(weight) || weight < 0.0F || weight > 1.0F)
             return Failed<float>(SequencePlaybackRuntimeErrors::ActivationInvalid);
-        const float value = baseline + (cinematic - baseline) * weight;
+        const float value = std::lerp(baseline, cinematic, weight);
         if (!std::isfinite(value))
             return Failed<float>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         return Result<float>::Success(value);
@@ -225,28 +268,29 @@ namespace Horo::Cinematic {
                                                                const std::span<SequenceRestoreDiagnostic> diagnostics) {
         if (diagnostics.size() < snapshot.Size())
             return Failed<SequenceRestoreResult>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+        using enum SequenceRestoreOutcome;
         SequenceRestoreResult result{};
         const auto entries = snapshot.Entries();
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const SequenceRestoreEntry &entry = entries[index];
             SequenceRestoreDiagnostic &diagnostic = diagnostics[index];
-            diagnostic = {entry.track, entry.target, SequenceRestoreOutcome::TargetMissing};
+            diagnostic = {entry.track, entry.target, TargetMissing};
             const SequenceRestoreTargetSnapshot *target = FindRestoreTarget(targets, entry.target);
             if (target == nullptr || !target->target.IsValid() || target->context == nullptr || target->apply == nullptr) {
                 ++result.missing;
                 continue;
             }
             if (target->target.generation != entry.target.generation || target->targetRevision != entry.targetRevision) {
-                diagnostic.outcome = SequenceRestoreOutcome::StaleGeneration;
+                diagnostic.outcome = StaleGeneration;
                 ++result.stale;
                 continue;
             }
             if (!target->apply(target->context, entry.value)) {
-                diagnostic.outcome = SequenceRestoreOutcome::WriteRejected;
+                diagnostic.outcome = WriteRejected;
                 ++result.rejected;
                 continue;
             }
-            diagnostic.outcome = SequenceRestoreOutcome::Restored;
+            diagnostic.outcome = Restored;
             ++result.restored;
         }
         return Result<SequenceRestoreResult>::Success(result);
@@ -260,38 +304,19 @@ namespace Horo::Cinematic {
             return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         std::vector<SequenceAuthorityClaim> canonical(claims.begin(), claims.end());
         for (const SequenceAuthorityClaim &claim : canonical) {
-            if (!claim.player.IsValid() || !claim.target.IsValid() || !IsValidChannel(claim.channel) || !IsValidClaimMode(claim.mode) ||
-                claim.authorityRevision != authorityRevision || claim.eligibleSimulationTick != eligibleSimulationTick)
-                return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::ActivationInvalid);
-            if (claim.mode == CinematicClaimMode::PresentationOverlay && claim.channel != CinematicControlChannel::SkeletalPose)
-                return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::AuthorityConflict);
-            if (claim.mode == CinematicClaimMode::Blend && !IsBlendableChannel(claim.channel))
-                return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::AuthorityConflict);
+            if (auto valid = ValidateAuthorityClaim(claim, authorityRevision, eligibleSimulationTick); valid.HasError())
+                return Result<SequenceAuthorityPlan>::Failure(std::move(valid).ErrorValue());
         }
         std::ranges::sort(canonical, AuthorityClaimLess);
-        for (std::size_t index = 1; index < canonical.size(); ++index) {
-            if (SamePlayerClaim(canonical[index - 1], canonical[index]))
-                return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::AuthorityConflict);
-        }
-        for (std::size_t left = 0; left < canonical.size(); ++left) {
-            for (std::size_t right = left + 1; right < canonical.size() && SameAuthorityKey(canonical[left], canonical[right]); ++right) {
-                if (canonical[left].target.generation != canonical[right].target.generation)
-                    return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::AuthorityConflict);
-                if (canonical[left].required && canonical[right].required && canonical[left].mode == CinematicClaimMode::Exclusive &&
-                    canonical[right].mode == CinematicClaimMode::Exclusive && canonical[left].priority == canonical[right].priority)
-                    return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::AuthorityConflict);
-                if (canonical[left].required && canonical[right].required &&
-                    ((canonical[left].mode == CinematicClaimMode::Exclusive && canonical[right].mode == CinematicClaimMode::Blend) ||
-                     (canonical[left].mode == CinematicClaimMode::Blend && canonical[right].mode == CinematicClaimMode::Exclusive)))
-                    return Failed<SequenceAuthorityPlan>(SequencePlaybackRuntimeErrors::AuthorityConflict);
-            }
-        }
+        if (auto valid = ValidateAuthorityClaims(std::span<const SequenceAuthorityClaim>{canonical}); valid.HasError())
+            return Result<SequenceAuthorityPlan>::Failure(std::move(valid).ErrorValue());
         return Result<SequenceAuthorityPlan>::Success(
             SequenceAuthorityPlan{authorityRevision, eligibleSimulationTick, std::move(canonical)});
     }
 
     /** @copydoc SequenceAuthorityPlan::ResolveGameplayWrite */
     Result<SequenceGameplayWriteResult> SequenceAuthorityPlan::ResolveGameplayWrite(const SequenceGameplayWriteRequest &request) const {
+        using enum CinematicClaimMode;
         if (!request.target.IsValid() || !IsValidChannel(request.channel))
             return Failed<SequenceGameplayWriteResult>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         if (request.authorityRevision != authorityRevision_ || request.simulationTick != eligibleSimulationTick_)
@@ -299,20 +324,20 @@ namespace Horo::Cinematic {
 
         const SequenceAuthorityClaim *winner = nullptr;
         bool staleTargetGenerationFound = false;
-        const auto first = std::lower_bound(claims_.begin(), claims_.end(), request,
-                                            [](const SequenceAuthorityClaim &claim, const SequenceGameplayWriteRequest &candidate) {
-            if (claim.target.stableValue != candidate.target.stableValue)
-                return claim.target.stableValue < candidate.target.stableValue;
-            return claim.channel < candidate.channel;
+        const auto first =
+            std::ranges::lower_bound(claims_, request, []<typename Left, typename Right>(const Left &left, const Right &right) {
+            if (left.target.stableValue != right.target.stableValue)
+                return left.target.stableValue < right.target.stableValue;
+            return left.channel < right.channel;
         });
         for (auto claim = first; claim != claims_.end() && SameAuthorityKey(*claim, request); ++claim) {
             if (claim->target != request.target) {
                 staleTargetGenerationFound = true;
                 continue;
             }
-            if (claim->mode == CinematicClaimMode::ObserveOnly || claim->mode == CinematicClaimMode::PresentationOverlay)
+            if (claim->mode == ObserveOnly || claim->mode == PresentationOverlay)
                 continue;
-            winner = &*claim;
+            winner = std::to_address(claim);
             break;
         }
         if (winner == nullptr) {
@@ -320,9 +345,9 @@ namespace Horo::Cinematic {
                 return Result<SequenceGameplayWriteResult>::Success({SequenceGameplayWriteOutcome::StaleAuthority, std::nullopt});
             return Result<SequenceGameplayWriteResult>::Success({SequenceGameplayWriteOutcome::AcceptedGameplay, std::nullopt});
         }
-        if (winner->mode == CinematicClaimMode::Exclusive)
+        if (winner->mode == Exclusive)
             return Result<SequenceGameplayWriteResult>::Success({SequenceGameplayWriteOutcome::SuppressedByCinematic, winner->player});
-        if (winner->mode == CinematicClaimMode::Blend)
+        if (winner->mode == Blend)
             return Result<SequenceGameplayWriteResult>::Success({SequenceGameplayWriteOutcome::AcceptedForOwnerBlend, winner->player});
         return Result<SequenceGameplayWriteResult>::Success({SequenceGameplayWriteOutcome::UnsupportedAuthorityMode, winner->player});
     }
@@ -375,15 +400,12 @@ namespace Horo::Cinematic {
             return evaluated;
         SequenceFrameEvaluationResult result = evaluated.Value();
         const SequencePlayerOperationFence fence = instance.cursor.controlFence;
-        auto committed = instance.player.CommitEvaluationPosition(fence, result.position);
-        if (committed.HasError())
+        if (auto committed = instance.player.CommitEvaluationPosition(fence, result.position); committed.HasError())
             return Result<SequenceFrameEvaluationResult>::Failure(committed.ErrorValue());
         if (result.reachedEnd) {
-            auto stopping = instance.player.Stop(handle);
-            if (stopping.HasError())
+            if (auto stopping = instance.player.Stop(handle); stopping.HasError())
                 return Result<SequenceFrameEvaluationResult>::Failure(stopping.ErrorValue());
-            auto stopped = instance.player.FinishStop(handle);
-            if (stopped.HasError())
+            if (auto stopped = instance.player.FinishStop(handle); stopped.HasError())
                 return Result<SequenceFrameEvaluationResult>::Failure(stopped.ErrorValue());
             ReleaseCoordination(instance);
         }
@@ -393,6 +415,7 @@ namespace Horo::Cinematic {
     /** @copydoc CinematicRuntimeService::ResolveGameplayPause */
     Result<SequenceGameplayPauseResult> CinematicRuntimeService::ResolveGameplayPause(const SequencePlayerHandle &handle,
                                                                                       const SequenceGameplayPauseRequest &request) {
+        using enum SequenceGameplayPauseOutcome;
         auto slot = ResolveSlot(handle);
         if (slot.HasError())
             return Result<SequenceGameplayPauseResult>::Failure(slot.ErrorValue());
@@ -401,20 +424,18 @@ namespace Horo::Cinematic {
         Instance &instance = *slots_[slot.Value()].instance;
         if (request.authorityRevision < instance.gameplayPauseRevision ||
             (request.authorityRevision == instance.gameplayPauseRevision && request.paused != instance.gameplayPaused))
-            return Result<SequenceGameplayPauseResult>::Success(
-                {SequenceGameplayPauseOutcome::StaleAuthority, instance.gameplayPauseRevision});
+            return Result<SequenceGameplayPauseResult>::Success({StaleAuthority, instance.gameplayPauseRevision});
         if (request.authorityRevision == instance.gameplayPauseRevision)
-            return Result<SequenceGameplayPauseResult>::Success({SequenceGameplayPauseOutcome::Unchanged, instance.gameplayPauseRevision});
+            return Result<SequenceGameplayPauseResult>::Success({Unchanged, instance.gameplayPauseRevision});
 
         const bool wasPaused = instance.gameplayPaused;
         instance.gameplayPauseRevision = request.authorityRevision;
         instance.gameplayPaused = request.paused;
         instance.resumeBaselinePending = wasPaused && !request.paused;
         if (!request.paused)
-            return Result<SequenceGameplayPauseResult>::Success({SequenceGameplayPauseOutcome::Resumed, instance.gameplayPauseRevision});
-        const SequenceGameplayPauseOutcome outcome = instance.coordination.pausePolicy == SequencePausePolicy::FollowGameplay
-                                                         ? SequenceGameplayPauseOutcome::HeldByGameplayPause
-                                                         : SequenceGameplayPauseOutcome::ContinuedDuringGameplayPause;
+            return Result<SequenceGameplayPauseResult>::Success({Resumed, instance.gameplayPauseRevision});
+        const SequenceGameplayPauseOutcome outcome =
+            instance.coordination.pausePolicy == SequencePausePolicy::FollowGameplay ? HeldByGameplayPause : ContinuedDuringGameplayPause;
         return Result<SequenceGameplayPauseResult>::Success({outcome, instance.gameplayPauseRevision});
     }
 
@@ -447,8 +468,8 @@ namespace Horo::Cinematic {
         if (slot.HasError())
             return Result<SequenceGameplayWriteResult>::Failure(slot.ErrorValue());
         const Instance &instance = *slots_[slot.Value()].instance;
-        const SequencePlaybackState state = instance.player.Snapshot().state;
-        if (state == SequencePlaybackState::Closing || IsTerminal(state)) {
+        if (const SequencePlaybackState state = instance.player.Snapshot().state;
+            state == SequencePlaybackState::Closing || IsTerminal(state)) {
             if (!request.target.IsValid() || !IsValidChannel(request.channel))
                 return Failed<SequenceGameplayWriteResult>(SequencePlaybackRuntimeErrors::ActivationInvalid);
             return Result<SequenceGameplayWriteResult>::Success({SequenceGameplayWriteOutcome::AcceptedGameplay, std::nullopt});

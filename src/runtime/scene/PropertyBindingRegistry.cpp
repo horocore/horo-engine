@@ -20,11 +20,11 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] bool IsValidRange(const PropertyRangeConstraint &range) noexcept {
-            if (range.minimum && !std::isfinite(*range.minimum))
+            if (range.minimum.has_value() && !std::isfinite(*range.minimum))
                 return false;
-            if (range.maximum && !std::isfinite(*range.maximum))
+            if (range.maximum.has_value() && !std::isfinite(*range.maximum))
                 return false;
-            return !range.minimum || !range.maximum || *range.minimum <= *range.maximum;
+            return !range.minimum.has_value() || !range.maximum.has_value() || *range.minimum <= *range.maximum;
         }
 
         [[nodiscard]] Result<void> ValidateDescriptor(PropertyBindingDescriptor &descriptor) {

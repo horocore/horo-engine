@@ -7,6 +7,7 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Cinematic {
@@ -30,15 +31,15 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] bool IsFiniteRange(const Runtime::PropertyRangeConstraint &range) noexcept {
-            if (range.minimum && !std::isfinite(*range.minimum))
+            if (range.minimum.has_value() && !std::isfinite(*range.minimum))
                 return false;
-            if (range.maximum && !std::isfinite(*range.maximum))
+            if (range.maximum.has_value() && !std::isfinite(*range.maximum))
                 return false;
-            return !range.minimum || !range.maximum || *range.minimum <= *range.maximum;
+            return !range.minimum.has_value() || !range.maximum.has_value() || *range.minimum <= *range.maximum;
         }
 
         [[nodiscard]] bool IsWithinRange(const Runtime::PropertyRangeConstraint &range, const float value) noexcept {
-            return (!range.minimum || value >= *range.minimum) && (!range.maximum || value <= *range.maximum);
+            return (!range.minimum.has_value() || value >= *range.minimum) && (!range.maximum.has_value() || value <= *range.maximum);
         }
 
         [[nodiscard]] bool IsWithinRange(const Runtime::PropertyRangeConstraint &range,
@@ -46,15 +47,15 @@ namespace Horo::Cinematic {
             const auto check = [&range](const float component) {
                 return std::isfinite(component) && IsWithinRange(range, component);
             };
-            return std::visit([&check](const auto &typed) {
-                using Value = std::decay_t<decltype(typed)>;
-                if constexpr (std::is_same_v<Value, float>) {
+            return std::visit([&check]<typename Value>(const Value &typed) {
+                using TypedValue = std::decay_t<Value>;
+                if constexpr (std::is_same_v<TypedValue, float>) {
                     return check(typed);
-                } else if constexpr (std::is_same_v<Value, bool>) {
+                } else if constexpr (std::is_same_v<TypedValue, bool>) {
                     return true;
-                } else if constexpr (std::is_same_v<Value, Math::Vec2>) {
+                } else if constexpr (std::is_same_v<TypedValue, Math::Vec2>) {
                     return check(typed.x) && check(typed.y);
-                } else if constexpr (std::is_same_v<Value, Math::Vec3>) {
+                } else if constexpr (std::is_same_v<TypedValue, Math::Vec3>) {
                     return check(typed.x) && check(typed.y) && check(typed.z);
                 } else {
                     return check(typed.x) && check(typed.y) && check(typed.z) && check(typed.w);
@@ -63,42 +64,52 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] bool MatchesType(const Runtime::PropertyBindingType type, const Runtime::PropertyBindingValue &value) noexcept {
+            using enum Runtime::PropertyBindingType;
             switch (type) {
-                case Runtime::PropertyBindingType::Float:
+                case Float:
                     return std::holds_alternative<float>(value);
-                case Runtime::PropertyBindingType::Vec2:
+                case Vec2:
                     return std::holds_alternative<Math::Vec2>(value);
-                case Runtime::PropertyBindingType::Vec3:
+                case Vec3:
                     return std::holds_alternative<Math::Vec3>(value);
-                case Runtime::PropertyBindingType::Vec4:
+                case Vec4:
                     return std::holds_alternative<Math::Vec4>(value);
-                case Runtime::PropertyBindingType::Boolean:
+                case Boolean:
                     return std::holds_alternative<bool>(value);
-                case Runtime::PropertyBindingType::Count:
+                case Count:
                     return false;
             }
             return false;
         }
 
+        [[nodiscard]] Result<void> ValidateBooleanCurve(const ScalarCurveView &curve) {
+            for (const ScalarCurveKey &key : curve.Keys()) {
+                if (key.interpolation != CurveInterpolation::Constant || (key.value != 0.0F && key.value != 1.0F))
+                    return RejectProperty<void>(CinematicErrors::PropertyMalformed,
+                                                "Boolean property curves must contain constant zero/one keys.");
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateCurveSet(const PropertyCurveSet &curves) {
+            using enum Runtime::PropertyBindingType;
             const std::size_t channelCount = PropertyTrackChannelCount(curves.type);
             if (channelCount == 0)
                 return RejectProperty<void>(CinematicErrors::PropertyMalformed, "The property curve type is invalid.");
             for (std::size_t channel = 0; channel < curves.channels.size(); ++channel) {
-                if (channel < channelCount) {
-                    if (!curves.channels[channel].has_value() || curves.channels[channel]->Keys().empty())
+                if (channel >= channelCount) {
+                    if (curves.channels[channel].has_value())
                         return RejectProperty<void>(CinematicErrors::PropertyMalformed,
-                                                    "The property curve is missing a required scalar channel.");
-                    if (curves.type == Runtime::PropertyBindingType::Boolean) {
-                        for (const ScalarCurveKey &key : curves.channels[channel]->Keys()) {
-                            if (key.interpolation != CurveInterpolation::Constant || (key.value != 0.0F && key.value != 1.0F))
-                                return RejectProperty<void>(CinematicErrors::PropertyMalformed,
-                                                            "Boolean property curves must contain constant zero/one keys.");
-                        }
-                    }
-                } else if (curves.channels[channel].has_value()) {
+                                                    "The property curve contains an unused scalar channel.");
+                    continue;
+                }
+                const auto &curve = curves.channels[channel];
+                if (!curve.has_value() || curve->Keys().empty())
                     return RejectProperty<void>(CinematicErrors::PropertyMalformed,
-                                                "The property curve contains an unused scalar channel.");
+                                                "The property curve is missing a required scalar channel.");
+                if (curves.type == Boolean) {
+                    if (auto valid = ValidateBooleanCurve(*curve); valid.HasError())
+                        return valid;
                 }
             }
             return Result<void>::Success();
@@ -119,18 +130,19 @@ namespace Horo::Cinematic {
                                                                 "A property curve produced a non-finite sample.");
             }
 
+            using enum Runtime::PropertyBindingType;
             switch (track.curves.type) {
-                case Runtime::PropertyBindingType::Float:
+                case Float:
                     return Result<PropertyBindingValue>::Success(samples[0]);
-                case Runtime::PropertyBindingType::Vec2:
+                case Vec2:
                     return Result<PropertyBindingValue>::Success(Math::Vec2{samples[0], samples[1]});
-                case Runtime::PropertyBindingType::Vec3:
+                case Vec3:
                     return Result<PropertyBindingValue>::Success(Math::Vec3{samples[0], samples[1], samples[2]});
-                case Runtime::PropertyBindingType::Vec4:
+                case Vec4:
                     return Result<PropertyBindingValue>::Success(Math::Vec4{samples[0], samples[1], samples[2], samples[3]});
-                case Runtime::PropertyBindingType::Boolean:
+                case Boolean:
                     return Result<PropertyBindingValue>::Success(samples[0] >= 0.5F);
-                case Runtime::PropertyBindingType::Count:
+                case Count:
                     break;
             }
             return RejectProperty<PropertyBindingValue>(CinematicErrors::PropertyMalformed, "The property curve type is not supported.");
@@ -147,24 +159,25 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] const ErrorCodeDescriptor &DiagnosticError(const PropertyBindingEvaluationOutcome outcome) noexcept {
+            using enum PropertyBindingEvaluationOutcome;
             switch (outcome) {
-                case PropertyBindingEvaluationOutcome::BindingMissing:
+                case BindingMissing:
                     return CinematicErrors::PropertyBindingMissing;
-                case PropertyBindingEvaluationOutcome::BindingStale:
+                case BindingStale:
                     return CinematicErrors::PropertyBindingStale;
-                case PropertyBindingEvaluationOutcome::TargetMissing:
+                case TargetMissing:
                     return CinematicErrors::PropertyBindingTargetMissing;
-                case PropertyBindingEvaluationOutcome::ComponentMismatch:
+                case ComponentMismatch:
                     return CinematicErrors::PropertyComponentMismatch;
-                case PropertyBindingEvaluationOutcome::TypeMismatch:
+                case TypeMismatch:
                     return CinematicErrors::PropertyTypeMismatch;
-                case PropertyBindingEvaluationOutcome::ValueOutOfRange:
+                case ValueOutOfRange:
                     return CinematicErrors::PropertySampleInvalid;
-                case PropertyBindingEvaluationOutcome::ReadOnly:
-                case PropertyBindingEvaluationOutcome::WriteRejected:
+                case ReadOnly:
+                case WriteRejected:
                     return CinematicErrors::PropertyWriteRejected;
-                case PropertyBindingEvaluationOutcome::Applied:
-                case PropertyBindingEvaluationOutcome::Count:
+                case Applied:
+                case Count:
                     return CinematicErrors::PropertyMalformed;
             }
             return CinematicErrors::PropertyMalformed;
@@ -303,8 +316,8 @@ namespace Horo::Cinematic {
             if (compiled.activationTargetIndex >= context.targets.size())
                 return RejectProperty<std::size_t>(CinematicErrors::PropertyBindingTargetMissing,
                                                    "A required property target disappeared from the scene snapshot.");
-            const PropertyBindingTargetSnapshot &target = context.targets[compiled.activationTargetIndex];
-            if (!SameTarget(target, *compiled.activationTarget))
+            if (const PropertyBindingTargetSnapshot &target = context.targets[compiled.activationTargetIndex];
+                !SameTarget(target, *compiled.activationTarget))
                 return RejectProperty<std::size_t>(CinematicErrors::PropertyBindingStale,
                                                    "A property component or binding generation changed after activation.");
 
@@ -344,8 +357,7 @@ namespace Horo::Cinematic {
         if (!IsWithinRange(compiled.binding->range, value.value))
             return reject(PropertyBindingEvaluationOutcome::ValueOutOfRange, CinematicErrors::PropertySampleInvalid);
 
-        auto written = compiled.binding->setter(target.component, value.value);
-        if (written.HasError()) {
+        if (auto written = compiled.binding->setter(target.component, value.value); written.HasError()) {
             diagnostic =
                 Diagnostic(compiled.track, PropertyBindingEvaluationOutcome::WriteRejected, CinematicErrors::PropertyWriteRejected);
             diagnostic.error = std::move(written).ErrorValue();

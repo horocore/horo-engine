@@ -292,6 +292,11 @@ namespace Horo::Cinematic {
                                                                         CinematicControlChannel::CharacterTranslation,
                                                                         CinematicClaimMode::Blend, 5, 9, 42, true}};
         RequireError(SequenceAuthorityPlan::Create(9, 42, incompatible), SequencePlaybackRuntimeErrors::AuthorityConflict);
+
+        const std::array staleGeneration{claims[0], SequenceAuthorityClaim{Handle(11), AuthorityTarget(500, 2),
+                                                                           CinematicControlChannel::CharacterTranslation,
+                                                                           CinematicClaimMode::Exclusive, 5, 9, 42, false}};
+        RequireError(SequenceAuthorityPlan::Create(9, 42, staleGeneration), SequencePlaybackRuntimeErrors::AuthorityConflict);
     }
 
     TEST_CASE("Playback activation rejects mismatched plans and simulation claims during host pause",

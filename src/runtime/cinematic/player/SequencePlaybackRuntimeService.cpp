@@ -20,7 +20,7 @@ namespace Horo::Cinematic {
         }
     }  // namespace
 
-    CinematicRuntimeService::Instance::Instance(SequencePlayer playerValue, SequenceFrameCursor cursorValue,
+    CinematicRuntimeService::Instance::Instance(SequencePlayer playerValue, const SequenceFrameCursor &cursorValue,
                                                 SequencePlaybackActivation activationValue,
                                                 std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
                                                 std::optional<SequenceCoordinationLease> hudSuppressionLeaseValue) noexcept
@@ -30,7 +30,7 @@ namespace Horo::Cinematic {
           gameplayPauseLease(std::move(gameplayPauseLeaseValue)), hudSuppressionLease(std::move(hudSuppressionLeaseValue)),
           retainedBytes(activationValue.retainedBytes) {}
 
-    CinematicRuntimeService::CinematicRuntimeService(const CinematicRuntimeSessionId session, const SequenceEvaluationBudget budget,
+    CinematicRuntimeService::CinematicRuntimeService(const CinematicRuntimeSessionId session, const SequenceEvaluationBudget &budget,
                                                      std::vector<Slot> slots) noexcept
         : session_(session), budget_(budget), slots_(std::move(slots)) {}
 
@@ -237,8 +237,7 @@ namespace Horo::Cinematic {
             if (closing.HasError())
                 return Result<void>::Failure(closing.ErrorValue());
         }
-        auto finished = instance.player.FinishClose(handle);
-        if (finished.HasError())
+        if (auto finished = instance.player.FinishClose(handle); finished.HasError())
             return Result<void>::Failure(finished.ErrorValue());
         ReleaseCoordination(instance);
         return Result<void>::Success();
@@ -279,7 +278,7 @@ namespace Horo::Cinematic {
     }
 
     /** @copydoc CinematicRuntimeService::SynchronizeCursor */
-    Result<void> CinematicRuntimeService::SynchronizeCursor(Instance &instance, const SequenceCursorResetPolicy resetPolicy) {
+    Result<void> CinematicRuntimeService::SynchronizeCursor(Instance &instance, const SequenceCursorResetPolicy resetPolicy) const {
         auto cursor = MakeSequenceFrameCursor(instance.player.Snapshot(), resetPolicy);
         if (cursor.HasError())
             return Result<void>::Failure(cursor.ErrorValue());
@@ -288,7 +287,7 @@ namespace Horo::Cinematic {
     }
 
     /** @copydoc CinematicRuntimeService::RebindCursorFence */
-    Result<void> CinematicRuntimeService::RebindCursorFence(Instance &instance) {
+    Result<void> CinematicRuntimeService::RebindCursorFence(Instance &instance) const {
         const SequencePlayerSnapshot snapshot = instance.player.Snapshot();
         if (!snapshot.handle.IsValid() || snapshot.controlRevision == 0 || snapshot.position < 0 || snapshot.position > snapshot.duration)
             return Failed<void>(SequencePlaybackRuntimeErrors::RevisionExhausted);
@@ -360,8 +359,7 @@ namespace Horo::Cinematic {
                 lease.reset();
             }
         };
-        const auto acquireLease = [&](const SequenceCoordinationLeaseKind kind,
-                                      std::optional<SequenceCoordinationLease> &destination) -> Result<void> {
+        const auto acquireLease = [&](const SequenceCoordinationLeaseKind kind, std::optional<SequenceCoordinationLease> &destination) {
             auto acquired = activation.coordinationHooks.acquire(activation.coordinationHooks.context, activation.player.handle, kind);
             if (acquired.HasError())
                 return Result<void>::Failure(acquired.ErrorValue());
@@ -383,7 +381,7 @@ namespace Horo::Cinematic {
         return Result<void>::Success();
     }
 
-    void CinematicRuntimeService::ReleaseCoordination(Instance &instance) noexcept {
+    void CinematicRuntimeService::ReleaseCoordination(Instance &instance) const noexcept {
         if (instance.hudSuppressionLease.has_value()) {
             instance.coordinationHooks.release(instance.coordinationHooks.context, *instance.hudSuppressionLease);
             instance.hudSuppressionLease.reset();
@@ -420,8 +418,7 @@ namespace Horo::Cinematic {
                 if (closing.HasError())
                     return Result<void>::Failure(closing.ErrorValue());
             }
-            auto finished = instance.player.FinishClose(snapshot.handle);
-            if (finished.HasError())
+            if (auto finished = instance.player.FinishClose(snapshot.handle); finished.HasError())
                 return Result<void>::Failure(finished.ErrorValue());
             ReleaseCoordination(instance);
         }
