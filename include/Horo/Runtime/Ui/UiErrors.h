@@ -64,6 +64,24 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor LayoutSnapshotStorageExhausted;
     /** @brief The layout engine is retiring or stopped and rejects new work. */
     extern const ErrorCodeDescriptor LayoutLifecycleUnavailable;
+    /** @brief A style schema, value, or resolver request is malformed. */
+    extern const ErrorCodeDescriptor StyleInvalid;
+    /** @brief A style asset, class, token, or property repeats a stable identity. */
+    extern const ErrorCodeDescriptor StyleIdentityConflict;
+    /** @brief A style reference names a missing or foreign asset, class, token, or property. */
+    extern const ErrorCodeDescriptor StyleReferenceInvalid;
+    /** @brief A style assignment crosses a closed value category or declared range. */
+    extern const ErrorCodeDescriptor StyleTypeMismatch;
+    /** @brief A style asset, class, or token graph contains a cycle or excessive inheritance depth. */
+    extern const ErrorCodeDescriptor StyleCycle;
+    /** @brief A visual-state selector or layer is malformed or uses unknown state evidence. */
+    extern const ErrorCodeDescriptor StyleStateInvalid;
+    /** @brief Style source identity or revision evidence does not match the active tree/registry. */
+    extern const ErrorCodeDescriptor StyleSourceStale;
+    /** @brief Every preallocated immutable computed-style snapshot slot remains leased. */
+    extern const ErrorCodeDescriptor StyleSnapshotStorageExhausted;
+    /** @brief The style registry or resolver is retiring or stopped and rejects new work. */
+    extern const ErrorCodeDescriptor StyleLifecycleUnavailable;
     /** @brief Hit-test projection, geometry, pointer, ray, or canvas evidence is malformed. */
     extern const ErrorCodeDescriptor HitTestInvalid;
     /** @brief Hit-test ownership, tree, canvas, or interaction evidence is stale or mismatched. */
