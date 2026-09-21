@@ -162,7 +162,9 @@ jobs:
           xvfb-run -a build/sonar/tests/HoroEditorWorkspaceControllerTests
           /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
+          gcovr_started=$SECONDS
           /tmp/horo-gcovr/bin/gcovr --sonarqube build/sonar/coverage.xml \
+            -j 0 \
             --sonarqube-metric line \
             --root "$GITHUB_WORKSPACE" \
             --filter "$GITHUB_WORKSPACE/include" \
@@ -173,6 +175,7 @@ jobs:
             --exclude-noncode-lines \
             --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
             build/sonar
+          echo "gcovr completed in $((SECONDS - gcovr_started))s"
           ccache --show-stats
 
       - name: SonarCloud scan
