@@ -4,8 +4,9 @@
  * @brief Authored, cooked, scene-reference, and mutable-instance Runtime UI contracts.
  */
 
-#include "Horo/Assets/AssetId.h"
+#include "Horo/Runtime/Ui/UiAssetDependency.h"
 #include "Horo/Runtime/Ui/UiCanvasSpace.h"
+#include "Horo/Runtime/Ui/UiLocalization.h"
 
 #include <compare>
 #include <cstddef>
@@ -18,17 +19,12 @@ namespace Horo::Runtime::Ui {
     inline constexpr std::size_t MaximumUiDocumentCanvases = 64;
     /** @brief Maximum canonical asset dependencies admitted by one authored document. */
     inline constexpr std::size_t MaximumUiDocumentDependencies = 1024;
+    /** @brief Maximum localized message references admitted by one authored document. */
+    inline constexpr std::size_t MaximumUiDocumentLocalizedTexts = 4'096;
+    /** @brief Maximum localized asset references admitted by one authored document. */
+    inline constexpr std::size_t MaximumUiDocumentLocalizedAssets = 1'024;
     /** @brief Maximum byte count admitted by one cooked document payload. */
     inline constexpr std::size_t MaximumCookedUiDocumentBytes = 64ULL * 1024ULL * 1024ULL;
-
-    /** @brief One asset required or optionally consumed by a UI document. */
-    struct UiAssetDependency final {
-        Assets::AssetId asset;            /**< Stable referenced asset identity. */
-        Assets::AssetTypeId expectedType; /**< Type required when the asset is resolved. */
-        bool required{true};              /**< Whether missing residency prevents instance activation. */
-        /** @brief Compares canonical dependency evidence. @return Structural ordering and equality. */
-        [[nodiscard]] auto operator<=>(const UiAssetDependency &) const noexcept = default;
-    };
 
     /** @brief Immutable validated authoring model stored by a `.uicanvas` document owner. */
     class UiDocument final {
@@ -39,6 +35,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiDocumentRevision Revision() const noexcept;
         /** @brief Returns canvases in stable authored order. @return Borrowed immutable canvas descriptors. */
         [[nodiscard]] std::span<const UiCanvasDescriptor> Canvases() const noexcept;
+        /** @brief Returns localized message references in authored order. @return Borrowed immutable references. */
+        [[nodiscard]] std::span<const UiLocalizedText> LocalizedTexts() const noexcept;
+        /** @brief Returns localized asset references in authored order. @return Borrowed immutable references. */
+        [[nodiscard]] std::span<const UiLocalizedAssetReference> LocalizedAssets() const noexcept;
         /** @brief Returns dependencies in canonical AssetId order. @return Borrowed immutable dependencies. */
         [[nodiscard]] std::span<const UiAssetDependency> Dependencies() const noexcept;
 
@@ -46,11 +46,14 @@ namespace Horo::Runtime::Ui {
         friend class UiDocumentBuilder;
         /** @brief Adopts validated authored state from UiDocumentBuilder. */
         UiDocument(UiDocumentId id, UiDocumentRevision revision, std::vector<UiCanvasDescriptor> canvases,
+                   std::vector<UiLocalizedText> localizedTexts, std::vector<UiLocalizedAssetReference> localizedAssets,
                    std::vector<UiAssetDependency> dependencies) noexcept;
-        UiDocumentId id_;                             /**< Stable authored identity. */
-        UiDocumentRevision revision_;                 /**< Authored revision represented by this snapshot. */
-        std::vector<UiCanvasDescriptor> canvases_;    /**< Validated authored-order canvases. */
-        std::vector<UiAssetDependency> dependencies_; /**< Canonical dependency enumeration. */
+        UiDocumentId id_;                                        /**< Stable authored identity. */
+        UiDocumentRevision revision_;                            /**< Authored revision represented by this snapshot. */
+        std::vector<UiCanvasDescriptor> canvases_;               /**< Validated authored-order canvases. */
+        std::vector<UiLocalizedText> localizedTexts_;            /**< Authored stable message references. */
+        std::vector<UiLocalizedAssetReference> localizedAssets_; /**< Authored localized asset variant sets. */
+        std::vector<UiAssetDependency> dependencies_;            /**< Canonical dependency enumeration. */
     };
 
     /** @brief Load-time authoring builder that publishes only complete validated documents. */
@@ -64,6 +67,18 @@ namespace Horo::Runtime::Ui {
          * @return Success or UiErrors::CapacityExceeded without modifying the builder.
          */
         [[nodiscard]] Result<void> AddCanvas(UiCanvasDescriptor canvas);
+        /**
+         * @brief Adds one complete localized message reference in authored order.
+         * @param text Owned stable key, arguments, fallback and failure policy.
+         * @return Success or a typed capacity/invalid-reference failure; failure leaves the builder unchanged.
+         */
+        [[nodiscard]] Result<void> AddLocalizedText(UiLocalizedText text);
+        /**
+         * @brief Adds one localized asset reference and atomically merges all declared variants into dependencies.
+         * @param reference Owned finite localized asset mapping.
+         * @return Success or a typed validation/conflict/capacity failure; failure leaves the builder unchanged.
+         */
+        [[nodiscard]] Result<void> AddLocalizedAsset(UiLocalizedAssetReference reference);
         /** @brief Adds or strengthens one dependency. @param dependency Asset requirement.
          * @return Success, or a typed invalid/conflicting/capacity error.
          */
@@ -72,10 +87,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiDocument> Build() &&;
 
     private:
-        UiDocumentId id_;                             /**< Candidate authored identity. */
-        UiDocumentRevision revision_;                 /**< Candidate authored revision. */
-        std::vector<UiCanvasDescriptor> canvases_;    /**< Bounded authored-order canvases. */
-        std::vector<UiAssetDependency> dependencies_; /**< Bounded canonicalizable dependencies. */
+        UiDocumentId id_;                                        /**< Candidate authored identity. */
+        UiDocumentRevision revision_;                            /**< Candidate authored revision. */
+        std::vector<UiCanvasDescriptor> canvases_;               /**< Bounded authored-order canvases. */
+        std::vector<UiLocalizedText> localizedTexts_;            /**< Bounded authored message references. */
+        std::vector<UiLocalizedAssetReference> localizedAssets_; /**< Bounded authored asset references. */
+        std::vector<UiAssetDependency> dependencies_;            /**< Bounded canonicalizable dependencies. */
     };
 
     /** @brief Versioned cooked payload, separate from authoring state and mutable runtime state. */

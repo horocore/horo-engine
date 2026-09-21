@@ -8,12 +8,30 @@ namespace Horo::Runtime::Ui {
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
         }
+
+        [[nodiscard]] Result<void> MergeDependency(std::vector<UiAssetDependency> &dependencies, UiAssetDependency dependency) {
+            if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
+                return Failure(UiErrors::DependencyInvalid);
+            const auto position = std::ranges::lower_bound(dependencies, dependency.asset, {}, &UiAssetDependency::asset);
+            if (position != dependencies.end() && position->asset == dependency.asset) {
+                if (position->expectedType != dependency.expectedType)
+                    return Failure(UiErrors::DependencyInvalid);
+                position->required = position->required || dependency.required;
+                return Result<void>::Success();
+            }
+            if (dependencies.size() == MaximumUiDocumentDependencies)
+                return Failure(UiErrors::CapacityExceeded);
+            dependencies.insert(position, std::move(dependency));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc UiDocument::UiDocument */
     UiDocument::UiDocument(UiDocumentId id, UiDocumentRevision revision, std::vector<UiCanvasDescriptor> canvases,
+                           std::vector<UiLocalizedText> localizedTexts, std::vector<UiLocalizedAssetReference> localizedAssets,
                            std::vector<UiAssetDependency> dependencies) noexcept
-        : id_(id), revision_(revision), canvases_(std::move(canvases)), dependencies_(std::move(dependencies)) {}
+        : id_(id), revision_(revision), canvases_(std::move(canvases)), localizedTexts_(std::move(localizedTexts)),
+          localizedAssets_(std::move(localizedAssets)), dependencies_(std::move(dependencies)) {}
 
     /** @copydoc UiDocument::Id */
     UiDocumentId UiDocument::Id() const noexcept {
@@ -28,6 +46,16 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiDocument::Canvases */
     std::span<const UiCanvasDescriptor> UiDocument::Canvases() const noexcept {
         return canvases_;
+    }
+
+    /** @copydoc UiDocument::LocalizedTexts */
+    std::span<const UiLocalizedText> UiDocument::LocalizedTexts() const noexcept {
+        return localizedTexts_;
+    }
+
+    /** @copydoc UiDocument::LocalizedAssets */
+    std::span<const UiLocalizedAssetReference> UiDocument::LocalizedAssets() const noexcept {
+        return localizedAssets_;
     }
 
     /** @copydoc UiDocument::Dependencies */
@@ -46,21 +74,37 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiDocumentBuilder::AddLocalizedText */
+    Result<void> UiDocumentBuilder::AddLocalizedText(UiLocalizedText text) {
+        if (!text.IsValid())
+            return Failure(UiErrors::LocalizedMessageInvalid);
+        if (localizedTexts_.size() == MaximumUiDocumentLocalizedTexts)
+            return Failure(UiErrors::CapacityExceeded);
+        localizedTexts_.push_back(std::move(text));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiDocumentBuilder::AddLocalizedAsset */
+    Result<void> UiDocumentBuilder::AddLocalizedAsset(UiLocalizedAssetReference reference) {
+        if (!reference.IsValid())
+            return Failure(UiErrors::LocalizedAssetReferenceInvalid);
+        if (localizedAssets_.size() == MaximumUiDocumentLocalizedAssets)
+            return Failure(UiErrors::CapacityExceeded);
+
+        std::vector<UiAssetDependency> candidate = dependencies_;
+        candidate.reserve(dependencies_.size() + reference.Dependencies().size());
+        for (const UiAssetDependency &dependency : reference.Dependencies()) {
+            if (const auto merged = MergeDependency(candidate, dependency); merged.HasError())
+                return merged;
+        }
+        dependencies_ = std::move(candidate);
+        localizedAssets_.push_back(std::move(reference));
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiDocumentBuilder::RequireAsset */
     Result<void> UiDocumentBuilder::RequireAsset(UiAssetDependency dependency) {
-        if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
-            return Failure(UiErrors::DependencyInvalid);
-        const auto found = std::ranges::find(dependencies_, dependency.asset, &UiAssetDependency::asset);
-        if (found == dependencies_.end()) {
-            if (dependencies_.size() == MaximumUiDocumentDependencies)
-                return Failure(UiErrors::CapacityExceeded);
-            dependencies_.push_back(std::move(dependency));
-            return Result<void>::Success();
-        }
-        if (found->expectedType != dependency.expectedType)
-            return Failure(UiErrors::DependencyInvalid);
-        found->required = found->required || dependency.required;
-        return Result<void>::Success();
+        return MergeDependency(dependencies_, std::move(dependency));
     }
 
     /** @copydoc UiDocumentBuilder::Build */
@@ -76,7 +120,8 @@ namespace Horo::Runtime::Ui {
                     return Failure<UiDocument>(UiErrors::DocumentDuplicateIdentity);
         }
         std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
-        return Result<UiDocument>::Success(UiDocument{id_, revision_, std::move(canvases_), std::move(dependencies_)});
+        return Result<UiDocument>::Success(UiDocument{id_, revision_, std::move(canvases_), std::move(localizedTexts_),
+                                                      std::move(localizedAssets_), std::move(dependencies_)});
     }
 
     /** @copydoc CookedUiDocument::CookedUiDocument */
