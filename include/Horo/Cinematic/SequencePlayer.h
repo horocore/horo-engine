@@ -34,6 +34,7 @@ namespace Horo::Cinematic {
         Started,
         Resumed,
         Paused,
+        Advanced,
         StopRequested,
         Stopped,
         Seeked,
@@ -160,6 +161,15 @@ namespace Horo::Cinematic {
          * @return Atomic seek transition that suppresses skipped event dispatch.
          */
         [[nodiscard]] Result<SequencePlayerTransition> Seek(const SequencePlayerHandle &handle, SequenceTime target);
+        /**
+         * @brief Commits one successfully evaluated position without changing the control revision.
+         * @param fence Exact control fence captured before the owner-boundary evaluation.
+         * @param position Position produced by the all-or-none evaluation attempt.
+         * @return Observable advancement or a typed stale, state, or time failure.
+         * @note Only the session owner may publish evaluated time; commands still advance the control revision.
+         */
+        [[nodiscard]] Result<SequencePlayerTransition> CommitEvaluationPosition(const SequencePlayerOperationFence &fence,
+                                                                                SequenceTime position);
         /**
          * @brief Changes the exact playback rate without changing pause state.
          * @param handle Exact current handle.

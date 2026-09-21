@@ -717,6 +717,9 @@ add_library(HoroCinematicRuntime STATIC
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
         runtime/cinematic/player/SequencePlayer.cpp
         runtime/cinematic/player/SequencePlayerErrors.cpp
+        runtime/cinematic/player/SequencePlaybackRuntime.cpp
+        runtime/cinematic/player/SequencePlaybackRuntimeErrors.cpp
+        runtime/cinematic/player/SequencePlaybackRuntimeService.cpp
 )
 add_library(HoroEngine::CinematicRuntime ALIAS HoroCinematicRuntime)
 target_compile_features(HoroCinematicRuntime PUBLIC cxx_std_20)
