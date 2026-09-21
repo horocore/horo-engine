@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace Horo::Render {
     /** @brief Independently reported renderer capabilities. */
@@ -30,13 +31,23 @@ namespace Horo::Render {
     struct RenderCapabilitySet final {
         std::uint16_t bits{0}; /**< Enabled capability bits. */
 
+        /** @brief Number of capability values currently defined by the public contract. */
+        static constexpr std::uint16_t CapabilityCount = static_cast<std::uint16_t>(RenderCapability::RenderTargetResources) + 1U;
+
+        static_assert(CapabilityCount <= std::numeric_limits<std::uint16_t>::digits,
+                      "Render capability count exceeds the capability bitset width.");
+
+        /** @brief Mask containing every capability bit defined by the public contract. */
+        static constexpr std::uint16_t KnownBits = static_cast<std::uint16_t>((std::uint32_t{1} << CapabilityCount) - 1U);
+
         /**
          * @brief Returns the bit for one capability.
          * @param capability Capability to encode.
          * @return The corresponding single-bit mask.
          */
         [[nodiscard]] static constexpr std::uint16_t Bit(const RenderCapability capability) noexcept {
-            return static_cast<std::uint16_t>(1U << static_cast<std::uint8_t>(capability));
+            const auto value = static_cast<std::uint8_t>(capability);
+            return value < CapabilityCount ? static_cast<std::uint16_t>(std::uint32_t{1} << value) : 0;
         }
 
         /**
@@ -45,7 +56,8 @@ namespace Horo::Render {
          * @return `true` when the capability is enabled.
          */
         [[nodiscard]] constexpr bool Supports(const RenderCapability capability) const noexcept {
-            return (bits & Bit(capability)) != 0;
+            const std::uint16_t bit = Bit(capability);
+            return bit != 0 && (bits & bit) != 0;
         }
 
         /**
@@ -61,8 +73,7 @@ namespace Horo::Render {
          * @return `true` when no reserved capability bits are set.
          */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            constexpr std::uint16_t knownBits = (1U << 10U) - 1U;
-            return (bits & static_cast<std::uint16_t>(~knownBits)) == 0;
+            return (bits & static_cast<std::uint16_t>(~KnownBits)) == 0;
         }
     };
 

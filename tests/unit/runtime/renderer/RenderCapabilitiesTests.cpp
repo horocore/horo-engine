@@ -59,6 +59,28 @@ TEST_CASE("Render capability snapshots keep feature, queue, limit, and format pr
                                                     .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment}));
 }
 
+TEST_CASE("Render capability bitsets cover every public capability and reject reserved values", "[unit][runtime][renderer][capabilities]") {
+    RenderCapabilitySet capabilities;
+    for (std::uint16_t value = 0; value < RenderCapabilitySet::CapabilityCount; ++value) {
+        capabilities.Enable(static_cast<RenderCapability>(value));
+    }
+
+    REQUIRE(capabilities.IsValid());
+    CHECK(capabilities.bits == RenderCapabilitySet::KnownBits);
+    for (std::uint16_t value = 0; value < RenderCapabilitySet::CapabilityCount; ++value) {
+        CHECK(capabilities.Supports(static_cast<RenderCapability>(value)));
+    }
+
+    const auto invalid = static_cast<RenderCapability>(RenderCapabilitySet::CapabilityCount);
+    CHECK(RenderCapabilitySet::Bit(invalid) == 0);
+    CHECK_FALSE(capabilities.Supports(invalid));
+    capabilities.Enable(invalid);
+    CHECK(capabilities.bits == RenderCapabilitySet::KnownBits);
+
+    capabilities.bits = static_cast<std::uint16_t>(RenderCapabilitySet::KnownBits | (std::uint16_t{1} << 15U));
+    CHECK_FALSE(capabilities.IsValid());
+}
+
 TEST_CASE("Null backend publishes a synthetic bounded capability snapshot", "[unit][runtime][renderer][capabilities]") {
     RenderBackendRegistry registry;
     REQUIRE(RegisterNullRenderBackend(registry).HasValue());
