@@ -50,36 +50,13 @@ namespace Horo::Navigation {
 
     /** @brief Sentinel used when a path result has no known canonical polygon frontier. */
     inline constexpr std::uint32_t NavigationPathNoPolygon = std::numeric_limits<std::uint32_t>::max();
-
-    /** @brief Bounded provider-neutral request for one grounded path. */
-    struct NavigationPathRequest final {
-        NavigationWorldId world;       /**< Exact active world captured at admission. */
-        NavigationGeneration topology; /**< Exact immutable topology captured at admission. */
-        Math::Vec3 start;              /**< Start in Horo right-handed, Y-up world space. */
-        Math::Vec3 destination;        /**< Destination in the same origin revision as start. */
-        NavigationFilterId filter;     /**< Exact registered traversal filter; never a default fallback. */
-        NavigationPathCoveragePolicy coveragePolicy{NavigationPathCoveragePolicy::RequireComplete}; /**< Partial-path opt-in. */
-        NavigationQueryRequirement requirement; /**< Exact admitted quality and execution bounds. */
-    };
+    /** @brief Sentinel used when a path result has no contributing portal. */
+    inline constexpr std::uint32_t NavigationPathNoPortal = std::numeric_limits<std::uint32_t>::max();
+    /** @brief Sentinel used when a path result has no contributing polygon vertex. */
+    inline constexpr std::uint32_t NavigationPathNoVertex = std::numeric_limits<std::uint32_t>::max();
 
     /**
-     * @brief Provider-neutral ordered path points with typed progress and cost evidence.
-     * @details Reachable paths end at the requested destination. Partial paths end at `stopPosition` and carry the
-     * reason and canonical polygon where progress stopped. Unreachable and budget-exhausted paths may have no points.
-     */
-    struct NavigationPath final {
-        std::vector<Math::Vec3> points;                                 /**< Ordered world-space points, including the progress endpoint. */
-        NavigationPathStatus status{NavigationPathStatus::Unreachable}; /**< Typed search result state. */
-        NavigationPathStopReason stopReason{NavigationPathStopReason::None}; /**< Why progress stopped, if it did. */
-        Math::Vec3 stopPosition{};                               /**< Finite progress location for partial/unreachable results. */
-        std::uint32_t stopPolygonIndex{NavigationPathNoPolygon}; /**< Canonical polygon at the progress frontier, when known. */
-        float cost{};                                            /**< Finite non-negative traversal cost of the returned route. */
-        float lengthMeters{};                                    /**< Finite non-negative geometric path length in metres. */
-        NavigationGeneration sourceGeneration;                   /**< Exact topology generation used to produce this path. */
-    };
-
-    /**
-     * @brief Provider-neutral provenance for one polygon observed by a bounded spatial query.
+     * @brief Provider-neutral provenance for one polygon observed by a bounded navigation query.
      *
      * The polygon index is the canonical index supplied in the provider creation topology. It is not a native
      * polygon reference and is valid only with the exact world and topology generation carried beside it. A surface
@@ -93,6 +70,125 @@ namespace Horo::Navigation {
 
         [[nodiscard]] constexpr auto operator<=>(const NavigationQueryProvenance &) const noexcept = default;
     };
+
+    /** @brief Semantic kind of one portal retained in a path corridor. */
+    enum class NavigationPathPortalKind : std::uint8_t {
+        SharedPolygonEdge,
+        Count
+    };
+
+    /** @brief Semantic kind of one compact movement waypoint. */
+    enum class NavigationPathWaypointKind : std::uint8_t {
+        Start,
+        PortalCorner,
+        Destination,
+        PartialStop,
+        Count
+    };
+
+    /**
+     * @brief One polygon reference retained by a provider-neutral path corridor.
+     * @details The reference is generation-scoped and never contains a provider-native polygon handle.
+     */
+    struct NavigationPathCorridorPolygon final {
+        NavigationQueryProvenance provenance; /**< Exact world, topology, surface, and canonical polygon evidence. */
+        NavigationAreaId area;                /**< Traversal area resolved for the accepted path filter. */
+
+        [[nodiscard]] constexpr auto operator<=>(const NavigationPathCorridorPolygon &) const noexcept = default;
+    };
+
+    /**
+     * @brief One finite, clearance-adjusted shared edge between consecutive corridor polygons.
+     * @details `left` and `right` are ordered from the corridor travel direction in canonical XZ space. The endpoint
+     * vertex identities retain source evidence even when clearance moves the actual funnel endpoint inward.
+     */
+    struct NavigationPathPortal final {
+        NavigationPathPortalKind kind{NavigationPathPortalKind::SharedPolygonEdge};
+        std::uint32_t fromPolygonIndex{NavigationPathNoPolygon}; /**< Index into the path corridor's polygon sequence. */
+        std::uint32_t toPolygonIndex{NavigationPathNoPolygon};   /**< Index into the path corridor's polygon sequence. */
+        std::uint32_t leftVertexIndex{NavigationPathNoVertex};   /**< Canonical vertex supplying the left portal endpoint. */
+        std::uint32_t rightVertexIndex{NavigationPathNoVertex};  /**< Canonical vertex supplying the right portal endpoint. */
+        Math::Vec3 left{};                                       /**< Clearance-adjusted left endpoint. */
+        Math::Vec3 right{};                                      /**< Clearance-adjusted right endpoint. */
+        float widthMeters{};                                     /**< Positive traversable width after clearance. */
+        float clearanceMeters{};                                 /**< Distance removed from each raw portal endpoint. */
+
+        [[nodiscard]] constexpr auto operator<=>(const NavigationPathPortal &) const noexcept = default;
+    };
+
+    /**
+     * @brief Provenance identifying why one compact waypoint exists.
+     * @details `portalIndex` and `vertexIndex` are populated only for portal-corner waypoints. The polygon evidence
+     * remains valid with the exact path source generation and is never a native provider reference.
+     */
+    struct NavigationPathWaypointProvenance final {
+        NavigationPathWaypointKind kind{NavigationPathWaypointKind::Start};
+        NavigationQueryProvenance polygon; /**< Polygon containing or producing the waypoint. */
+        std::uint32_t corridorPolygonIndex{NavigationPathNoPolygon};
+        std::uint32_t portalIndex{NavigationPathNoPortal};
+        std::uint32_t vertexIndex{NavigationPathNoVertex};
+
+        [[nodiscard]] constexpr auto operator<=>(const NavigationPathWaypointProvenance &) const noexcept = default;
+    };
+
+    /** @brief One compact movement target produced by deterministic string-pulling. */
+    struct NavigationPathWaypoint final {
+        Math::Vec3 position{};
+        NavigationPathWaypointProvenance provenance;
+
+        [[nodiscard]] constexpr auto operator<=>(const NavigationPathWaypoint &) const noexcept = default;
+    };
+
+    /**
+     * @brief Independent bounded output counts for path corridor, portal, and waypoint data.
+     * @details Zero preserves the legacy behavior and inherits the corresponding provider query bound: node expansions
+     * for corridor polygons and result points for portals/waypoints.
+     */
+    struct NavigationPathOutputLimits final {
+        std::uint32_t maximumCorridorPolygons{}; /**< Maximum retained corridor polygon references. */
+        std::uint32_t maximumPortals{};          /**< Maximum retained shared-edge portals. */
+        std::uint32_t maximumWaypoints{};        /**< Maximum compact movement waypoints. */
+
+        [[nodiscard]] constexpr auto operator<=>(const NavigationPathOutputLimits &) const noexcept = default;
+    };
+
+    /** @brief Bounded provider-neutral request for one grounded path. */
+    struct NavigationPathRequest final {
+        NavigationWorldId world;       /**< Exact active world captured at admission. */
+        NavigationGeneration topology; /**< Exact immutable topology captured at admission. */
+        Math::Vec3 start;              /**< Start in Horo right-handed, Y-up world space. */
+        Math::Vec3 destination;        /**< Destination in the same origin revision as start. */
+        NavigationFilterId filter;     /**< Exact registered traversal filter; never a default fallback. */
+        NavigationPathCoveragePolicy coveragePolicy{NavigationPathCoveragePolicy::RequireComplete}; /**< Partial-path opt-in. */
+        NavigationQueryRequirement requirement; /**< Exact admitted quality and execution bounds. */
+        float clearanceMeters{};                /**< Optional finite non-negative portal clearance; zero uses the provider agent radius. */
+        NavigationPathOutputLimits outputLimits{}; /**< Optional path-specific output bounds; zero fields inherit requirement limits. */
+    };
+
+    /**
+     * @brief Provider-neutral path corridor, compact waypoints, and typed progress/cost evidence.
+     * @details Reachable paths end at the requested destination. Partial paths end at `stopPosition` and carry the
+     * reason and canonical polygon where progress stopped. Unreachable and budget-exhausted paths may have no points.
+     * `waypoints` is the canonical compact movement representation; `points` is retained as a coordinate-only mirror
+     * for callers of the preceding filtered-path contract.
+     */
+    struct NavigationPath final {
+        std::vector<Math::Vec3> points;                                      /**< Coordinate-only mirror of `waypoints`. */
+        NavigationPathStatus status{NavigationPathStatus::Unreachable};      /**< Typed search result state. */
+        NavigationPathStopReason stopReason{NavigationPathStopReason::None}; /**< Why progress stopped, if it did. */
+        Math::Vec3 stopPosition{};                               /**< Finite progress location for partial/unreachable results. */
+        std::uint32_t stopPolygonIndex{NavigationPathNoPolygon}; /**< Canonical polygon at the progress frontier, when known. */
+        float cost{};                                            /**< Finite non-negative traversal cost of the returned route. */
+        float lengthMeters{};                                    /**< Finite non-negative geometric path length in metres. */
+        NavigationGeneration sourceGeneration;                   /**< Exact topology generation used to produce this path. */
+        std::vector<NavigationPathCorridorPolygon> corridor;     /**< Ordered polygon references from start to terminal corridor. */
+        std::vector<NavigationPathPortal> portals;               /**< Ordered shared-edge portals between corridor polygons. */
+        std::vector<NavigationPathWaypoint> waypoints;           /**< Ordered compact movement targets with provenance. */
+    };
+
+    using NavigationPathPolygonReference = NavigationPathCorridorPolygon;
+    using NavigationWaypointProvenance = NavigationPathWaypointProvenance;
+    using NavigationWaypoint = NavigationPathWaypoint;
 
     /**
      * @brief One provider-neutral grounded-surface observation returned by projection, sampling, polygon, or raycast queries.

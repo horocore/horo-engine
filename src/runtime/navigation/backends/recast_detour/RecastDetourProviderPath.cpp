@@ -3,14 +3,55 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <new>
+#include <optional>
+#include <ranges>
 #include <utility>
 #include <vector>
 
 namespace Horo::Navigation::RecastDetourQueries {
     namespace {
         using Detail::Failure;
+
+        constexpr double FunnelEpsilon = 1.0e-5;
+        constexpr double PortalLengthEpsilon = 1.0e-5;
+
+        [[nodiscard]] double CrossXZ(const Math::Vec3 first, const Math::Vec3 second) noexcept {
+            return (static_cast<double>(first.x) * second.z) - (static_cast<double>(first.z) * second.x);
+        }
+
+        [[nodiscard]] double TriangleAreaXZ(const Math::Vec3 apex, const Math::Vec3 first, const Math::Vec3 second) noexcept {
+            return CrossXZ(first - apex, second - apex);
+        }
+
+        [[nodiscard]] bool SamePoint(const Math::Vec3 first, const Math::Vec3 second) noexcept {
+            return std::abs(static_cast<double>(first.x) - second.x) <= FunnelEpsilon &&
+                   std::abs(static_cast<double>(first.y) - second.y) <= FunnelEpsilon &&
+                   std::abs(static_cast<double>(first.z) - second.z) <= FunnelEpsilon;
+        }
+
+        [[nodiscard]] std::uint32_t MaximumCorridorPolygons(const PathBuildContext &context) noexcept {
+            const std::uint32_t requested = context.request.outputLimits.maximumCorridorPolygons;
+            const std::uint32_t prepared = static_cast<std::uint32_t>(context.slot.polygonPathIndices.size());
+            const std::uint32_t admitted = context.request.requirement.limits.maximumNodeExpansions;
+            return std::min(prepared, requested == 0 ? admitted : requested);
+        }
+
+        [[nodiscard]] std::uint32_t MaximumPortals(const PathBuildContext &context) noexcept {
+            const std::uint32_t requested = context.request.outputLimits.maximumPortals;
+            const std::uint32_t prepared = static_cast<std::uint32_t>(context.slot.portals.capacity());
+            const std::uint32_t admitted = context.request.requirement.limits.maximumResultPoints;
+            return std::min(prepared, requested == 0 ? admitted : requested);
+        }
+
+        [[nodiscard]] std::uint32_t MaximumWaypoints(const PathBuildContext &context) noexcept {
+            const std::uint32_t requested = context.request.outputLimits.maximumWaypoints;
+            const std::uint32_t prepared = static_cast<std::uint32_t>(context.slot.waypoints.capacity());
+            const std::uint32_t admitted = context.request.requirement.limits.maximumResultPoints;
+            return std::min(prepared, requested == 0 ? admitted : requested);
+        }
 
         [[nodiscard]] Result<float> PathLength(const std::vector<Math::Vec3> &points) {
             double length{};
@@ -77,16 +118,136 @@ namespace Horo::Navigation::RecastDetourQueries {
             return Result<float>::Success(static_cast<float>(cost));
         }
 
-        struct StraightPathScratch final {
-            int pointCount{};
-            bool pointBudgetExceeded{};
+        struct SharedEdge final {
+            std::uint32_t first{};
+            std::uint32_t second{};
         };
 
-        struct PathGeometry final {
-            Math::Vec3 effectiveTarget{};
-            std::uint32_t costPolygonCount{};
-            bool pointBudgetExceeded{};
-        };
+        [[nodiscard]] bool IsSameUndirectedEdge(const std::uint32_t first, const std::uint32_t second, const std::uint32_t otherFirst,
+                                                const std::uint32_t otherSecond) noexcept {
+            return (first == otherFirst && second == otherSecond) || (first == otherSecond && second == otherFirst);
+        }
+
+        [[nodiscard]] Result<SharedEdge> FindSharedEdge(const GroundedNavigationPolygon &from, const GroundedNavigationPolygon &to) {
+            std::optional<SharedEdge> result;
+            for (std::uint8_t fromEdge = 0; fromEdge < from.vertexCount; ++fromEdge) {
+                const std::uint32_t fromFirst = from.vertexIndices[fromEdge];
+                const std::uint32_t fromSecond = from.vertexIndices[(fromEdge + 1U) % from.vertexCount];
+                for (std::uint8_t toEdge = 0; toEdge < to.vertexCount; ++toEdge) {
+                    const std::uint32_t toFirst = to.vertexIndices[toEdge];
+                    const std::uint32_t toSecond = to.vertexIndices[(toEdge + 1U) % to.vertexCount];
+                    if (!IsSameUndirectedEdge(fromFirst, fromSecond, toFirst, toSecond))
+                        continue;
+                    if (result.has_value())
+                        return Failure<SharedEdge>(NavigationErrors::PathPortalDegenerate);
+                    result = SharedEdge{.first = fromFirst, .second = fromSecond};
+                }
+            }
+            if (!result.has_value())
+                return Failure<SharedEdge>(NavigationErrors::PathPortalDegenerate);
+            return Result<SharedEdge>::Success(*result);
+        }
+
+        [[nodiscard]] Result<NavigationPathPortal> MakePortal(const PathBuildContext &context, const std::uint32_t corridorIndex) {
+            if (corridorIndex + 1U >= context.search.polygonCount)
+                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+            const std::uint32_t fromIndex = context.slot.polygonPathIndices[corridorIndex];
+            const std::uint32_t toIndex = context.slot.polygonPathIndices[corridorIndex + 1U];
+            if (fromIndex >= context.polygons.size() || toIndex >= context.polygons.size())
+                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+            const GroundedNavigationPolygon &from = context.polygons[fromIndex];
+            const GroundedNavigationPolygon &to = context.polygons[toIndex];
+            const auto shared = FindSharedEdge(from, to);
+            if (shared.HasError())
+                return Result<NavigationPathPortal>::Failure(shared.ErrorValue());
+            if (shared.Value().first >= context.vertices.size() || shared.Value().second >= context.vertices.size())
+                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+
+            const Math::Vec3 first = context.vertices[shared.Value().first];
+            const Math::Vec3 second = context.vertices[shared.Value().second];
+            if (!Math::IsFinite(first) || !Math::IsFinite(second))
+                return Failure<NavigationPathPortal>(NavigationErrors::ProviderFailed);
+            const double rawLength = std::hypot(static_cast<double>(second.x) - first.x, static_cast<double>(second.y) - first.y,
+                                                static_cast<double>(second.z) - first.z);
+            if (!std::isfinite(rawLength) || rawLength <= PortalLengthEpsilon)
+                return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
+
+            Math::Vec3 travel = context.centers[toIndex] - context.centers[fromIndex];
+            if (std::hypot(static_cast<double>(travel.x), static_cast<double>(travel.z)) <= FunnelEpsilon)
+                travel = context.request.destination - context.request.start;
+            const double travelLength = std::hypot(static_cast<double>(travel.x), static_cast<double>(travel.z));
+            const Math::Vec3 edge = second - first;
+            const double orientation = CrossXZ(travel, edge);
+            if (!std::isfinite(travelLength) || travelLength <= FunnelEpsilon || !std::isfinite(orientation) ||
+                std::abs(orientation) <= FunnelEpsilon)
+                return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
+
+            Math::Vec3 left = orientation < 0.0 ? first : second;
+            Math::Vec3 right = orientation < 0.0 ? second : first;
+            const std::uint32_t leftVertex = orientation < 0.0 ? shared.Value().first : shared.Value().second;
+            const std::uint32_t rightVertex = orientation < 0.0 ? shared.Value().second : shared.Value().first;
+            const float clearance =
+                context.request.clearanceMeters == 0.0F ? context.defaultClearanceMeters : context.request.clearanceMeters;
+            if (!std::isfinite(clearance) || clearance < 0.0F)
+                return Failure<NavigationPathPortal>(NavigationErrors::CapabilityDescriptorInvalid);
+            if (static_cast<double>(clearance) * 2.0 + PortalLengthEpsilon >= rawLength)
+                return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
+
+            const float ratio = static_cast<float>(static_cast<double>(clearance) / rawLength);
+            const Math::Vec3 originalLeft = left;
+            const Math::Vec3 originalRight = right;
+            left = originalLeft + (originalRight - originalLeft) * ratio;
+            right = originalRight - (originalRight - originalLeft) * ratio;
+            const double width = std::hypot(static_cast<double>(right.x) - left.x, static_cast<double>(right.y) - left.y,
+                                            static_cast<double>(right.z) - left.z);
+            if (!Math::IsFinite(left) || !Math::IsFinite(right) || !std::isfinite(width) || width <= PortalLengthEpsilon)
+                return Failure<NavigationPathPortal>(NavigationErrors::PathPortalDegenerate);
+            return Result<NavigationPathPortal>::Success({.kind = NavigationPathPortalKind::SharedPolygonEdge,
+                                                          .fromPolygonIndex = corridorIndex,
+                                                          .toPolygonIndex = corridorIndex + 1U,
+                                                          .leftVertexIndex = leftVertex,
+                                                          .rightVertexIndex = rightVertex,
+                                                          .left = left,
+                                                          .right = right,
+                                                          .widthMeters = static_cast<float>(width),
+                                                          .clearanceMeters = clearance});
+        }
+
+        [[nodiscard]] Result<void> BuildCorridorAndPortals(PathBuildContext &context, NavigationPath &path) {
+            const std::uint32_t corridorCount = context.search.polygonCount;
+            if (corridorCount == 0 || corridorCount > MaximumCorridorPolygons(context))
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            if (corridorCount > context.slot.polygonPathIndices.size())
+                return Failure<void>(NavigationErrors::ProviderFailed);
+            try {
+                path.corridor.reserve(corridorCount);
+                for (std::uint32_t index = 0; index < corridorCount; ++index) {
+                    const std::uint32_t polygonIndex = context.slot.polygonPathIndices[index];
+                    if (polygonIndex >= context.polygons.size())
+                        return Failure<void>(NavigationErrors::ProviderFailed);
+                    path.corridor.push_back({.provenance = {.world = context.request.world,
+                                                            .topology = context.request.topology,
+                                                            .surface = context.polygons[polygonIndex].surface,
+                                                            .polygonIndex = polygonIndex},
+                                             .area = context.polygons[polygonIndex].area});
+                }
+
+                context.slot.portals.clear();
+                const std::uint32_t portalCount = corridorCount - 1U;
+                if (portalCount > MaximumPortals(context) || portalCount > context.slot.portals.capacity())
+                    return Failure<void>(NavigationErrors::CapacityExceeded);
+                for (std::uint32_t index = 0; index < portalCount; ++index) {
+                    const auto portal = MakePortal(context, index);
+                    if (portal.HasError())
+                        return Result<void>::Failure(portal.ErrorValue());
+                    context.slot.portals.push_back(portal.Value());
+                }
+                path.portals.assign(context.slot.portals.begin(), context.slot.portals.end());
+                return Result<void>::Success();
+            } catch (const std::bad_alloc &) {
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            }
+        }
 
         [[nodiscard]] NavigationPath MakePathSkeleton(const PathBuildContext &context) {
             NavigationPath path;
@@ -114,74 +275,153 @@ namespace Horo::Navigation::RecastDetourQueries {
             return partialTarget;
         }
 
-        [[nodiscard]] Result<StraightPathScratch> FindStraightPathPoints(PathBuildContext &context, const Math::Vec3 target) {
-            for (std::uint32_t index = 0; index < context.search.polygonCount; ++index)
-                context.slot.polygonPath[index] = context.references[context.slot.polygonPathIndices[index]];
-            const auto scratchCapacity = static_cast<std::uint32_t>(context.slot.straightPoints.size() / 3U);
-            const auto boundedPoints = static_cast<int>(std::min(context.request.requirement.limits.maximumResultPoints, scratchCapacity));
-            const std::array<float, 3> projectedStart{context.start.projected.x, context.start.projected.y, context.start.projected.z};
-            const std::array<float, 3> projectedTarget{target.x, target.y, target.z};
-            int pointCount{};
-            const dtStatus straightStatus =
-                context.slot.query->findStraightPath(projectedStart.data(), projectedTarget.data(), context.slot.polygonPath.data(),
-                                                     static_cast<int>(context.search.polygonCount), context.slot.straightPoints.data(),
-                                                     context.slot.straightFlags.data(), context.slot.straightPolygons.data(), &pointCount,
-                                                     boundedPoints);
-            if (pointCount < 0 || pointCount > boundedPoints)
-                return Failure<StraightPathScratch>(NavigationErrors::ProviderFailed);
-            const bool reachedTarget = pointCount > 0 && (context.slot.straightFlags[pointCount - 1] & DT_STRAIGHTPATH_END) != 0;
-            const bool pointBudgetExceeded = dtStatusDetail(straightStatus, DT_BUFFER_TOO_SMALL) && !reachedTarget;
-            if (dtStatusFailed(straightStatus) && !pointBudgetExceeded)
-                return Failure<StraightPathScratch>(NavigationErrors::ProviderFailed);
-            if (pointBudgetExceeded && context.request.coveragePolicy == NavigationPathCoveragePolicy::RequireComplete)
-                return Failure<StraightPathScratch>(NavigationErrors::CapacityExceeded);
-            return Result<StraightPathScratch>::Success({.pointCount = pointCount, .pointBudgetExceeded = pointBudgetExceeded});
+        [[nodiscard]] NavigationPathWaypoint MakeWaypoint(const NavigationPath &path, const Math::Vec3 position,
+                                                          const NavigationPathWaypointKind kind, const std::uint32_t corridorIndex,
+                                                          const std::uint32_t portalIndex, const std::uint32_t vertexIndex) {
+            const std::uint32_t boundedCorridorIndex = path.corridor.empty()
+                                                           ? NavigationPathNoPolygon
+                                                           : std::min(corridorIndex, static_cast<std::uint32_t>(path.corridor.size() - 1U));
+            return {.position = position,
+                    .provenance = {.kind = kind,
+                                   .polygon = boundedCorridorIndex == NavigationPathNoPolygon
+                                                  ? NavigationQueryProvenance{}
+                                                  : path.corridor[boundedCorridorIndex].provenance,
+                                   .corridorPolygonIndex = boundedCorridorIndex,
+                                   .portalIndex = portalIndex,
+                                   .vertexIndex = vertexIndex}};
         }
 
-        [[nodiscard]] Result<PathGeometry> PopulatePathPoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target) {
-            const auto scratch = FindStraightPathPoints(context, target);
-            if (scratch.HasError())
-                return Result<PathGeometry>::Failure(scratch.ErrorValue());
-            try {
-                path.points.reserve(static_cast<std::size_t>(std::max(scratch.Value().pointCount, 0)));
-                for (int index = 0; index < scratch.Value().pointCount; ++index) {
-                    const std::size_t offset = static_cast<std::size_t>(index) * 3U;
-                    path.points.push_back({context.slot.straightPoints[offset], context.slot.straightPoints[offset + 1U],
-                                           context.slot.straightPoints[offset + 2U]});
-                }
-                if (path.points.empty())
-                    return Failure<PathGeometry>(NavigationErrors::ProviderFailed);
-                path.points.front() = context.request.start;
-                PathGeometry geometry{.effectiveTarget = target,
-                                      .costPolygonCount = context.search.polygonCount,
-                                      .pointBudgetExceeded = scratch.Value().pointBudgetExceeded};
-                if (!geometry.pointBudgetExceeded)
-                    path.points.back() = target;
-                else {
-                    path.status = NavigationPathStatus::Partial;
-                    path.stopReason = NavigationPathStopReason::ResultPointBudgetExceeded;
-                    geometry.effectiveTarget = path.points.back();
-                    path.stopPosition = geometry.effectiveTarget;
-                    const dtPolyRef frontierReference = context.slot.straightPolygons[scratch.Value().pointCount - 1];
-                    std::uint32_t frontierPosition = InvalidNavigationPolygonIndex;
-                    for (std::uint32_t index = 0; index < context.search.polygonCount; ++index) {
-                        if (context.references[context.slot.polygonPathIndices[index]] == frontierReference) {
-                            frontierPosition = index;
+        enum class WaypointAppendResult : std::uint8_t {
+            Added,
+            Duplicate,
+            BudgetExceeded
+        };
+
+        [[nodiscard]] WaypointAppendResult AppendWaypoint(std::vector<NavigationPathWaypoint> &waypoints,
+                                                          const NavigationPathWaypoint &waypoint, const std::uint32_t maximumWaypoints) {
+            if (!Math::IsFinite(waypoint.position))
+                return WaypointAppendResult::BudgetExceeded;
+            if (!waypoints.empty() && waypoints.back().provenance.kind == waypoint.provenance.kind &&
+                SamePoint(waypoints.back().position, waypoint.position))
+                return WaypointAppendResult::Duplicate;
+            if (waypoints.size() >= maximumWaypoints)
+                return WaypointAppendResult::BudgetExceeded;
+            waypoints.push_back(waypoint);
+            return WaypointAppendResult::Added;
+        }
+
+        struct FunnelResult final {
+            bool pointBudgetExceeded{};
+            Math::Vec3 effectiveTarget{};
+            std::uint32_t costPolygonCount{};
+        };
+
+        [[nodiscard]] Result<FunnelResult> BuildWaypoints(PathBuildContext &context, NavigationPath &path, const Math::Vec3 target) {
+            if (path.corridor.empty())
+                return Failure<FunnelResult>(NavigationErrors::ProviderFailed);
+            const std::uint32_t maximumWaypoints = MaximumWaypoints(context);
+            if (maximumWaypoints < 2U)
+                return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
+
+            context.slot.waypoints.clear();
+            const auto start = MakeWaypoint(path, context.request.start, NavigationPathWaypointKind::Start, 0, NavigationPathNoPortal,
+                                            NavigationPathNoVertex);
+            if (AppendWaypoint(context.slot.waypoints, start, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
+                return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
+
+            Math::Vec3 apex = context.start.projected;
+            Math::Vec3 left = apex;
+            Math::Vec3 right = apex;
+            std::uint32_t leftPortal = NavigationPathNoPortal;
+            std::uint32_t rightPortal = NavigationPathNoPortal;
+            bool pointBudgetExceeded{};
+            for (std::uint32_t portalIndex = 0; portalIndex <= path.portals.size(); ++portalIndex) {
+                const bool isTargetPortal = portalIndex == path.portals.size();
+                const Math::Vec3 newLeft = isTargetPortal ? target : path.portals[portalIndex].left;
+                const Math::Vec3 newRight = isTargetPortal ? target : path.portals[portalIndex].right;
+
+                if (TriangleAreaXZ(apex, right, newRight) <= FunnelEpsilon) {
+                    if (SamePoint(apex, right) || TriangleAreaXZ(apex, left, newRight) > FunnelEpsilon) {
+                        right = newRight;
+                        rightPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
+                    } else {
+                        const std::uint32_t cornerPortal = leftPortal == NavigationPathNoPortal ? portalIndex : leftPortal;
+                        const std::uint32_t cornerCorridor = cornerPortal == NavigationPathNoPortal ? 0U : cornerPortal;
+                        const auto corner = MakeWaypoint(path, left, NavigationPathWaypointKind::PortalCorner, cornerCorridor, cornerPortal,
+                                                         cornerPortal < path.portals.size() ? path.portals[cornerPortal].leftVertexIndex
+                                                                                            : NavigationPathNoVertex);
+                        if (AppendWaypoint(context.slot.waypoints, corner, maximumWaypoints) == WaypointAppendResult::BudgetExceeded) {
+                            pointBudgetExceeded = true;
                             break;
                         }
+                        apex = left;
+                        left = apex;
+                        right = apex;
+                        leftPortal = cornerPortal;
+                        rightPortal = cornerPortal;
+                        portalIndex = cornerPortal;
+                        continue;
                     }
-                    if (frontierPosition == InvalidNavigationPolygonIndex)
-                        return Failure<PathGeometry>(NavigationErrors::ProviderFailed);
-                    path.stopPolygonIndex = context.slot.polygonPathIndices[frontierPosition];
-                    geometry.costPolygonCount = frontierPosition + 1U;
                 }
-                return Result<PathGeometry>::Success(geometry);
-            } catch (const std::bad_alloc &) {
-                return Failure<PathGeometry>(NavigationErrors::CapacityExceeded);
+
+                if (TriangleAreaXZ(apex, left, newLeft) >= -FunnelEpsilon) {
+                    if (SamePoint(apex, left) || TriangleAreaXZ(apex, right, newLeft) < -FunnelEpsilon) {
+                        left = newLeft;
+                        leftPortal = isTargetPortal ? NavigationPathNoPortal : portalIndex;
+                    } else {
+                        const std::uint32_t cornerPortal = rightPortal == NavigationPathNoPortal ? portalIndex : rightPortal;
+                        const std::uint32_t cornerCorridor = cornerPortal == NavigationPathNoPortal ? 0U : cornerPortal;
+                        const auto corner =
+                            MakeWaypoint(path, right, NavigationPathWaypointKind::PortalCorner, cornerCorridor, cornerPortal,
+                                         cornerPortal < path.portals.size() ? path.portals[cornerPortal].rightVertexIndex
+                                                                            : NavigationPathNoVertex);
+                        if (AppendWaypoint(context.slot.waypoints, corner, maximumWaypoints) == WaypointAppendResult::BudgetExceeded) {
+                            pointBudgetExceeded = true;
+                            break;
+                        }
+                        apex = right;
+                        left = apex;
+                        right = apex;
+                        leftPortal = cornerPortal;
+                        rightPortal = cornerPortal;
+                        portalIndex = cornerPortal;
+                        continue;
+                    }
+                }
             }
+
+            if (!pointBudgetExceeded) {
+                const NavigationPathWaypointKind targetKind = context.search.status == NavigationPathStatus::Reachable
+                                                                  ? NavigationPathWaypointKind::Destination
+                                                                  : NavigationPathWaypointKind::PartialStop;
+                const auto destination = MakeWaypoint(path, target, targetKind, static_cast<std::uint32_t>(path.corridor.size() - 1U),
+                                                      NavigationPathNoPortal, NavigationPathNoVertex);
+                if (AppendWaypoint(context.slot.waypoints, destination, maximumWaypoints) == WaypointAppendResult::BudgetExceeded)
+                    pointBudgetExceeded = true;
+            }
+
+            if (pointBudgetExceeded && context.request.coveragePolicy == NavigationPathCoveragePolicy::RequireComplete)
+                return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
+            if (context.slot.waypoints.empty())
+                return Failure<FunnelResult>(NavigationErrors::ProviderFailed);
+            try {
+                path.waypoints.assign(context.slot.waypoints.begin(), context.slot.waypoints.end());
+                path.points.reserve(path.waypoints.size());
+                for (const NavigationPathWaypoint &waypoint : path.waypoints)
+                    path.points.push_back(waypoint.position);
+            } catch (const std::bad_alloc &) {
+                return Failure<FunnelResult>(NavigationErrors::CapacityExceeded);
+            }
+
+            FunnelResult result{.pointBudgetExceeded = pointBudgetExceeded,
+                                .effectiveTarget = path.points.back(),
+                                .costPolygonCount = path.waypoints.back().provenance.corridorPolygonIndex + 1U};
+            if (result.costPolygonCount == 0 || result.costPolygonCount > path.corridor.size())
+                return Failure<FunnelResult>(NavigationErrors::ProviderFailed);
+            return Result<FunnelResult>::Success(result);
         }
 
-        [[nodiscard]] Result<void> PopulatePathMetrics(PathBuildContext &context, NavigationPath &path, const PathGeometry &geometry) {
+        [[nodiscard]] Result<void> PopulatePathMetrics(PathBuildContext &context, NavigationPath &path, const FunnelResult &geometry) {
             auto length = PathLength(path.points);
             if (length.HasError())
                 return Result<void>::Failure(length.ErrorValue());
@@ -195,6 +435,10 @@ namespace Horo::Navigation::RecastDetourQueries {
             if (!std::isfinite(path.cost) || path.cost < 0.0F ||
                 path.lengthMeters > context.request.requirement.limits.maximumSearchDistanceMeters)
                 return Failure<void>(NavigationErrors::QueryLimitExceeded);
+            if (!std::ranges::all_of(path.points, [](const Math::Vec3 point) {
+                return Math::IsFinite(point);
+            }))
+                return Failure<void>(NavigationErrors::ProviderFailed);
             return Result<void>::Success();
         }
     }  // namespace
@@ -209,19 +453,25 @@ namespace Horo::Navigation::RecastDetourQueries {
             return Result<NavigationPath>::Success(std::move(path));
 
         path.status = NavigationPathStatus::Partial;
+        if (const auto corridor = BuildCorridorAndPortals(context, path); corridor.HasError())
+            return Result<NavigationPath>::Failure(corridor.ErrorValue());
         const auto target = ResolvePathTarget(context, path);
         if (target.HasError())
             return Result<NavigationPath>::Failure(target.ErrorValue());
-        const auto geometry = PopulatePathPoints(context, path, target.Value());
+        const auto geometry = BuildWaypoints(context, path, target.Value());
         if (geometry.HasError())
             return Result<NavigationPath>::Failure(geometry.ErrorValue());
-        if (context.search.status == NavigationPathStatus::Reachable && !geometry.Value().pointBudgetExceeded) {
+        if (geometry.Value().pointBudgetExceeded) {
+            path.status = NavigationPathStatus::Partial;
+            path.stopReason = NavigationPathStopReason::ResultPointBudgetExceeded;
+            path.stopPosition = geometry.Value().effectiveTarget;
+            path.stopPolygonIndex = path.waypoints.back().provenance.polygon.polygonIndex;
+        } else if (context.search.status == NavigationPathStatus::Reachable) {
             path.status = NavigationPathStatus::Reachable;
             path.stopReason = NavigationPathStopReason::None;
             path.stopPosition = context.request.destination;
         }
-        const auto metrics = PopulatePathMetrics(context, path, geometry.Value());
-        if (metrics.HasError())
+        if (const auto metrics = PopulatePathMetrics(context, path, geometry.Value()); metrics.HasError())
             return Result<NavigationPath>::Failure(metrics.ErrorValue());
         return Result<NavigationPath>::Success(std::move(path));
     }

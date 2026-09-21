@@ -23,8 +23,10 @@ namespace Horo::Navigation::RecastDetourQueries {
         const CorridorSearch &search;
         const NavigationAreaRegistry &areaRegistry;
         const std::vector<GroundedNavigationPolygon> &polygons;
+        const std::vector<Math::Vec3> &vertices;
         const std::vector<Math::Vec3> &centers;
         const std::vector<dtPolyRef> &references;
+        float defaultClearanceMeters{};
     };
 
     [[nodiscard]] Result<NavigationPath> BuildPath(PathBuildContext &context);

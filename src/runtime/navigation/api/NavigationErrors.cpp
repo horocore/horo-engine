@@ -166,6 +166,15 @@ namespace Horo::Navigation::NavigationErrors {
         .retryable = true,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PathPortalDegenerate{
+        .domain = NavigationDomain,
+        .code = ErrorCode{"navigation.path.portal_degenerate"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A path corridor portal has no finite traversable width for the requested clearance.",
+        .remediationHint = "Recook the adjacent navigation polygons or reduce the agent/path clearance before retrying.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor AreaDescriptorInvalid{
         .domain = NavigationDomain,
         .code = ErrorCode{"navigation.area.descriptor_invalid"},

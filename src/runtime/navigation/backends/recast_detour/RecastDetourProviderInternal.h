@@ -61,7 +61,8 @@ namespace Horo::Navigation {
             : query(std::move(other.query)), polygonPath(std::move(other.polygonPath)), straightPoints(std::move(other.straightPoints)),
               straightFlags(std::move(other.straightFlags)), straightPolygons(std::move(other.straightPolygons)),
               searchNodes(std::move(other.searchNodes)), openNodes(std::move(other.openNodes)),
-              polygonPathIndices(std::move(other.polygonPathIndices)), leased(other.leased.load()) {
+              polygonPathIndices(std::move(other.polygonPathIndices)), portals(std::move(other.portals)),
+              waypoints(std::move(other.waypoints)), leased(other.leased.load()) {
             other.leased.store(false);
         }
 
@@ -75,6 +76,8 @@ namespace Horo::Navigation {
         std::vector<NavigationAStarNode> searchNodes;
         std::vector<std::uint32_t> openNodes;
         std::vector<std::uint32_t> polygonPathIndices;
+        std::vector<NavigationPathPortal> portals;
+        std::vector<NavigationPathWaypoint> waypoints;
         std::atomic<bool> leased{false};
     };
 
