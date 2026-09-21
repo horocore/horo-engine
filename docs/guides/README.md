@@ -57,6 +57,8 @@ workflows.
 - [VFX Foundation Qualification](./vfx-foundation-qualification.md): validate the
   authored particle path end to end through headless domain resolution and CPU simulation,
   plus hostile-input, tier, and allocation evidence.
+- [Physics Reference Scene Corpus](./physics-reference-scene-corpus.md): reproduce
+  versioned contact, trigger, query and explicit unsupported-capability observations.
 - [Grounded Navigation Provider Composition](./grounded-navigation-provider-composition.md):
   compose the pinned Detour runtime provider from neutral topology with explicit
   capacity, world-generation, cancellation, and teardown behavior.
