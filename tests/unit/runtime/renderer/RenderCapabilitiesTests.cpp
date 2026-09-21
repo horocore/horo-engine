@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace {
     using namespace Horo::Render;
@@ -77,8 +78,11 @@ TEST_CASE("Render capability bitsets cover every public capability and reject re
     capabilities.Enable(invalid);
     CHECK(capabilities.bits == RenderCapabilitySet::KnownBits);
 
-    capabilities.bits = static_cast<std::uint16_t>(RenderCapabilitySet::KnownBits | (std::uint16_t{1} << 15U));
-    CHECK_FALSE(capabilities.IsValid());
+    if constexpr (RenderCapabilitySet::CapabilityCount < std::numeric_limits<std::uint16_t>::digits) {
+        const auto firstReservedBit = static_cast<std::uint16_t>(std::uint32_t{1} << RenderCapabilitySet::CapabilityCount);
+        capabilities.bits = static_cast<std::uint16_t>(RenderCapabilitySet::KnownBits | firstReservedBit);
+        CHECK_FALSE(capabilities.IsValid());
+    }
 }
 
 TEST_CASE("Null backend publishes a synthetic bounded capability snapshot", "[unit][runtime][renderer][capabilities]") {
