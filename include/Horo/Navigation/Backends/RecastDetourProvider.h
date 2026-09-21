@@ -7,6 +7,7 @@
 
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationBackend.h"
+#include "Horo/Navigation/NavigationMeshBuilder.h"
 
 #include <array>
 #include <cstddef>
@@ -62,4 +63,10 @@ namespace Horo::Navigation {
      */
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourNavigationQueryBackend(
         const RecastDetourProviderCreateInfo &info);
+
+    /**
+     * @brief Creates the pinned Recast grounded tile builder.
+     * @return Independently owned tile builder, or a typed unsupported result when the provider is omitted.
+     */
+    [[nodiscard]] Result<std::unique_ptr<INavigationMeshBuilder>> CreateRecastDetourNavigationMeshBuilder();
 }  // namespace Horo::Navigation
