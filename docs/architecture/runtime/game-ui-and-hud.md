@@ -375,6 +375,20 @@ invalidated, remaining callbacks and the default action are suppressed, and the
 caller receives a typed failure. Handler exceptions are contained at the callback
 boundary. Retirement closes admission and shutdown is idempotent.
 
+`UiPointerCaptureStore` is the Runtime UI owner of continued pointer delivery. It
+preallocates a bounded set of move-only leases keyed by exact input context and
+pointer, and copies the initiating button, view, target route, retained-tree
+revision and last-presented interaction revision into each lease. It owns no
+handler, tree, renderer, platform or gameplay pointer. Release and cancellation
+are owner-thread operations; cancellation reasons remain observable on the lease
+until its caller releases it, so a cancelled token cannot alias a reused slot.
+Focus/device loss, modal replacement, route or target destruction, reload, scene/
+scope or viewport teardown, suspension and shutdown must cancel the affected
+leases before the next generation can admit delivery; `CancelContext`,
+`CancelInstance`, `CancelCanvas` and `CancelView` provide the explicit teardown
+boundaries. Reconciliation rejects foreign or stale owner evidence and prevents
+capture from crossing contexts or viewports.
+
 ## Typed Actions, Commands, And Default Navigation
 
 Interactive controls do not retain callbacks or gameplay references. They emit
