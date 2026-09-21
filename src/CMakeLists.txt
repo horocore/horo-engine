@@ -297,6 +297,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLayoutTypes.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
+        runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiPresentationReceipt.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
