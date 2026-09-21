@@ -1,4 +1,4 @@
-#include "Horo/Extensions/ScriptInvocationInternal.h"
+#include "ScriptInvocationInternal.h"
 
 #include <algorithm>
 #include <chrono>
