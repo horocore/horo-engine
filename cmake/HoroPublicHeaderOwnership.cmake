@@ -609,6 +609,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProject.h
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
+    Horo/Editor/UiCanvasDocument.h
     Horo/Editor/WelcomeController.h
     Horo/Editor/WorkspaceDockArea.h
     Horo/Editor/WorkspaceLayout.h

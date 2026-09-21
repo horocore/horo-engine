@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Editor/EditorSurfaceIdentity.h"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -26,6 +28,8 @@ namespace Horo::Editor {
         DuplicatePanelId,
         InvalidSplit,
         ActiveTabMissing,
+        InvalidDocumentTab,
+        DuplicateDocumentTab,
     };
 
     struct WorkspaceLayoutIssue {
@@ -105,6 +109,7 @@ namespace Horo::Editor {
     struct WorkspaceLayout {
         std::uint32_t schemaVersion = 1;
         LayoutNode root;
+        std::vector<SerializedDocumentOpenKey> openDocuments; /**< Persistent document keys restored into the workspace host. */
 
         WorkspaceLayout() = default;
         WorkspaceLayout(const WorkspaceLayout &) = default;

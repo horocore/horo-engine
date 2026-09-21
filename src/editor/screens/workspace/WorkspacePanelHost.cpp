@@ -6,6 +6,8 @@
 
 namespace Horo::Editor {
     namespace {
+        const ErrorDomainId WorkspaceDocumentDomain{"horo.editor.workspace_document"};
+
         LayoutNode MakeDefaultLayout() {
             auto left = std::make_unique<LayoutNode>(
                 TabStackNode{.id = "workspace.left", .tabs = {"horo.hierarchy"}, .activeTab = "horo.hierarchy"});
@@ -76,10 +78,54 @@ namespace Horo::Editor {
                 return false;
             }, node.value);
         }
+
+        [[nodiscard]] auto FindDocumentTab(std::vector<WorkspaceDocumentTab> &tabs, const DocumentInstanceId instance) {
+            return std::ranges::find_if(tabs, [instance](const WorkspaceDocumentTab &tab) {
+                return tab.identity.instance == instance;
+            });
+        }
+
+        [[nodiscard]] auto FindDocumentTab(const std::vector<WorkspaceDocumentTab> &tabs, const DocumentInstanceId instance) {
+            return std::ranges::find_if(tabs, [instance](const WorkspaceDocumentTab &tab) {
+                return tab.identity.instance == instance;
+            });
+        }
+
+        [[nodiscard]] bool ContainsDocumentKey(const std::vector<SerializedDocumentOpenKey> &documents,
+                                               const SerializedDocumentOpenKey &candidate) {
+            return std::ranges::find(documents, candidate) != documents.end();
+        }
     }  // namespace
+
+    namespace WorkspaceDocumentErrors {
+        const ErrorCodeDescriptor DirtyDocument{
+            .domain = WorkspaceDocumentDomain,
+            .code = ErrorCode{"editor.workspace_document.dirty"},
+            .defaultSeverity = ErrorSeverity::Warning,
+            .summary = "The workspace document has unsaved changes.",
+            .remediationHint = "Save the document or explicitly discard its changes before closing the tab.",
+            .retryable = false,
+            .userActionable = true,
+        };
+        const ErrorCodeDescriptor DocumentUnknown{
+            .domain = WorkspaceDocumentDomain,
+            .code = ErrorCode{"editor.workspace_document.unknown"},
+            .defaultSeverity = ErrorSeverity::Error,
+            .summary = "The requested workspace document is not open.",
+            .remediationHint = "Refresh the workspace tabs and retry the operation.",
+            .retryable = false,
+            .userActionable = true,
+        };
+    }  // namespace WorkspaceDocumentErrors
 
     WorkspacePanelHost::WorkspacePanelHost() {
         m_layout.root = MakeDefaultLayout();
+    }
+
+    /** @copydoc WorkspacePanelHost::AttachDocumentIdentityRegistry */
+    void WorkspacePanelHost::AttachDocumentIdentityRegistry(DocumentIdentityRegistry &registry) noexcept {
+        if (m_documentTabs.empty())
+            m_documentRegistry_ = &registry;
     }
 
     WorkspaceLayoutOperationResult WorkspacePanelHost::OpenPanel(const std::string_view panelId, const std::string_view stackId) {
@@ -152,6 +198,66 @@ namespace Horo::Editor {
         return {};
     }
 
+    /** @copydoc WorkspacePanelHost::OpenDocument */
+    Result<DocumentOpenResult> WorkspacePanelHost::OpenDocument(const DocumentOpenKey &key) {
+        const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key);
+        if (serialized.HasError())
+            return Result<DocumentOpenResult>::Failure(serialized.ErrorValue());
+
+        const Result<DocumentOpenResult> opened = m_documentRegistry_->Open(key);
+        if (opened.HasError())
+            return opened;
+
+        const DocumentIdentity identity = opened.Value().identity;
+        if (FindDocumentTab(m_documentTabs, identity.instance) == m_documentTabs.end()) {
+            m_documentTabs.push_back(WorkspaceDocumentTab{.identity = identity});
+            if (!ContainsDocumentKey(m_layout.openDocuments, serialized.Value()))
+                m_layout.openDocuments.push_back(serialized.Value());
+        }
+        m_activeDocument = identity.instance;
+        return opened;
+    }
+
+    /** @copydoc WorkspacePanelHost::CloseDocument */
+    Result<void> WorkspacePanelHost::CloseDocument(const DocumentInstanceId instance, const WorkspaceDocumentClosePolicy policy) {
+        const auto tab = FindDocumentTab(m_documentTabs, instance);
+        if (tab == m_documentTabs.end())
+            return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
+        if (tab->dirty && policy == WorkspaceDocumentClosePolicy::RequireClean)
+            return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DirtyDocument));
+
+        const DocumentOpenKey key = tab->identity.key;
+        if (const Result<void> closed = m_documentRegistry_->Close(instance); closed.HasError())
+            return closed;
+
+        const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key);
+        if (serialized.HasValue()) {
+            std::erase(m_layout.openDocuments, serialized.Value());
+        }
+        m_documentTabs.erase(tab);
+        if (m_activeDocument == instance) {
+            m_activeDocument = m_documentTabs.empty() ? std::nullopt : std::optional{m_documentTabs.front().identity.instance};
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorkspacePanelHost::SetDocumentDirty */
+    Result<void> WorkspacePanelHost::SetDocumentDirty(const DocumentInstanceId instance, const bool dirty) {
+        const auto tab = FindDocumentTab(m_documentTabs, instance);
+        if (tab == m_documentTabs.end())
+            return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
+        tab->dirty = dirty;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorkspacePanelHost::FocusDocument */
+    Result<void> WorkspacePanelHost::FocusDocument(const DocumentInstanceId instance) {
+        if (FindDocumentTab(m_documentTabs, instance) == m_documentTabs.end())
+            return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
+        m_activeDocument = instance;
+        return Result<void>::Success();
+    }
+
     bool WorkspacePanelHost::SaveLayout(const std::filesystem::path &path, std::string *error) const {
         return WorkspaceLayoutPersistence::Save(path, m_layout, error);
     }
@@ -160,7 +266,74 @@ namespace Horo::Editor {
         auto restored = WorkspaceLayoutPersistence::Load(path, error);
         if (!restored.has_value())
             return false;
+
+        const std::vector<WorkspaceDocumentTab> previousTabs = m_documentTabs;
+        const std::optional<DocumentInstanceId> previousActive = m_activeDocument;
+        const WorkspaceLayout previousLayout = m_layout;
+        const auto previousActiveTab =
+            previousActive.has_value() ? FindDocumentTab(previousTabs, previousActive.value()) : previousTabs.end();
+        const std::optional<DocumentOpenKey> previousActiveKey =
+            previousActiveTab != previousTabs.end() ? std::optional{previousActiveTab->identity.key} : std::nullopt;
+
+        const auto restorePrevious = [&]() {
+            std::vector<WorkspaceDocumentTab> restoredTabs;
+            restoredTabs.reserve(previousTabs.size());
+            for (const WorkspaceDocumentTab &tab : previousTabs) {
+                const Result<DocumentOpenResult> reopened = m_documentRegistry_->Open(tab.identity.key);
+                if (reopened.HasError())
+                    continue;
+                restoredTabs.push_back(WorkspaceDocumentTab{.identity = reopened.Value().identity, .dirty = tab.dirty});
+            }
+            m_layout = previousLayout;
+            m_documentTabs = std::move(restoredTabs);
+            m_activeDocument.reset();
+            if (previousActiveKey.has_value()) {
+                const auto active = std::ranges::find_if(m_documentTabs, [&](const WorkspaceDocumentTab &tab) {
+                    return tab.identity.key == *previousActiveKey;
+                });
+                if (active != m_documentTabs.end())
+                    m_activeDocument = active->identity.instance;
+            }
+            if (!m_activeDocument.has_value() && !m_documentTabs.empty())
+                m_activeDocument = m_documentTabs.front().identity.instance;
+        };
+
+        for (const WorkspaceDocumentTab &tab : previousTabs) {
+            if (const Result<void> closed = m_documentRegistry_->Close(tab.identity.instance); closed.HasError()) {
+                if (error)
+                    *error = closed.ErrorValue().message;
+                restorePrevious();
+                return false;
+            }
+        }
+
+        std::vector<WorkspaceDocumentTab> restoredTabs;
+        restoredTabs.reserve(restored->openDocuments.size());
+        for (const SerializedDocumentOpenKey &serialized : restored->openDocuments) {
+            const Result<DocumentOpenKey> key = DeserializeDocumentOpenKey(serialized);
+            if (key.HasError()) {
+                if (error)
+                    *error = "workspace document identity is invalid";
+                for (const WorkspaceDocumentTab &tab : restoredTabs)
+                    static_cast<void>(m_documentRegistry_->Close(tab.identity.instance));
+                restorePrevious();
+                return false;
+            }
+            const Result<DocumentOpenResult> opened = m_documentRegistry_->Open(key.Value());
+            if (opened.HasError()) {
+                if (error)
+                    *error = opened.ErrorValue().message;
+                for (const WorkspaceDocumentTab &tab : restoredTabs)
+                    static_cast<void>(m_documentRegistry_->Close(tab.identity.instance));
+                restorePrevious();
+                return false;
+            }
+            restoredTabs.push_back(WorkspaceDocumentTab{.identity = opened.Value().identity});
+        }
+
         m_layout = std::move(*restored);
+        m_documentTabs = std::move(restoredTabs);
+        m_activeDocument = m_documentTabs.empty() ? std::nullopt : std::optional{m_documentTabs.front().identity.instance};
         return true;
     }
 

@@ -171,6 +171,7 @@ namespace Horo::Editor {
             .allowSymlinkedFiles = true,
             .embeddedEditorAvailable = true,
             .externalEditorAvailable = true,
+            .uiCanvasExtensions = {".uicanvas"},
         };
     }
 
@@ -180,6 +181,18 @@ namespace Horo::Editor {
         policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
         policy_.projectTextExtensions = NormalizeValues(policy_.projectTextExtensions, true);
         policy_.projectTextFileNames = NormalizeValues(policy_.projectTextFileNames, false);
+        policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
+    }
+
+    SourceFileOpenService::SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry &documentRegistry,
+                                                 SourceFilePolicy policy)
+        : projectRootValid_(false), projectRoot_(ResolveRoot(projectRoot, projectRootValid_)), policy_(std::move(policy)),
+          documentRegistry_(&documentRegistry) {
+        policy_.nativeSourceExtensions = NormalizeValues(policy_.nativeSourceExtensions, true);
+        policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
+        policy_.projectTextExtensions = NormalizeValues(policy_.projectTextExtensions, true);
+        policy_.projectTextFileNames = NormalizeValues(policy_.projectTextFileNames, false);
+        policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
     }
 
     SourceFileClassification SourceFileOpenService::Classify(const std::filesystem::path &path) const {
@@ -190,6 +203,8 @@ namespace Horo::Editor {
             return SourceFileClassification{NativeSource, extension};
         if (Contains(policy_.horoScriptExtensions, extension))
             return SourceFileClassification{HoroScript, extension};
+        if (Contains(policy_.uiCanvasExtensions, extension))
+            return SourceFileClassification{UiCanvas, extension};
         if (Contains(policy_.projectTextExtensions, extension) || Contains(policy_.projectTextFileNames, fileName))
             return SourceFileClassification{ProjectText, extension};
         return SourceFileClassification{Unsupported, extension};
@@ -264,8 +279,9 @@ namespace Horo::Editor {
             return Result<SourceOpenResult>::Failure(MakePathError(SourceOpenErrors::EditorUnavailable, location.Value().absolutePath));
         }
 
-        const DocumentOpenKey key{.kind = DocumentKind::Source, .source = location.Value().document};
-        const Result<DocumentOpenResult> document = documentRegistry_.Open(key);
+        const DocumentKind documentKind = classification.kind == SourceFileKind::UiCanvas ? DocumentKind::UiCanvas : DocumentKind::Source;
+        const DocumentOpenKey key{.kind = documentKind, .source = location.Value().document};
+        const Result<DocumentOpenResult> document = documentRegistry_->Open(key);
         if (document.HasError())
             return Result<SourceOpenResult>::Failure(document.ErrorValue());
         return Result<SourceOpenResult>::Success(SourceOpenResult{

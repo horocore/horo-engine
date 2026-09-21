@@ -29,6 +29,7 @@ namespace Horo::Editor {
         HoroScript,
         ProjectText,
         Unsupported,
+        UiCanvas,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -63,10 +64,11 @@ namespace Horo::Editor {
         bool allowSymlinkedFiles{true};                  /**< Permit symlinks whose resolved target stays inside the project. */
         bool embeddedEditorAvailable{true};              /**< Embedded workspace route is installed. */
         bool externalEditorAvailable{true};              /**< External fallback route is installed. */
+        std::vector<std::string> uiCanvasExtensions;     /**< Runtime UI canvas document suffixes. */
 
         /**
          * @brief Returns the default M2 source/text policy.
-         * @return A value containing native source, Horo Script, and project-text extensions.
+         * @return A value containing native source, Horo Script, project-text, and UI Canvas extensions.
          */
         [[nodiscard]] static SourceFilePolicy Default();
     };
@@ -128,6 +130,16 @@ namespace Horo::Editor {
          */
         explicit SourceFileOpenService(const std::filesystem::path &projectRoot, SourceFilePolicy policy = SourceFilePolicy::Default());
 
+        /**
+         * @brief Creates a source-open service using a caller-owned document identity registry.
+         * @param projectRoot Project root containing the source files.
+         * @param documentRegistry Workspace-owned registry shared by all document routes.
+         * @param policy Extension, symlink, and editor-capability policy.
+         * @pre @p documentRegistry outlives this service.
+         */
+        SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry &documentRegistry,
+                              SourceFilePolicy policy = SourceFilePolicy::Default());
+
         /** @brief Returns the normalized project root captured by this service. */
         [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
             return projectRoot_;
@@ -136,6 +148,16 @@ namespace Horo::Editor {
         /** @brief Returns the immutable policy used for future requests. */
         [[nodiscard]] const SourceFilePolicy &Policy() const noexcept {
             return policy_;
+        }
+
+        /** @brief Returns the registry used for document identity routing. */
+        [[nodiscard]] DocumentIdentityRegistry &DocumentRegistry() noexcept {
+            return *documentRegistry_;
+        }
+
+        /** @brief Returns the registry used for document identity routing. */
+        [[nodiscard]] const DocumentIdentityRegistry &DocumentRegistry() const noexcept {
+            return *documentRegistry_;
         }
 
         /**
@@ -160,6 +182,7 @@ namespace Horo::Editor {
         bool projectRootValid_{false};
         std::filesystem::path projectRoot_;
         SourceFilePolicy policy_;
-        DocumentIdentityRegistry documentRegistry_;
+        DocumentIdentityRegistry ownedDocumentRegistry_;
+        DocumentIdentityRegistry *documentRegistry_{&ownedDocumentRegistry_};
     };
 }  // namespace Horo::Editor

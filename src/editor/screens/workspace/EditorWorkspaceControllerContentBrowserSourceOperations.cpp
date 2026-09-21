@@ -24,6 +24,34 @@ namespace Horo::Editor {
         }
 
         const SourceOpenResult &result = opened.Value();
+        if (result.classification.kind == SourceFileKind::UiCanvas && result.document.has_value() &&
+            result.route == SourceOpenRoute::EmbeddedWorkspace) {
+            const DocumentOpenResult &document = *result.document;
+            const bool hasSession = std::ranges::any_of(m_uiCanvasDocuments, [&](const UiCanvasDocument &session) {
+                return session.Identity().instance == document.identity.instance;
+            });
+            bool addedSession = false;
+            if (!hasSession) {
+                const Result<UiCanvasDocument> loaded = UiCanvasDocument::Open(document.identity, result.location.absolutePath);
+                if (loaded.HasError()) {
+                    if (document.disposition == DocumentOpenDisposition::Opened)
+                        static_cast<void>(m_documentRegistry.Close(document.identity.instance));
+                    m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+                    return;
+                }
+                m_uiCanvasDocuments.push_back(std::move(loaded).Value());
+                addedSession = true;
+            }
+            const Result<DocumentOpenResult> workspaceDocument = m_viewModel.workspacePanelHost.OpenDocument(document.identity.key);
+            if (workspaceDocument.HasError()) {
+                if (document.disposition == DocumentOpenDisposition::Opened)
+                    static_cast<void>(m_documentRegistry.Close(document.identity.instance));
+                if (addedSession)
+                    m_uiCanvasDocuments.pop_back();
+                m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+            }
+            return;
+        }
         bool navigated = false;
         if (m_sourceOpenNavigator) {
             navigated = m_sourceOpenNavigator(result);

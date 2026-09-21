@@ -52,6 +52,7 @@ TEST_CASE("Source policy classifies editable source and project text by extensio
 
     REQUIRE(service.Classify("Player.CPP").kind == SourceFileKind::NativeSource);
     REQUIRE(service.Classify("player.horo_script").kind == SourceFileKind::HoroScript);
+    REQUIRE(service.Classify("assets/ui/Hud.UICANVAS").kind == SourceFileKind::UiCanvas);
     REQUIRE(service.Classify(".horo/project.JSON").kind == SourceFileKind::ProjectText);
     REQUIRE(service.Classify("README.bin").kind == SourceFileKind::Unsupported);
     REQUIRE(service.Classify(".gitignore").kind == SourceFileKind::ProjectText);
@@ -60,6 +61,44 @@ TEST_CASE("Source policy classifies editable source and project text by extensio
     projectPolicy.projectTextExtensions = {"project_source"};
     SourceFileOpenService customized{project.Root(), std::move(projectPolicy)};
     REQUIRE(customized.Classify("generated.PROJECT_SOURCE").kind == SourceFileKind::ProjectText);
+}
+
+TEST_CASE("UI canvas opening uses a distinct persistent document kind and focuses existing tabs", "[unit][editor][source][ui]") {
+    TemporaryProject project;
+    project.Write("assets/ui/Hud.uicanvas");
+    project.Write("assets/ui/Menu.uicanvas");
+
+    DocumentIdentityRegistry registry;
+    SourceFileOpenService service{project.Root(), registry};
+    const auto hud = service.Open(SourceOpenRequest{
+        .path = "assets/ui/Hud.uicanvas",
+        .origin = SourceOpenOrigin::AssetActivation,
+        .mode = SourceOpenMode::EmbeddedOnly,
+    });
+    REQUIRE(hud.HasValue());
+    REQUIRE(hud.Value().classification.kind == SourceFileKind::UiCanvas);
+    REQUIRE(hud.Value().document.has_value());
+    REQUIRE(hud.Value().document->identity.key.kind == DocumentKind::UiCanvas);
+    REQUIRE(hud.Value().document->disposition == DocumentOpenDisposition::Opened);
+
+    const auto focused = service.Open(SourceOpenRequest{
+        .path = project.Root() / "assets/ui/Hud.uicanvas",
+        .origin = SourceOpenOrigin::Command,
+        .mode = SourceOpenMode::EmbeddedOnly,
+    });
+    REQUIRE(focused.HasValue());
+    REQUIRE(focused.Value().document->disposition == DocumentOpenDisposition::FocusExisting);
+    REQUIRE(focused.Value().document->identity == hud.Value().document->identity);
+
+    const auto menu = service.Open(SourceOpenRequest{
+        .path = "assets/ui/Menu.uicanvas",
+        .origin = SourceOpenOrigin::AssetActivation,
+        .mode = SourceOpenMode::EmbeddedOnly,
+    });
+    REQUIRE(menu.HasValue());
+    REQUIRE(menu.Value().document->identity.key.kind == DocumentKind::UiCanvas);
+    REQUIRE(menu.Value().document->identity != hud.Value().document->identity);
+    REQUIRE(registry.Size() == 2);
 }
 
 TEST_CASE("Relative absolute and internal symlink paths focus one canonical source document", "[unit][editor][source][paths]") {
