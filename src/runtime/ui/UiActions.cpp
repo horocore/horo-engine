@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <exception>
 #include <limits>
 #include <new>
 #include <type_traits>
@@ -27,8 +26,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool IsValidActionValue(const UiActionValue &value) noexcept {
-            return std::visit([](const auto &typed) noexcept {
-                using Value = std::decay_t<decltype(typed)>;
+            return std::visit([]<typename Typed>(const Typed &typed) noexcept {
+                using Value = std::decay_t<Typed>;
                 if constexpr (std::is_same_v<Value, double>)
                     return std::isfinite(typed);
                 else if constexpr (std::is_same_v<Value, UiActionText>)
@@ -76,15 +75,57 @@ namespace Horo::Runtime::Ui {
         }
 
         struct DispatchGuard final {
-            explicit DispatchGuard(bool &dispatching) noexcept : dispatching_(dispatching) {
-                dispatching_ = true;
-            }
+            explicit DispatchGuard(bool &dispatching) noexcept : dispatching_(dispatching), previous_(std::exchange(dispatching, true)) {}
 
-            ~DispatchGuard() {
-                dispatching_ = false;
+            DispatchGuard(const DispatchGuard &) = delete;
+            DispatchGuard &operator=(const DispatchGuard &) = delete;
+            DispatchGuard(DispatchGuard &&) = delete;
+            DispatchGuard &operator=(DispatchGuard &&) = delete;
+
+            ~DispatchGuard() noexcept {
+                dispatching_ = previous_;
             }
 
             bool &dispatching_;
+            bool previous_;
+        };
+
+        [[nodiscard]] Result<UiActionResult> InvokeActionHandler(const UiActionRequest &request, UiActionHandler &handler) {
+            try {
+                return handler.Handle(request);
+            } catch (...) {  // NOSONAR(cpp:S2738) The Runtime UI callback boundary must contain arbitrary handler exceptions.
+                return Failure<UiActionResult>(UiErrors::ActionHandlerFailed);
+            }
+        }
+
+        template <typename Command> [[nodiscard]] Result<void> ValidateTypedUiActionCommand(const Command &command) {
+            if constexpr (std::is_same_v<Command, UiButtonActionCommand>) {
+                if (!command.action.IsValid())
+                    return Failure(UiErrors::ActionCommandInvalid);
+                return command.payload.Validate();
+            } else if constexpr (std::is_same_v<Command, UiFormActionCommand>) {
+                if (!command.action.IsValid() || !IsKnownEnum(command.kind, UiFormActionKind::Count))
+                    return Failure(UiErrors::ActionCommandInvalid);
+                return command.payload.Validate();
+            } else if constexpr (std::is_same_v<Command, UiRouteActionCommand>) {
+                if (!command.action.IsValid() || !IsKnownEnum(command.kind, UiRouteActionKind::Count))
+                    return Failure(UiErrors::ActionCommandInvalid);
+                return command.payload.Validate();
+            } else if constexpr (std::is_same_v<Command, UiGameplayActionCommand>) {
+                if (!command.action.IsValid())
+                    return Failure(UiErrors::ActionCommandInvalid);
+                return command.payload.Validate();
+            } else {
+                if (!command.focused.IsValid() || !IsKnownEnum(command.direction, UiNavigationDirection::Count))
+                    return Failure(UiErrors::NavigationInvalid);
+                return Result<void>::Success();
+            }
+        }
+
+        struct UiActionCommandValidationVisitor final {
+            template <typename Command> [[nodiscard]] Result<void> operator()(const Command &command) const {
+                return ValidateTypedUiActionCommand(command);
+            }
         };
     }  // namespace
 
@@ -175,18 +216,19 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiActionCommandKindOf */
     UiActionCommandKind UiActionCommandKindOf(const UiActionCommand &command) noexcept {
-        return std::visit([](const auto &typed) noexcept {
-            using Value = std::decay_t<decltype(typed)>;
+        return std::visit([]<typename Typed>(const Typed &) noexcept {
+            using Value = std::decay_t<Typed>;
+            using enum UiActionCommandKind;
             if constexpr (std::is_same_v<Value, UiButtonActionCommand>)
-                return UiActionCommandKind::Button;
+                return Button;
             else if constexpr (std::is_same_v<Value, UiFormActionCommand>)
-                return UiActionCommandKind::Form;
+                return Form;
             else if constexpr (std::is_same_v<Value, UiRouteActionCommand>)
-                return UiActionCommandKind::Route;
+                return Route;
             else if constexpr (std::is_same_v<Value, UiGameplayActionCommand>)
-                return UiActionCommandKind::Gameplay;
+                return Gameplay;
             else
-                return UiActionCommandKind::Navigation;
+                return Navigation;
         }, command);
     }
 
@@ -211,30 +253,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc ValidateUiActionCommand */
     Result<void> ValidateUiActionCommand(const UiActionCommand &command) {
-        return std::visit([](const auto &typed) -> Result<void> {
-            using Value = std::decay_t<decltype(typed)>;
-            if constexpr (std::is_same_v<Value, UiButtonActionCommand>) {
-                if (!typed.action.IsValid())
-                    return Failure(UiErrors::ActionCommandInvalid);
-                return typed.payload.Validate();
-            } else if constexpr (std::is_same_v<Value, UiFormActionCommand>) {
-                if (!typed.action.IsValid() || !IsKnownEnum(typed.kind, UiFormActionKind::Count))
-                    return Failure(UiErrors::ActionCommandInvalid);
-                return typed.payload.Validate();
-            } else if constexpr (std::is_same_v<Value, UiRouteActionCommand>) {
-                if (!typed.action.IsValid() || !IsKnownEnum(typed.kind, UiRouteActionKind::Count))
-                    return Failure(UiErrors::ActionCommandInvalid);
-                return typed.payload.Validate();
-            } else if constexpr (std::is_same_v<Value, UiGameplayActionCommand>) {
-                if (!typed.action.IsValid())
-                    return Failure(UiErrors::ActionCommandInvalid);
-                return typed.payload.Validate();
-            } else {
-                if (!typed.focused.IsValid() || !IsKnownEnum(typed.direction, UiNavigationDirection::Count))
-                    return Failure(UiErrors::NavigationInvalid);
-                return Result<void>::Success();
-            }
-        }, command);
+        return std::visit(UiActionCommandValidationVisitor{}, command);
     }
 
     /** @copydoc UiActionRequest::Validate */
@@ -532,15 +551,7 @@ namespace Horo::Runtime::Ui {
             return Failure<UiActionResult>(UiErrors::ActionSourceStale);
 
         DispatchGuard guard{storage_->dispatching};
-        Result<UiActionResult> result = [&]() -> Result<UiActionResult> {
-            try {
-                return handler.Handle(request);
-            } catch (const std::exception &) {
-                return Failure<UiActionResult>(UiErrors::ActionHandlerFailed);
-            } catch (...) {
-                return Failure<UiActionResult>(UiErrors::ActionHandlerFailed);
-            }
-        }();
+        auto result = InvokeActionHandler(request, handler);
         if (result.HasError())
             return Result<UiActionResult>::Failure(std::move(result).ErrorValue());
         if (result.Value().request != request.id)
@@ -560,7 +571,7 @@ namespace Horo::Runtime::Ui {
         if (!request.Value().has_value())
             return Result<std::optional<UiActionResult>>::Success(std::nullopt);
 
-        const auto result = Dispatch(*request.Value(), handler);
+        auto result = Dispatch(*request.Value(), handler);
         if (result.HasError())
             return Result<std::optional<UiActionResult>>::Failure(result.ErrorValue());
         return Result<std::optional<UiActionResult>>::Success(std::optional<UiActionResult>{std::move(result).Value()});
