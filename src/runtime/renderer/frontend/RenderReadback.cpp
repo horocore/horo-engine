@@ -1,8 +1,8 @@
 #include "Horo/Runtime/Render/RenderReadback.h"
 
+#include "BoundedRenderQueueCore.h"
 #include "Horo/Runtime/Render/RenderReadbackErrors.h"
 
-#include <algorithm>
 #include <atomic>
 #include <limits>
 #include <new>
@@ -14,7 +14,7 @@
 
 namespace Horo::Render {
     namespace {
-        [[nodiscard]] Error ReadbackError(const ErrorCodeDescriptor &descriptor, std::string message) {
+        [[nodiscard]] Error ReadbackError(const ErrorCodeDescriptor &descriptor, std::string message = {}) {
             return MakeError(descriptor, std::move(message));
         }
 
@@ -74,13 +74,20 @@ namespace Horo::Render {
             std::shared_ptr<const RetainedPayload> payload;
         };
 
-        template <typename Records>
-        [[nodiscard]] auto FindReadbackRecord(Records &records, const RenderResourceOwnerId renderer, const RenderReadbackId request) {
-            if (!request.IsValid() || request.renderer != renderer)
-                return records.end();
-            return std::ranges::find_if(records, [request](const ReadbackRecord &record) {
-                return record.id == request;
-            });
+        [[nodiscard]] Error ReadbackAdmissionError(const detail::QueueAdmissionFailure failure) {
+            using enum detail::QueueAdmissionFailure;
+            switch (failure) {
+                case Capacity:
+                    return ReadbackError(RenderReadbackErrors::CapacityExceeded,
+                                         "Readback metadata, staging, or retained-result capacity is exhausted.");
+                case Identity:
+                    return ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback request identity space is exhausted.");
+                case Allocation:
+                    return ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback request storage allocation failed.");
+                case Length:
+                    return ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback metadata capacity cannot be represented.");
+            }
+            return ReadbackError(RenderReadbackErrors::CapacityExceeded);
         }
     }  // namespace
 
@@ -127,79 +134,174 @@ namespace Horo::Render {
     }
 
     class RenderReadbackQueue::Impl final {
-        using RecordContainer = std::vector<ReadbackRecord>;
-        using RecordIterator = RecordContainer::iterator;
-        using ConstRecordIterator = RecordContainer::const_iterator;
+        using enum RenderReadbackState;
+        using Core = detail::BoundedRenderQueueCore<ReadbackRecord, RenderReadbackId, RenderReadbackLimits>;
+        using OperationAdapter = detail::QueueOperationAdapter<Core>;
 
     public:
-        Impl(const RenderResourceOwnerId renderer, const RenderReadbackLimits &limits) : renderer_(renderer), limits_(limits) {
-            records_.reserve(limits.maximumRequests);
-        }
+        Impl(const RenderResourceOwnerId renderer, const RenderReadbackLimits &limits)
+            : retained_(std::make_shared<RetainedAccounting>()), core_(renderer, limits),
+              operations_(core_, RenderReadbackErrors::WrongThread, RenderReadbackErrors::InvalidRequest,
+                          "Readback identity is malformed, foreign, or no longer tracked.") {}
 
         [[nodiscard]] Result<RenderReadbackId> Request(const RenderReadbackDescriptor &descriptor) {
-            if (!accepting_)
+            if (!core_.OnOwnerThread())
+                return Result<RenderReadbackId>::Failure(ReadbackError(RenderReadbackErrors::WrongThread));
+            if (!core_.Accepting())
                 return Result<RenderReadbackId>::Failure(ReadbackError(RenderReadbackErrors::Stopped, "Readback admission is stopped."));
-            if (!descriptor.IsValid() || SourceOwner(descriptor.source) != renderer_ ||
-                descriptor.byteCount > limits_.maximumRequestBytes || descriptor.alignment > limits_.maximumAlignment) {
+            const RenderReadbackLimits &limits = core_.LimitsValue();
+            if (!descriptor.IsValid() || SourceOwner(descriptor.source) != core_.Renderer() ||
+                descriptor.byteCount > limits.maximumRequestBytes || descriptor.alignment > limits.maximumAlignment) {
                 return Result<RenderReadbackId>::Failure(
                     ReadbackError(RenderReadbackErrors::InvalidDescriptor,
                                   "Readback descriptor exceeds the configured byte or alignment bounds."));
             }
-            if (const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed),
-                retainedAndPending = retainedBytes + pendingBytes_;
-                records_.size() >= limits_.maximumRequests || descriptor.byteCount > limits_.maximumPendingBytes - pendingBytes_ ||
-                retainedAndPending > limits_.maximumRetainedResultBytes ||
-                descriptor.byteCount > limits_.maximumRetainedResultBytes - retainedAndPending) {
-                ++failedAdmissionCount_;
-                return Result<RenderReadbackId>::Failure(
-                    ReadbackError(RenderReadbackErrors::CapacityExceeded,
-                                  "Readback metadata, staging, or retained-result capacity is exhausted."));
-            }
-            if (nextId_ == std::numeric_limits<std::uint64_t>::max()) {
-                ++failedAdmissionCount_;
-                return Result<RenderReadbackId>::Failure(
-                    ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback request identity space is exhausted."));
-            }
-            const RenderReadbackId id{renderer_, nextId_++};
-            records_.push_back({.id = id, .descriptor = descriptor});
-            pendingBytes_ += descriptor.byteCount;
-            return Result<RenderReadbackId>::Success(id);
+            const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed);
+            const bool pendingCapacityAvailable = descriptor.byteCount <= limits.maximumPendingBytes - core_.PendingBytes();
+            const bool retainedCapacityAvailable =
+                retainedBytes <= limits.maximumRetainedResultBytes &&
+                core_.PendingBytes() <= limits.maximumRetainedResultBytes - retainedBytes &&
+                descriptor.byteCount <= limits.maximumRetainedResultBytes - retainedBytes - core_.PendingBytes();
+            auto admitted = core_.Admit(pendingCapacityAvailable && retainedCapacityAvailable, [descriptor](const RenderReadbackId id) {
+                return ReadbackRecord{.id = id, .descriptor = descriptor};
+            }, ReadbackAdmissionError);
+            if (admitted.HasValue())
+                core_.ChargePending(descriptor.byteCount);
+            return admitted;
         }
 
         [[nodiscard]] Result<void> MarkSubmitted(const RenderReadbackId request, const RenderTimelinePoint completion) {
-            ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return InvalidRequest();
-            if (record->state != RenderReadbackState::Pending || !completion.IsValid())
-                return InvalidTransition("Only a pending readback may receive a valid completion point.");
-            record->state = RenderReadbackState::Submitted;
-            record->completion = completion;
-            return Result<void>::Success();
+            return operations_.Apply<Result<void>>(request, [completion, this](auto &record) {
+                if (record.state != Pending || !completion.IsValid())
+                    return InvalidTransition("Only a pending readback may receive a valid completion point.");
+                record.state = Submitted;
+                record.completion = completion;
+                return Result<void>::Success();
+            });
         }
 
         [[nodiscard]] Result<void> Complete(const RenderReadbackId request, const std::span<const std::byte> mappedBytes) {
-            using enum RenderReadbackState;
-            ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return InvalidRequest();
-            if (record->state != Submitted && record->state != Cancelled && record->state != TimedOut) {
+            return operations_.Apply<Result<void>>(request, [this, mappedBytes](auto &record) {
+                return CompleteRecord(record, mappedBytes);
+            });
+        }
+
+        [[nodiscard]] Result<void> Fail(const RenderReadbackId request, const Error &error) {
+            return operations_.Apply<Result<void>>(request, [this, &error](auto &record) {
+                if (record.state == Cancelled || record.state == TimedOut) {
+                    ReleasePending(record);
+                    return Result<void>::Success();
+                }
+                if (record.state != Pending && record.state != Submitted)
+                    return InvalidTransition("Only pending or submitted readback work may fail.");
+                ReleasePending(record);
+                record.failure = error;
+                record.state = Failed;
+                return Result<void>::Success();
+            });
+        }
+
+        [[nodiscard]] Result<void> Cancel(const RenderReadbackId request) {
+            return operations_.Apply<Result<void>>(request, [this](auto &record) {
+                return detail::TransitionQueueRecord(record, Cancelled, Pending, Submitted, [this] {
+                    return InvalidTransition("Only pending or submitted readback work may be cancelled.");
+                }, [this](auto &pendingRecord) {
+                    ReleasePending(pendingRecord);
+                });
+            });
+        }
+
+        [[nodiscard]] Result<void> Timeout(const RenderReadbackId request) {
+            return operations_.Apply<Result<void>>(request, [this](auto &record) {
+                return detail::TransitionQueueRecord(record, TimedOut, Pending, Submitted, [this] {
+                    return InvalidTransition("Only pending or submitted readback work may time out.");
+                }, [this](auto &pendingRecord) {
+                    ReleasePending(pendingRecord);
+                });
+            });
+        }
+
+        [[nodiscard]] Result<void> Retire(const RenderReadbackId request) {
+            return operations_.Apply<Result<void>>(request, [this](auto &record) {
+                if (record.state != Cancelled && record.state != TimedOut)
+                    return InvalidTransition("Only cancelled or timed-out submitted work may retire without publication.");
+                ReleasePending(record);
+                return Result<void>::Success();
+            });
+        }
+
+        [[nodiscard]] Result<RenderReadbackState> State(const RenderReadbackId request) const {
+            return operations_.Apply<Result<RenderReadbackState>>(request, [this](const auto &record) {
+                return Result<RenderReadbackState>::Success(record.state);
+            });
+        }
+
+        [[nodiscard]] Result<ReadyReadback> AcquireView(const RenderReadbackId request) const {
+            return operations_.Apply<Result<ReadyReadback>>(request, [](const auto &record) {
+                if (record.state == Pending || record.state == Submitted)
+                    return Result<ReadyReadback>::Failure(
+                        ReadbackError(RenderReadbackErrors::ResultPending, "Readback result has not completed."));
+                if (record.state == Cancelled)
+                    return Result<ReadyReadback>::Failure(ReadbackError(RenderReadbackErrors::Cancelled, "Readback was cancelled."));
+                if (record.state == TimedOut)
+                    return Result<ReadyReadback>::Failure(ReadbackError(RenderReadbackErrors::TimedOut, "Readback timed out."));
+                if (record.state == Failed)
+                    return Result<ReadyReadback>::Failure(*record.failure);
+                return Result<ReadyReadback>::Success({record.id, record.completion, record.payload});
+            });
+        }
+
+        void ConsumeReady(const RenderReadbackId request) noexcept {
+            const ReadbackRecord *record = core_.Find(request);
+            if (record != nullptr && record->state == Ready)
+                core_.Erase(request);
+        }
+
+        [[nodiscard]] Result<void> Discard(const RenderReadbackId request) {
+            const auto result = operations_.Apply<Result<void>>(request, [this](const auto &record) {
+                if (!IsTerminal(record.state) || record.pendingBytesCharged)
+                    return this->InvalidTransition("Only fully retired terminal readbacks may be discarded.");
+                return Result<void>::Success();
+            });
+            if (result.HasValue())
+                core_.Erase(request);
+            return result;
+        }
+
+        [[nodiscard]] RenderReadbackSnapshot Snapshot() const noexcept {
+            return detail::MakeQueueSnapshot<RenderReadbackSnapshot>(core_, Submitted, Ready, IsTerminal, [this](auto &snapshot) {
+                snapshot.pendingBytes = core_.PendingBytes();
+                snapshot.retainedResultBytes = retained_->bytes.load(std::memory_order_relaxed);
+            });
+        }
+
+        void StopAdmission() noexcept {
+            operations_.StopAdmission();
+        }
+
+        void Shutdown() noexcept {
+            operations_.Shutdown();
+        }
+
+    private:
+        [[nodiscard]] Result<void> CompleteRecord(ReadbackRecord &record, const std::span<const std::byte> mappedBytes) {
+            if (record.state != Submitted && record.state != Cancelled && record.state != TimedOut)
                 return InvalidTransition("Only submitted, cancelled, or timed-out backend work may complete.");
-            }
-            if (record->state == Cancelled || record->state == TimedOut) {
-                ReleasePending(*record);
+            if (record.state == Cancelled || record.state == TimedOut) {
+                ReleasePending(record);
                 return Result<void>::Success();
             }
-            if (!record->completion.IsValid() || mappedBytes.size() != record->descriptor.byteCount) {
+            if (!record.completion.IsValid() || mappedBytes.size() != record.descriptor.byteCount)
                 return Result<void>::Failure(ReadbackError(RenderReadbackErrors::MappingSizeMismatch,
                                                            "Mapped readback bytes do not match the exact admitted request size."));
-            }
             if (const std::size_t retainedBytes = retained_->bytes.load(std::memory_order_relaxed);
-                mappedBytes.size() > limits_.maximumRetainedResultBytes - std::min(retainedBytes, limits_.maximumRetainedResultBytes))
+                retainedBytes > core_.LimitsValue().maximumRetainedResultBytes ||
+                mappedBytes.size() > core_.LimitsValue().maximumRetainedResultBytes - retainedBytes)
                 return Result<void>::Failure(
                     ReadbackError(RenderReadbackErrors::CapacityExceeded, "Consumer-retained readback results leave no result capacity."));
             try {
                 std::vector<std::byte> owned(mappedBytes.begin(), mappedBytes.end());
-                record->payload = std::make_shared<RetainedPayload>(retained_, std::move(owned));
+                record.payload = std::make_shared<RetainedPayload>(retained_, std::move(owned));
             } catch (const std::bad_alloc &) {
                 return Result<void>::Failure(
                     ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback result storage allocation failed."));
@@ -207,180 +309,22 @@ namespace Horo::Render {
                 return Result<void>::Failure(
                     ReadbackError(RenderReadbackErrors::CapacityExceeded, "Readback result size cannot be represented."));
             }
-            ReleasePending(*record);
-            record->state = RenderReadbackState::Ready;
+            ReleasePending(record);
+            record.state = Ready;
             return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> Fail(const RenderReadbackId request, const Error &error) {
-            using enum RenderReadbackState;
-            ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return InvalidRequest();
-            if (record->state == Cancelled || record->state == TimedOut) {
-                ReleasePending(*record);
-                return Result<void>::Success();
-            }
-            if (record->state != Pending && record->state != Submitted)
-                return InvalidTransition("Only pending or submitted readback work may fail.");
-            ReleasePending(*record);
-            record->failure = error;
-            record->state = RenderReadbackState::Failed;
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> Cancel(const RenderReadbackId request) {
-            using enum RenderReadbackState;
-            ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return InvalidRequest();
-            if (record->state == Cancelled)
-                return Result<void>::Success();
-            if (record->state != Pending && record->state != Submitted)
-                return InvalidTransition("Only pending or submitted readback work may be cancelled.");
-            if (record->state == Pending)
-                ReleasePending(*record);
-            record->state = Cancelled;
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> Timeout(const RenderReadbackId request) {
-            using enum RenderReadbackState;
-            ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return InvalidRequest();
-            if (record->state == TimedOut)
-                return Result<void>::Success();
-            if (record->state != Pending && record->state != Submitted)
-                return InvalidTransition("Only pending or submitted readback work may time out.");
-            if (record->state == Pending)
-                ReleasePending(*record);
-            record->state = TimedOut;
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> Retire(const RenderReadbackId request) {
-            ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return InvalidRequest();
-            if (record->state != RenderReadbackState::Cancelled && record->state != RenderReadbackState::TimedOut)
-                return InvalidTransition("Only cancelled or timed-out submitted work may retire without publication.");
-            ReleasePending(*record);
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<RenderReadbackState> State(const RenderReadbackId request) const {
-            const ReadbackRecord *record = Find(request);
-            if (record == nullptr)
-                return Result<RenderReadbackState>::Failure(InvalidRequestError());
-            return Result<RenderReadbackState>::Success(record->state);
-        }
-
-        [[nodiscard]] Result<ReadyReadback> AcquireView(const RenderReadbackId request) const {
-            auto record = FindIterator(request);
-            if (record == records_.end())
-                return Result<ReadyReadback>::Failure(InvalidRequestError());
-            if (record->state == RenderReadbackState::Pending || record->state == RenderReadbackState::Submitted)
-                return Result<ReadyReadback>::Failure(
-                    ReadbackError(RenderReadbackErrors::ResultPending, "Readback result has not completed."));
-            if (record->state == RenderReadbackState::Cancelled)
-                return Result<ReadyReadback>::Failure(ReadbackError(RenderReadbackErrors::Cancelled, "Readback was cancelled."));
-            if (record->state == RenderReadbackState::TimedOut)
-                return Result<ReadyReadback>::Failure(ReadbackError(RenderReadbackErrors::TimedOut, "Readback timed out."));
-            if (record->state == RenderReadbackState::Failed)
-                return Result<ReadyReadback>::Failure(*record->failure);
-            return Result<ReadyReadback>::Success({record->id, record->completion, record->payload});
-        }
-
-        void ConsumeReady(const RenderReadbackId request) noexcept {
-            const auto record = FindIterator(request);
-            if (record != records_.end() && record->state == RenderReadbackState::Ready)
-                records_.erase(record);
-        }
-
-        [[nodiscard]] Result<void> Discard(const RenderReadbackId request) {
-            auto record = FindIterator(request);
-            if (record == records_.end())
-                return InvalidRequest();
-            if (!IsTerminal(record->state) || record->pendingBytesCharged)
-                return InvalidTransition("Only fully retired terminal readbacks may be discarded.");
-            records_.erase(record);
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] RenderReadbackSnapshot Snapshot() const noexcept {
-            RenderReadbackSnapshot snapshot{.pendingBytes = pendingBytes_,
-                                            .retainedResultBytes = retained_->bytes.load(std::memory_order_relaxed),
-                                            .requestCount = static_cast<std::uint32_t>(records_.size()),
-                                            .failedAdmissionCount = failedAdmissionCount_,
-                                            .acceptingRequests = accepting_};
-            for (const ReadbackRecord &record : records_) {
-                if (record.state == RenderReadbackState::Submitted)
-                    ++snapshot.submittedCount;
-                if (record.state == RenderReadbackState::Ready)
-                    ++snapshot.readyCount;
-                if (IsTerminal(record.state))
-                    ++snapshot.terminalCount;
-            }
-            return snapshot;
-        }
-
-        void StopAdmission() noexcept {
-            accepting_ = false;
-        }
-
-        void Shutdown() noexcept {
-            accepting_ = false;
-            records_.clear();
-            pendingBytes_ = 0;
-        }
-
-    private:
-        [[nodiscard]] Error InvalidRequestError() const {
-            return ReadbackError(RenderReadbackErrors::InvalidRequest, "Readback identity is malformed, foreign, or no longer tracked.");
-        }
-
-        [[nodiscard]] Result<void> InvalidRequest() const {
-            return Result<void>::Failure(InvalidRequestError());
         }
 
         [[nodiscard]] Result<void> InvalidTransition(std::string message) const {
             return Result<void>::Failure(ReadbackError(RenderReadbackErrors::InvalidTransition, std::move(message)));
         }
 
-        [[nodiscard]] RecordIterator FindIterator(const RenderReadbackId request) {
-            return FindReadbackRecord(records_, renderer_, request);
-        }
-
-        [[nodiscard]] ConstRecordIterator FindIterator(const RenderReadbackId request) const {
-            return FindReadbackRecord(records_, renderer_, request);
-        }
-
-        [[nodiscard]] ReadbackRecord *Find(const RenderReadbackId request) {
-            const auto found = FindIterator(request);
-            return found == records_.end() ? nullptr : std::to_address(found);
-        }
-
-        [[nodiscard]] const ReadbackRecord *Find(const RenderReadbackId request) const {
-            const auto found = FindIterator(request);
-            return found == records_.end() ? nullptr : std::to_address(found);
-        }
-
         void ReleasePending(ReadbackRecord &record) noexcept {
-            if (!record.pendingBytesCharged)
-                return;
-            pendingBytes_ -= record.descriptor.byteCount;
-            record.pendingBytesCharged = false;
+            core_.ReleasePending(record);
         }
 
-        RenderResourceOwnerId renderer_;
-        RenderReadbackLimits limits_;
         std::shared_ptr<RetainedAccounting> retained_{std::make_shared<RetainedAccounting>()};
-        RecordContainer records_;
-        std::size_t pendingBytes_{0};
-        std::uint64_t nextId_{1};
-        std::uint64_t failedAdmissionCount_{0};
-        bool accepting_{true};
+        Core core_;
+        OperationAdapter operations_;
     };
 
     /** @copydoc RenderReadbackQueue::Create */

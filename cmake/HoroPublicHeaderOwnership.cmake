@@ -549,6 +549,11 @@ horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/RenderMemoryBudgetErrors.h
     Horo/Runtime/Render/RenderReadback.h
     Horo/Runtime/Render/RenderReadbackErrors.h
+    Horo/Runtime/Render/RenderTransferLimits.h
+    Horo/Runtime/Render/RenderUpload.h
+    Horo/Runtime/Render/RenderUploadErrors.h
+    Horo/Runtime/Render/RenderQuery.h
+    Horo/Runtime/Render/RenderQueryErrors.h
     Horo/Runtime/Render/UiRenderComposition.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS
