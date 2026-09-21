@@ -211,6 +211,11 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveRestoreTransaction.cpp
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
+        runtime/save/SaveMigration.cpp
+        runtime/save/SaveMigrationExecutor.cpp
+        runtime/save/SaveMigrationPlanner.cpp
+        runtime/save/SaveMigrationRegistry.cpp
+        runtime/save/SaveMigrationValidation.cpp
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveFinalization.cpp
         runtime/save/SaveArchiveFraming.cpp
@@ -225,6 +230,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveSlotIndex.cpp
         runtime/save/SaveStorageAdapter.cpp
         runtime/save/SaveSlotCommitTransaction.cpp
+        runtime/save/SaveSlotRecovery.cpp
         runtime/save/SaveStoragePolicy.cpp
         runtime/save/SaveOperation.cpp
         runtime/save/SaveOperationArbiter.cpp
@@ -274,13 +280,24 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiAccessibilityErrors.cpp
+        runtime/ui/UiDiagnosticDescriptors.cpp
+        runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityPolicy.cpp
+        runtime/ui/UiAccessibilityStorage.cpp
+        runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
+        runtime/ui/UiPointerCapture.cpp
+        runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiControls.cpp
+        runtime/ui/UiControlStateMachine.cpp
+        runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutTypes.cpp
         runtime/ui/UiStyle.cpp
@@ -292,6 +309,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
+        runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiPresentationReceipt.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
@@ -676,6 +694,9 @@ target_link_libraries(HoroPCG PUBLIC HoroEngine::Foundation)
 
 add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp
+        runtime/vfx/api/CpuParticleSimulator.cpp
+        runtime/vfx/api/CpuParticleSimulatorPreparation.cpp
+        runtime/vfx/api/CpuParticleSimulatorStages.cpp
         runtime/vfx/api/CpuParticleSpawnPipeline.cpp
         runtime/vfx/api/ParticleSystemDescriptor.cpp
         runtime/vfx/api/VfxErrors.cpp
@@ -1251,6 +1272,8 @@ add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
         editor/EditorSurfaceIdentity.cpp
         editor/SourceFileOpenService.cpp
+        editor/UiCanvasDocument.cpp
+        editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
         editor/document/SceneDocumentPersistenceCommon.cpp
@@ -1312,6 +1335,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::NetworkApi
         HoroEngine::Application
         HoroEngine::Platform
+        HoroEngine::RuntimeUi
         HoroEngine::EditorModel
         HoroEngine::GameplayLua
         HoroEngine::GameplayModuleHost

@@ -8,12 +8,20 @@ using namespace Horo::Editor;
 
 TEST_CASE("Workspace Layout Persistence Tests", "[unit][editor]") {
     WorkspacePanelHost host;
+    const auto opened = host.OpenDocument(DocumentOpenKey{
+        .kind = DocumentKind::UiCanvas,
+        .source = SourceDocumentId::Parse("assets/ui/Hud.uicanvas").Value(),
+    });
+    REQUIRE(opened.HasValue());
     const auto json = WorkspaceLayoutPersistence::Serialize(host.Layout());
     std::string error;
     const auto restored = WorkspaceLayoutPersistence::Deserialize(json, &error);
     REQUIRE((restored.has_value()));
     REQUIRE((restored->Validate().empty()));
     REQUIRE((restored->FindTabStack("workspace.document") != nullptr));
+    REQUIRE((restored->openDocuments.size() == 1));
+    REQUIRE((restored->openDocuments.front().kind == "ui_canvas"));
+    REQUIRE((restored->openDocuments.front().source == "assets/ui/Hud.uicanvas"));
 
     REQUIRE((!WorkspaceLayoutPersistence::Deserialize("{\"schemaVersion\":99,\"root\":{}}", &error)));
     REQUIRE((!error.empty()));

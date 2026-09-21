@@ -316,6 +316,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterControllerContractsTests.cpp
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
+        unit/runtime/physics/CharacterGroundingTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
         unit/runtime/physics/CharacterWorldCommandTests.cpp
@@ -339,6 +340,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsMassPropertiesTests.cpp
         unit/runtime/physics/PhysicsPoseTests.cpp
         unit/runtime/physics/PhysicsQueryTests.cpp
+        unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
         unit/runtime/physics/PhysicsShapeDescriptorTests.cpp
         unit/runtime/physics/PhysicsStepPolicyTests.cpp
@@ -399,6 +401,7 @@ horo_register_catch_test(HoroPCGTests LABELS "unit;pcg;headless")
 add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp
+        unit/runtime/vfx/CpuParticleSimulatorTests.cpp
         unit/runtime/vfx/CpuParticleSpawnPipelineTests.cpp
         unit/runtime/vfx/ParticleSystemDescriptorTests.cpp
         unit/runtime/vfx/VfxFoundationQualificationTests.cpp
@@ -549,6 +552,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/WorldObjectOwnershipTests.cpp
         unit/runtime/world_streaming/WorldPartitionCapabilityProfileTests.cpp
         unit/runtime/world_streaming/WorldPartitionRegistryTests.cpp
+        unit/runtime/world_streaming/WorldStreamingFoundationQualificationTests.cpp
         unit/runtime/world_streaming/WorldSpatialAssignmentTests.cpp
         unit/runtime/world_streaming/WorldSpatialObjectDescriptorTests.cpp
         unit/runtime/world_streaming/WorldSpanningObjectPlanTests.cpp
@@ -910,6 +914,11 @@ add_executable(HoroSourceFileOpenServiceTests
 )
 target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSourceFileOpenServiceTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroUiCanvasDocumentTests
+        unit/editor/UiCanvasDocumentTests.cpp
+)
+target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -1509,6 +1518,11 @@ add_executable(HoroRuntimeUiDiagnosticsTests
 )
 target_compile_features(HoroRuntimeUiDiagnosticsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDiagnosticsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiAccessibilityTests
+        unit/runtime/ui/UiAccessibilityTests.cpp
+)
+target_compile_features(HoroRuntimeUiAccessibilityTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiAccessibilityTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiElementTreeTests
         unit/runtime/ui/UiElementTreeTests.cpp
 )
@@ -1519,6 +1533,11 @@ add_executable(HoroRuntimeUiRenderSnapshotTests
 )
 target_compile_features(HoroRuntimeUiRenderSnapshotTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiRenderSnapshotTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiRenderGeometryTests
+        unit/runtime/ui/UiRenderGeometryTests.cpp
+)
+target_compile_features(HoroRuntimeUiRenderGeometryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiRenderGeometryTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiLayoutTests
         unit/runtime/ui/UiLayoutTests.cpp
 )
@@ -1543,6 +1562,13 @@ add_executable(HoroRuntimeUiEventDispatchTests
 target_compile_features(HoroRuntimeUiEventDispatchTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiEventDispatchTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiEventDispatchTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiPointerCaptureTests
+        unit/runtime/ui/UiPointerCaptureTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiPointerCaptureTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiPointerCaptureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiPointerCaptureTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiActionsTests
         unit/runtime/ui/UiActionsTests.cpp
         support/AllocationProbe.cpp
@@ -1550,6 +1576,13 @@ add_executable(HoroRuntimeUiActionsTests
 target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiActionsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiActionsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiControlsTests
+        unit/runtime/ui/UiControlsTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiControlsTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiControlsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiControlsTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeSaveArchiveMetadataTests
         unit/runtime/save/SaveArchiveMetadataTests.cpp
 )
@@ -1570,6 +1603,11 @@ add_executable(HoroRuntimeSaveArchiveReaderTests
 )
 target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveArchiveReaderTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveMigrationTests
+        unit/runtime/save/SaveMigrationTests.cpp
+)
+target_compile_features(HoroRuntimeSaveMigrationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveMigrationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCanonicalCodecTests
         unit/runtime/save/SaveCanonicalCodecTests.cpp
 )
@@ -1634,6 +1672,11 @@ add_executable(HoroRuntimeSaveSlotCommitTransactionTests
 )
 target_compile_features(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotCommitTransactionTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveSlotRecoveryTests
+        unit/runtime/save/SaveSlotRecoveryTests.cpp
+)
+target_compile_features(HoroRuntimeSaveSlotRecoveryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveSlotRecoveryTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSafePointCoordinatorTests
         unit/runtime/save/SaveSafePointCoordinatorTests.cpp
 )
@@ -2171,6 +2214,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroWorkspacePanelHostTests
         HoroEditorSurfaceIdentityTests
         HoroSourceFileOpenServiceTests
+        HoroUiCanvasDocumentTests
         HoroWorkspaceLayoutPersistenceTests
         HoroActivityBarLayoutTests
         HoroWorkspaceSplitterInteractionTests
@@ -2244,17 +2288,22 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests
+        HoroRuntimeUiAccessibilityTests
         HoroRuntimeUiElementTreeTests
         HoroRuntimeUiRenderSnapshotTests
+        HoroRuntimeUiRenderGeometryTests
         HoroRuntimeUiLayoutTests
         HoroRuntimeUiStyleTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
+        HoroRuntimeUiPointerCaptureTests
         HoroRuntimeUiActionsTests
+        HoroRuntimeUiControlsTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests
         HoroRuntimeSaveArchiveReaderTests
+        HoroRuntimeSaveMigrationTests
         HoroRuntimeSaveCanonicalCodecTests
         HoroRuntimeSaveReferenceTests
         HoroRuntimeSaveSlotMetadataTests
@@ -2267,6 +2316,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveStoragePolicyTests
         HoroRuntimeSaveOperationArbiterTests
         HoroRuntimeSaveSlotCommitTransactionTests
+        HoroRuntimeSaveSlotRecoveryTests
         HoroRuntimeSaveSafePointCoordinatorTests
         HoroRuntimeSaveProjectPolicyTests
         HoroRuntimeSaveTestCompositionsTests

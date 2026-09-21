@@ -113,12 +113,15 @@ namespace Horo::Runtime::Ui {
     struct RuntimeUiInstanceHandleTag;
     struct UiCanvasInstanceHandleTag;
     struct UiElementHandleTag;
+    struct RuntimeUiInputContextHandleTag;
     /** @brief Generation-safe identity of one runtime document-tree instance. */
     using RuntimeUiInstanceId = UiRuntimeHandle<RuntimeUiInstanceHandleTag>;
     /** @brief Generation-safe identity of one instantiated canvas. */
     using UiCanvasInstanceId = UiRuntimeHandle<UiCanvasInstanceHandleTag>;
     /** @brief Generation-safe identity of one element in a runtime tree. */
     using UiElementHandle = UiRuntimeHandle<UiElementHandleTag>;
+    /** @brief Generation-safe identity of one Runtime UI input audience/viewport context. */
+    using RuntimeUiInputContextId = UiRuntimeHandle<RuntimeUiInputContextHandleTag>;
 
     /** @brief Rejects malformed and cross-owner handles before registry access.
      * @param handle Handle submitted to a Runtime UI owner boundary.
@@ -253,4 +256,5 @@ namespace Horo::Runtime::Ui {
     static_assert(sizeof(RuntimeUiInstanceId) == 16);
     static_assert(sizeof(UiCanvasInstanceId) == 16);
     static_assert(sizeof(UiElementHandle) == 16);
+    static_assert(sizeof(RuntimeUiInputContextId) == 16);
 }  // namespace Horo::Runtime::Ui

@@ -108,6 +108,18 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor EventDispatchHandlerFailed;
     /** @brief The event dispatcher is retiring, stopped, or changing lifecycle during dispatch. */
     extern const ErrorCodeDescriptor EventDispatchLifecycleUnavailable;
+    /** @brief A pointer-capture context, pointer, button, or cancellation reason is malformed. */
+    extern const ErrorCodeDescriptor PointerCaptureInvalid;
+    /** @brief Pointer-capture owner, tree, target, or route evidence is stale or foreign. */
+    extern const ErrorCodeDescriptor PointerCaptureSourceStale;
+    /** @brief Pointer capture was requested against an interaction generation that was not presented. */
+    extern const ErrorCodeDescriptor PointerCaptureInteractionStale;
+    /** @brief The requested pointer is already captured by the same Runtime UI context. */
+    extern const ErrorCodeDescriptor PointerCaptureBusy;
+    /** @brief Every preallocated pointer-capture slot is occupied or retired. */
+    extern const ErrorCodeDescriptor PointerCaptureCapacityExceeded;
+    /** @brief The pointer-capture store is retiring, stopped, or otherwise unavailable. */
+    extern const ErrorCodeDescriptor PointerCaptureLifecycleUnavailable;
     /** @brief A typed Runtime UI action or owner context is malformed. */
     extern const ErrorCodeDescriptor ActionInvalid;
     /** @brief A typed Runtime UI action payload contains an invalid value. */
@@ -130,6 +142,22 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief A typed interactive-control descriptor is malformed or incompatible with its control kind. */
+    extern const ErrorCodeDescriptor ControlDescriptorInvalid;
+    /** @brief A normalized control input has invalid kind, source, sequence, tick, or payload evidence. */
+    extern const ErrorCodeDescriptor ControlInputInvalid;
+    /** @brief A control input belongs to another owner, element, or presented revision. */
+    extern const ErrorCodeDescriptor ControlSourceStale;
+    /** @brief A control input arrived before the staged default action was resolved. */
+    extern const ErrorCodeDescriptor ControlDefaultPending;
+    /** @brief A staged control default action could not be represented by its typed bounded payload. */
+    extern const ErrorCodeDescriptor ControlDefaultInvalid;
+    /** @brief A text input or repeat policy exceeded its fixed representation bound. */
+    extern const ErrorCodeDescriptor ControlCapacityExceeded;
+    /** @brief A control tick or event sequence moved backwards or exhausted its finite domain. */
+    extern const ErrorCodeDescriptor ControlSequenceInvalid;
+    /** @brief The interactive-control state machine is retiring, stopped, or changing lifecycle during input. */
+    extern const ErrorCodeDescriptor ControlLifecycleUnavailable;
     /** @brief Immutable Runtime UI render snapshot evidence or table topology is malformed. */
     extern const ErrorCodeDescriptor RenderSnapshotInvalid;
     /** @brief A Runtime UI draw command contains invalid geometry, paint, or table references. */
@@ -140,6 +168,14 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor RenderSnapshotStorageExhausted;
     /** @brief A Runtime UI render extractor is closed and no longer accepts snapshots. */
     extern const ErrorCodeDescriptor RenderSnapshotLifecycleUnavailable;
+    /** @brief Generated Runtime UI geometry or its batch topology is malformed. */
+    extern const ErrorCodeDescriptor RenderGeometryInvalid;
+    /** @brief Generated Runtime UI geometry exceeds its admitted vertex, index, or batch capacity. */
+    extern const ErrorCodeDescriptor RenderGeometryCapacityExceeded;
+    /** @brief Every preallocated Runtime UI geometry plan slot remains leased by an in-flight frame. */
+    extern const ErrorCodeDescriptor RenderGeometryStorageExhausted;
+    /** @brief A Runtime UI geometry arena is closed and no longer accepts plans. */
+    extern const ErrorCodeDescriptor RenderGeometryLifecycleUnavailable;
     /** @brief A Runtime UI render composition request exceeds its declared bounded pass capacity. */
     extern const ErrorCodeDescriptor RenderCompositionCapacityExceeded;
     /** @brief A Runtime UI render composition pass has invalid view, graph, target, ordering, or space policy. */
@@ -152,4 +188,40 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DiagnosticInvalid;
     /** @brief A Runtime UI diagnostic category or source error is not part of the declared contract. */
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
+    /** @brief An accessibility semantic schema value is malformed or unsupported. */
+    extern const ErrorCodeDescriptor AccessibilitySchemaInvalid;
+    /** @brief An accessibility node role is unknown or incompatible with its control data. */
+    extern const ErrorCodeDescriptor AccessibilityRoleInvalid;
+    /** @brief An accessibility state is unknown or incompatible with its node role. */
+    extern const ErrorCodeDescriptor AccessibilityStateInvalid;
+    /** @brief An accessibility typed value is malformed or incompatible with its node role. */
+    extern const ErrorCodeDescriptor AccessibilityValueInvalid;
+    /** @brief Accessibility range metadata is malformed or not admitted for the node role. */
+    extern const ErrorCodeDescriptor AccessibilityRangeInvalid;
+    /** @brief Accessibility selection metadata is malformed or not admitted for the node role. */
+    extern const ErrorCodeDescriptor AccessibilitySelectionInvalid;
+    /** @brief Accessibility text is invalid, oversized, or not valid UTF-8. */
+    extern const ErrorCodeDescriptor AccessibilityTextInvalid;
+    /** @brief An interactive accessibility node has neither a name nor a valid label relation. */
+    extern const ErrorCodeDescriptor AccessibilityNameMissing;
+    /** @brief An accessibility relation is dangling, duplicated, cyclic, or unsupported. */
+    extern const ErrorCodeDescriptor AccessibilityRelationInvalid;
+    /** @brief An accessibility action is unknown, duplicated, or incompatible with its node. */
+    extern const ErrorCodeDescriptor AccessibilityActionInvalid;
+    /** @brief A contributed accessibility node has invalid contributor ownership evidence. */
+    extern const ErrorCodeDescriptor AccessibilityContributorInvalid;
+    /** @brief A complete accessibility snapshot candidate is malformed. */
+    extern const ErrorCodeDescriptor AccessibilitySnapshotInvalid;
+    /** @brief An accessibility snapshot source or semantic revision is stale. */
+    extern const ErrorCodeDescriptor AccessibilitySnapshotSourceStale;
+    /** @brief Every preallocated accessibility snapshot slot remains leased. */
+    extern const ErrorCodeDescriptor AccessibilitySnapshotStorageExhausted;
+    /** @brief The accessibility snapshot store is closed and rejects new publication. */
+    extern const ErrorCodeDescriptor AccessibilityLifecycleUnavailable;
+    /** @brief An accessibility action request targets an older or absent semantic generation. */
+    extern const ErrorCodeDescriptor AccessibilityActionStale;
+    /** @brief An accessibility action is currently disallowed by visibility, state, or argument policy. */
+    extern const ErrorCodeDescriptor AccessibilityActionRejected;
+    /** @brief More than one accessibility node claims semantic focus. */
+    extern const ErrorCodeDescriptor AccessibilityFocusConflict;
 }  // namespace Horo::Runtime::Ui::UiErrors

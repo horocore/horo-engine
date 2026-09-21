@@ -555,6 +555,41 @@ namespace Horo::Runtime::Ui::UiErrors {
                                            "Create a new extractor for the active view generation before publishing another snapshot.",
                                            false,
                                            false};
+    /** @copydoc RenderGeometryInvalid */
+    const ErrorCodeDescriptor RenderGeometryInvalid{UiDomain,
+                                                    ErrorCode{"runtime_ui.render_geometry.invalid"},
+                                                    ErrorSeverity::Error,
+                                                    "The generated Runtime UI geometry is invalid.",
+                                                    "Provide finite logical paint data and a compatible bounded batch topology.",
+                                                    false,
+                                                    false};
+    /** @copydoc RenderGeometryCapacityExceeded */
+    const ErrorCodeDescriptor
+        RenderGeometryCapacityExceeded{UiDomain,
+                                       ErrorCode{"runtime_ui.render_geometry.capacity_exceeded"},
+                                       ErrorSeverity::Error,
+                                       "Generated Runtime UI geometry exceeds its bounded frame capacity.",
+                                       "Increase the admitted geometry limits or reduce the UI draw, glyph, and batch count.",
+                                       true,
+                                       false};
+    /** @copydoc RenderGeometryStorageExhausted */
+    const ErrorCodeDescriptor
+        RenderGeometryStorageExhausted{UiDomain,
+                                       ErrorCode{"runtime_ui.render_geometry.storage_exhausted"},
+                                       ErrorSeverity::Error,
+                                       "Every bounded Runtime UI geometry plan slot is still leased.",
+                                       "Retire an in-flight geometry plan before retrying; never overwrite or allocate fallback storage.",
+                                       true,
+                                       false};
+    /** @copydoc RenderGeometryLifecycleUnavailable */
+    const ErrorCodeDescriptor
+        RenderGeometryLifecycleUnavailable{UiDomain,
+                                           ErrorCode{"runtime_ui.render_geometry.lifecycle_unavailable"},
+                                           ErrorSeverity::Error,
+                                           "The Runtime UI geometry arena is closed.",
+                                           "Create a new geometry arena for the active view generation before building another plan.",
+                                           false,
+                                           false};
     /** @copydoc RenderCompositionCapacityExceeded */
     const ErrorCodeDescriptor
         RenderCompositionCapacityExceeded{UiDomain,

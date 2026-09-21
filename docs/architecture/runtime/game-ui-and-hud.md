@@ -375,6 +375,20 @@ invalidated, remaining callbacks and the default action are suppressed, and the
 caller receives a typed failure. Handler exceptions are contained at the callback
 boundary. Retirement closes admission and shutdown is idempotent.
 
+`UiPointerCaptureStore` is the Runtime UI owner of continued pointer delivery. It
+preallocates a bounded set of move-only leases keyed by exact input context and
+pointer, and copies the initiating button, view, target route, retained-tree
+revision and last-presented interaction revision into each lease. It owns no
+handler, tree, renderer, platform or gameplay pointer. Release and cancellation
+are owner-thread operations; cancellation reasons remain observable on the lease
+until its caller releases it, so a cancelled token cannot alias a reused slot.
+Focus/device loss, modal replacement, route or target destruction, reload, scene/
+scope or viewport teardown, suspension and shutdown must cancel the affected
+leases before the next generation can admit delivery; `CancelContext`,
+`CancelInstance`, `CancelCanvas` and `CancelView` provide the explicit teardown
+boundaries. Reconciliation rejects foreign or stale owner evidence and prevents
+capture from crossing contexts or viewports.
+
 ## Typed Actions, Commands, And Default Navigation
 
 Interactive controls do not retain callbacks or gameplay references. They emit
@@ -396,6 +410,23 @@ no-target evidence. A no-target result cannot silently fall through to gameplay;
 the input/context owner decides the declared handled or rejected policy. Queue
 storage is reserved at router creation, so frame-hot admission and dispatch do
 not allocate, block, perform I/O, or invoke another subsystem synchronously.
+
+[ADR-180](../../adr/180-runtime-ui-interactive-control-state-machines-and-default-actions.md) owns
+the semantic state machine for core interactive controls. `Button`, `Toggle`,
+`Slider` and `TextInput` use closed typed descriptor/state variants with exact
+owner and presented-element evidence. Pointer press/release and normalized
+keyboard/gamepad submit edges share one pressed transition contract; disabled
+controls cannot acquire focus, focus/capture loss and cancellation clear
+transient press/repeat/editing state, and text cancellation restores the
+edit-session value.
+
+Control handling is a two-step default-action boundary. `Handle` may stage a
+`DefaultPending` result, but checked values, scalar values and submitted text do
+not commit until the route owner calls `ApplyDefault`; a prevented route calls
+`SuppressDefault`. New input is rejected until that decision is made. Repeat is
+driven by bounded owner ticks, emits at most one default per admitted tick, and
+does not catch up through an unbounded burst. Control descriptors contain no
+callbacks, renderer/style state, native handles or gameplay references.
 
 Retirement closes new admission, reload creates a new owner/revision generation,
 and shutdown discards queued requests without invoking a consumer. Late results
