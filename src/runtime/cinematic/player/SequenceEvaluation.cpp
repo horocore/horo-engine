@@ -321,6 +321,10 @@ namespace Horo::Cinematic {
             std::size_t cameraCuts{};
         };
 
+        [[nodiscard]] bool AtOccurrenceLimit(const StagedOccurrenceCounts &counts, const std::size_t limit) noexcept {
+            return limit != 0 && (counts.events >= limit || counts.cameraCuts >= limit - counts.events);
+        }
+
         [[nodiscard]] Result<StagedOccurrenceCounts> StageOccurrences(const SequencePlayerHandle &player,
                                                                       const std::span<const SequenceFrameEventKey> events,
                                                                       const std::span<const SequenceFrameCameraCutKey> cameraCuts,
@@ -332,7 +336,7 @@ namespace Horo::Cinematic {
                                                 [&counts, &scratch, &capacityExceeded, &player](const auto &event, const auto &segment) {
                 if (segment.direction == SequenceTraversalDirection::Reverse && !event.fireInReverse)
                     return;
-                if (counts.events >= scratch.events.size()) {
+                if (counts.events >= scratch.events.size() || AtOccurrenceLimit(counts, scratch.maximumBoundaryOccurrences)) {
                     capacityExceeded = true;
                     return;
                 }
@@ -340,7 +344,7 @@ namespace Horo::Cinematic {
             });
             VisitCrossed<SequenceFrameCameraCutKey>(cameraCuts, segments,
                                                     [&counts, &scratch, &capacityExceeded, &player](const auto &cut, const auto &segment) {
-                if (counts.cameraCuts >= scratch.cameraCuts.size()) {
+                if (counts.cameraCuts >= scratch.cameraCuts.size() || AtOccurrenceLimit(counts, scratch.maximumBoundaryOccurrences)) {
                     capacityExceeded = true;
                     return;
                 }
@@ -484,14 +488,42 @@ namespace Horo::Cinematic {
         ++committed.evaluationRevision;
         cursor = committed;
         ApplyAndDispatch(tracks_, scratch, hooks, staged.Value());
+        const bool reachedEnd =
+            loopMode_ == SequenceLoopMode::Once && player.rate.numerator != 0 &&
+            ((player.rate.numerator > 0 && cursor.position == duration_) || (player.rate.numerator < 0 && cursor.position == 0));
         return Result<SequenceFrameEvaluationResult>::Success({previousPosition, cursor.position, cursor.traversal,
                                                                cursor.evaluationRevision, tracks_.size(), staged.Value().events,
-                                                               staged.Value().cameraCuts});
+                                                               staged.Value().cameraCuts, reachedEnd});
     }
 
     /** @copydoc SequenceFrameEvaluationPlan::TrackCount */
     std::size_t SequenceFrameEvaluationPlan::TrackCount() const noexcept {
         return tracks_.size();
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::Duration */
+    SequenceTime SequenceFrameEvaluationPlan::Duration() const noexcept {
+        return duration_;
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::EventCount */
+    std::size_t SequenceFrameEvaluationPlan::EventCount() const noexcept {
+        return events_.size();
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::CameraCutCount */
+    std::size_t SequenceFrameEvaluationPlan::CameraCutCount() const noexcept {
+        return cameraCuts_.size();
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::LoopMode */
+    SequenceLoopMode SequenceFrameEvaluationPlan::LoopMode() const noexcept {
+        return loopMode_;
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::MaximumLoopCrossings */
+    std::size_t SequenceFrameEvaluationPlan::MaximumLoopCrossings() const noexcept {
+        return maximumLoopCrossings_;
     }
 
     SequenceFrameEvaluationPlan::SequenceFrameEvaluationPlan(const SequenceTime duration, const SequenceLoopMode loopMode,

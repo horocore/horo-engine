@@ -395,6 +395,8 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequenceEvaluationErrors.h
     Horo/Cinematic/SequencePlayer.h
     Horo/Cinematic/SequencePlayerErrors.h
+    Horo/Cinematic/SequencePlaybackRuntime.h
+    Horo/Cinematic/SequencePlaybackRuntimeErrors.h
 )
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavMeshData.h
