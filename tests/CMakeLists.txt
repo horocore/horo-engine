@@ -914,6 +914,11 @@ add_executable(HoroSourceFileOpenServiceTests
 )
 target_compile_features(HoroSourceFileOpenServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSourceFileOpenServiceTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroUiCanvasDocumentTests
+        unit/editor/UiCanvasDocumentTests.cpp
+)
+target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -1518,6 +1523,11 @@ add_executable(HoroRuntimeUiDiagnosticsTests
 )
 target_compile_features(HoroRuntimeUiDiagnosticsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDiagnosticsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiAccessibilityTests
+        unit/runtime/ui/UiAccessibilityTests.cpp
+)
+target_compile_features(HoroRuntimeUiAccessibilityTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiAccessibilityTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiElementTreeTests
         unit/runtime/ui/UiElementTreeTests.cpp
 )
@@ -2204,6 +2214,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroWorkspacePanelHostTests
         HoroEditorSurfaceIdentityTests
         HoroSourceFileOpenServiceTests
+        HoroUiCanvasDocumentTests
         HoroWorkspaceLayoutPersistenceTests
         HoroActivityBarLayoutTests
         HoroWorkspaceSplitterInteractionTests
@@ -2278,6 +2289,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests
+        HoroRuntimeUiAccessibilityTests
         HoroRuntimeUiElementTreeTests
         HoroRuntimeUiRenderSnapshotTests
         HoroRuntimeUiRenderGeometryTests

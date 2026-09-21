@@ -171,15 +171,43 @@ namespace Horo::Editor {
             .allowSymlinkedFiles = true,
             .embeddedEditorAvailable = true,
             .externalEditorAvailable = true,
+            .uiCanvasExtensions = {".uicanvas"},
         };
     }
 
     SourceFileOpenService::SourceFileOpenService(const std::filesystem::path &projectRoot, SourceFilePolicy policy)
-        : projectRootValid_(false), projectRoot_(ResolveRoot(projectRoot, projectRootValid_)), policy_(std::move(policy)) {
+        : SourceFileOpenService(projectRoot, nullptr, std::move(policy)) {}
+
+    SourceFileOpenService::SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry &documentRegistry,
+                                                 SourceFilePolicy policy)
+        : SourceFileOpenService(projectRoot, &documentRegistry, std::move(policy)) {}
+
+    SourceFileOpenService::SourceFileOpenService(const std::filesystem::path &projectRoot, DocumentIdentityRegistry *documentRegistry,
+                                                 SourceFilePolicy policy)
+        : projectRootValid_(false), projectRoot_(ResolveRoot(projectRoot, projectRootValid_)), policy_(std::move(policy)),
+          documentRegistry_(documentRegistry != nullptr ? documentRegistry : &ownedDocumentRegistry_) {
         policy_.nativeSourceExtensions = NormalizeValues(policy_.nativeSourceExtensions, true);
         policy_.horoScriptExtensions = NormalizeValues(policy_.horoScriptExtensions, true);
         policy_.projectTextExtensions = NormalizeValues(policy_.projectTextExtensions, true);
         policy_.projectTextFileNames = NormalizeValues(policy_.projectTextFileNames, false);
+        policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
+    }
+
+    SourceFileOpenService::SourceFileOpenService(SourceFileOpenService &&other) noexcept
+        : projectRootValid_(other.projectRootValid_), projectRoot_(std::move(other.projectRoot_)), policy_(std::move(other.policy_)),
+          ownedDocumentRegistry_(std::move(other.ownedDocumentRegistry_)),
+          documentRegistry_(other.documentRegistry_ == &other.ownedDocumentRegistry_ ? &ownedDocumentRegistry_ : other.documentRegistry_) {}
+
+    SourceFileOpenService &SourceFileOpenService::operator=(SourceFileOpenService &&other) noexcept {
+        if (this == &other)
+            return *this;
+        const bool otherUsesOwnedRegistry = other.documentRegistry_ == &other.ownedDocumentRegistry_;
+        projectRootValid_ = other.projectRootValid_;
+        projectRoot_ = std::move(other.projectRoot_);
+        policy_ = std::move(other.policy_);
+        ownedDocumentRegistry_ = std::move(other.ownedDocumentRegistry_);
+        documentRegistry_ = otherUsesOwnedRegistry ? &ownedDocumentRegistry_ : other.documentRegistry_;
+        return *this;
     }
 
     SourceFileClassification SourceFileOpenService::Classify(const std::filesystem::path &path) const {
@@ -190,6 +218,8 @@ namespace Horo::Editor {
             return SourceFileClassification{NativeSource, extension};
         if (Contains(policy_.horoScriptExtensions, extension))
             return SourceFileClassification{HoroScript, extension};
+        if (Contains(policy_.uiCanvasExtensions, extension))
+            return SourceFileClassification{UiCanvas, extension};
         if (Contains(policy_.projectTextExtensions, extension) || Contains(policy_.projectTextFileNames, fileName))
             return SourceFileClassification{ProjectText, extension};
         return SourceFileClassification{Unsupported, extension};
@@ -264,8 +294,9 @@ namespace Horo::Editor {
             return Result<SourceOpenResult>::Failure(MakePathError(SourceOpenErrors::EditorUnavailable, location.Value().absolutePath));
         }
 
-        const DocumentOpenKey key{.kind = DocumentKind::Source, .source = location.Value().document};
-        const Result<DocumentOpenResult> document = documentRegistry_.Open(key);
+        const DocumentKind documentKind = classification.kind == SourceFileKind::UiCanvas ? DocumentKind::UiCanvas : DocumentKind::Source;
+        const DocumentOpenKey key{.kind = documentKind, .source = location.Value().document};
+        const Result<DocumentOpenResult> document = documentRegistry_->Open(key);
         if (document.HasError())
             return Result<SourceOpenResult>::Failure(document.ErrorValue());
         return Result<SourceOpenResult>::Success(SourceOpenResult{
