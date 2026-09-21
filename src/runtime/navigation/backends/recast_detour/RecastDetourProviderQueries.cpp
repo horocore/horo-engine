@@ -29,10 +29,20 @@ namespace Horo::Navigation {
                 return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
             if (!Math::IsFinite(request.start) || !Math::IsFinite(request.destination))
                 return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
+            if (!std::isfinite(request.clearanceMeters) || request.clearanceMeters < 0.0F)
+                return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
             if (request.requirement.limits.maximumResultPoints < 2U)
                 return Failure<void>(NavigationErrors::CapabilityDescriptorInvalid);
             if (const auto admitted = AdmitNavigationQuery(capabilities, capabilities.revision, request.requirement); admitted.HasError())
                 return admitted;
+            if (const NavigationQueryLimits &available = capabilities.queryLimits[static_cast<std::size_t>(request.requirement.query)]
+                                                                                 [static_cast<std::size_t>(request.requirement.quality)];
+                (request.outputLimits.maximumCorridorPolygons != 0 &&
+                 request.outputLimits.maximumCorridorPolygons > available.maximumNodeExpansions) ||
+                (request.outputLimits.maximumPortals != 0 && request.outputLimits.maximumPortals > available.maximumResultPoints) ||
+                (request.outputLimits.maximumWaypoints != 0 && request.outputLimits.maximumWaypoints > available.maximumResultPoints) ||
+                (request.outputLimits.maximumWaypoints != 0 && request.outputLimits.maximumWaypoints < 2U))
+                return Failure<void>(NavigationErrors::QueryLimitExceeded);
             if (const double distance = std::hypot(static_cast<double>(request.destination.x) - request.start.x,
                                                    static_cast<double>(request.destination.y) - request.start.y,
                                                    static_cast<double>(request.destination.z) - request.start.z);
@@ -382,8 +392,10 @@ namespace Horo::Navigation {
             const NavigationAreaRegistry &areaRegistry;
             const std::vector<GroundedNavigationPolygon> &polygons;
             const std::vector<NavigationPolygonAdjacency> &adjacency;
+            const std::vector<Math::Vec3> &vertices;
             const std::vector<Math::Vec3> &centers;
             const std::vector<dtPolyRef> &references;
+            float defaultClearanceMeters{};
         };
 
         [[nodiscard]] Result<NavigationPath> ExecutePathQuery(PathQueryContext &context, const CancellationToken &cancellation) {
@@ -407,8 +419,10 @@ namespace Horo::Navigation {
                                          .search = corridor.Value(),
                                          .areaRegistry = context.areaRegistry,
                                          .polygons = context.polygons,
+                                         .vertices = context.vertices,
                                          .centers = context.centers,
-                                         .references = context.references};
+                                         .references = context.references,
+                                         .defaultClearanceMeters = context.defaultClearanceMeters};
             auto path = BuildPath(pathContext);
             if (path.HasError())
                 return path;
@@ -421,7 +435,7 @@ namespace Horo::Navigation {
         public:
             RecastDetourNavigationQueryBackend(const RecastDetourProviderCreateInfo &info, RecastDetourQueryBackendData data) noexcept
                 : world_(info.world), topology_(info.topology), nearestPointHalfExtents_(info.nearestPointHalfExtents),
-                  maximumResultPoints_(info.maximumResultPoints),
+                  defaultClearanceMeters_(info.walkableRadiusMeters), maximumResultPoints_(info.maximumResultPoints),
                   capabilities_(MakeAvailableGroundedQueryCapabilities(info.capabilityRevision,
                                                                        {.maximumNodeExpansions = info.maximumQueryNodes,
                                                                         .maximumResultPoints = info.maximumResultPoints,
@@ -468,8 +482,10 @@ namespace Horo::Navigation {
                                          .areaRegistry = areaRegistry_,
                                          .polygons = polygons_,
                                          .adjacency = adjacency_,
+                                         .vertices = vertices_,
                                          .centers = polygonCenters_,
-                                         .references = polygonReferences_};
+                                         .references = polygonReferences_,
+                                         .defaultClearanceMeters = defaultClearanceMeters_};
                 return ExecutePathQuery(context, cancellation);
             }
 
@@ -513,6 +529,7 @@ namespace Horo::Navigation {
             NavigationWorldId world_;
             NavigationGeneration topology_;
             Math::Vec3 nearestPointHalfExtents_;
+            float defaultClearanceMeters_{};
             std::uint32_t maximumResultPoints_{};
             NavigationProviderCapabilities capabilities_;
             NavMeshPtr mesh_;

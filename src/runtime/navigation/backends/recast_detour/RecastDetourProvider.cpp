@@ -345,6 +345,8 @@ namespace Horo::Navigation {
                 slot.searchNodes.resize(info.maximumQueryNodes);
                 slot.openNodes.resize(info.maximumQueryNodes);
                 slot.polygonPathIndices.resize(info.maximumQueryNodes);
+                slot.portals.resize(info.maximumQueryNodes);
+                slot.waypoints.resize(info.maximumResultPoints);
             }
             return Result<std::vector<QuerySlot>>::Success(std::move(slots));
         }

@@ -154,6 +154,7 @@ namespace Horo::Navigation {
                                            .maximumSearchDistanceMeters = 100.0F}},
             };
         }
+
     }  // namespace
 
     TEST_CASE("Recast Detour provider translates neutral topology and path requests", "[unit][navigation][provider]") {
@@ -195,6 +196,18 @@ namespace Horo::Navigation {
         CHECK(exactBufferPath.Value().status == NavigationPathStatus::Reachable);
         CHECK(exactBufferPath.Value().points.front() == exactBufferRequest.start);
         CHECK(exactBufferPath.Value().points.back() == exactBufferRequest.destination);
+    }
+
+    TEST_CASE("Recast Detour reports a typed diagnostic for a portal that cannot honor clearance", "[unit][navigation][provider][path]") {
+        const SquareTopology topology;
+        const auto info = CreateInfo(topology);
+        auto created = CreateRecastDetourNavigationQueryBackend(info);
+        REQUIRE(created.HasValue());
+        auto provider = std::move(created).Value();
+
+        auto request = Request(info);
+        request.clearanceMeters = 8.0F;
+        RequireError(provider->FindPath(request, {}), NavigationErrors::PathPortalDegenerate);
     }
 
     TEST_CASE("Recast Detour path filters apply exclusion and traversal costs", "[unit][navigation][provider][path]") {

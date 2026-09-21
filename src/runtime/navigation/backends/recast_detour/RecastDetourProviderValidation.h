@@ -51,13 +51,15 @@ namespace Horo::Navigation::Detail {
                 return false;
         }
 
-        std::size_t querySlotBytes{};
-        if (!CheckedProduct(static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)), sizeof(dtPolyRef),
+        if (std::size_t querySlotBytes{};
+            !CheckedProduct(static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)), sizeof(dtPolyRef),
                             querySlotBytes) ||
             !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) *
                                             ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))) ||
             !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumQueryNodes) *
                                             (sizeof(NavigationAStarNode) + sizeof(std::uint32_t) + sizeof(std::uint32_t))) ||
+            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumQueryNodes) * sizeof(NavigationPathPortal)) ||
+            !CheckedAdd(querySlotBytes, static_cast<std::size_t>(info.maximumResultPoints) * sizeof(NavigationPathWaypoint)) ||
             !CheckedProduct(info.maximumConcurrentQueries, querySlotBytes, querySlotBytes) || !CheckedAdd(bytes, querySlotBytes))
             return false;
         return bytes <= info.maximumOwnedBytes;

@@ -40,6 +40,8 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor InvalidWorld;
     /** @brief An accepted operation exhausted a declared execution, scratch, result, or retry bound. */
     extern const ErrorCodeDescriptor CapacityExceeded;
+    /** @brief A path corridor portal is zero-width, ambiguous, or cannot honor the requested clearance. */
+    extern const ErrorCodeDescriptor PathPortalDegenerate;
     /** @brief An area identity, source, or finite non-negative traversal cost is malformed. */
     extern const ErrorCodeDescriptor AreaDescriptorInvalid;
     /** @brief A filter identity, source, referenced identity, or finite non-negative cost is malformed. */
@@ -158,4 +160,8 @@ namespace Horo::Navigation::NavigationErrors {
     inline const ErrorCodeDescriptor &SerializationCapacityExceeded = SourceSerializationCapacityExceeded;
     inline const ErrorCodeDescriptor &SerializationUnknownAuthoredRecord = SourceUnknownAuthoredRecord;
     inline const ErrorCodeDescriptor &SerializationGeneratedPayloadQuarantined = GeneratedPayloadQuarantined;
+
+    // Compatibility aliases keep the portal diagnostic discoverable across the path/corridor vocabulary.
+    inline const ErrorCodeDescriptor &CorridorPortalDegenerate = PathPortalDegenerate;
+    inline const ErrorCodeDescriptor &PortalDegenerate = PathPortalDegenerate;
 }  // namespace Horo::Navigation::NavigationErrors
