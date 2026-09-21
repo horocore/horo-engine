@@ -235,7 +235,7 @@ namespace Horo::Runtime {
             CHECK(invalidPolicyResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryInvalid.code.Value());
         }
 
-        TEST_CASE("Recovery rejects invalid bounds and incomplete ordering evidence", "[unit][runtime][save][slot-recovery]") {
+        TEST_CASE("Recovery rejects invalid request and observation bounds", "[unit][runtime][save][slot-recovery]") {
             FakeValidator validator;
             const auto current = Artifact(90, 10);
             const SaveSlotRecoveryRequest invalidSlot{.slot = {},
@@ -271,7 +271,11 @@ namespace Horo::Runtime {
             const auto tooManyQuarantinedResult = SaveSlotRecoveryPlanner(validator, tightPolicy).Build(tooManyQuarantineRequest);
             REQUIRE(tooManyQuarantinedResult.HasError());
             CHECK(tooManyQuarantinedResult.ErrorValue().code.Value() == SaveErrors::SlotRecoveryLimitExceeded.code.Value());
+        }
 
+        TEST_CASE("Recovery rejects incomplete ordering evidence", "[unit][runtime][save][slot-recovery]") {
+            FakeValidator validator;
+            const auto current = Artifact(90, 10);
             const auto zeroCurrentResult = SaveSlotRecoveryPlanner(validator, {})
                                                .Build(SaveSlotRecoveryRequest{.slot = Id<SaveGameSlotId>(4),
                                                                               .trigger = SaveSlotRecoveryTrigger::CorruptCurrent,
