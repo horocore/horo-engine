@@ -292,6 +292,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
+        runtime/ui/UiDocumentSerialization.cpp
+        runtime/ui/UiDocumentSerializationOperations.cpp
+        runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
@@ -310,7 +313,9 @@ add_library(HoroRuntimeUi STATIC
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
-target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
+target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
+        PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroGameplayApi STATIC
         gameplay/api/BehaviorTypes.cpp
@@ -825,8 +830,11 @@ target_link_libraries(HoroNavigationRecastDetour PUBLIC HoroEngine::NavigationAp
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationRecastDetour PRIVATE
             runtime/navigation/backends/recast_detour/RecastDetourProvider.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourProviderEndpoint.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h
             runtime/navigation/backends/recast_detour/RecastDetourProviderQueries.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourProviderQueriesInternal.h
+            runtime/navigation/backends/recast_detour/RecastDetourProviderPath.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderSpatialQueries.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderSpatialQueryResults.cpp
             runtime/navigation/backends/recast_detour/RecastDetourMeshBuilder.cpp

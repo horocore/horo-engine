@@ -148,9 +148,10 @@ namespace Horo::Navigation {
 
         [[nodiscard]] bool IsValidPathRequest(const NavigationPathRequest &request) noexcept {
             return request.world.IsValid() && request.topology.IsValid() && Math::IsFinite(request.start) &&
-                   Math::IsFinite(request.destination) && request.requirement.query < NavigationQueryKind::Count &&
+                   Math::IsFinite(request.destination) && request.filter.IsValid() &&
+                   request.coveragePolicy < NavigationPathCoveragePolicy::Count && request.requirement.query == NavigationQueryKind::Path &&
                    request.requirement.quality < NavigationQualityLevel::Count && request.requirement.limits.maximumNodeExpansions > 0 &&
-                   request.requirement.limits.maximumResultPoints > 0 &&
+                   request.requirement.limits.maximumResultPoints >= 2 &&
                    std::isfinite(request.requirement.limits.maximumSearchDistanceMeters) &&
                    request.requirement.limits.maximumSearchDistanceMeters > 0.0F;
         }

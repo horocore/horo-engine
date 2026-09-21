@@ -43,6 +43,7 @@ namespace Horo::Navigation {
             std::vector<unsigned short> polygons;
             std::vector<unsigned short> polygonFlags;
             std::vector<unsigned char> polygonAreas;
+            std::vector<NavigationPolygonAdjacency> adjacency;
             Math::Vec3 minimum;
             Math::Vec3 maximum;
         };
@@ -224,6 +225,27 @@ namespace Horo::Navigation {
             }
         }
 
+        void BuildPolygonAdjacency(const std::vector<PolygonEdge> &edges, NativeTopologyInput &translated) {
+            translated.adjacency.assign(translated.polygonAreas.size(), {});
+            std::size_t index{};
+            while (index + 1U < edges.size()) {
+                const PolygonEdge &first = edges[index];
+                const PolygonEdge &second = edges[index + 1U];
+                if (first.first != second.first || first.second != second.second) {
+                    ++index;
+                    continue;
+                }
+                auto append = [&translated](const std::uint32_t polygon, const std::uint32_t neighbor) {
+                    NavigationPolygonAdjacency &adjacency = translated.adjacency[polygon];
+                    if (adjacency.count < adjacency.neighbors.size())
+                        adjacency.neighbors[adjacency.count++] = neighbor;
+                };
+                append(first.polygon, second.polygon);
+                append(second.polygon, first.polygon);
+                index += 2U;
+            }
+        }
+
         [[nodiscard]] Result<NativeTopologyInput> TranslateTopology(const RecastDetourProviderCreateInfo &info) {
             auto validatedEdges = ValidatePolygons(info);
             if (validatedEdges.HasError())
@@ -235,6 +257,7 @@ namespace Horo::Navigation {
             if (auto polygons = TranslatePolygonData(info, translated); polygons.HasError())
                 return Result<NativeTopologyInput>::Failure(polygons.ErrorValue());
             LinkPolygonNeighbors(info, validatedEdges.Value(), translated);
+            BuildPolygonAdjacency(validatedEdges.Value(), translated);
             return Result<NativeTopologyInput>::Success(std::move(translated));
         }
 
@@ -319,8 +342,52 @@ namespace Horo::Navigation {
                 slot.straightPoints.resize(static_cast<std::size_t>(info.maximumResultPoints) * 3U);
                 slot.straightFlags.resize(info.maximumResultPoints);
                 slot.straightPolygons.resize(info.maximumResultPoints);
+                slot.searchNodes.resize(info.maximumQueryNodes);
+                slot.openNodes.resize(info.maximumQueryNodes);
+                slot.polygonPathIndices.resize(info.maximumQueryNodes);
+                slot.portals.resize(info.maximumQueryNodes);
+                slot.waypoints.resize(info.maximumResultPoints);
             }
             return Result<std::vector<QuerySlot>>::Success(std::move(slots));
+        }
+
+        [[nodiscard]] Result<std::vector<Math::Vec3>> BuildPolygonCenters(const RecastDetourProviderCreateInfo &info) {
+            try {
+                std::vector<Math::Vec3> centers;
+                centers.reserve(info.polygons.size());
+                for (const GroundedNavigationPolygon &polygon : info.polygons) {
+                    Math::Vec3 center{};
+                    for (std::uint8_t index = 0; index < polygon.vertexCount; ++index)
+                        center += info.vertices[polygon.vertexIndices[index]];
+                    center = center / static_cast<float>(polygon.vertexCount);
+                    if (!Math::IsFinite(center))
+                        return Failure<std::vector<Math::Vec3>>(NavigationErrors::ProviderFailed);
+                    centers.push_back(center);
+                }
+                return Result<std::vector<Math::Vec3>>::Success(std::move(centers));
+            } catch (const std::bad_alloc &) {
+                return Failure<std::vector<Math::Vec3>>(NavigationErrors::CapacityExceeded);
+            }
+        }
+
+        [[nodiscard]] Result<std::vector<dtPolyRef>> BuildPolygonReferences(const dtNavMesh &mesh, const std::size_t polygonCount) {
+            const dtMeshTile *tile = mesh.getTile(0);
+            if (tile == nullptr || tile->header == nullptr || tile->header->polyCount != static_cast<int>(polygonCount))
+                return Failure<std::vector<dtPolyRef>>(NavigationErrors::ProviderFailed);
+            const dtPolyRef base = mesh.getPolyRefBase(tile);
+            try {
+                std::vector<dtPolyRef> references;
+                references.reserve(polygonCount);
+                for (std::size_t index = 0; index < polygonCount; ++index) {
+                    const dtPolyRef reference = base + static_cast<dtPolyRef>(index);
+                    if (!mesh.isValidPolyRef(reference))
+                        return Failure<std::vector<dtPolyRef>>(NavigationErrors::ProviderFailed);
+                    references.push_back(reference);
+                }
+                return Result<std::vector<dtPolyRef>>::Success(std::move(references));
+            } catch (const std::bad_alloc &) {
+                return Failure<std::vector<dtPolyRef>>(NavigationErrors::CapacityExceeded);
+            }
         }
 
     }  // namespace
@@ -330,19 +397,39 @@ namespace Horo::Navigation {
         if (const auto validated = ValidateCreateInfo(info); validated.HasError())
             return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(validated.ErrorValue());
         try {
+            auto areaRegistry = NavigationAreaRegistry::Create(info.areas, info.filters);
+            if (areaRegistry.HasError())
+                return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(areaRegistry.ErrorValue());
+            for (const GroundedNavigationPolygon &polygon : info.polygons) {
+                if (const auto resolved = areaRegistry.Value().ResolveArea(polygon.area); resolved.HasError())
+                    return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(resolved.ErrorValue());
+            }
             auto translated = TranslateTopology(info);
             if (translated.HasError())
                 return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(translated.ErrorValue());
             auto mesh = BuildNavMesh(info, translated.Value());
             if (mesh.HasError())
                 return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(mesh.ErrorValue());
+            auto centers = BuildPolygonCenters(info);
+            if (centers.HasError())
+                return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(centers.ErrorValue());
+            auto references = BuildPolygonReferences(*mesh.Value(), info.polygons.size());
+            if (references.HasError())
+                return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(references.ErrorValue());
             auto slots = BuildQuerySlots(info, *mesh.Value());
             if (slots.HasError())
                 return Result<std::unique_ptr<INavigationQueryBackend>>::Failure(slots.ErrorValue());
             std::vector<Math::Vec3> vertices{info.vertices.begin(), info.vertices.end()};
             std::vector<GroundedNavigationPolygon> polygons{info.polygons.begin(), info.polygons.end()};
-            return MakeRecastDetourNavigationQueryBackend(info, std::move(mesh).Value(), std::move(slots).Value(), std::move(vertices),
-                                                          std::move(polygons));
+            RecastDetourQueryBackendData data{.mesh = std::move(mesh).Value(),
+                                              .slots = std::move(slots).Value(),
+                                              .vertices = std::move(vertices),
+                                              .polygons = std::move(polygons),
+                                              .adjacency = std::move(translated).Value().adjacency,
+                                              .polygonCenters = std::move(centers).Value(),
+                                              .polygonReferences = std::move(references).Value(),
+                                              .areaRegistry = std::move(areaRegistry).Value()};
+            return MakeRecastDetourNavigationQueryBackend(info, std::move(data));
         } catch (const std::bad_alloc &) {
             return Failure<std::unique_ptr<INavigationQueryBackend>>(NavigationErrors::CapacityExceeded);
         }

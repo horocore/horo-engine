@@ -52,6 +52,8 @@ namespace Horo::Navigation {
         float maximumSearchDistanceMeters{10'000.0F};             /**< Capability-advertised finite request ceiling. */
         std::size_t maximumOwnedBytes{64ULL * 1024ULL * 1024ULL}; /**< Preparation-time owned-memory admission ceiling. */
         std::uint64_t capabilityRevision{1};                      /**< Non-zero immutable capability evidence revision. */
+        std::span<const NavigationAreaDescriptor> areas;          /**< Complete immutable area descriptors for query filters. */
+        std::span<const NavigationQueryFilterDescriptor> filters; /**< Complete immutable filter descriptors for path queries. */
     };
 
     /**
