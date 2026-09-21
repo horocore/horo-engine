@@ -12,7 +12,7 @@
 
 namespace Horo::Navigation {
     /**
-     * @brief Creates an inert provider that reports missing navigation data for every path query.
+     * @brief Creates an inert provider that reports missing navigation data for every grounded query.
      * @return Independently owned provider, or a typed allocation failure.
      */
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateNullNavigationQueryBackend();

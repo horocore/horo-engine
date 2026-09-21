@@ -3,6 +3,7 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 
 #include <DetourNavMesh.h>
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -36,14 +37,15 @@ namespace Horo::Navigation::Detail {
 
     [[nodiscard]] inline bool FitsOwnedBudget(const RecastDetourProviderCreateInfo &info) noexcept {
         std::size_t bytes{};
-        if (std::size_t value{}; !CheckedProduct(info.vertices.size(), 64U, value) || !CheckedAdd(bytes, value) ||
-                                 !CheckedProduct(info.polygons.size(), 256U, value) || !CheckedAdd(bytes, value) ||
-                                 !CheckedProduct(info.maximumConcurrentQueries,
-                                                 (static_cast<std::size_t>(info.maximumQueryNodes) * sizeof(dtPolyRef)) +
-                                                     (static_cast<std::size_t>(info.maximumResultPoints) *
-                                                      ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))),
-                                                 value) ||
-                                 !CheckedAdd(bytes, value))
+        if (std::size_t value{};
+            !CheckedProduct(info.vertices.size(), 64U, value) || !CheckedAdd(bytes, value) ||
+            !CheckedProduct(info.polygons.size(), 256U, value) || !CheckedAdd(bytes, value) ||
+            !CheckedProduct(info.maximumConcurrentQueries,
+                            (static_cast<std::size_t>(std::max(info.maximumQueryNodes, info.maximumResultPoints)) * sizeof(dtPolyRef)) +
+                                (static_cast<std::size_t>(info.maximumResultPoints) *
+                                 ((sizeof(float) * 3U) + sizeof(unsigned char) + sizeof(dtPolyRef))),
+                            value) ||
+            !CheckedAdd(bytes, value))
             return false;
         return bytes <= info.maximumOwnedBytes;
     }

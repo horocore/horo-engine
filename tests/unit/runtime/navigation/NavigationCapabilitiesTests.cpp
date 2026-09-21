@@ -124,6 +124,17 @@ namespace Horo::Navigation {
                     NavigationSupport::Unsupported);
         }
 
+        TEST_CASE("Available grounded capability construction covers bounded spatial queries", "[navigation][capability]") {
+            const auto capabilities = MakeAvailableGroundedQueryCapabilities(9, SupportedLimits, 4);
+
+            REQUIRE(ValidateNavigationProviderCapabilities(capabilities));
+            for (std::size_t query = 0; query < static_cast<std::size_t>(NavigationQueryKind::Count); ++query) {
+                REQUIRE(QueryNavigationSupport(capabilities, static_cast<NavigationQueryKind>(query), NavigationQualityLevel::High) ==
+                        NavigationSupport::Available);
+                REQUIRE(capabilities.queryLimits[query][static_cast<std::size_t>(NavigationQualityLevel::High)] == SupportedLimits);
+            }
+        }
+
         TEST_CASE("Navigation capabilities keep omitted unavailable and available compositions distinct", "[navigation][capability]") {
             NavigationProviderCapabilities omitted{
                 .revision = 1,

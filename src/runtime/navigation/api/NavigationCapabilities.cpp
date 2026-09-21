@@ -105,6 +105,17 @@ namespace Horo::Navigation {
         return capabilities;
     }
 
+    /** @copydoc MakeAvailableGroundedQueryCapabilities */
+    NavigationProviderCapabilities MakeAvailableGroundedQueryCapabilities(const std::uint64_t revision, const NavigationQueryLimits &limits,
+                                                                          const std::uint32_t maximumConcurrentQueries) noexcept {
+        auto capabilities = MakeAvailablePathQueryCapabilities(revision, limits, maximumConcurrentQueries);
+        for (std::size_t query = 0; query < capabilities.querySupport.size(); ++query) {
+            capabilities.querySupport[query].fill(NavigationSupport::Available);
+            capabilities.queryLimits[query].fill(limits);
+        }
+        return capabilities;
+    }
+
     /** @copydoc ValidateNavigationProviderCapabilities */
     bool ValidateNavigationProviderCapabilities(const NavigationProviderCapabilities &capabilities) noexcept {
         if (capabilities.contractVersion != 1 || capabilities.revision == 0 ||

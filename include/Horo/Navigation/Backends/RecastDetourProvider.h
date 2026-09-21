@@ -21,6 +21,7 @@ namespace Horo::Navigation {
         std::array<std::uint32_t, 6> vertexIndices{}; /**< Counter-clockwise canonical-space indices; unused entries are zero. */
         std::uint8_t vertexCount{};                   /**< Active prefix length in [3, 6]. */
         NavigationAreaId area;                        /**< Stable Horo area identity mapped privately during preparation. */
+        SurfaceId surface;                            /**< Optional stable authored surface identity for query provenance. */
     };
 
     /** @brief Hard qualification ceilings for the initial Detour runtime adapter. */
