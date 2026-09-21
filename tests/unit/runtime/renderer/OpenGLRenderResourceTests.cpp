@@ -1,3 +1,4 @@
+#include "BackendTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
 #include "RenderMemoryTestSupport.h"
@@ -207,16 +208,7 @@ namespace Horo::Render::OpenGLResourceTests {
         return backend;
     }
 
-    struct ResourceInstances {
-        std::uint64_t vertex{0};
-        std::uint64_t index{0};
-        std::uint64_t mesh{0};
-        std::uint64_t color{0};
-        std::uint64_t depth{0};
-        std::uint64_t colorView{0};
-        std::uint64_t depthView{0};
-        std::uint64_t target{0};
-    };
+    using ResourceInstances = Horo::Render::BackendTestSupport::RenderResourceIdentities;
 
     /** @brief Builds the canonical triangle descriptor shared by success and rejection checks. */
     [[nodiscard]] RenderMeshDescriptor TriangleMeshDescriptor() noexcept {
@@ -243,12 +235,8 @@ namespace Horo::Render::OpenGLResourceTests {
     void CreateMeshResources(IRenderBackend &backend, ResourceInstances &resources) {
         const std::array<std::byte, sizeof(MeshVertex) * 3> vertices{};
         const std::array<std::byte, sizeof(std::uint32_t) * 3> indices{};
-        const RenderBufferDescriptor vertexDescriptor{.byteSize = vertices.size(),
-                                                      .usage = RenderBufferUsage::Vertex,
-                                                      .access = RenderBufferAccess::DeviceLocal};
-        const RenderBufferDescriptor indexDescriptor{.byteSize = indices.size(),
-                                                     .usage = RenderBufferUsage::Index,
-                                                     .access = RenderBufferAccess::DeviceLocal};
+        const RenderBufferDescriptor vertexDescriptor = Horo::Render::BackendTestSupport::MakeTestVertexBufferDescriptor(vertices.size());
+        const RenderBufferDescriptor indexDescriptor = Horo::Render::BackendTestSupport::MakeTestIndexBufferDescriptor(indices.size());
         const auto vertexPlan = backend.QueryBufferMemoryCost(vertexDescriptor).Value();
         const auto indexPlan = backend.QueryBufferMemoryCost(indexDescriptor).Value();
         auto vertex = backend.CreateBuffer(vertexDescriptor, {}, TestSupport::PlacementFor(vertexPlan, 1, 1));
@@ -353,14 +341,7 @@ namespace Horo::Render::OpenGLResourceTests {
 
     /** @brief Destroys resources in dependency order and verifies native release accounting. */
     void DestroyResources(IRenderBackend &backend, const ResourceInstances &resources) {
-        backend.DestroyRenderTarget(resources.target);
-        backend.DestroyTextureView(resources.depthView);
-        backend.DestroyTextureView(resources.colorView);
-        backend.DestroyTexture(resources.depth);
-        backend.DestroyTexture(resources.color);
-        backend.DestroyMesh(resources.mesh);
-        backend.DestroyBuffer(resources.index);
-        backend.DestroyBuffer(resources.vertex);
+        Horo::Render::BackendTestSupport::DestroyRenderResources(backend, resources);
         Check(resourceCommandState.deletedFramebuffers == 2);
         Check(resourceCommandState.deletedTextures == 2);
         Check(resourceCommandState.deletedVertexArrays == 1);

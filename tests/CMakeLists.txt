@@ -1949,6 +1949,7 @@ add_test(NAME HoroSecurityBaselineTests COMMAND HoroSecurityBaselineTests)
 if (HORO_BUILD_RENDER_OPENGL)
     add_executable(HoroRenderOpenGLTests
             unit/runtime/renderer/OpenGLRenderBackendTests.cpp
+            unit/runtime/renderer/OpenGLRenderBackendQualificationTests.cpp
             unit/runtime/renderer/OpenGLRenderResourceTests.cpp
     )
 
@@ -1997,6 +1998,7 @@ if (NOT HORO_BUILD_RENDER_METAL)
     add_executable(HoroMetalDeviceCapabilityTests
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
+            unit/runtime/renderer/MetalRenderBackendQualificationTests.cpp
             unit/runtime/renderer/MetalResourcePolicyTests.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalDeviceCapabilities.cpp
             ${PROJECT_SOURCE_DIR}/src/runtime/renderer/modules/metal/MetalRenderBackend.cpp
@@ -2019,6 +2021,7 @@ if (HORO_BUILD_RENDER_METAL)
     add_executable(HoroRenderMetalTests
             unit/runtime/renderer/MetalDeviceCapabilityTests.cpp
             unit/runtime/renderer/MetalRenderBackendTests.cpp
+            unit/runtime/renderer/MetalRenderBackendQualificationTests.cpp
             unit/runtime/renderer/MetalResourceFormatsTests.mm
             unit/runtime/renderer/MetalResourcePolicyTests.cpp
     )
@@ -2099,7 +2102,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             HoroEngine::RenderVulkan
             Vulkan::Headers
     )
-    add_test(NAME HoroRenderVulkanTests COMMAND HoroRenderVulkanTests)
+    horo_register_catch_test(HoroRenderVulkanTests LABELS "native;renderer;vulkan;qualification")
 endif ()
 
 set(HORO_CATCH_TEST_TARGETS

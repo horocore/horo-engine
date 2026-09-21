@@ -406,6 +406,25 @@ namespace {
         REQUIRE(loader.releaseCount == 1);
     }
 
+    TEST_CASE("Vulkan qualification reports the unimplemented interactive operations explicitly",
+              "[unit][runtime][renderer][vulkan][qualification]") {
+        RuntimeState state = DefaultState();
+        FakeRuntimePort port{state};
+        std::unique_ptr<IRenderBackend> backend = CreateBackend(port);
+
+        REQUIRE(backend->Initialize(RenderBackendConfig{.requirePresentation = true}).HasValue());
+        Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {1280, 720}}),
+                               "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Present(FrameToken{1}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+
+        backend->Shutdown();
+        backend->Shutdown();
+        Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 2, .outputExtent = {640, 480}}),
+                               "render.backend.not_initialized", "horo.render.vulkan");
+    }
+
     TEST_CASE("Vulkan loader and instance admission fail closed before native descendants", "[unit][runtime][renderer][vulkan]") {
         SECTION("missing version query") {
             RuntimeState state = DefaultState();
