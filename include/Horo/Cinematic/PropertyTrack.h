@@ -35,17 +35,17 @@ namespace Horo::Cinematic {
     /** @brief Number of scalar channels required by one typed property value. */
     [[nodiscard]] constexpr std::size_t PropertyTrackChannelCount(const Runtime::PropertyBindingType type) noexcept {
         switch (type) {
-        case Runtime::PropertyBindingType::Float:
-        case Runtime::PropertyBindingType::Boolean:
-            return 1;
-        case Runtime::PropertyBindingType::Vec2:
-            return 2;
-        case Runtime::PropertyBindingType::Vec3:
-            return 3;
-        case Runtime::PropertyBindingType::Vec4:
-            return 4;
-        case Runtime::PropertyBindingType::Count:
-            return 0;
+            case Runtime::PropertyBindingType::Float:
+            case Runtime::PropertyBindingType::Boolean:
+                return 1;
+            case Runtime::PropertyBindingType::Vec2:
+                return 2;
+            case Runtime::PropertyBindingType::Vec3:
+                return 3;
+            case Runtime::PropertyBindingType::Vec4:
+                return 4;
+            case Runtime::PropertyBindingType::Count:
+                return 0;
         }
         return 0;
     }
@@ -142,9 +142,9 @@ namespace Horo::Cinematic {
          * @return Compiled plan or a typed version, binding, type, target, or capacity failure.
          */
         [[nodiscard]] static Result<PropertyEvaluationPlan> Create(PropertySceneVersion scene,
-                                                                    std::span<const PropertyTrackDescriptor> tracks,
-                                                                    std::span<const PropertyBindingTargetSnapshot> targets,
-                                                                    const Runtime::PropertyBindingRegistry &registry);
+                                                                   std::span<const PropertyTrackDescriptor> tracks,
+                                                                   std::span<const PropertyBindingTargetSnapshot> targets,
+                                                                   const Runtime::PropertyBindingRegistry &registry);
 
         /**
          * @brief Samples values directly at an arbitrary time into caller-owned storage.
@@ -165,8 +165,8 @@ namespace Horo::Cinematic {
          * @return Applied/diagnostic counts; binding failures are skipped but never hidden.
          */
         [[nodiscard]] Result<PropertyEvaluationResult> Apply(const PropertyEvaluationContext &context,
-                                                              std::span<const PropertyEvaluationValue> values,
-                                                              std::span<PropertyEvaluationDiagnostic> diagnostics) const;
+                                                             std::span<const PropertyEvaluationValue> values,
+                                                             std::span<PropertyEvaluationDiagnostic> diagnostics) const;
 
         /**
          * @brief Samples and applies one boundary with one preflighted value batch.
@@ -176,10 +176,9 @@ namespace Horo::Cinematic {
          * @param diagnostics Caller storage with at least TrackCount entries.
          * @return Counts or a typed sampling/stale/capacity failure.
          */
-        [[nodiscard]] Result<PropertyEvaluationResult> EvaluateAndApply(CurveTime time,
-                                                                         const PropertyEvaluationContext &context,
-                                                                         std::span<PropertyEvaluationValue> values,
-                                                                         std::span<PropertyEvaluationDiagnostic> diagnostics) const;
+        [[nodiscard]] Result<PropertyEvaluationResult> EvaluateAndApply(CurveTime time, const PropertyEvaluationContext &context,
+                                                                        std::span<PropertyEvaluationValue> values,
+                                                                        std::span<PropertyEvaluationDiagnostic> diagnostics) const;
 
         /** @brief Returns the exact activation scene fence. @return Captured scene version. */
         [[nodiscard]] PropertySceneVersion SceneVersion() const noexcept;
@@ -191,8 +190,17 @@ namespace Horo::Cinematic {
             PropertyTrackDescriptor track;
             const Runtime::PropertyBindingDescriptor *binding{};
             std::optional<PropertyBindingTargetSnapshot> activationTarget;
+            std::size_t activationTargetIndex{MaximumPropertyTracks};
             PropertyBindingEvaluationOutcome activationOutcome{PropertyBindingEvaluationOutcome::Applied};
         };
+
+        [[nodiscard]] static Result<void> ValidateTargetSnapshots(std::span<const PropertyBindingTargetSnapshot> targets);
+        [[nodiscard]] static Result<CompiledTrack> CompileTrack(const PropertyTrackDescriptor &track,
+                                                                 std::span<const PropertyTrackDescriptor> priorTracks,
+                                                                 std::span<const PropertyBindingTargetSnapshot> targets,
+                                                                 const Runtime::PropertyBindingRegistry &registry);
+        [[nodiscard]] bool ApplyTrack(const CompiledTrack &compiled, const PropertyEvaluationContext &context,
+                                      const PropertyEvaluationValue &value, PropertyEvaluationDiagnostic &diagnostic) const;
 
         PropertyEvaluationPlan(PropertySceneVersion scene, std::vector<CompiledTrack> orderedTracks) noexcept;
 
