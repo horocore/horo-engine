@@ -405,8 +405,9 @@ namespace Horo::Navigation::RecastDetourQueries {
                                                          const Math::Vec3 target, const std::uint32_t portalIndex,
                                                          const std::uint32_t maximumWaypoints) {
             const bool isTargetPortal = portalIndex == path.portals.size();
-            const FunnelProgress right = ProcessRightPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
-            if (right.pointBudgetExceeded || right.restart)
+            if (const FunnelProgress right =
+                    ProcessRightPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
+                right.pointBudgetExceeded || right.restart)
                 return right;
             return ProcessLeftPortal(context, path, funnel, target, isTargetPortal, portalIndex, maximumWaypoints);
         }
