@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 
+#include "UiAssetDependencyInternal.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -9,20 +11,18 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
-        [[nodiscard]] Result<void> MergeDependency(std::vector<UiAssetDependency> &dependencies, UiAssetDependency dependency) {
-            if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
-                return Failure(UiErrors::DependencyInvalid);
-            const auto position = std::ranges::lower_bound(dependencies, dependency.asset, {}, &UiAssetDependency::asset);
-            if (position != dependencies.end() && position->asset == dependency.asset) {
-                if (position->expectedType != dependency.expectedType)
+        [[nodiscard]] Result<void> MergeDocumentDependency(std::vector<UiAssetDependency> &dependencies, UiAssetDependency dependency) {
+            switch (Internal::MergeUiAssetDependency(dependencies, std::move(dependency), MaximumUiDocumentDependencies)) {
+                case Internal::UiAssetDependencyMergeResult::Inserted:
+                case Internal::UiAssetDependencyMergeResult::Strengthened:
+                    return Result<void>::Success();
+                case Internal::UiAssetDependencyMergeResult::CapacityExceeded:
+                    return Failure(UiErrors::CapacityExceeded);
+                case Internal::UiAssetDependencyMergeResult::Invalid:
+                case Internal::UiAssetDependencyMergeResult::Conflict:
                     return Failure(UiErrors::DependencyInvalid);
-                position->required = position->required || dependency.required;
-                return Result<void>::Success();
             }
-            if (dependencies.size() == MaximumUiDocumentDependencies)
-                return Failure(UiErrors::CapacityExceeded);
-            dependencies.insert(position, std::move(dependency));
-            return Result<void>::Success();
+            return Failure(UiErrors::DependencyInvalid);
         }
     }  // namespace
 
@@ -91,20 +91,37 @@ namespace Horo::Runtime::Ui {
         if (localizedAssets_.size() == MaximumUiDocumentLocalizedAssets)
             return Failure(UiErrors::CapacityExceeded);
 
-        std::vector<UiAssetDependency> candidate = dependencies_;
-        candidate.reserve(dependencies_.size() + reference.Dependencies().size());
+        std::size_t newDependencyCount = 0;
         for (const UiAssetDependency &dependency : reference.Dependencies()) {
-            if (const auto merged = MergeDependency(candidate, dependency); merged.HasError())
-                return merged;
+            if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
+                return Failure(UiErrors::DependencyInvalid);
+            const auto position = std::ranges::lower_bound(dependencies_, dependency.asset, {}, &UiAssetDependency::asset);
+            if (position != dependencies_.end() && position->asset == dependency.asset) {
+                if (position->expectedType != dependency.expectedType)
+                    return Failure(UiErrors::DependencyInvalid);
+            } else if (dependencies_.size() + newDependencyCount >= MaximumUiDocumentDependencies) {
+                return Failure(UiErrors::CapacityExceeded);
+            } else {
+                ++newDependencyCount;
+            }
         }
-        dependencies_ = std::move(candidate);
+
+        localizedAssets_.reserve(localizedAssets_.size() + 1);
+        dependencies_.reserve(dependencies_.size() + newDependencyCount);
+        for (const UiAssetDependency &dependency : reference.Dependencies()) {
+            const auto merged = Internal::MergeUiAssetDependency(dependencies_, dependency, MaximumUiDocumentDependencies);
+            if (merged == Internal::UiAssetDependencyMergeResult::CapacityExceeded)
+                return Failure(UiErrors::CapacityExceeded);
+            if (merged == Internal::UiAssetDependencyMergeResult::Invalid || merged == Internal::UiAssetDependencyMergeResult::Conflict)
+                return Failure(UiErrors::DependencyInvalid);
+        }
         localizedAssets_.push_back(std::move(reference));
         return Result<void>::Success();
     }
 
     /** @copydoc UiDocumentBuilder::RequireAsset */
     Result<void> UiDocumentBuilder::RequireAsset(UiAssetDependency dependency) {
-        return MergeDependency(dependencies_, std::move(dependency));
+        return MergeDocumentDependency(dependencies_, std::move(dependency));
     }
 
     /** @copydoc UiDocumentBuilder::Build */
@@ -119,7 +136,6 @@ namespace Horo::Runtime::Ui {
                 if (canvases_[previous].id == canvas.id || canvases_[previous].rootElement == canvas.rootElement)
                     return Failure<UiDocument>(UiErrors::DocumentDuplicateIdentity);
         }
-        std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
         return Result<UiDocument>::Success(UiDocument{id_, revision_, std::move(canvases_), std::move(localizedTexts_),
                                                       std::move(localizedAssets_), std::move(dependencies_)});
     }

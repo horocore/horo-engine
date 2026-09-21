@@ -126,6 +126,19 @@ namespace Horo::Runtime::Ui {
             const auto document = std::move(builder).Build();
             REQUIRE(document.HasError());  // A canvas is still required before publication.
 
+            UiDocumentBuilder transactional{StableId<UiDocumentId>(9), UiDocumentRevision::Create(1).Value()};
+            REQUIRE(transactional.AddLocalizedAsset(LocalizedAsset()).HasValue());
+            const auto conflictingReference =
+                UiLocalizedAssetReference::Create(Type("core.font"), UiLocalizedAssetFallbackPolicy::Omit,
+                                                  std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(1)}});
+            REQUIRE(conflictingReference.HasValue());
+            REQUIRE(transactional.AddLocalizedAsset(conflictingReference.Value()).HasError());
+            REQUIRE(transactional.AddCanvas({StableId<UiCanvasId>(3), StableId<UiElementId>(4)}).HasValue());
+            const auto transactionResult = std::move(transactional).Build();
+            REQUIRE(transactionResult.HasValue());
+            REQUIRE(transactionResult.Value().LocalizedAssets().size() == 1);
+            REQUIRE(transactionResult.Value().Dependencies().size() == 3);
+
             UiDocumentBuilder complete{StableId<UiDocumentId>(8), UiDocumentRevision::Create(1).Value()};
             REQUIRE(complete.AddCanvas({StableId<UiCanvasId>(1), StableId<UiElementId>(2)}).HasValue());
             REQUIRE(complete.AddLocalizedText(text).HasValue());

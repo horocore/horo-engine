@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiAssetDependencyInternal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -177,20 +178,6 @@ namespace Horo::Runtime::Ui {
             return IsSafeArgumentName(argument.name) && IsValidArgumentValue(argument.value);
         }
 
-        [[nodiscard]] Result<void> MergeDependency(std::vector<UiAssetDependency> &dependencies, UiAssetDependency dependency) {
-            if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
-                return Failure(UiErrors::DependencyInvalid);
-            const auto position = std::ranges::lower_bound(dependencies, dependency.asset, {}, &UiAssetDependency::asset);
-            if (position != dependencies.end() && position->asset == dependency.asset) {
-                if (position->expectedType != dependency.expectedType)
-                    return Failure(UiErrors::LocalizedAssetVariantConflict);
-                position->required = position->required || dependency.required;
-                return Result<void>::Success();
-            }
-            dependencies.insert(position, std::move(dependency));
-            return Result<void>::Success();
-        }
-
         [[nodiscard]] bool IsValidAssetFallbackPolicy(const UiLocalizedAssetFallbackPolicy policy) noexcept {
             using enum UiLocalizedAssetFallbackPolicy;
             return policy == Required || policy == UseNeutral || policy == Omit;
@@ -297,16 +284,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiLocalizedText::FindArgument */
     const UiLocalizedArgument *UiLocalizedText::FindArgument(const std::string_view name) const noexcept {
-        std::size_t first = 0;
-        std::size_t last = arguments_.size();
-        while (first < last) {
-            const std::size_t middle = first + (last - first) / 2;
-            if (arguments_[middle].name < name)
-                first = middle + 1;
-            else
-                last = middle;
-        }
-        return first < arguments_.size() && arguments_[first].name == name ? &arguments_[first] : nullptr;
+        const auto found = std::ranges::lower_bound(arguments_, name, {}, &UiLocalizedArgument::name);
+        return found != arguments_.end() && found->name == name ? &*found : nullptr;
     }
 
     /** @copydoc UiLocalizedText::FallbackText */
@@ -359,19 +338,18 @@ namespace Horo::Runtime::Ui {
         dependencies.reserve(variants.size() + (hasNeutral ? 1U : 0U));
         const bool localizedVariantsRequired = fallbackPolicy == Required;
         for (const UiLocalizedAssetVariant &variant : variants) {
-            if (const auto merged = MergeDependency(dependencies, {variant.asset, expectedType, localizedVariantsRequired});
-                merged.HasError())
-                return Failure<UiLocalizedAssetReference>(merged.ErrorValue().code.Value() ==
-                                                                  UiErrors::LocalizedAssetVariantConflict.code.Value()
-                                                              ? UiErrors::LocalizedAssetVariantConflict
-                                                              : UiErrors::DependencyInvalid);
+            const auto merged = Internal::MergeUiAssetDependency(dependencies, {variant.asset, expectedType, localizedVariantsRequired});
+            if (merged == Internal::UiAssetDependencyMergeResult::Invalid)
+                return Failure<UiLocalizedAssetReference>(UiErrors::DependencyInvalid);
+            if (merged == Internal::UiAssetDependencyMergeResult::Conflict)
+                return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetVariantConflict);
         }
         if (hasNeutral) {
-            if (const auto merged = MergeDependency(dependencies, {neutralAsset.value(), expectedType, true}); merged.HasError())
-                return Failure<UiLocalizedAssetReference>(merged.ErrorValue().code.Value() ==
-                                                                  UiErrors::LocalizedAssetVariantConflict.code.Value()
-                                                              ? UiErrors::LocalizedAssetVariantConflict
-                                                              : UiErrors::DependencyInvalid);
+            const auto merged = Internal::MergeUiAssetDependency(dependencies, {neutralAsset.value(), expectedType, true});
+            if (merged == Internal::UiAssetDependencyMergeResult::Invalid)
+                return Failure<UiLocalizedAssetReference>(UiErrors::DependencyInvalid);
+            if (merged == Internal::UiAssetDependencyMergeResult::Conflict)
+                return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetVariantConflict);
         }
 
         return Result<UiLocalizedAssetReference>::Success(
@@ -435,8 +413,8 @@ namespace Horo::Runtime::Ui {
                     return Failure<std::optional<UiLocalizedAssetSelection>>(UiErrors::LocaleFallbackChainInvalid);
 
         for (const UiLocaleTag &locale : localeChain) {
-            const auto found = std::ranges::find(variants_, locale, &UiLocalizedAssetVariant::locale);
-            if (found != variants_.end())
+            const auto found = std::ranges::lower_bound(variants_, locale, {}, &UiLocalizedAssetVariant::locale);
+            if (found != variants_.end() && found->locale == locale)
                 return Result<std::optional<UiLocalizedAssetSelection>>::Success(
                     UiLocalizedAssetSelection{found->asset, found->locale.Value(), false});
         }
