@@ -23,7 +23,9 @@ namespace Horo::Character {
             CharacterControllerDescriptor descriptor;
             std::optional<CharacterMovementRequest> lastMovement;
             CharacterTransformPublication publication;
+            std::optional<CharacterLocomotionSnapshot> locomotion;
             std::uint64_t lastSequence{};
+            std::uint64_t stateRevision{};
             std::uint64_t lastTeleportTick{};
             std::optional<std::uint64_t> reservedTeleportTick;
             bool spawned{};

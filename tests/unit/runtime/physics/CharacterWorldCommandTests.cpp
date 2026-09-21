@@ -7,6 +7,189 @@ namespace Horo::Character {
     namespace {
         using namespace TestDetail;
 
+        struct MovementResolver final {
+            CharacterMovementResult templateResult;
+            Math::Vec3 observedPrevious{};
+            bool invalidIdentity{};
+            bool outOfBounds{};
+            bool invalidUp{};
+            float excessiveDisplacementMeters{};
+
+            static Result<CharacterMovementResult> Resolve(void *context, const CharacterMovementRequest &request,
+                                                           const CharacterTransformPublication &previous) noexcept {
+                auto &resolver = *static_cast<MovementResolver *>(context);
+                resolver.observedPrevious = previous.position;
+                CharacterMovementResult result = resolver.templateResult;
+                result.controller = resolver.invalidIdentity ? CharacterControllerHandle{} : request.controller;
+                result.tick = request.tick;
+                result.sequence = request.sequence;
+                result.finalPosition =
+                    resolver.outOfBounds
+                        ? Math::Vec3{Physics::MaximumPhysicsLocalHalfExtentMeters + 1.0F, 0, 0}
+                        : previous.position +
+                              Math::Vec3{resolver.excessiveDisplacementMeters > 0.0F ? resolver.excessiveDisplacementMeters : 1.0F, 0, 0};
+                result.finalHeading = previous.heading;
+                result.up = resolver.invalidUp ? Math::Vec3{0, 0, 1} : previous.up;
+                return Result<CharacterMovementResult>::Success(std::move(result));
+            }
+        };
+
+        [[nodiscard]] MovementResolver GroundedMovementResolver(const CharacterWorldDescriptor &world) {
+            MovementResolver resolver;
+            resolver.templateResult.grounded = true;
+            resolver.templateResult.groundMaterial = Material();
+            resolver.templateResult.collisions = CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides;
+            resolver.templateResult.contacts[0].body = Physics::BodyHandle{world.physicsWorld, {7, 2}};
+            resolver.templateResult.contacts[0].shape = Physics::ShapeHandle{world.physicsWorld, {8, 3}};
+            resolver.templateResult.contacts[0].material = Material();
+            resolver.templateResult.contacts[0].penetrationDepthMeters = 0.1F;
+            resolver.templateResult.contactCount = 1;
+            return resolver;
+        }
+
+        enum class InvalidMovementEvidence {
+            OutOfBounds,
+            ExcessiveDisplacement,
+            InvalidUp,
+        };
+
+        void RequireRejectedMovementResult(const InvalidMovementEvidence evidence) {
+            auto spawned = SpawnedActiveWorldWithController();
+            auto resolver = GroundedMovementResolver(spawned.world->Descriptor());
+            switch (evidence) {
+                case InvalidMovementEvidence::OutOfBounds:
+                    resolver.outOfBounds = true;
+                    break;
+                case InvalidMovementEvidence::ExcessiveDisplacement:
+                    resolver.excessiveDisplacementMeters = spawned.world->Settings().Values().work.maximumDisplacementMetersPerTick + 1.0F;
+                    break;
+                case InvalidMovementEvidence::InvalidUp:
+                    resolver.invalidUp = true;
+                    break;
+            }
+            const CharacterTickObserver observer{.context = &resolver, .movementResult = MovementResolver::Resolve};
+            REQUIRE(spawned.world->QueueMovementCommand(Movement(spawned.controller, 1, 1)).HasValue());
+            RequireError(spawned.world->AdvanceFixedTick(FixedTick(1, observer)), CharacterErrors::PlacementInvalid);
+            REQUIRE((spawned.world->PublishedTick() == CharacterPublishedTick{}));
+            RequireError(spawned.world->ControllerLocomotionSnapshot(spawned.controller), CharacterErrors::InvalidState);
+        }
+
+        TEST_CASE("Character publishes complete immutable locomotion state and authoritative transforms",
+                  "[physics][character][world][snapshot]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            const auto controller = spawned.controller;
+            auto &world = *spawned.world;
+            RequireError(world.ControllerLocomotionSnapshot(controller), CharacterErrors::InvalidState);
+
+            auto resolver = GroundedMovementResolver(world.Descriptor());
+            const CharacterTickObserver observer{.context = &resolver, .movementResult = MovementResolver::Resolve};
+            auto request = Movement(controller, 1, 1);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{3, 0, 0};
+            REQUIRE(world.QueueMovementCommand(request).HasValue());
+            REQUIRE(world.AdvanceFixedTick(FixedTick(1, observer)).HasValue());
+
+            const auto snapshot = world.ControllerLocomotionSnapshot(controller);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().controller == controller);
+            REQUIRE(snapshot.Value().movement.controller == controller);
+            REQUIRE(snapshot.Value().transform.controller == controller);
+            REQUIRE(snapshot.Value().tick == 1);
+            REQUIRE(snapshot.Value().stateRevision == 1);
+            REQUIRE(snapshot.Value().movement.grounded);
+            REQUIRE(snapshot.Value().movement.platformAttached == false);
+            REQUIRE(snapshot.Value().movement.collisions == (CharacterCollisionFlags::Ground | CharacterCollisionFlags::Sides));
+            REQUIRE(snapshot.Value().movement.contactCount == 1);
+            REQUIRE(snapshot.Value().movement.contacts[0].body.has_value());
+            REQUIRE(snapshot.Value().movement.contacts[0].shape.world == world.Descriptor().physicsWorld);
+            REQUIRE(snapshot.Value().transform.authority == CharacterTransformAuthority::CharacterController);
+            REQUIRE(snapshot.Value().transform.position == Math::Vec3{1, 0, 0});
+            REQUIRE(snapshot.Value().transform.grounded);
+            REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot.Value(), world.ControllerDescriptor(controller).Value()).HasValue());
+
+            auto detachedCopy = world.ControllerTransform(controller).Value();
+            detachedCopy.position = {100, 100, 100};
+            detachedCopy.grounded = false;
+            request = Movement(controller, 2, 2);
+            REQUIRE(world.QueueMovementCommand(request).HasValue());
+            REQUIRE(world.AdvanceFixedTick(FixedTick(2, observer)).HasValue());
+            const auto next = world.ControllerLocomotionSnapshot(controller);
+            REQUIRE(next.HasValue());
+            REQUIRE(resolver.observedPrevious == Math::Vec3{1, 0, 0});
+            REQUIRE(next.Value().transform.position == Math::Vec3{2, 0, 0});
+            REQUIRE(next.Value().stateRevision == 2);
+        }
+
+        TEST_CASE("Character publishes the backend-free baseline movement and heading intent",
+                  "[physics][character][world][snapshot][baseline]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            auto request = Movement(spawned.controller, 1, 1);
+            const Math::Vec3 velocity{3, 0, 0};
+            const auto heading = Math::Quaternion::FromAxisAngle({0, 1, 0}, Math::Pi / 2.0F);
+            request.desiredVelocityMetersPerSecond = velocity;
+            request.desiredHeading = heading;
+            const auto input = FixedTick(1);
+            REQUIRE(world.QueueMovementCommand(request).HasValue());
+            REQUIRE(world.AdvanceFixedTick(input).HasValue());
+
+            const auto snapshot = world.ControllerLocomotionSnapshot(spawned.controller);
+            REQUIRE(snapshot.HasValue());
+            const auto &movement = snapshot.Value().movement;
+            const auto &transform = snapshot.Value().transform;
+            const auto expectedPosition =
+                velocity * static_cast<float>(static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
+            REQUIRE(movement.controller == spawned.controller);
+            REQUIRE(movement.tick == 1);
+            REQUIRE(movement.sequence == 1);
+            REQUIRE(movement.finalPosition == expectedPosition);
+            REQUIRE(movement.finalHeading == heading);
+            REQUIRE(movement.achievedVelocityMetersPerSecond == velocity);
+            REQUIRE(movement.up == Math::Vec3{0, 1, 0});
+            REQUIRE(movement.groundNormal == Math::Vec3{0, 1, 0});
+            REQUIRE_FALSE(movement.grounded);
+            REQUIRE_FALSE(movement.platformAttached);
+            REQUIRE(movement.groundingRevalidationRequired);
+            REQUIRE(transform.position == expectedPosition);
+            REQUIRE(transform.heading == heading);
+            REQUIRE(transform.groundingRevalidationRequired);
+            REQUIRE(transform.authority == CharacterTransformAuthority::CharacterController);
+        }
+
+        TEST_CASE("Character rejects malformed movement evidence without publishing and shuts down terminally",
+                  "[physics][character][world][snapshot][lifecycle]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            auto resolver = GroundedMovementResolver(world.Descriptor());
+            resolver.invalidIdentity = true;
+            const CharacterTickObserver observer{.context = &resolver, .movementResult = MovementResolver::Resolve};
+            REQUIRE(world.QueueMovementCommand(Movement(spawned.controller, 1, 1)).HasValue());
+            RequireError(world.AdvanceFixedTick(FixedTick(1, observer)), CharacterErrors::RequestInvalid);
+            REQUIRE((world.PublishedTick() == CharacterPublishedTick{}));
+            REQUIRE(world.ControllerTransform(spawned.controller).Value().position == Math::Vec3{});
+            RequireError(world.ControllerLocomotionSnapshot(spawned.controller), CharacterErrors::InvalidState);
+
+            world.Shutdown();
+            REQUIRE(world.State() == CharacterWorldState::Destroyed);
+            RequireError(world.ControllerTransform(spawned.controller), CharacterErrors::InvalidState);
+            RequireError(world.ControllerLocomotionSnapshot(spawned.controller), CharacterErrors::InvalidState);
+            world.Shutdown();
+        }
+
+        TEST_CASE("Character rejects movement results outside the Physics local-origin envelope",
+                  "[physics][character][world][snapshot][validation]") {
+            RequireRejectedMovementResult(InvalidMovementEvidence::OutOfBounds);
+        }
+
+        TEST_CASE("Character rejects movement results beyond the fixed-tick displacement bound",
+                  "[physics][character][world][snapshot][validation]") {
+            RequireRejectedMovementResult(InvalidMovementEvidence::ExcessiveDisplacement);
+        }
+
+        TEST_CASE("Character rejects movement results that change the controller up axis",
+                  "[physics][character][world][snapshot][validation]") {
+            RequireRejectedMovementResult(InvalidMovementEvidence::InvalidUp);
+        }
+
         TEST_CASE("Character steady-state command movement does not allocate after preparation",
                   "[physics][character][world][command][allocation]") {
             auto [world, controllers] = ActiveWorldWithControllers();

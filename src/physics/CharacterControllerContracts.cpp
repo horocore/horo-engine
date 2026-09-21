@@ -114,14 +114,26 @@ namespace Horo::Character {
 
         /** @brief Checks coherent grounded or airborne surface evidence. */
         [[nodiscard]] Result<void> ValidateGroundEvidence(const CharacterMovementResult &result) {
+            using FlagValue = std::underlying_type_t<CharacterCollisionFlags>;
+            const bool hasGroundCollision =
+                (static_cast<FlagValue>(result.collisions) & static_cast<FlagValue>(CharacterCollisionFlags::Ground)) != 0;
             if (result.grounded) {
                 if (!IsUnit(result.groundNormal) || !result.groundMaterial.has_value() || !IsMaterialValid(*result.groundMaterial))
                     return Result<void>::Failure(
                         MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks valid surface evidence."));
+                if (!hasGroundCollision)
+                    return Result<void>::Failure(
+                        MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks ground collision evidence."));
             } else if (result.groundMaterial.has_value()) {
                 return Result<void>::Failure(
                     MakeError(CharacterErrors::DescriptorInvalid, "Airborne result cannot claim ground material evidence."));
             }
+            if (result.platformAttached && !result.grounded)
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Platform attachment requires grounded evidence."));
+            if (result.groundingRevalidationRequired && (result.grounded || result.platformAttached))
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Grounding revalidation cannot coexist with support state."));
             return Result<void>::Success();
         }
 
@@ -137,7 +149,7 @@ namespace Horo::Character {
                         MakeError(CharacterErrors::DescriptorInvalid, "Contact body does not belong to the descriptor world."));
             }
             if (!Math::IsFinite(contact.point) || !IsUnit(contact.normal) || !IsMaterialValid(contact.material) ||
-                !std::isfinite(contact.penetrationDepthMeters))
+                !std::isfinite(contact.penetrationDepthMeters) || contact.penetrationDepthMeters < 0.0F)
                 return Result<void>::Failure(
                     MakeError(CharacterErrors::DescriptorInvalid, "Contact evidence contains invalid numeric or material data."));
             return Result<void>::Success();
@@ -231,8 +243,10 @@ namespace Horo::Character {
                 ValidateCharacterControllerHandleOwner(publication.controller, expectedSceneGeneration, expectedCharacterWorld);
             owner.HasError())
             return owner;
+        if (publication.authority != CharacterTransformAuthority::CharacterController)
+            return Result<void>::Failure(MakeError(CharacterErrors::OperationUnsupported, "Unknown Character transform authority."));
         if (publication.publicationRevision == 0 || !Math::IsFinite(publication.position) || !IsUnit(publication.heading) ||
-            !IsUnit(publication.up) ||
+            !IsUnit(publication.up) || (publication.platformAttached && !publication.grounded) ||
             (publication.groundingRevalidationRequired && (publication.grounded || publication.platformAttached)))
             return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Character transform publication is incoherent."));
         return Result<void>::Success();
@@ -279,6 +293,35 @@ namespace Horo::Character {
             if (contact.HasError())
                 return contact;
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCharacterLocomotionSnapshot */
+    Result<void> ValidateCharacterLocomotionSnapshot(const CharacterLocomotionSnapshot &snapshot,
+                                                     const CharacterControllerDescriptor &descriptor) {
+        if (const auto descriptorValidation = ValidateCharacterControllerDescriptor(descriptor); descriptorValidation.HasError())
+            return descriptorValidation;
+        if (const auto owner =
+                ValidateCharacterControllerHandleOwner(snapshot.controller, descriptor.sceneGeneration, descriptor.characterWorld);
+            owner.HasError())
+            return owner;
+        if (snapshot.stateRevision == 0)
+            return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Locomotion state revision is invalid."));
+        if (const auto movement = ValidateCharacterMovementResult(snapshot.movement, descriptor); movement.HasError())
+            return movement;
+        if (const auto transform =
+                ValidateCharacterTransformPublication(snapshot.transform, descriptor.sceneGeneration, descriptor.characterWorld);
+            transform.HasError())
+            return transform;
+        if (snapshot.movement.controller != snapshot.controller || snapshot.transform.controller != snapshot.controller ||
+            snapshot.movement.tick != snapshot.tick || snapshot.transform.sourceTick != snapshot.tick ||
+            snapshot.movement.finalPosition != snapshot.transform.position ||
+            snapshot.movement.finalHeading != snapshot.transform.heading || snapshot.movement.up != snapshot.transform.up ||
+            snapshot.movement.grounded != snapshot.transform.grounded ||
+            snapshot.movement.platformAttached != snapshot.transform.platformAttached ||
+            snapshot.movement.groundingRevalidationRequired != snapshot.transform.groundingRevalidationRequired)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::PlacementInvalid, "Locomotion state and transform publication do not match."));
         return Result<void>::Success();
     }
 }  // namespace Horo::Character

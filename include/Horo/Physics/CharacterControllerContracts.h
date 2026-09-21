@@ -11,6 +11,7 @@
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 
 #include <array>
+#include <cstdint>
 #include <optional>
 
 namespace Horo::Character {
@@ -121,6 +122,11 @@ namespace Horo::Character {
         Teleport,
     };
 
+    /** @brief Declares the Horo owner that may publish the active controller collision root. */
+    enum class CharacterTransformAuthority : std::uint8_t {
+        CharacterController,
+    };
+
     /**
      * @brief Backend-neutral overlap evidence reduced by the Physics query adapter.
      *
@@ -184,7 +190,7 @@ namespace Horo::Character {
         std::uint64_t physicsSnapshotRevision{};
     };
 
-    /** @brief One coherent collision-root publication produced by spawn or teleport. */
+    /** @brief One coherent collision-root publication owned by the Character controller. */
     struct CharacterTransformPublication final {
         CharacterControllerHandle controller;
         std::uint64_t sourceTick{};
@@ -195,6 +201,7 @@ namespace Horo::Character {
         bool grounded{};
         bool platformAttached{};
         bool groundingRevalidationRequired{};
+        CharacterTransformAuthority authority{CharacterTransformAuthority::CharacterController};
     };
 
     /** @brief Result of a bounded spawn or explicit teleport operation. */
@@ -299,6 +306,23 @@ namespace Horo::Character {
         std::array<CharacterSurfaceContact, MaximumCharacterContacts> contacts{};
         std::uint32_t contactCount{};
         bool truncated{};
+        bool platformAttached{};
+        bool groundingRevalidationRequired{};
+    };
+
+    /**
+     * @brief Immutable post-tick movement evidence and authoritative transform for one controller.
+     *
+     * The snapshot owns only Horo identity, math, bounded contact and material values. It does not
+     * retain a backend object, native pointer, query collector or mutable world storage. Readers receive
+     * copies through CharacterWorld and may not write back into the controller publication path.
+     */
+    struct CharacterLocomotionSnapshot final {
+        CharacterControllerHandle controller;
+        std::uint64_t tick{};
+        std::uint64_t stateRevision{};
+        CharacterMovementResult movement;
+        CharacterTransformPublication transform;
     };
 
     /**
@@ -340,4 +364,14 @@ namespace Horo::Character {
      */
     [[nodiscard]] Result<void> ValidateCharacterMovementResult(const CharacterMovementResult &result,
                                                                const CharacterControllerDescriptor &descriptor);
+
+    /**
+     * @brief Validates one complete immutable movement snapshot and its transform projection.
+     * @param snapshot Candidate post-tick state and transform publication.
+     * @param descriptor Descriptor whose owner generations and contact bound apply.
+     * @return Success or a stable identity, result, capacity or publication error.
+     * @post Inputs remain unchanged; success grants no mutation authority or lifetime extension.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterLocomotionSnapshot(const CharacterLocomotionSnapshot &snapshot,
+                                                                   const CharacterControllerDescriptor &descriptor);
 }  // namespace Horo::Character
