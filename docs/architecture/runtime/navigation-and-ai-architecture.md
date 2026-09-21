@@ -684,23 +684,32 @@ Pathfinding uses A* on the NavMesh polygon graph:
 
 ```cpp
 struct PathfindingRequest {
-    WorldCoordinate64  start;
-    WorldCoordinate64  end;
-    NavMeshQueryFilter filter;
-    float              straighteningThreshold;
-    CancellationToken  cancelToken;
+    NavigationWorldId             world;
+    NavigationGeneration           topology;
+    WorldCoordinate64              start;
+    WorldCoordinate64              end;
+    NavigationFilterId             filter;
+    CoveragePolicy                 coveragePolicy; // RequireComplete or AllowPartial
+    QueryLimits                    limits;        // bounded expansions and output points
+    CancellationToken              cancelToken;
 };
 
 struct PathfindingResult {
     std::vector<WorldCoordinate64> waypoints;
-    PathfindingStatus            status;      // Complete, Partial, Failed
-    float                        pathLength;
+    PathfindingStatus              status;      // Reachable, Partial, Unreachable, BudgetExceeded
+    PathStopReason                 stopReason;  // why the frontier stopped
+    WorldCoordinate64              stopPosition;
+    float                          pathCost;
+    float                          pathLength;
+    NavigationGeneration            sourceGeneration;
 };
 ```
 
-- `NavMeshQueryFilter` controls which NavMesh areas are traversable
+- `NavigationFilterId` resolves through the immutable area/filter registry; exclusion wins and every base or override cost must be finite and non-negative before search.
+- A* orders equal-cost work by canonical polygon identity and admits no more than the declared node/open-set bound.
 - Path straightening (string pulling) produces a compact waypoint list
-- Partial paths are returned when the destination is unreachable
+- `RequireComplete` reports `Unreachable` or `BudgetExceeded` without pretending a prefix is complete; `AllowPartial` reports a bounded prefix with the exact stop reason, stop position and source generation.
+- Cancellation remains a typed terminal outcome and never publishes a path.
 - Pathfinding requests are asynchronous and can be cancelled
 
 ### Hierarchical Pathfinding

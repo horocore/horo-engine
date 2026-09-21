@@ -64,6 +64,8 @@ namespace Horo::Navigation::TestSupport {
             .topology = topology,
             .start = {1.0F, 2.0F, 3.0F},
             .destination = {4.0F, 5.0F, 6.0F},
+            .filter = NavigationFilterId::Create(1).Value(),
+            .coveragePolicy = NavigationPathCoveragePolicy::RequireComplete,
             .requirement =
                 {
                     .query = NavigationQueryKind::Path,

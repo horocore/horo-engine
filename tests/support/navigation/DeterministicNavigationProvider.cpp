@@ -3,6 +3,7 @@
 #include "Horo/Navigation/NavigationErrors.h"
 
 #include <limits>
+#include <utility>
 
 namespace Horo::Navigation::TestSupport {
     namespace {
@@ -29,6 +30,9 @@ namespace Horo::Navigation::TestSupport {
 
     Result<NavigationPath> DeterministicNavigationQueryBackend::FindPath(const NavigationPathRequest &request,
                                                                          const CancellationToken &cancellation) const {
+        if (!request.filter.IsValid() || request.coveragePolicy >= NavigationPathCoveragePolicy::Count ||
+            request.requirement.query != NavigationQueryKind::Path || request.requirement.limits.maximumResultPoints < 2U)
+            return Result<NavigationPath>::Failure(MakeError(NavigationErrors::CapabilityDescriptorInvalid));
         const NavigationFixtureFault fault = fault_.load(std::memory_order_relaxed);
         if (fault == NavigationFixtureFault::Cancellation || cancellation.IsCancellationRequested())
             return Result<NavigationPath>::Failure(MakeError(NavigationErrors::QueryCancelled));
@@ -38,8 +42,17 @@ namespace Horo::Navigation::TestSupport {
             return Result<NavigationPath>::Failure(MakeError(NavigationErrors::StaleSnapshot));
 
         for (const NavigationPathFixture &fixture : fixtures_) {
-            if (fixture.start == request.start && fixture.destination == request.destination)
-                return Result<NavigationPath>::Success(fixture.path);
+            if (fixture.start == request.start && fixture.destination == request.destination) {
+                NavigationPath path = fixture.path;
+                path.status = NavigationPathStatus::Reachable;
+                path.stopReason = NavigationPathStopReason::None;
+                path.stopPosition = request.destination;
+                path.stopPolygonIndex = 0;
+                path.sourceGeneration = request.topology;
+                if (path.cost == 0.0F)
+                    path.cost = path.lengthMeters;
+                return Result<NavigationPath>::Success(std::move(path));
+            }
         }
         return Result<NavigationPath>::Failure(MakeError(NavigationErrors::NoNavigationData));
     }

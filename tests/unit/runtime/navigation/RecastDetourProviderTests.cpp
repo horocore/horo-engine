@@ -29,9 +29,36 @@ namespace Horo::Navigation {
                 {
                     .vertexIndices = {0, 2, 3, 0, 0, 0},
                     .vertexCount = 3,
-                    .area = NavigationAreaId::Create(1).Value(),
+                    .area = NavigationAreaId::Create(2).Value(),
                     .surface = SurfaceId::Create(102).Value(),
                 },
+            }};
+            std::array<NavigationAreaDescriptor, 2> areas{{
+                {.id = NavigationAreaId::Create(1).Value(),
+                 .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                 .traversalCost = 1.0F,
+                 .flags = {.bits = 1}},
+                {.id = NavigationAreaId::Create(2).Value(),
+                 .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                 .traversalCost = 1.0F,
+                 .flags = {.bits = 2}},
+            }};
+            std::array<NavigationQueryFilterDescriptor, 3> filters{{
+                {.id = NavigationFilterId::Create(1).Value(),
+                 .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                 .includedFlags = {},
+                 .excludedFlags = {},
+                 .costOverrides = {}},
+                {.id = NavigationFilterId::Create(2).Value(),
+                 .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                 .includedFlags = {},
+                 .excludedFlags = {.bits = 2},
+                 .costOverrides = {}},
+                {.id = NavigationFilterId::Create(3).Value(),
+                 .source = {.kind = NavigationDescriptorSourceKind::Project, .id = NavigationDescriptorSourceId::Create(1).Value()},
+                 .includedFlags = {},
+                 .excludedFlags = {},
+                 .costOverrides = {{.area = NavigationAreaId::Create(2).Value(), .traversalCost = 5.0F}}},
             }};
         };
 
@@ -44,6 +71,8 @@ namespace Horo::Navigation {
                 .maximumQueryNodes = 64,
                 .maximumResultPoints = 16,
                 .maximumConcurrentQueries = 2,
+                .areas = topology.areas,
+                .filters = topology.filters,
             };
         }
 
@@ -53,6 +82,8 @@ namespace Horo::Navigation {
                 .topology = info.topology,
                 .start = {8.0F, 0.0F, 2.0F},
                 .destination = {2.0F, 0.0F, 8.0F},
+                .filter = NavigationFilterId::Create(1).Value(),
+                .coveragePolicy = NavigationPathCoveragePolicy::RequireComplete,
                 .requirement =
                     {
                         .query = NavigationQueryKind::Path,
@@ -123,6 +154,7 @@ namespace Horo::Navigation {
                                            .maximumSearchDistanceMeters = 100.0F}},
             };
         }
+
     }  // namespace
 
     TEST_CASE("Recast Detour provider translates neutral topology and path requests", "[unit][navigation][provider]") {
@@ -149,8 +181,91 @@ namespace Horo::Navigation {
         REQUIRE(path.Value().points.size() >= 2);
         REQUIRE(path.Value().points.front() == Request(info).start);
         REQUIRE(path.Value().points.back() == Request(info).destination);
+        CHECK(path.Value().status == NavigationPathStatus::Reachable);
+        CHECK(path.Value().stopReason == NavigationPathStopReason::None);
+        CHECK(path.Value().sourceGeneration == info.topology);
+        CHECK(std::isfinite(path.Value().cost));
+        CHECK(path.Value().cost >= 0.0F);
         REQUIRE(path.Value().lengthMeters > 0.0F);
         TestSupport::RequireNavigationProviderContract(*provider, Request(info), TestSupport::NavigationProviderFixtureOutcome::Path);
+
+        auto exactBufferRequest = Request(info);
+        exactBufferRequest.requirement.limits.maximumResultPoints = 2;
+        const auto exactBufferPath = provider->FindPath(exactBufferRequest, {});
+        REQUIRE(exactBufferPath.HasValue());
+        CHECK(exactBufferPath.Value().status == NavigationPathStatus::Reachable);
+        CHECK(exactBufferPath.Value().points.front() == exactBufferRequest.start);
+        CHECK(exactBufferPath.Value().points.back() == exactBufferRequest.destination);
+    }
+
+    TEST_CASE("Recast Detour reports a typed diagnostic for a portal that cannot honor clearance", "[unit][navigation][provider][path]") {
+        const SquareTopology topology;
+        const auto info = CreateInfo(topology);
+        auto created = CreateRecastDetourNavigationQueryBackend(info);
+        REQUIRE(created.HasValue());
+        auto provider = std::move(created).Value();
+
+        auto request = Request(info);
+        request.clearanceMeters = 8.0F;
+        RequireError(provider->FindPath(request, {}), NavigationErrors::PathPortalDegenerate);
+    }
+
+    TEST_CASE("Recast Detour path filters apply exclusion and traversal costs", "[unit][navigation][provider][path]") {
+        const SquareTopology topology;
+        const auto info = CreateInfo(topology);
+        auto created = CreateRecastDetourNavigationQueryBackend(info);
+        REQUIRE(created.HasValue());
+        auto provider = std::move(created).Value();
+
+        auto excluded = Request(info);
+        excluded.filter = NavigationFilterId::Create(2).Value();
+        excluded.coveragePolicy = NavigationPathCoveragePolicy::AllowPartial;
+        const auto excludedResult = provider->FindPath(excluded, {});
+        REQUIRE(excludedResult.HasValue());
+        CHECK(excludedResult.Value().status == NavigationPathStatus::Unreachable);
+        CHECK(excludedResult.Value().stopReason == NavigationPathStopReason::DestinationUnreachable);
+        CHECK(excludedResult.Value().stopPosition == excluded.destination);
+        CHECK(excludedResult.Value().sourceGeneration == excluded.topology);
+
+        auto expensive = Request(info);
+        expensive.filter = NavigationFilterId::Create(3).Value();
+        const auto baseline = provider->FindPath(Request(info), {});
+        const auto expensiveResult = provider->FindPath(expensive, {});
+        REQUIRE(baseline.HasValue());
+        REQUIRE(expensiveResult.HasValue());
+        CHECK(expensiveResult.Value().status == NavigationPathStatus::Reachable);
+        CHECK(expensiveResult.Value().cost > baseline.Value().cost);
+
+        auto unknown = Request(info);
+        unknown.filter = NavigationFilterId::Create(404).Value();
+        RequireError(provider->FindPath(unknown, {}), NavigationErrors::FilterUnknown);
+    }
+
+    TEST_CASE("Recast Detour path search reports bounded partial progress", "[unit][navigation][provider][path]") {
+        const SquareTopology topology;
+        auto info = CreateInfo(topology);
+        info.maximumQueryNodes = 1;
+        auto created = CreateRecastDetourNavigationQueryBackend(info);
+        REQUIRE(created.HasValue());
+        auto provider = std::move(created).Value();
+
+        auto request = Request(info);
+        request.requirement.limits.maximumNodeExpansions = info.maximumQueryNodes;
+        request.coveragePolicy = NavigationPathCoveragePolicy::AllowPartial;
+        const auto result = provider->FindPath(request, {});
+        REQUIRE(result.HasValue());
+        CHECK(result.Value().status == NavigationPathStatus::Partial);
+        CHECK(result.Value().stopReason == NavigationPathStopReason::NodeBudgetExceeded);
+        CHECK(result.Value().stopPolygonIndex == 0);
+        CHECK(result.Value().points.size() <= request.requirement.limits.maximumResultPoints);
+        CHECK(result.Value().sourceGeneration == request.topology);
+
+        request.coveragePolicy = NavigationPathCoveragePolicy::RequireComplete;
+        const auto complete = provider->FindPath(request, {});
+        REQUIRE(complete.HasValue());
+        CHECK(complete.Value().status == NavigationPathStatus::BudgetExceeded);
+        CHECK(complete.Value().stopReason == NavigationPathStopReason::NodeBudgetExceeded);
+        CHECK(complete.Value().points.empty());
     }
 
     TEST_CASE("Recast Detour provider rejects malformed topology without publishing partial state", "[unit][navigation][provider]") {
@@ -168,6 +283,13 @@ namespace Horo::Navigation {
         info = CreateInfo(validTopology);
         info.maximumOwnedBytes = 1;
         RequireError(CreateRecastDetourNavigationQueryBackend(info), NavigationErrors::CapacityExceeded);
+
+        for (const float cost : {-1.0F, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+            SquareTopology invalidCostTopology;
+            invalidCostTopology.areas.front().traversalCost = cost;
+            RequireError(CreateRecastDetourNavigationQueryBackend(CreateInfo(invalidCostTopology)),
+                         NavigationErrors::AreaDescriptorInvalid);
+        }
 
         info = CreateInfo(validTopology);
         auto recovered = CreateRecastDetourNavigationQueryBackend(info);
