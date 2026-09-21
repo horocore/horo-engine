@@ -276,6 +276,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiBinding.cpp
+        runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiDiagnostics.cpp
