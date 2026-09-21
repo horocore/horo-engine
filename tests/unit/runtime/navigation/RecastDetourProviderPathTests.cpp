@@ -12,6 +12,8 @@
 
 namespace Horo::Navigation {
     namespace {
+        using TestSupport::RequireError;
+
         struct ZigZagTopology final {
             std::array<Math::Vec3, 8> vertices{{{0.0F, 0.0F, 0.0F},
                                                 {10.0F, 0.0F, 0.0F},
