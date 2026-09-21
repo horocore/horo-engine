@@ -170,4 +170,40 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DiagnosticInvalid;
     /** @brief A Runtime UI diagnostic category or source error is not part of the declared contract. */
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
+    /** @brief An accessibility semantic schema value is malformed or unsupported. */
+    extern const ErrorCodeDescriptor AccessibilitySchemaInvalid;
+    /** @brief An accessibility node role is unknown or incompatible with its control data. */
+    extern const ErrorCodeDescriptor AccessibilityRoleInvalid;
+    /** @brief An accessibility state is unknown or incompatible with its node role. */
+    extern const ErrorCodeDescriptor AccessibilityStateInvalid;
+    /** @brief An accessibility typed value is malformed or incompatible with its node role. */
+    extern const ErrorCodeDescriptor AccessibilityValueInvalid;
+    /** @brief Accessibility range metadata is malformed or not admitted for the node role. */
+    extern const ErrorCodeDescriptor AccessibilityRangeInvalid;
+    /** @brief Accessibility selection metadata is malformed or not admitted for the node role. */
+    extern const ErrorCodeDescriptor AccessibilitySelectionInvalid;
+    /** @brief Accessibility text is invalid, oversized, or not valid UTF-8. */
+    extern const ErrorCodeDescriptor AccessibilityTextInvalid;
+    /** @brief An interactive accessibility node has neither a name nor a valid label relation. */
+    extern const ErrorCodeDescriptor AccessibilityNameMissing;
+    /** @brief An accessibility relation is dangling, duplicated, cyclic, or unsupported. */
+    extern const ErrorCodeDescriptor AccessibilityRelationInvalid;
+    /** @brief An accessibility action is unknown, duplicated, or incompatible with its node. */
+    extern const ErrorCodeDescriptor AccessibilityActionInvalid;
+    /** @brief A contributed accessibility node has invalid contributor ownership evidence. */
+    extern const ErrorCodeDescriptor AccessibilityContributorInvalid;
+    /** @brief A complete accessibility snapshot candidate is malformed. */
+    extern const ErrorCodeDescriptor AccessibilitySnapshotInvalid;
+    /** @brief An accessibility snapshot source or semantic revision is stale. */
+    extern const ErrorCodeDescriptor AccessibilitySnapshotSourceStale;
+    /** @brief Every preallocated accessibility snapshot slot remains leased. */
+    extern const ErrorCodeDescriptor AccessibilitySnapshotStorageExhausted;
+    /** @brief The accessibility snapshot store is closed and rejects new publication. */
+    extern const ErrorCodeDescriptor AccessibilityLifecycleUnavailable;
+    /** @brief An accessibility action request targets an older or absent semantic generation. */
+    extern const ErrorCodeDescriptor AccessibilityActionStale;
+    /** @brief An accessibility action is currently disallowed by visibility, state, or argument policy. */
+    extern const ErrorCodeDescriptor AccessibilityActionRejected;
+    /** @brief More than one accessibility node claims semantic focus. */
+    extern const ErrorCodeDescriptor AccessibilityFocusConflict;
 }  // namespace Horo::Runtime::Ui::UiErrors
