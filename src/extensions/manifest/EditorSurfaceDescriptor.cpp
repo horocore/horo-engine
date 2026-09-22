@@ -3,6 +3,7 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
+#include <ranges>
 #include <string_view>
 
 namespace Horo::Extensions {
@@ -95,6 +96,25 @@ namespace Horo::Extensions {
             }
             return true;
         }
+
+        [[nodiscard]] bool HasUniqueKnownEventKinds(const std::vector<EditorSurfaceEventId> &events) noexcept {
+            for (std::size_t index = 0; index < events.size(); ++index) {
+                if (!IsKnownEditorEventKind(events[index]))
+                    return false;
+                for (std::size_t previous = 0; previous < index; ++previous) {
+                    if (events[previous] == events[index])
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool HasNoEventOverlap(const std::vector<EditorSurfaceEventId> &editorEvents,
+                                             const std::vector<EditorSurfaceEventId> &processEvents) noexcept {
+            return std::ranges::none_of(editorEvents, [&processEvents](const EditorSurfaceEventId event) {
+                return std::ranges::find(processEvents, event) != processEvents.end();
+            });
+        }
     }  // namespace
 
     /** @copydoc ValidateEditorSurfaceDescriptor */
@@ -122,6 +142,12 @@ namespace Horo::Extensions {
         if (descriptor.requiredCapabilities.size() > limits.maximumCapabilities ||
             descriptor.requiredPermissions.size() > limits.maximumPermissions)
             return Invalid("Editor surface capability or permission count exceeds the configured limit.");
+        if (descriptor.requestedEditorEvents.size() > limits.maximumEditorEvents ||
+            descriptor.requestedProcessEvents.size() > limits.maximumProcessEvents)
+            return Invalid("Editor surface event request count exceeds the configured limit.");
+        if (!HasUniqueKnownEventKinds(descriptor.requestedEditorEvents) || !HasUniqueKnownEventKinds(descriptor.requestedProcessEvents) ||
+            !HasNoEventOverlap(descriptor.requestedEditorEvents, descriptor.requestedProcessEvents))
+            return Invalid("Editor surface event requests must be known, unique, and separated by source.");
         if (!HasUniqueCanonicalIds(descriptor.requiredCapabilities, limits.maximumIdentityBytes) ||
             !HasUniqueCanonicalIds(descriptor.requiredPermissions, limits.maximumIdentityBytes))
             return Invalid("Editor surface capability and permission identities must be unique and canonical.");

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Extensions/ExtensionCapabilityAdmission.h"
+#include "Horo/Foundation/EditorEventTypes.h"
 #include "Horo/Foundation/Result.h"
 
 #include <cstddef>
@@ -14,6 +15,9 @@
 #include <vector>
 
 namespace Horo::Extensions {
+    /** @brief Stable event identity requested by an editor surface descriptor. */
+    using EditorSurfaceEventId = Horo::EditorEventKind;
+
     /** @brief Extension contribution kinds that are hosted by an editor surface authority. */
     enum class EditorSurfaceKind : std::uint8_t {
         Panel,
@@ -81,6 +85,8 @@ namespace Horo::Extensions {
         std::vector<ExtensionCapabilityId> requiredCapabilities;
         std::vector<ExtensionPermissionId> requiredPermissions;
         EditorSurfaceProviderIdentity provider;
+        std::vector<EditorSurfaceEventId> requestedEditorEvents;
+        std::vector<EditorSurfaceEventId> requestedProcessEvents;
     };
 
     /** @brief Bounds applied before a descriptor becomes visible to an editor host. */
@@ -90,6 +96,8 @@ namespace Horo::Extensions {
         std::size_t maximumPlacementTargetBytes{256};
         std::size_t maximumCapabilities{32};
         std::size_t maximumPermissions{32};
+        std::size_t maximumEditorEvents{16};
+        std::size_t maximumProcessEvents{16};
     };
 
     /**

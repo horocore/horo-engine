@@ -179,6 +179,7 @@ namespace Horo::Editor {
                                                                             ? *gameplayEnvironment
                                                                             : Application::GameplayBuildEnvironment{},
                                                                     .localization = &context_.localization,
+                                                                    .engineEvents = &context_.engineEvents,
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
