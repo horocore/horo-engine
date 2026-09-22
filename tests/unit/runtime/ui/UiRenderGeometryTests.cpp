@@ -70,47 +70,59 @@ namespace Horo::Runtime::Ui {
                                  UiNineSliceDraw{0, {0.0F, 0.0F, 1.0F, 1.0F}, {64, 64}, {8, 8, 8, 8}, {1.0F, 1.0F, 1.0F, 1.0F}}};
         }
 
+        void AddSolidAndBorderCommands(std::vector<UiDrawCommand> &commands, const UiElementHandle root, const std::int32_t borderWidth) {
+            commands.push_back(
+                UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}});
+            commands.push_back(UiDrawCommand{root,
+                                             {{100, 0}, {100, 50}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             1.0F,
+                                             UiSolidDraw{{0.4F, 0.5F, 0.6F, 1.0F}}});
+            commands.push_back(UiDrawCommand{root,
+                                             {{0, 0}, {200, 50}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             1.0F,
+                                             UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, borderWidth}});
+        }
+
+        void AddImageCommands(std::vector<UiDrawCommand> &commands, const UiElementHandle child) {
+            commands.push_back(UiDrawCommand{child,
+                                             {{0, 64}, {64, 64}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             0.75F,
+                                             UiImageDraw{0, {1.0F, 1.0F, 1.0F, 1.0F}}});
+            commands.push_back(UiDrawCommand{child,
+                                             {{64, 64}, {64, 64}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             0.75F,
+                                             UiImageDraw{0, {0.8F, 0.8F, 0.8F, 1.0F}}});
+            commands.push_back(UiDrawCommand{child,
+                                             {{128, 64}, {64, 64}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             1.0F,
+                                             UiSpriteDraw{0, {0.25F, 0.0F, 0.75F, 1.0F}, {1.0F, 1.0F, 1.0F, 1.0F}}});
+        }
+
+        void AddTextCommand(std::vector<UiDrawCommand> &commands, const UiElementHandle child) {
+            commands.push_back(UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}});
+        }
+
         std::vector<UiDrawCommand> MakeCommands(const UiElementHandle root, const UiElementHandle child, const std::int32_t borderWidth,
                                                 const bool includeNineSlice = false) {
-            std::vector<UiDrawCommand> commands{
-                UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}},
-                UiDrawCommand{root,
-                              {{100, 0}, {100, 50}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              1.0F,
-                              UiSolidDraw{{0.4F, 0.5F, 0.6F, 1.0F}}},
-                UiDrawCommand{root,
-                              {{0, 0}, {200, 50}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              1.0F,
-                              UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, borderWidth}},
-                UiDrawCommand{child,
-                              {{0, 64}, {64, 64}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              0.75F,
-                              UiImageDraw{0, {1.0F, 1.0F, 1.0F, 1.0F}}},
-                UiDrawCommand{child,
-                              {{64, 64}, {64, 64}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              0.75F,
-                              UiImageDraw{0, {0.8F, 0.8F, 0.8F, 1.0F}}},
-                UiDrawCommand{child,
-                              {{128, 64}, {64, 64}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              1.0F,
-                              UiSpriteDraw{0, {0.25F, 0.0F, 0.75F, 1.0F}, {1.0F, 1.0F, 1.0F, 1.0F}}},
-                UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}},
-            };
+            std::vector<UiDrawCommand> commands;
+            AddSolidAndBorderCommands(commands, root, borderWidth);
+            AddImageCommands(commands, child);
+            AddTextCommand(commands, child);
             if (includeNineSlice)
                 commands.push_back(MakeNineSliceCommand(child));
             return commands;
@@ -230,8 +242,8 @@ namespace Horo::Runtime::Ui {
             REQUIRE(plan.Batches()[5].indexCount == 54);
             REQUIRE(plan.Vertices()[44].x == 400.0F);
             REQUIRE(plan.Vertices()[44].y == 0.0F);
-            REQUIRE(plan.Vertices()[46].x == 416.0F);
-            REQUIRE(plan.Vertices()[46].y == 12.0F);
+            REQUIRE(plan.Vertices()[46].x == 408.0F);
+            REQUIRE(plan.Vertices()[46].y == 8.0F);
             REQUIRE(plan.Vertices()[78].x == 528.0F);
             REQUIRE(plan.Vertices()[78].y == 96.0F);
         }

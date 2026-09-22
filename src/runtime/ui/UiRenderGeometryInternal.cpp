@@ -71,8 +71,16 @@ namespace Horo::Runtime::Ui::RenderGeometryInternal {
         const float rightFraction = static_cast<float>(draw.insets.right) / sourceWidth;
         const float topFraction = static_cast<float>(draw.insets.top) / sourceHeight;
         const float bottomFraction = static_cast<float>(draw.insets.bottom) / sourceHeight;
-        const std::array<float, 4> xPositions{x, x + width * leftFraction, x + width * (1.0F - rightFraction), x + width};
-        const std::array<float, 4> yPositions{y, y + height * topFraction, y + height * (1.0F - bottomFraction), y + height};
+        const float leftInset = static_cast<float>(draw.insets.left);
+        const float rightInset = static_cast<float>(draw.insets.right);
+        const float topInset = static_cast<float>(draw.insets.top);
+        const float bottomInset = static_cast<float>(draw.insets.bottom);
+        const float horizontalInsets = leftInset + rightInset;
+        const float verticalInsets = topInset + bottomInset;
+        const float horizontalScale = horizontalInsets > width ? width / horizontalInsets : 1.0F;
+        const float verticalScale = verticalInsets > height ? height / verticalInsets : 1.0F;
+        const std::array<float, 4> xPositions{x, x + leftInset * horizontalScale, x + width - rightInset * horizontalScale, x + width};
+        const std::array<float, 4> yPositions{y, y + topInset * verticalScale, y + height - bottomInset * verticalScale, y + height};
         const std::array<float, 4> uCoordinates{draw.uv[0], draw.uv[0] + uvWidth * leftFraction, draw.uv[2] - uvWidth * rightFraction,
                                                 draw.uv[2]};
         const std::array<float, 4> vCoordinates{draw.uv[1], draw.uv[1] + uvHeight * topFraction, draw.uv[3] - uvHeight * bottomFraction,
