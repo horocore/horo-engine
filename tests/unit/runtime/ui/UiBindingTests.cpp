@@ -281,6 +281,7 @@ namespace Horo::Runtime::Ui {
                 const std::array properties{property};
                 ExpectError(ValidateUiBindingProviderDescriptor(Provider(properties), limits), UiErrors::BindingSchemaInvalid);
             };
+            auto invalid = HealthProperty();
             auto invalidLimits = UiBindingValueLimits{};
             invalidLimits.maximumBytes = 0;
             expectInvalid(
