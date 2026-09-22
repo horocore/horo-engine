@@ -1320,6 +1320,7 @@ namespace {
         const std::filesystem::path projectRoot = base / "project";
         const std::filesystem::path outsideSource = base / "outside.cpp";
         std::filesystem::create_directories(projectRoot);
+        std::filesystem::create_directories(projectRoot / "source");
         {
             std::ofstream source(outsideSource);
             source << "int main() {}\n";
@@ -1331,6 +1332,19 @@ namespace {
         command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = outsideSource.string(), .line = 1};
         controller.ProcessCommand(command);
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.global_dock.build_output.source.invalid"));
+
+        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = (projectRoot / "source/Missing.cpp").string(), .line = 3};
+        controller.ProcessCommand(command);
+        REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.source_open.missing"));
+
+        const std::filesystem::path escapingLink = projectRoot / "source/escape.cpp";
+        std::error_code symlinkError;
+        std::filesystem::create_symlink(outsideSource, escapingLink, symlinkError);
+        if (!symlinkError) {
+            command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = escapingLink.string(), .line = 4};
+            controller.ProcessCommand(command);
+            REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.global_dock.build_output.source.invalid"));
+        }
 
         std::error_code cleanupError;
         std::filesystem::remove_all(base, cleanupError);
