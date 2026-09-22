@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "com.horo.examples.gui-form-basic",
+  "displayName": "Basic Declarative Form Example",
+  "description": "A host-rendered extension form composed only from Horo standard primitives.",
+  "version": "1.0.0",
+  "kind": "editor_gui",
+  "author": "Horo Engine",
+  "modules": [
+    {
+      "id": "com.horo.examples.gui-form-basic.native",
+      "version": "1.0.0",
+      "kind": "editor_gui",
+      "roles": ["editor-presentation"],
+      "entry": "horo_editor_ui_form_basic"
+    }
+  ],
+  "contributions": [
+    {
+      "type": "editor.settings_page",
+      "id": "com.horo.examples.gui-form-basic.settings",
+      "module": "com.horo.examples.gui-form-basic.native"
+    }
+  ]
+}

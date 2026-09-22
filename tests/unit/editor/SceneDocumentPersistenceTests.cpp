@@ -104,6 +104,40 @@ TEST_CASE("Navigation link direction and modifier shape round trip explicitly", 
     REQUIRE(loadedComponents.navigationLink->direction == Runtime::NavigationLinkDirection::StartToEnd);
 }
 
+TEST_CASE("AI scene component bindings remain inspectable when activation descriptors are unavailable", "[unit][editor][persistence][ai]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    SceneDocumentSnapshot snapshot{
+        .revision = DocumentRevision{1},
+        .state = DocumentStateId{1},
+        .objects = {SceneObjectSnapshot{
+            .id = SceneObjectId{1},
+            .name = "Unresolved AI Agent",
+            .components =
+                SceneObjectComponentSet{
+                    .aiAgent = AI::AiAgentComponent{.agent = AI::AgentId::Create(41).Value(), .enabled = true},
+                    .aiController = AI::AiControllerComponent{.controller = AI::ControllerTypeId::Create(51).Value(),
+                                                              .decisionAsset = AI::DecisionGraphAssetId::Create(61).Value(),
+                                                              .blackboardSchema = AI::BlackboardSchemaId::Create(71).Value(),
+                                                              .requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Behavior),
+                                                              .enabled = true},
+                },
+        }},
+    };
+
+    REQUIRE(SaveDefaultScene(project, snapshot).HasValue());
+    const auto loaded = LoadProjectDefaultScene(project.Root());
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value().has_value());
+    REQUIRE(loaded.Value()->objects.size() == 1);
+    REQUIRE(loaded.Value()->objects.front().components.aiAgent.has_value());
+    REQUIRE(loaded.Value()->objects.front().components.aiController.has_value());
+    CHECK(loaded.Value()->objects.front().components.aiAgent->agent.Value() == 41);
+    CHECK(loaded.Value()->objects.front().components.aiController->controller.Value() == 51);
+    CHECK(loaded.Value()->objects.front().components.aiController->decisionAsset.Value() == 61);
+    CHECK(loaded.Value()->objects.front().components.aiController->blackboardSchema.Value() == 71);
+}
+
 TEST_CASE("Every authored light kind survives project scene save and reload", "[unit][editor][persistence]") {
     TemporaryProject project;
     project.PrepareEmptyScene();

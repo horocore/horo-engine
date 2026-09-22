@@ -5,6 +5,7 @@
  * @brief Immutable validated handoff from authoring data to runtime scene construction.
  */
 
+#include "Horo/AI/AISceneComponents.h"
 #include "Horo/Assets/AssetDependency.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
@@ -38,6 +39,8 @@ namespace Horo::Runtime {
         std::optional<NavigationModifierComponent> navigationModifier;
         std::optional<NavigationLinkComponent> navigationLink;
         std::optional<NavigationAgentComponent> navigationAgent;
+        std::optional<AI::AiAgentComponent> aiAgent;
+        std::optional<AI::AiControllerComponent> aiController;
         std::optional<RigidBodyComponent> rigidBody;
         std::vector<ColliderComponent> colliders;
         std::vector<PhysicsConstraintComponent> physicsConstraints;
