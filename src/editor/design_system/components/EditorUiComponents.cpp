@@ -281,7 +281,7 @@ namespace Horo::Editor::Ui {
         };
 
         [[nodiscard]] ContextMenuRow DrawContextMenuRow(const char *id, const bool selected, const bool keepPopupOpen = false,
-                                                        const bool enabled = true) {
+                                                        const bool enabled = true, const ImGuiHoveredFlags hoverFlags = ImGuiHoveredFlags_None) {
             constexpr float rowHeight = 30.0F;
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4{});
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4{});
@@ -297,7 +297,7 @@ namespace Horo::Editor::Ui {
                 .minimum = ImGui::GetItemRectMin(),
                 .maximum = ImGui::GetItemRectMax(),
                 .activated = activated,
-                .hovered = ImGui::IsItemHovered(),
+                .hovered = ImGui::IsItemHovered(hoverFlags),
             };
         }
 
@@ -1675,7 +1675,7 @@ namespace Horo::Editor::Ui {
             viewport->WorkPos.y + (viewport->WorkSize.y - height) * 0.5F,
         };
 
-        ImGui::SetNextWindowPos(position, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(position, ImGuiCond_Appearing);
         ImGui::SetNextWindowSize({width, height}, ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0F, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Theme::GetActiveTokens().radii.modal);
@@ -1686,6 +1686,7 @@ namespace Horo::Editor::Ui {
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
+        const ImVec2 modalPosition = ImGui::GetWindowPos();
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.0F, 0.0F});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg0());
         const float headerHeight = ScaledLayoutValue(props.headerHeight);
@@ -1712,10 +1713,12 @@ namespace Horo::Editor::Ui {
             ImGui::PopStyleColor();
         }
 
+        bool closeHovered = false;
         if (props.showClose) {
             constexpr ImVec2 closeSize{28.0F, 28.0F};
             ImGui::SetCursorPos({ImGui::GetWindowWidth() - 50.0F, (props.headerHeight - closeSize.y) * 0.5F});
             closeRequested_ = IconCloseButton("##ModalClose", closeSize);
+            closeHovered = ImGui::IsItemHovered();
         }
 
         const ImVec2 headerPosition = ImGui::GetWindowPos();
@@ -1725,6 +1728,25 @@ namespace Horo::Editor::Ui {
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
+
+        const ImVec2 headerMax{modalPosition.x + width, modalPosition.y + headerHeight};
+        ImGuiStorage *const windowStorage = ImGui::GetStateStorage();
+        const ImGuiID draggingStateId = ImGui::GetID("##ModalHeaderDragging");
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsMouseHoveringRect(modalPosition, headerMax, false) && !closeHovered) {
+            windowStorage->SetBool(draggingStateId, true);
+        }
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            windowStorage->SetBool(draggingStateId, false);
+        if (windowStorage->GetBool(draggingStateId)) {
+            const ImVec2 delta = ImGui::GetIO().MouseDelta;
+            const float maximumX = viewport->WorkPos.x + viewport->WorkSize.x - width;
+            const float maximumY = viewport->WorkPos.y + viewport->WorkSize.y - height;
+            const ImVec2 draggedPosition{
+                std::clamp(modalPosition.x + delta.x, viewport->WorkPos.x, maximumX),
+                std::clamp(modalPosition.y + delta.y, viewport->WorkPos.y, maximumY),
+            };
+            ImGui::SetWindowPos(draggedPosition, ImGuiCond_Always);
+        }
 
         bodyHeight_ = std::max(0.0F, ImGui::GetWindowHeight() - headerHeight - footerHeight_);
         footerStartY_ = ImGui::GetWindowContentRegionMax().y - footerHeight_;
@@ -2214,7 +2236,10 @@ namespace Horo::Editor::Ui {
         const char *stableId = std::strstr(label, "###");
         if (stableId == nullptr)
             ImGui::PushID(label);
-        const ContextMenuRow row = DrawContextMenuRow(stableId != nullptr ? stableId : "##submenu", wasOpen, true);
+        // An already-open child popup blocks normal item hover on its parent menu.
+        // Allow hovering sibling rows so moving the pointer switches submenus.
+        const ContextMenuRow row = DrawContextMenuRow(stableId != nullptr ? stableId : "##submenu", wasOpen, true, true,
+                                                       ImGuiHoveredFlags_AllowWhenBlockedByPopup);
         if (stableId == nullptr)
             ImGui::PopID();
         DrawContextMenuRowPresentation(row, {label, nullptr, fonts, Theme::Text(), row.hovered || wasOpen, true, iconToken});

@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Horo::Editor {
@@ -39,6 +40,9 @@ namespace Horo::Editor {
 
         /** @brief Finds a projected hierarchy node by stable ID. */
         [[nodiscard]] const HierarchyNode *Find(HierarchyNodeId id) const noexcept;
+
+        /** @brief Returns the projected parent of one hierarchy node. */
+        [[nodiscard]] std::optional<HierarchyNodeId> ParentId(HierarchyNodeId id) const noexcept;
 
         /** @brief Returns the selected projected hierarchy node ID. */
         [[nodiscard]] std::optional<HierarchyNodeId> SelectedId() const noexcept;
@@ -85,6 +89,7 @@ namespace Horo::Editor {
     private:
         HierarchyModel m_model;
         std::vector<HierarchyNodeInput> m_inputs;
+        std::unordered_map<HierarchyNodeId, std::optional<HierarchyNodeId>> m_parentByNode;
         std::vector<HierarchyVisibleRow> m_visibleRows;
         DocumentRevision m_projectedRevision{};
         DocumentRevision m_handledRevealRevision{};

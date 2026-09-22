@@ -80,6 +80,8 @@ namespace Horo::Editor {
         StepPlay,
         StopPlay,
         CreatePrimitive,
+        PreviewAssetPlacement,
+        CancelAssetPlacementPreview,
         InstantiateAsset,
         DuplicateObject,
         DeleteObject,

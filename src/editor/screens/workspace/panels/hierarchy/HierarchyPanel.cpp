@@ -281,7 +281,8 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool AcceptAssetDrop(const std::optional<SceneObjectId> parent, const AssetSceneDropTarget target,
                                            const ImVec2 minimum, const ImVec2 maximum, const DocumentRevision revision,
-                                           EditorWorkspaceViewCommandData &command, ImDrawList &drawList) {
+                                           EditorWorkspaceViewCommandData &command, ImDrawList &drawList,
+                                           const HierarchyAssetDropZone zone = HierarchyAssetDropZone::Child) {
             if (!ImGui::BeginDragDropTarget())
                 return false;
             bool delivered = false;
@@ -290,9 +291,15 @@ namespace Horo::Editor {
                                              ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
             if (const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted); payload.has_value()) {
                 const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
-                drawList.AddRect(minimum, maximum, Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err()),
-                                 Theme::Layout::Radius, 0, 2.0F);
-                if (accepted->IsDelivery()) {
+                const ImU32 targetColor = Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err());
+                if (zone == HierarchyAssetDropZone::Child) {
+                    drawList.AddRect(minimum, maximum, targetColor, Theme::Layout::Radius, 0, 2.0F);
+                } else {
+                    const float y = zone == HierarchyAssetDropZone::BeforeSibling ? minimum.y : maximum.y;
+                    drawList.AddLine({minimum.x, y}, {maximum.x, y}, targetColor, 3.0F);
+                    drawList.AddCircleFilled({minimum.x + 2.0F, y}, 3.0F, targetColor);
+                }
+                if (policy.canInstantiate && accepted->IsDelivery()) {
                     delivered = true;
                     command.command = EditorWorkspaceViewCommand::InstantiateAsset;
                     command.assetSceneDrop = AssetSceneDropRequest{
@@ -757,8 +764,14 @@ namespace Horo::Editor {
             const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
             const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
             const bool pointerInActions = ImGui::IsMouseHoveringRect(actionsMin, actionsMax);
-            const bool assetDropDelivered = AcceptAssetDrop(SceneObjectId{node.id}, AssetSceneDropTarget::HierarchyChild, rowMin, rowMax,
-                                                            viewModel.documentRevision, command, drawList);
+            const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - rowMin.y) / layout.height, 0.0F, 1.0F);
+            const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(node.id);
+            const std::optional<SceneObjectId> nodeParent =
+                projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
+            const HierarchyAssetDropPlacement assetPlacement =
+                ResolveHierarchyAssetDropPlacement(normalizedRowY, SceneObjectId{node.id}, nodeParent);
+            const bool assetDropDelivered = AcceptAssetDrop(assetPlacement.parent, assetPlacement.target, rowMin, rowMax,
+                                                            viewModel.documentRevision, command, drawList, assetPlacement.zone);
             const RowFrame frame{
                 .row = row,
                 .node = node,

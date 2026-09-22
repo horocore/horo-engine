@@ -50,9 +50,10 @@ namespace Horo::Editor {
         void DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                      Math::ClipDepthRange depthRange);
-        static bool AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
-                                            const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                                            Math::ClipDepthRange depthRange);
+        bool AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
+                                     EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                                     Math::ClipDepthRange depthRange);
+        void CancelAssetPlacementPreview(EditorWorkspaceViewCommandData &command);
         static void DrawViewportSurface(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                         const EditorViewportTextureView &textureView, bool hasRenderedViewport);
 
@@ -66,5 +67,7 @@ namespace Horo::Editor {
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
         bool lightMarkerFailureReported_{false};
+        bool assetPlacementPreviewActive_{false};
+        bool assetPlacementCancelled_{false};
     };
 }  // namespace Horo::Editor

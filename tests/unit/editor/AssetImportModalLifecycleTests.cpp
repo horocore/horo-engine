@@ -168,6 +168,38 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
     REQUIRE_FALSE(operations.SnapshotIfChanged(completedOperations->revision).has_value());
 }
 
+TEST_CASE("AssetImportModal restores retained import history when reopened", "[native]") {
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    OperationStore operations{4, 4};
+
+    const auto operation = operations.Begin(OperationDescriptor{
+        .kind = OperationKind::Import,
+        .title = "sylvan_razorback",
+        .phase = "import",
+        .message = "Importing assets",
+        .progress = 0.0F,
+    });
+    REQUIRE(operation.has_value());
+    REQUIRE(operations.Update(*operation, OperationUpdate{.state = OperationState::Succeeded,
+                                                          .phase = "complete",
+                                                          .message = "Asset import completed",
+                                                          .progress = 1.0F}));
+
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto *modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+
+    REQUIRE(modalPtr->Snapshot().items.empty());
+    REQUIRE(modalPtr->ImportHistory().size() == 1);
+    CHECK(modalPtr->ImportHistory().front().title == "sylvan_razorback");
+    CHECK(modalPtr->ImportHistory().front().state == OperationState::Succeeded);
+}
+
 TEST_CASE("AssetImportModal presets are scoped by importer contribution and extension", "[native]") {
     const Theme::Fonts fonts{};
     JobSystem jobs;

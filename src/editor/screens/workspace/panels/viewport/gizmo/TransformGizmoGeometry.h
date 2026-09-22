@@ -51,6 +51,27 @@ namespace Horo::Editor {
                                                                                  const TransformGizmoGeometryRequest &request);
 
     /**
+     * @brief Draws the active rotation drag's position marker on its selected axis ring.
+     * @param drawList Overlay draw list receiving the marker.
+     * @param camera Current editor viewport camera.
+     * @param center Projected gizmo center in screen pixels.
+     * @param rotationVector Current direction on the selected rotation plane.
+     * @param axis Active X/Y/Z axis index.
+     * @return Success or an invalid camera, vector, center, or axis error.
+     */
+    [[nodiscard]] Result<void> DrawTransformGizmoRotationPin(ImDrawList &drawList, const EditorViewportCamera &camera, ImVec2 center,
+                                                             Math::Vec3 rotationVector, int axis);
+
+    /**
+     * @brief Reports whether a linear gizmo axis has a stable screen-space arrow direction for the camera.
+     * @param camera Camera used to present the gizmo.
+     * @param worldAxis Normalizable world-space axis direction.
+     * @return True when the axis is sufficiently separated from the camera view direction, or a typed validation failure.
+     */
+    [[nodiscard]] Result<bool> HasTransformGizmoLinearAxisScreenDirection(const EditorViewportCamera &camera,
+                                                                          Math::Vec3 worldAxis) noexcept;
+
+    /**
      * @brief Projects a pointer ray onto a rotation plane and returns its normalized center-relative vector.
      * @return A vector on hit, empty on geometric miss, or the typed camera/ray/plane failure.
      */
