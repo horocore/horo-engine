@@ -12,6 +12,8 @@ namespace Horo::Runtime::Ui::SerializationInternal {
 
     [[nodiscard]] std::string EncodeUiId(const SerializedUiId &bytes);
 
+    [[nodiscard]] Result<double> ReadFiniteNumber(const Json &value);
+
     template <typename Integer> [[nodiscard]] Result<Integer> ReadUnsigned(const Json &value);
 
     template <typename Id> [[nodiscard]] Result<Id> DecodeUiId(const Json &value);

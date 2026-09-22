@@ -140,11 +140,9 @@ namespace Horo::Runtime::Ui {
 
     private:
         friend class UiDocumentBuilder;
+        struct State;
         /** @brief Adopts validated authored state from UiDocumentBuilder. */
-        UiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
-                   std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                   std::vector<UiLocalizedText> localizedTexts, std::vector<UiLocalizedAssetReference> localizedAssets,
-                   std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes) noexcept;
+        explicit UiDocument(State state) noexcept;
         UiDocumentSchemaVersion schemaVersion_;                  /**< Durable source schema represented by this snapshot. */
         UiDocumentId id_;                                        /**< Stable authored identity. */
         UiDocumentRevision revision_;                            /**< Authored revision represented by this snapshot. */

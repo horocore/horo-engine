@@ -292,6 +292,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiDocumentSerialization.cpp
+        runtime/ui/UiDocumentLocalizationSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp

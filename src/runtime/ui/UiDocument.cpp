@@ -333,14 +333,24 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    struct UiDocument::State final {
+        UiDocumentSchemaVersion schemaVersion;
+        UiDocumentId id;
+        UiDocumentRevision revision;
+        std::vector<UiCanvasDescriptor> canvases;
+        std::vector<UiDocumentElement> elements;
+        std::vector<UiLocalizedText> localizedTexts;
+        std::vector<UiLocalizedAssetReference> localizedAssets;
+        std::vector<UiAssetDependency> dependencies;
+        std::vector<UiRouteMetadata> routes;
+    };
+
     /** @copydoc UiDocument::UiDocument */
-    UiDocument::UiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
-                           std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                           std::vector<UiLocalizedText> localizedTexts, std::vector<UiLocalizedAssetReference> localizedAssets,
-                           std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes) noexcept
-        : schemaVersion_(schemaVersion), id_(id), revision_(revision), canvases_(std::move(canvases)), elements_(std::move(elements)),
-          localizedTexts_(std::move(localizedTexts)), localizedAssets_(std::move(localizedAssets)), dependencies_(std::move(dependencies)),
-          routes_(std::move(routes)) {}
+    UiDocument::UiDocument(State state) noexcept
+        : schemaVersion_(state.schemaVersion), id_(state.id), revision_(state.revision), canvases_(std::move(state.canvases)),
+          elements_(std::move(state.elements)), localizedTexts_(std::move(state.localizedTexts)),
+          localizedAssets_(std::move(state.localizedAssets)), dependencies_(std::move(state.dependencies)),
+          routes_(std::move(state.routes)) {}
 
     /** @copydoc UiDocument::SchemaVersion */
     UiDocumentSchemaVersion UiDocument::SchemaVersion() const noexcept {
@@ -476,9 +486,9 @@ namespace Horo::Runtime::Ui {
             return Result<UiDocument>::Failure(validated.ErrorValue());
         std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
         std::ranges::sort(routes_, {}, &UiRouteMetadata::id);
-        return Result<UiDocument>::Success(UiDocument{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_),
-                                                      std::move(localizedTexts_), std::move(localizedAssets_), std::move(dependencies_),
-                                                      std::move(routes_)});
+        return Result<UiDocument>::Success(UiDocument{
+            UiDocument::State{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_), std::move(localizedTexts_),
+                              std::move(localizedAssets_), std::move(dependencies_), std::move(routes_)}});
     }
 
     /** @copydoc CookedUiDocument::CookedUiDocument */
