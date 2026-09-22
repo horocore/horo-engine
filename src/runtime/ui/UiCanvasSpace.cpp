@@ -84,6 +84,29 @@ namespace Horo::Runtime::Ui {
                 {static_cast<std::uint32_t>(numerator / divisor), static_cast<std::uint32_t>(denominator / divisor)});
         }
 
+        [[nodiscard]] Result<UiCanvasDeviceScale> ResolveBaseScale(const UiCanvasDescriptor &canvas,
+                                                                   const UiCanvasViewportEvidence &evidence) {
+            using enum UiScaleMode;
+            switch (canvas.scaleMode) {
+                case ScaleWithScreenSize: {
+                    const std::uint64_t widthCross =
+                        static_cast<std::uint64_t>(evidence.pixelExtent.width) * canvas.referenceResolution.height;
+                    const std::uint64_t heightCross =
+                        static_cast<std::uint64_t>(evidence.pixelExtent.height) * canvas.referenceResolution.width;
+                    return Result<UiCanvasDeviceScale>::Success(
+                        widthCross <= heightCross ? ReducedScale(evidence.pixelExtent.width, canvas.referenceResolution.width)
+                                                  : ReducedScale(evidence.pixelExtent.height, canvas.referenceResolution.height));
+                }
+                case ConstantPixelSize:
+                    return Result<UiCanvasDeviceScale>::Success({1, 1});
+                case ConstantPhysicalSize:
+                    if (!evidence.dpiScale.IsValid())
+                        return Failure<UiCanvasDeviceScale>(UiErrors::CanvasSpaceInvalid);
+                    return Result<UiCanvasDeviceScale>::Success(ReducedScale(evidence.dpiScale.pixelUnits, evidence.dpiScale.logicalDips));
+            }
+            return Failure<UiCanvasDeviceScale>(UiErrors::CanvasSpaceInvalid);
+        }
+
         [[nodiscard]] Result<std::int32_t> ResolveAxis(const std::uint32_t pixels, const UiCanvasDeviceScale scale) noexcept {
             constexpr std::uint64_t UnitsPerDip = 64;
             const std::uint64_t scaledPixels = static_cast<std::uint64_t>(pixels) * scale.logicalDips;
@@ -184,28 +207,10 @@ namespace Horo::Runtime::Ui {
         if (canvas.renderMode == UiRenderMode::WorldSpace)
             return Failure<UiResolvedScreenCanvas>(UiErrors::CanvasSpaceModeMismatch);
 
-        using enum UiScaleMode;
-        UiCanvasDeviceScale baseScale;
-        switch (canvas.scaleMode) {
-            case ScaleWithScreenSize: {
-                const std::uint64_t widthCross = static_cast<std::uint64_t>(evidence.pixelExtent.width) * canvas.referenceResolution.height;
-                const std::uint64_t heightCross =
-                    static_cast<std::uint64_t>(evidence.pixelExtent.height) * canvas.referenceResolution.width;
-                baseScale = widthCross <= heightCross ? ReducedScale(evidence.pixelExtent.width, canvas.referenceResolution.width)
-                                                      : ReducedScale(evidence.pixelExtent.height, canvas.referenceResolution.height);
-                break;
-            }
-            case ConstantPixelSize:
-                baseScale = {1, 1};
-                break;
-            case ConstantPhysicalSize:
-                if (!evidence.dpiScale.IsValid())
-                    return Failure<UiResolvedScreenCanvas>(UiErrors::CanvasSpaceInvalid);
-                baseScale = ReducedScale(evidence.dpiScale.pixelUnits, evidence.dpiScale.logicalDips);
-                break;
-        }
-
-        auto scale = ApplyUiScale(baseScale, canvas.presentation.uiScale);
+        const auto baseScale = ResolveBaseScale(canvas, evidence);
+        if (baseScale.HasError())
+            return Result<UiResolvedScreenCanvas>::Failure(baseScale.ErrorValue());
+        auto scale = ApplyUiScale(baseScale.Value(), canvas.presentation.uiScale);
         if (scale.HasError())
             return Result<UiResolvedScreenCanvas>::Failure(scale.ErrorValue());
         const auto content = ResolveContentRect(canvas, evidence);

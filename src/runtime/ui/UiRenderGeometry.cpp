@@ -340,6 +340,17 @@ namespace Horo::Runtime::Ui {
             }, command.payload);
         }
 
+        [[nodiscard]] Result<void> SnapVertices(const UiResolvedScreenCanvas &canvas, const std::span<UiRenderVertex> vertices) {
+            for (auto &vertex : vertices) {
+                const auto snapped = SnapUiPointToPixels(canvas, vertex.x, vertex.y);
+                if (snapped.HasError())
+                    return Result<void>::Failure(snapped.ErrorValue());
+                vertex.x = snapped.Value().x;
+                vertex.y = snapped.Value().y;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> Build(const UiRenderSnapshot &snapshot, const UiResolvedScreenCanvas *canvas) {
             Reset();
             source.emplace(snapshot);
@@ -375,13 +386,9 @@ namespace Horo::Runtime::Ui {
             }
 
             if (canvas != nullptr) {
-                for (auto &vertex : vertices) {
-                    const auto snapped = SnapUiPointToPixels(*canvas, vertex.x, vertex.y);
-                    if (snapped.HasError())
-                        return Result<void>::Failure(snapped.ErrorValue());
-                    vertex.x = snapped.Value().x;
-                    vertex.y = snapped.Value().y;
-                }
+                const auto snapped = SnapVertices(*canvas, vertices);
+                if (snapped.HasError())
+                    return snapped;
             }
             if (const auto validated = ValidateGenerated(vertices, indices, batches, commands.size()); validated.HasError())
                 return validated;
