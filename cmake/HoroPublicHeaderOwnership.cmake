@@ -168,6 +168,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiLayout.h
     Horo/Runtime/Ui/UiLayoutClipping.h
     Horo/Runtime/Ui/UiTextLayout.h
+    Horo/Runtime/Ui/UiGlyphAtlas.h
     Horo/Runtime/Ui/UiStyle.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
