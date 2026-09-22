@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Horo::Editor::Theme {
@@ -213,6 +214,8 @@ namespace Horo::Editor {
         const ILocalizationService *m_localization{};
         std::optional<OperationId> m_visibleOperationId;
         std::uint64_t m_historyRevision{};
+        OperationId m_lastTerminalImportId{};
+        std::unordered_set<OperationId> m_pendingImportOperations;
         std::vector<OperationRecord> m_importHistory;
         std::shared_ptr<CancellationSource> m_operationCancellation;
         EditorDataBus *m_events = nullptr;

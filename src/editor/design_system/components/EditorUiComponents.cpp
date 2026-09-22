@@ -281,7 +281,8 @@ namespace Horo::Editor::Ui {
         };
 
         [[nodiscard]] ContextMenuRow DrawContextMenuRow(const char *id, const bool selected, const bool keepPopupOpen = false,
-                                                        const bool enabled = true, const ImGuiHoveredFlags hoverFlags = ImGuiHoveredFlags_None) {
+                                                        const bool enabled = true,
+                                                        const ImGuiHoveredFlags hoverFlags = ImGuiHoveredFlags_None) {
             constexpr float rowHeight = 30.0F;
             ImGui::PushStyleColor(ImGuiCol_Header, ImVec4{});
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4{});
@@ -2239,7 +2240,7 @@ namespace Horo::Editor::Ui {
         // An already-open child popup blocks normal item hover on its parent menu.
         // Allow hovering sibling rows so moving the pointer switches submenus.
         const ContextMenuRow row = DrawContextMenuRow(stableId != nullptr ? stableId : "##submenu", wasOpen, true, true,
-                                                       ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+                                                      ImGuiHoveredFlags_AllowWhenBlockedByPopup);
         if (stableId == nullptr)
             ImGui::PopID();
         DrawContextMenuRowPresentation(row, {label, nullptr, fonts, Theme::Text(), row.hovered || wasOpen, true, iconToken});

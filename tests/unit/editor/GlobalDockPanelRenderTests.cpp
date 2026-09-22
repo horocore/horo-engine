@@ -1,5 +1,4 @@
 #include "ContentBrowserModel.h"
-#include "Horo/Assets/MeshEditorPayload.h"
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -21,7 +20,6 @@
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <array>
-#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
@@ -415,7 +413,7 @@ namespace {
         REQUIRE((byDescendingType == std::vector<std::size_t>{0, 2, 3, 1}));
     }
 
-    TEST_CASE("Content browser uses the mesh fallback for topology-free legacy assets", "[unit][editor][gui]") {
+    TEST_CASE("Content browser defers mesh payload preview generation", "[unit][editor][gui]") {
         using namespace Horo;
         using namespace Horo::Editor;
 
@@ -426,27 +424,9 @@ namespace {
         std::filesystem::create_directories(assetRoot);
         const std::filesystem::path assetPath = assetRoot / "legacy.horoasset";
 
-        std::vector<std::uint8_t> payload;
-        const auto writeU32 = [&payload](const std::uint32_t value) {
-            for (unsigned shift = 0; shift < 32; shift += 8)
-                payload.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffU));
-        };
-        const auto writeFloat = [&writeU32](const float value) {
-            writeU32(std::bit_cast<std::uint32_t>(value));
-        };
-        writeU32(Assets::MeshEditorPayloadSchemaVersion);
-        writeU32(2);
-        writeU32(1);
-        for (const float bound : {-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F})
-            writeFloat(bound);
-        writeU32(24);
-        writeU32(0);
-        writeU32(0);
-        for (const float component : {-1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F})
-            writeFloat(component);
         {
-            std::ofstream output(assetPath, std::ios::binary);
-            output.write(reinterpret_cast<const char *>(payload.data()), static_cast<std::streamsize>(payload.size()));
+            std::ofstream output(assetPath);
+            output << "mesh payload is decoded by the asynchronous preview provider";
         }
         {
             std::ofstream metadata(assetPath.string() + ".meta");
@@ -469,7 +449,6 @@ namespace {
         REQUIRE((directory.entries[0].importerModuleVersion == "1.0.0"));
         REQUIRE((directory.entries[0].previewFallback == Assets::AssetPreviewFallback::Mesh));
         REQUIRE((!directory.entries[0].previewImage.IsValid()));
-        REQUIRE((!directory.entries[0].meshPreviewPoints.empty()));
 
         std::error_code cleanupError;
         std::filesystem::remove_all(projectRoot, cleanupError);

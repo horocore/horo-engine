@@ -136,6 +136,17 @@ namespace Horo::Editor {
         assetPlacementPreviewActive_ = false;
     }
 
+    void ViewportPanel::DrawAssetPlacementHint(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const ImVec2 pointer,
+                                               const EditorGuiContext &context) {
+        const std::string &hint = context.localization.Get("editor", "workspace.viewport.asset_drop_hint");
+        const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
+        const ImVec2 hintMin{std::clamp(pointer.x + 14.0F, layout.origin.x + 8.0F, layout.origin.x + layout.width - hintSize.x - 20.0F),
+                             std::clamp(pointer.y + 18.0F, layout.origin.y + 8.0F, layout.origin.y + layout.height - hintSize.y - 16.0F)};
+        drawList.AddRectFilled(hintMin, {hintMin.x + hintSize.x + 12.0F, hintMin.y + hintSize.y + 8.0F}, Theme::U32(Theme::Bg0()),
+                               Theme::Layout::Radius);
+        drawList.AddText({hintMin.x + 6.0F, hintMin.y + 4.0F}, Theme::U32(Theme::Text()), hint.c_str());
+    }
+
     bool ViewportPanel::AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
@@ -159,6 +170,7 @@ namespace Horo::Editor {
                 const AssetSceneDropRequest request{
                     .assetId = payload->assetId.data(),
                     .assetType = payload->assetType.data(),
+                    .absoluteAssetPath = payload->absolutePath.data(),
                     .parent = std::nullopt,
                     .target = AssetSceneDropTarget::Viewport,
                     .normalizedX = std::clamp((pointer.x - layout.origin.x) / layout.width, 0.0F, 1.0F),
@@ -176,16 +188,7 @@ namespace Horo::Editor {
                                                              : EditorWorkspaceViewCommand::PreviewAssetPlacement;
                     command.assetSceneDrop = request;
                     assetPlacementPreviewActive_ = !accepted->IsDelivery();
-
-                    const std::string &hint = context.localization.Get("editor", "workspace.viewport.asset_drop_hint");
-                    const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
-                    const ImVec2 hintMin{std::clamp(pointer.x + 14.0F, layout.origin.x + 8.0F,
-                                                    layout.origin.x + layout.width - hintSize.x - 20.0F),
-                                         std::clamp(pointer.y + 18.0F, layout.origin.y + 8.0F,
-                                                    layout.origin.y + layout.height - hintSize.y - 16.0F)};
-                    drawList.AddRectFilled(hintMin, {hintMin.x + hintSize.x + 12.0F, hintMin.y + hintSize.y + 8.0F},
-                                           Theme::U32(Theme::Bg0()), Theme::Layout::Radius);
-                    drawList.AddText({hintMin.x + 6.0F, hintMin.y + 4.0F}, Theme::U32(Theme::Text()), hint.c_str());
+                    DrawAssetPlacementHint(drawList, layout, pointer, context);
                 }
             } else {
                 CancelAssetPlacementPreview(command);

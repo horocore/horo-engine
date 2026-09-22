@@ -37,6 +37,22 @@ namespace Horo::Editor {
         return HierarchyNodeType::Empty;
     }
 
+    void HierarchyEditSession::RevealObjectAncestors(const EditorWorkspaceViewModel &viewModel) {
+        if (!viewModel.hierarchyRevealObject.has_value() || viewModel.hierarchyRevealRevision == m_handledRevealRevision)
+            return;
+
+        std::optional<SceneObjectId> ancestor = viewModel.hierarchyRevealObject;
+        while (ancestor.has_value()) {
+            const auto object = std::ranges::find(viewModel.objects, *ancestor, &SceneObject::id);
+            if (object == viewModel.objects.end())
+                break;
+            if (object->parent.has_value())
+                static_cast<void>(m_model.SetExpanded(object->parent->value, true));
+            ancestor = object->parent;
+        }
+        m_handledRevealRevision = viewModel.hierarchyRevealRevision;
+    }
+
     /** @copydoc HierarchyEditSession::Synchronize */
     void HierarchyEditSession::Synchronize(const EditorWorkspaceViewModel &viewModel) {
         if (!m_projectionInitialized || m_projectedRevision != viewModel.documentRevision) {
@@ -66,19 +82,7 @@ namespace Horo::Editor {
             m_projectionInitialized = true;
         }
 
-        if (viewModel.hierarchyRevealObject.has_value() && viewModel.hierarchyRevealRevision != m_handledRevealRevision) {
-            std::optional<SceneObjectId> ancestor = viewModel.hierarchyRevealObject;
-            while (ancestor.has_value()) {
-                const auto object = std::ranges::find(viewModel.objects, *ancestor, &SceneObject::id);
-                if (object == viewModel.objects.end())
-                    break;
-                if (object->parent.has_value()) {
-                    static_cast<void>(m_model.SetExpanded(object->parent->value, true));
-                }
-                ancestor = object->parent;
-            }
-            m_handledRevealRevision = viewModel.hierarchyRevealRevision;
-        }
+        RevealObjectAncestors(viewModel);
 
         if (viewModel.primarySelection.has_value()) {
             static_cast<void>(m_model.Select(viewModel.primarySelection->value));

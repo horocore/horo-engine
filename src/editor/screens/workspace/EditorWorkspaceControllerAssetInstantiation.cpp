@@ -7,6 +7,16 @@
 #include <utility>
 
 namespace Horo::Editor {
+    namespace {
+        [[nodiscard]] std::filesystem::path ResolveAssetSourcePath(const EditorWorkspaceViewModel &viewModel,
+                                                                   const AssetSceneDropRequest &request,
+                                                                   const Assets::AssetRecord &record) {
+            const std::filesystem::path draggedPath{request.absoluteAssetPath};
+            if (draggedPath.is_absolute())
+                return draggedPath;
+            return std::filesystem::path{viewModel.projectRoot} / record.sourcePath.String();
+        }
+    }  // namespace
 
     void EditorWorkspaceController::HandleCreatePrimitive(const Runtime::PrimitiveId primitive, const std::optional<SceneObjectId> parent) {
         Result<SceneCommandResult> result = m_createSceneObject.Execute(PrimitiveCreationRequest{primitive, parent});
@@ -87,8 +97,7 @@ namespace Horo::Editor {
         const Assets::AssetRecord *record = ResolveAssetDropRecord(request, false);
         if (record == nullptr)
             return;
-        const std::filesystem::path source =
-            (std::filesystem::path{m_viewModel.projectRoot} / record->sourcePath.String()).lexically_normal();
+        const std::filesystem::path source = ResolveAssetSourcePath(m_viewModel, request, *record);
         const auto loaded = m_assetMeshCache.Load(record->id, source);
         if (loaded.HasError())
             return;
@@ -119,8 +128,7 @@ namespace Horo::Editor {
         if (record == nullptr)
             return;
 
-        const std::filesystem::path source =
-            (std::filesystem::path{m_viewModel.projectRoot} / record->sourcePath.String()).lexically_normal();
+        const std::filesystem::path source = ResolveAssetSourcePath(m_viewModel, request, *record);
         const auto loaded = m_assetMeshCache.Load(record->id, source);
         if (loaded.HasError()) {
             m_notifications.Publish("asset", NotificationSeverity::Error, loaded.ErrorValue().message,

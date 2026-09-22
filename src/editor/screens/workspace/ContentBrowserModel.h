@@ -46,13 +46,6 @@ namespace Horo::Editor {
         std::string absolutePath; /**< Canonical absolute directory selected by this segment. */
     };
 
-    /** @brief One decoded position used to draw a lightweight mesh-card preview. */
-    struct ContentBrowserMeshPreviewPoint {
-        float x{};
-        float y{};
-        float z{};
-    };
-
     /** @brief One direct child of the current absolute Content Browser directory. */
     struct ContentBrowserEntry {  // NOSONAR(cpp:S1820) Aggregate directory entry representation
         ContentBrowserEntryKind kind{ContentBrowserEntryKind::Asset};
@@ -82,7 +75,6 @@ namespace Horo::Editor {
         bool registered{false};                 /**< Whether the authoritative Asset Registry owns this asset. */
         Assets::AssetPreviewImage previewImage; /**< Optional module-produced RGBA8 card preview. */
         Assets::AssetPreviewFallback previewFallback{Assets::AssetPreviewFallback::Automatic};
-        std::vector<ContentBrowserMeshPreviewPoint> meshPreviewPoints; /**< Bounded editor-payload projection. */
     };
 
     /** @brief Complete immutable presentation snapshot for one absolute asset directory. */

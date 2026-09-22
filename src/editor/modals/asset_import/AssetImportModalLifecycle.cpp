@@ -19,6 +19,8 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr std::size_t kMaximumImportHistory = 50;
+
         [[nodiscard]] std::string PresetScopeKey(const Assets::AssetImportItem &item) {
             return item.importerContributionId + '\n' + item.sourceExtension;
         }
@@ -191,6 +193,8 @@ namespace Horo::Editor {
         m_visibleOperationId.reset();
         m_operationCancellation.reset();
         m_historyRevision = 0;
+        m_lastTerminalImportId = 0;
+        m_pendingImportOperations.clear();
         m_importHistory.clear();
         RefreshImportHistory();
 
@@ -279,12 +283,22 @@ namespace Horo::Editor {
         if (!snapshot.has_value())
             return;
         m_historyRevision = snapshot->revision;
-        m_importHistory.clear();
-        for (auto operation = snapshot->operations.rbegin(); operation != snapshot->operations.rend(); ++operation) {
-            const bool terminal = operation->state == OperationState::Succeeded || operation->state == OperationState::Failed ||
-                                  operation->state == OperationState::Cancelled;
-            if (operation->kind == OperationKind::Import && terminal)
-                m_importHistory.push_back(*operation);
+        for (const OperationRecord &operation : snapshot->operations) {
+            if (operation.kind != OperationKind::Import)
+                continue;
+            const bool terminal = operation.state == OperationState::Succeeded || operation.state == OperationState::Failed ||
+                                  operation.state == OperationState::Cancelled;
+            if (!terminal) {
+                m_pendingImportOperations.insert(operation.id);
+                continue;
+            }
+            const bool wasPending = m_pendingImportOperations.erase(operation.id) != 0;
+            if (!wasPending && operation.id <= m_lastTerminalImportId)
+                continue;
+            m_lastTerminalImportId = std::max(m_lastTerminalImportId, operation.id);
+            m_importHistory.insert(m_importHistory.begin(), operation);
+            if (m_importHistory.size() > kMaximumImportHistory)
+                m_importHistory.pop_back();
         }
     }
 

@@ -7,8 +7,6 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 
 #include <algorithm>
-#include <array>
-#include <limits>
 #include <string_view>
 #include <unordered_set>
 
@@ -67,42 +65,6 @@ namespace Horo::Editor {
                 return TintedPresentation(entry.displayName, Theme::Ok(), 0.11F, Ui::UiIcon::HierarchyMesh);
             }
             return TintedPresentation(entry.displayName, Theme::Accent(), 0.09F, Ui::UiIcon::Description);
-        }
-
-        void DrawMeshPreview(ImDrawList *drawList, const ContentBrowserEntry &entry, const ImVec2 previewMin, const ImVec2 previewMax) {
-            if (entry.meshPreviewPoints.empty())
-                return;
-
-            float minX = std::numeric_limits<float>::max();
-            float minY = std::numeric_limits<float>::max();
-            float maxX = std::numeric_limits<float>::lowest();
-            float maxY = std::numeric_limits<float>::lowest();
-            std::vector<ImVec2> projected;
-            projected.reserve(entry.meshPreviewPoints.size());
-            for (const ContentBrowserMeshPreviewPoint &point : entry.meshPreviewPoints) {
-                const ImVec2 value{point.x * 0.82F + point.z * 0.58F, -point.y + point.x * 0.24F + point.z * 0.18F};
-                minX = std::min(minX, value.x);
-                minY = std::min(minY, value.y);
-                maxX = std::max(maxX, value.x);
-                maxY = std::max(maxY, value.y);
-                projected.push_back(value);
-            }
-
-            const float width = std::max(maxX - minX, 0.0001F);
-            const float height = std::max(maxY - minY, 0.0001F);
-            const float scale = std::min(std::max(1.0F, previewMax.x - previewMin.x - 16.0F) / width,
-                                         std::max(1.0F, previewMax.y - previewMin.y - 16.0F) / height);
-            const ImVec2 center{(previewMin.x + previewMax.x) * 0.5F, (previewMin.y + previewMax.y) * 0.5F};
-            drawList->PushClipRect(previewMin, previewMax, true);
-            for (const ImVec2 point : projected) {
-                const ImVec2 screen{center.x + (point.x - (minX + maxX) * 0.5F) * scale,
-                                    center.y + (point.y - (minY + maxY) * 0.5F) * scale};
-                ImVec4 shadow = Theme::Shadow();
-                shadow.w = 0.27F;
-                drawList->AddCircleFilled({screen.x + 1.0F, screen.y + 1.0F}, 1.35F, Theme::U32(shadow), 6);
-                drawList->AddCircleFilled(screen, 1.05F, Theme::U32(Theme::Text()), 6);
-            }
-            drawList->PopClipRect();
         }
 
         [[nodiscard]] std::uint64_t PreviewFingerprint(const Assets::AssetPreviewImage &image) {
@@ -192,8 +154,6 @@ namespace Horo::Editor {
                                           asset.gradientMid, asset.gradientMid, asset.gradientEnd);
         if (const std::uintptr_t previewTexture = ResolvePreview(entry); previewTexture != 0)
             drawList->AddImage(previewTexture, {cardMin.x + 3.0F, cardMin.y + 3.0F}, {thumbMax.x - 3.0F, thumbMax.y - 3.0F});
-        else if (entry.assetType == "core.mesh" && !entry.meshPreviewPoints.empty())
-            DrawMeshPreview(drawList, entry, cardMin, thumbMax);
         else {
             const float iconSize = entry.kind == ContentBrowserEntryKind::Directory ? 34.0F : 20.0F;
             const ImU32 iconColor = Theme::U32(entry.kind == ContentBrowserEntryKind::Directory ? Theme::Muted() : Theme::Text());

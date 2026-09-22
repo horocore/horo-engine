@@ -305,6 +305,7 @@ namespace Horo::Editor {
                     command.assetSceneDrop = AssetSceneDropRequest{
                         .assetId = payload->assetId.data(),
                         .assetType = payload->assetType.data(),
+                        .absoluteAssetPath = payload->absolutePath.data(),
                         .parent = parent,
                         .target = target,
                         .documentRevision = revision,
