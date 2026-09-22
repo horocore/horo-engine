@@ -5,6 +5,7 @@
  * @brief Incremental measure-arrange orchestration and immutable Runtime UI layout snapshots.
  */
 
+#include "Horo/Runtime/Ui/UiCanvasSpace.h"
 #include "Horo/Runtime/Ui/UiElementTree.h"
 
 #include <array>
@@ -137,6 +138,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutConstraints constraints;                    /**< Assigned measure range. */
         std::span<const UiLayoutChildMeasurement> children; /**< Authored-order child measurements. */
         bool remeasure{};                                   /**< True only for the one bounded arrange-time retry. */
+        UiCanvasScaleFactor fontScale{};                    /**< Exact accessibility text scale for intrinsic measurement. */
     };
 
     /** @brief Fully resolved boxes and interaction geometry for one arranged element. */
@@ -199,6 +201,7 @@ namespace Horo::Runtime::Ui {
         UiDocumentId document;             /**< Stable source document. */
         UiLayoutSourceRevisions sources;   /**< Complete immutable input lineage. */
         UiInteractionRevision interaction; /**< Published layout/interaction generation. */
+        UiCanvasScaleFactor fontScale{};   /**< Accessibility text scale consumed by this generation. */
     };
 
     /** @brief One complete immutable arranged element record. */
@@ -227,6 +230,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutConstraints rootConstraints;  /**< Finite logical root measure range. */
         UiLogicalRect rootContent;            /**< Definite logical root assignment. */
         const UiLayoutEvaluator *evaluator{}; /**< Borrowed only for this synchronous call. */
+        UiCanvasScaleFactor fontScale{};      /**< Accessibility text scale forwarded to intrinsic measurement. */
     };
 
     /** @brief Explicit admission lifecycle for one canvas layout cache. */

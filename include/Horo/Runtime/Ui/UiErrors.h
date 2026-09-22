@@ -54,7 +54,7 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DocumentMigrationInvalid;
     /** @brief A scene/component canvas reference lacks stable identity or revision evidence. */
     extern const ErrorCodeDescriptor CanvasReferenceInvalid;
-    /** @brief A canvas descriptor, viewport extent, or caller-supplied scale is malformed. */
+    /** @brief A canvas descriptor, viewport evidence, presentation policy, or caller-supplied scale is malformed. */
     extern const ErrorCodeDescriptor CanvasSpaceInvalid;
     /** @brief A screen/world resolver was used with the wrong semantic canvas mode. */
     extern const ErrorCodeDescriptor CanvasSpaceModeMismatch;

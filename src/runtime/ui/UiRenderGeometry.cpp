@@ -31,6 +31,16 @@ namespace Horo::Runtime::Ui {
             return first <= size && count <= size - first;
         }
 
+        [[nodiscard]] double RoundTiesToEven(const double value) noexcept {
+            const double lower = std::floor(value);
+            const double fraction = value - lower;
+            if (fraction < 0.5)
+                return lower;
+            if (fraction > 0.5)
+                return lower + 1.0;
+            return std::fmod(std::abs(lower), 2.0) == 0.0 ? lower : lower + 1.0;
+        }
+
         [[nodiscard]] UiLinearColor WithOpacity(const UiLinearColor color, const float opacity) noexcept {
             UiLinearColor result = color;
             result.alpha *= opacity;
@@ -175,6 +185,30 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    /** @copydoc UiPixelSnappedPoint::IsValid */
+    bool UiPixelSnappedPoint::IsValid() const noexcept {
+        return std::isfinite(x) && std::isfinite(y);
+    }
+
+    /** @copydoc SnapUiPointToPixels */
+    Result<UiPixelSnappedPoint> SnapUiPointToPixels(const UiResolvedScreenCanvas &canvas, const float x, const float y) {
+        if (!canvas.IsValid() || !std::isfinite(x) || !std::isfinite(y))
+            return Failure<UiPixelSnappedPoint>(UiErrors::CanvasSpaceInvalid);
+        if (canvas.pixelSnap == UiPixelSnapMode::Disabled)
+            return Result<UiPixelSnappedPoint>::Success({x, y});
+
+        const auto content = canvas.ContentPixelRect();
+        const double unitsPerPixel = static_cast<double>(canvas.pixelsPerDip.logicalDips) * 64.0 / canvas.pixelsPerDip.pixelUnits;
+        const double physicalX = static_cast<double>(content.x) + static_cast<double>(x) / unitsPerPixel;
+        const double physicalY = static_cast<double>(content.y) + static_cast<double>(y) / unitsPerPixel;
+        const double snappedX = (RoundTiesToEven(physicalX) - content.x) * unitsPerPixel;
+        const double snappedY = (RoundTiesToEven(physicalY) - content.y) * unitsPerPixel;
+        if (!std::isfinite(snappedX) || !std::isfinite(snappedY) || std::abs(snappedX) > std::numeric_limits<float>::max() ||
+            std::abs(snappedY) > std::numeric_limits<float>::max())
+            return Failure<UiPixelSnappedPoint>(UiErrors::CanvasSpaceOverflow);
+        return Result<UiPixelSnappedPoint>::Success({static_cast<float>(snappedX), static_cast<float>(snappedY)});
+    }
+
     /** @copydoc UiRenderVertex::IsValid */
     bool UiRenderVertex::IsValid() const noexcept {
         return std::isfinite(x) && std::isfinite(y) && std::isfinite(u) && std::isfinite(v) && u >= 0.0F && u <= 1.0F && v >= 0.0F &&
@@ -306,9 +340,11 @@ namespace Horo::Runtime::Ui {
             }, command.payload);
         }
 
-        [[nodiscard]] Result<void> Build(const UiRenderSnapshot &snapshot) {
+        [[nodiscard]] Result<void> Build(const UiRenderSnapshot &snapshot, const UiResolvedScreenCanvas *canvas) {
             Reset();
             source.emplace(snapshot);
+            if (canvas != nullptr && !canvas->IsValid())
+                return Failure(UiErrors::CanvasSpaceInvalid);
             const auto commands = snapshot.Commands();
             if (commands.size() > std::numeric_limits<std::uint32_t>::max())
                 return Failure(UiErrors::RenderGeometryCapacityExceeded);
@@ -338,6 +374,15 @@ namespace Horo::Runtime::Ui {
                 batch->indexCount += static_cast<std::uint32_t>(indices.size() - firstIndex);
             }
 
+            if (canvas != nullptr) {
+                for (auto &vertex : vertices) {
+                    const auto snapped = SnapUiPointToPixels(*canvas, vertex.x, vertex.y);
+                    if (snapped.HasError())
+                        return Result<void>::Failure(snapped.ErrorValue());
+                    vertex.x = snapped.Value().x;
+                    vertex.y = snapped.Value().y;
+                }
+            }
             if (const auto validated = ValidateGenerated(vertices, indices, batches, commands.size()); validated.HasError())
                 return validated;
             descriptor = {snapshot.Descriptor().view,
@@ -345,7 +390,8 @@ namespace Horo::Runtime::Ui {
                           static_cast<std::uint32_t>(commands.size()),
                           static_cast<std::uint32_t>(vertices.size()),
                           static_cast<std::uint32_t>(indices.size()),
-                          static_cast<std::uint32_t>(batches.size())};
+                          static_cast<std::uint32_t>(batches.size()),
+                          canvas != nullptr ? std::optional<UiResolvedScreenCanvas>{*canvas} : std::nullopt};
             return Result<void>::Success();
         }
     };
@@ -492,8 +538,9 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderGeometryArena::operator=(UiRenderGeometryArena&&) */
     UiRenderGeometryArena &UiRenderGeometryArena::operator=(UiRenderGeometryArena &&) noexcept = default;
 
-    /** @copydoc UiRenderGeometryArena::Build */
-    Result<UiRenderGeometryPlan> UiRenderGeometryArena::Build(const UiRenderSnapshot &snapshot) {
+    /** @copydoc UiRenderGeometryArena::BuildInternal */
+    Result<UiRenderGeometryPlan> UiRenderGeometryArena::BuildInternal(const UiRenderSnapshot &snapshot,
+                                                                      const UiResolvedScreenCanvas *canvas) {
         if (!storage_)
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
         if (storage_->lifecycle != UiRenderGeometryArenaState::Active) {
@@ -514,7 +561,7 @@ namespace Horo::Runtime::Ui {
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryStorageExhausted);
         }
         UiRenderGeometryPlan::Storage::PublishLease publishLease{*slot};
-        const auto built = slot->Build(snapshot);
+        const auto built = slot->Build(snapshot, canvas);
         if (built.HasError()) {
             ++storage_->failedBuilds;
             return Result<UiRenderGeometryPlan>::Failure(built.ErrorValue());
@@ -524,6 +571,16 @@ namespace Horo::Runtime::Ui {
         storage_->peakIndices = std::max(storage_->peakIndices, static_cast<std::uint32_t>(slot->indices.size()));
         storage_->peakBatches = std::max(storage_->peakBatches, static_cast<std::uint32_t>(slot->batches.size()));
         return Result<UiRenderGeometryPlan>::Success(UiRenderGeometryPlan{std::move(slot)});
+    }
+
+    /** @copydoc UiRenderGeometryArena::Build */
+    Result<UiRenderGeometryPlan> UiRenderGeometryArena::Build(const UiRenderSnapshot &snapshot) {
+        return BuildInternal(snapshot, nullptr);
+    }
+
+    /** @copydoc UiRenderGeometryArena::Build */
+    Result<UiRenderGeometryPlan> UiRenderGeometryArena::Build(const UiRenderSnapshot &snapshot, const UiResolvedScreenCanvas &canvas) {
+        return BuildInternal(snapshot, &canvas);
     }
 
     /** @copydoc UiRenderGeometryArena::Close */

@@ -3,6 +3,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -179,6 +180,44 @@ namespace Horo::Runtime::Ui {
                 REQUIRE(index < plan.Vertices().size());
             for (const auto &batch : plan.Batches())
                 REQUIRE(batch.IsValid(plan.Vertices().size(), plan.Indices().size(), plan.Descriptor().commandCount));
+        }
+
+        TEST_CASE("Pixel snapping is deterministic, safe-area aware, and derived from logical render points",
+                  "[runtime_ui][render_geometry][pixel_snap]") {
+            const UiResolvedScreenCanvas canvas{{12800, 14400},        {405, 457}, {2, 1}, {5, 7, 400, 450}, {5, 7, 0, 0}, {}, {}, {},
+                                                UiPixelSnapMode::Edges};
+            const auto halfPixel = SnapUiPointToPixels(canvas, 16.0F, 16.0F);
+            REQUIRE(halfPixel.HasValue());
+            REQUIRE(halfPixel.Value() == UiPixelSnappedPoint{32.0F, 32.0F});
+
+            const auto disabled = SnapUiPointToPixels(UiResolvedScreenCanvas{{12800, 14400},
+                                                                             {400, 450},
+                                                                             {2, 1},
+                                                                             {},
+                                                                             {},
+                                                                             {},
+                                                                             {},
+                                                                             {},
+                                                                             UiPixelSnapMode::Disabled},
+                                                      16.0F, 16.0F);
+            REQUIRE(disabled.HasValue());
+            REQUIRE(disabled.Value() == UiPixelSnappedPoint{16.0F, 16.0F});
+
+            const auto malformed = SnapUiPointToPixels(canvas, 0.0F, std::numeric_limits<float>::infinity());
+            REQUIRE(malformed.HasError());
+            REQUIRE(malformed.ErrorValue().code.Value() == UiErrors::CanvasSpaceInvalid.code.Value());
+
+            const auto snapshot = MakeSnapshot(2);
+            auto arena = MakeArena();
+            const UiResolvedScreenCanvas buildCanvas{{25600, 25600},        {400, 400}, {1, 1}, {0, 0, 400, 400}, {}, {}, {}, {},
+                                                     UiPixelSnapMode::Edges};
+            const auto planResult = arena.Build(snapshot, buildCanvas);
+            REQUIRE(planResult.HasValue());
+            const auto plan = std::move(planResult).Value();
+            REQUIRE(plan.Descriptor().presentation.has_value());
+            REQUIRE(plan.Descriptor().presentation->pixelSnap == UiPixelSnapMode::Edges);
+            REQUIRE(plan.Vertices()[2].x == 128.0F);
+            REQUIRE(plan.Vertices()[2].y == 64.0F);
         }
 
         TEST_CASE("UI geometry clamps oversized border strips without edge overlap", "[runtime_ui][render_geometry][edge]") {

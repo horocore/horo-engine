@@ -104,6 +104,7 @@ namespace Horo::Runtime::Ui {
             mutable std::array<std::uint32_t, 32> arranges{};
             mutable bool failMeasure{};
             mutable bool alternateAssignments{};
+            mutable UiCanvasScaleFactor lastFontScale{};
 
             Result<void> ResolveChildConstraints(const UiLayoutChildConstraintRequest &request,
                                                  const std::span<UiLayoutConstraints> output) const override {
@@ -117,6 +118,7 @@ namespace Horo::Runtime::Ui {
 
             Result<UiLayoutMeasurement> Measure(const UiLayoutMeasureRequest &request) const override {
                 ++measures[request.element.slot];
+                lastFontScale = request.fontScale;
                 if (failMeasure)
                     return Result<UiLayoutMeasurement>::Failure(MakeError(UiErrors::LayoutInvalid));
                 const auto size = static_cast<std::int32_t>(request.element.slot * 8);
@@ -310,6 +312,28 @@ namespace Horo::Runtime::Ui {
             engine.Shutdown();
             engine.Shutdown();
             REQUIRE(engine.State() == UiLayoutEngineState::Stopped);
+        }
+
+        TEST_CASE("Font scale is revisioned through intrinsic measurement and retained snapshots", "[runtime_ui][layout][font_scale]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            auto initial = engine.Update(tree, Request(evaluator));
+            REQUIRE(initial.HasValue());
+            REQUIRE(initial.Value().Descriptor().fontScale == UiCanvasScaleFactor{1, 1});
+
+            auto scaledRequest = Request(evaluator, 2);
+            scaledRequest.fontScale = {3, 2};
+            const auto scaled = engine.Update(tree, scaledRequest);
+            REQUIRE(scaled.HasValue());
+            REQUIRE(evaluator.lastFontScale == UiCanvasScaleFactor{3, 2});
+            REQUIRE(scaled.Value().Descriptor().fontScale == UiCanvasScaleFactor{3, 2});
+            REQUIRE(evaluator.measures[tree.Root().Value().handle.slot] > 0);
+
+            auto malformed = Request(evaluator, 3);
+            malformed.fontScale.denominator = 0;
+            RequireError(engine.Update(tree, malformed), UiErrors::LayoutInvalid);
+            REQUIRE(scaled.Value().Descriptor().fontScale == UiCanvasScaleFactor{3, 2});
         }
 
         TEST_CASE("Layout frame-hot updates allocate no fallback storage", "[runtime_ui][layout][allocation]") {
