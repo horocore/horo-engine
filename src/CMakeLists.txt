@@ -1578,6 +1578,9 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
+    extensions/manifest/EditorUiForm.cpp
+    extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h
         extensions/manifest/ScriptExportDescriptorValidationSupport.cpp
