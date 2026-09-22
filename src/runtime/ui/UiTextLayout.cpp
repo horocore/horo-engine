@@ -70,8 +70,7 @@ namespace Horo::Runtime::Ui {
     std::shared_ptr<UiTextLayoutResult::Storage> UiTextLayoutEngine::Storage::TryAcquire() noexcept {
         for (std::size_t offset = 0; offset < slots.size(); ++offset) {
             const auto index = (nextSlot + offset) % slots.size();
-            std::uint64_t expected{};
-            if (!slots[index]->leases.compare_exchange_strong(expected, 1))
+            if (std::uint64_t expected{}; !slots[index]->leases.compare_exchange_strong(expected, 1))
                 continue;
             nextSlot = (index + 1) % slots.size();
             return slots[index];
@@ -79,12 +78,12 @@ namespace Horo::Runtime::Ui {
         return {};
     }
 
-    void UiTextLayoutEngine::Storage::ReleaseSlot(const std::shared_ptr<UiTextLayoutResult::Storage> &slot) noexcept {
+    void UiTextLayoutEngine::Storage::ReleaseSlot(const std::shared_ptr<UiTextLayoutResult::Storage> &slot) const noexcept {
         slot->Reset();
-        slot->leases.store(0, std::memory_order_release);
+        slot->leases.store(0);
     }
 
-    Result<void> UiTextLayoutEngine::Storage::BuildFaceTable(const UiTextShapedTextView &view, std::vector<UiTextFaceId> &output) {
+    Result<void> UiTextLayoutEngine::Storage::BuildFaceTable(const UiTextShapedTextView &view, std::vector<UiTextFaceId> &output) const {
         output.resize(view.glyphs.size());
         for (const auto &run : view.runs)
             for (std::uint32_t glyph = run.firstGlyph; glyph < run.firstGlyph + run.glyphCount; ++glyph)
@@ -103,27 +102,25 @@ namespace Horo::Runtime::Ui {
         return Result<std::int64_t>::Success(width);
     }
 
-    Result<void> UiTextLayoutEngine::Storage::AppendGlyph(UiTextLayoutResult::Storage &slot, const UiTextFaceId face,
-                                                          const std::uint32_t glyph, const std::uint32_t cluster,
-                                                          const UiLogicalPoint origin, const UiLogicalPoint advance,
-                                                          const std::uint32_t line, const bool ellipsis) {
+    Result<void> UiTextLayoutEngine::Storage::AppendGlyph(UiTextLayoutResult::Storage &slot,
+                                                          const UiTextLayoutInternal::GlyphAppend &placement) const {
         if (slot.glyphs.size() >= descriptor.limits.glyphs)
             return UiTextLayoutInternal::Failure(UiErrors::TextLayoutCapacityExceeded);
-        const auto first = static_cast<std::uint32_t>(slot.glyphs.size());
-        if (slot.runs.empty() || slot.runs.back().face != face || slot.runs.back().line != line || slot.runs.back().ellipsis != ellipsis ||
-            slot.runs.back().firstGlyph + slot.runs.back().glyphCount != first) {
+        if (const auto first = static_cast<std::uint32_t>(slot.glyphs.size());
+            slot.runs.empty() || slot.runs.back().face != placement.face || slot.runs.back().line != placement.line ||
+            slot.runs.back().ellipsis != placement.ellipsis || slot.runs.back().firstGlyph + slot.runs.back().glyphCount != first) {
             if (slot.runs.size() >= descriptor.limits.runs)
                 return UiTextLayoutInternal::Failure(UiErrors::TextLayoutCapacityExceeded);
-            slot.runs.push_back({face, first, 0, line, ellipsis});
+            slot.runs.emplace_back(placement.face, first, 0, placement.line, placement.ellipsis);
         }
-        slot.glyphs.push_back({face, glyph, cluster, origin, advance});
+        slot.glyphs.emplace_back(placement.face, placement.glyph, placement.cluster, placement.origin, placement.advance);
         ++slot.runs.back().glyphCount;
         return Result<void>::Success();
     }
 
     bool UiTextLayoutEngine::Storage::IsDrained() const noexcept {
         return std::ranges::all_of(slots, [](const auto &slot) {
-            return slot->leases.load(std::memory_order_acquire) == 0;
+            return slot->leases.load() == 0;
         });
     }
 
@@ -165,9 +162,9 @@ namespace Horo::Runtime::Ui {
     void UiTextLayoutResult::Retain() const noexcept {
         if (!storage_)
             return;
-        auto current = storage_->leases.load(std::memory_order_acquire);
+        auto current = storage_->leases.load();
         while (current != std::numeric_limits<std::uint64_t>::max()) {
-            if (storage_->leases.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel))
+            if (storage_->leases.compare_exchange_weak(current, current + 1))
                 return;
         }
         std::terminate();
@@ -177,7 +174,7 @@ namespace Horo::Runtime::Ui {
     void UiTextLayoutResult::Release() noexcept {
         if (!storage_)
             return;
-        storage_->leases.fetch_sub(1, std::memory_order_acq_rel);
+        storage_->leases.fetch_sub(1);
         storage_.reset();
     }
 
@@ -245,7 +242,7 @@ namespace Horo::Runtime::Ui {
     Result<UiTextLayoutResult> UiTextLayoutEngine::Layout(const UiTextLayoutRequest &request) {
         if (!storage_)
             return UiTextLayoutInternal::Failure<UiTextLayoutResult>(UiErrors::TextLayoutLifecycleUnavailable);
-        const auto published = storage_->Layout(request);
+        auto published = storage_->Layout(request);
         if (published.HasError())
             return Result<UiTextLayoutResult>::Failure(published.ErrorValue());
         return Result<UiTextLayoutResult>::Success(UiTextLayoutResult{std::move(published).Value()});

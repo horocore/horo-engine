@@ -123,9 +123,14 @@ namespace Horo::Runtime::Ui {
             const auto glyphY = UiTextLayoutInternal::AddValue(state.lineOrigin.y, offsetY.Value());
             if (glyphX.HasError() || glyphY.HasError())
                 return Failure(UiErrors::TextLayoutCapacityExceeded);
-            if (const auto appended = AppendGlyph(slot, glyphFaces[cluster.firstGlyph + glyphOffset], glyph.glyph, clusterIndex,
-                                                  {glyphX.Value(), glyphY.Value()}, {advanceX.Value(), 0}, state.lineIndex, false);
-                appended.HasError())
+            const UiTextLayoutInternal::GlyphAppend placement{glyphFaces[cluster.firstGlyph + glyphOffset],
+                                                              glyph.glyph,
+                                                              clusterIndex,
+                                                              {glyphX.Value(), glyphY.Value()},
+                                                              {advanceX.Value(), 0},
+                                                              state.lineIndex,
+                                                              false};
+            if (const auto appended = AppendGlyph(slot, placement); appended.HasError())
                 return appended;
             state.cursor += advanceX.Value();
         }
@@ -161,9 +166,8 @@ namespace Horo::Runtime::Ui {
             const auto advance = UiTextLayoutInternal::ScaleValue(ellipsis.glyphs[glyph].advance.x, request.options.scale);
             if (advance.HasError())
                 return Result<std::uint32_t>::Failure(advance.ErrorValue());
-            if (usedWidth > 0 && usedWidth + advance.Value() > available)
-                break;
-            if (usedWidth == 0 && advance.Value() > available)
+            const bool fits = usedWidth == 0 ? advance.Value() <= available : usedWidth + advance.Value() <= available;
+            if (!fits)
                 break;
             usedWidth += advance.Value();
             ++glyphCount;
@@ -185,9 +189,14 @@ namespace Horo::Runtime::Ui {
             const auto glyphY = UiTextLayoutInternal::AddValue(lineOrigin.y, offsetY.Value());
             if (glyphX.HasError() || glyphY.HasError())
                 return Failure(UiErrors::TextLayoutCapacityExceeded);
-            if (const auto appended = AppendGlyph(slot, ellipsisFaces[glyphOffset], glyph.glyph, NoUiTextLayoutCluster,
-                                                  {glyphX.Value(), glyphY.Value()}, {advanceX.Value(), 0}, lineIndex, true);
-                appended.HasError())
+            const UiTextLayoutInternal::GlyphAppend placement{ellipsisFaces[glyphOffset],
+                                                              glyph.glyph,
+                                                              NoUiTextLayoutCluster,
+                                                              {glyphX.Value(), glyphY.Value()},
+                                                              {advanceX.Value(), 0},
+                                                              lineIndex,
+                                                              true};
+            if (const auto appended = AppendGlyph(slot, placement); appended.HasError())
                 return appended;
             cursor += advanceX.Value();
         }
@@ -225,12 +234,12 @@ namespace Horo::Runtime::Ui {
             PrepareLineWindow(request, context.lineIndex, context.visibleLines, context.verticallyTruncated, context.ellipsisWidth);
         if (windowResult.HasError())
             return Result<void>::Failure(windowResult.ErrorValue());
-        const auto window = windowResult.Value();
+        const auto &window = windowResult.Value();
         const auto placementResult = PrepareLinePlacement(request, window, context.lineIndex, context.visibleLines, context.lineHeight,
                                                           context.verticalOffset, context.scaledAscent);
         if (placementResult.HasError())
             return Result<void>::Failure(placementResult.ErrorValue());
-        const auto placement = placementResult.Value();
+        const auto &placement = placementResult.Value();
         const auto &clusters = request.shaped.clusters;
         std::uint32_t optionalGaps{};
         if (request.options.horizontal == UiTextHorizontalAlignment::Justify && context.lineIndex + 1U < context.visibleLines &&

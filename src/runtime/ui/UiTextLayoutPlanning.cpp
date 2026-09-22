@@ -10,7 +10,7 @@ namespace Horo::Runtime::Ui {
     Result<void> UiTextLayoutEngine::Storage::AppendLinePlan(const std::uint32_t first, const std::uint32_t end, const bool hardBreak) {
         if (linePlans.size() >= descriptor.limits.lines)
             return Failure(UiErrors::TextLayoutCapacityExceeded);
-        linePlans.push_back({first, end - first, clusterPrefix[end] - clusterPrefix[first], hardBreak});
+        linePlans.emplace_back(first, end - first, clusterPrefix[end] - clusterPrefix[first], hardBreak);
         return Result<void>::Success();
     }
 
@@ -18,7 +18,7 @@ namespace Horo::Runtime::Ui {
                                                                const UiTextWrapMode wrap) const noexcept {
         if (wrap != UiTextWrapMode::Word)
             return index;
-        const auto upper = std::upper_bound(softBreaks.begin(), softBreaks.end(), index);
+        const auto upper = std::ranges::upper_bound(softBreaks, index);
         if (upper == softBreaks.begin())
             return index;
         const auto candidate = *std::prev(upper);
@@ -38,7 +38,7 @@ namespace Horo::Runtime::Ui {
             scaledClusterAdvances[index] = advance.Value();
             clusterPrefix[index + 1U] = clusterPrefix[index] + advance.Value();
             if (clusters[index].breakOpportunity == UiTextBreakOpportunity::Optional)
-                softBreaks.push_back(index + 1U);
+                softBreaks.emplace_back(index + 1U);
         }
 
         linePlans.clear();
@@ -68,7 +68,7 @@ namespace Horo::Runtime::Ui {
 
     Result<std::uint32_t> UiTextLayoutEngine::Storage::VisibleLineCount(const UiTextLayoutRequest &request,
                                                                         const std::int32_t lineHeight) const {
-        std::uint32_t count = static_cast<std::uint32_t>(linePlans.size());
+        auto count = static_cast<std::uint32_t>(linePlans.size());
         if (request.options.maxLines > 0)
             count = std::min(count, request.options.maxLines);
         if (request.options.overflow == UiTextOverflowMode::Ellipsis && lineHeight > 0 &&

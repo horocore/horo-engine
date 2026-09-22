@@ -69,6 +69,16 @@ namespace Horo::Runtime::Ui {
             std::int64_t justificationAdded{};
         };
 
+        struct GlyphAppend final {
+            UiTextFaceId face;
+            std::uint32_t glyph{};
+            std::uint32_t cluster{};
+            UiLogicalPoint origin;
+            UiLogicalPoint advance;
+            std::uint32_t line{};
+            bool ellipsis{};
+        };
+
         [[nodiscard]] Result<std::int32_t> ScaleValue(std::int32_t value, UiTextScale scale);
         [[nodiscard]] Result<std::int32_t> AddValue(std::int64_t left, std::int64_t right);
         [[nodiscard]] bool IsOlder(const UiLayoutSourceRevisions &candidate, const UiLayoutSourceRevisions &current) noexcept;
@@ -110,16 +120,14 @@ namespace Horo::Runtime::Ui {
         Storage &operator=(Storage &&) = delete;
 
         [[nodiscard]] std::shared_ptr<UiTextLayoutResult::Storage> TryAcquire() noexcept;
-        void ReleaseSlot(const std::shared_ptr<UiTextLayoutResult::Storage> &slot) noexcept;
-        [[nodiscard]] Result<void> BuildFaceTable(const UiTextShapedTextView &view, std::vector<UiTextFaceId> &output);
+        void ReleaseSlot(const std::shared_ptr<UiTextLayoutResult::Storage> &slot) const noexcept;
+        [[nodiscard]] Result<void> BuildFaceTable(const UiTextShapedTextView &view, std::vector<UiTextFaceId> &output) const;
         [[nodiscard]] Result<std::int64_t> ShapedWidth(const UiTextShapedTextView &view, UiTextScale scale) const;
         [[nodiscard]] Result<void> BuildLinePlans(const UiTextLayoutRequest &request);
         [[nodiscard]] Result<void> AppendLinePlan(std::uint32_t first, std::uint32_t end, bool hardBreak);
         [[nodiscard]] std::uint32_t SelectWrapSplit(std::uint32_t index, std::uint32_t lineStart, UiTextWrapMode wrap) const noexcept;
         [[nodiscard]] Result<std::uint32_t> VisibleLineCount(const UiTextLayoutRequest &request, std::int32_t lineHeight) const;
-        [[nodiscard]] Result<void> AppendGlyph(UiTextLayoutResult::Storage &slot, UiTextFaceId face, std::uint32_t glyph,
-                                               std::uint32_t cluster, UiLogicalPoint origin, UiLogicalPoint advance, std::uint32_t line,
-                                               bool ellipsis);
+        [[nodiscard]] Result<void> AppendGlyph(UiTextLayoutResult::Storage &slot, const UiTextLayoutInternal::GlyphAppend &placement) const;
         [[nodiscard]] Result<void> BuildOutput(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
                                                std::int32_t lineHeight, std::uint32_t visibleLines, bool sourceTruncated);
         [[nodiscard]] Result<void> PrepareEllipsis(const UiTextLayoutRequest &request, bool needsEllipsis);

@@ -87,7 +87,7 @@ namespace Horo::Runtime::Ui {
         } catch (const std::bad_alloc &) {
             ReleaseSlot(slot);
             return Failure<std::shared_ptr<UiTextLayoutResult::Storage>>(UiErrors::TextLayoutCapacityExceeded);
-        } catch (...) {
+        } catch (const std::exception &) {
             ReleaseSlot(slot);
             return Failure<std::shared_ptr<UiTextLayoutResult::Storage>>(UiErrors::TextLayoutInputInvalid);
         }
