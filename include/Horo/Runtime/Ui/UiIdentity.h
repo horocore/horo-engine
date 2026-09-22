@@ -56,6 +56,7 @@ namespace Horo::Runtime::Ui {
     struct UiElementIdentityTag;
     struct UiCanvasIdentityTag;
     struct UiActionIdentityTag;
+    struct UiBindingIdentityTag;
     struct UiRouteIdentityTag;
 
     /** @brief Stable authored identity of one Runtime UI document. */
@@ -66,6 +67,8 @@ namespace Horo::Runtime::Ui {
     using UiCanvasId = UiStableId<UiCanvasIdentityTag>;
     /** @brief Stable authored identity shared by a typed Runtime UI action contract. */
     using UiActionId = UiStableId<UiActionIdentityTag>;
+    /** @brief Stable authored identity of one Runtime UI binding descriptor. */
+    using UiBindingId = UiStableId<UiBindingIdentityTag>;
     /** @brief Stable authored identity of one Runtime UI route definition. */
     using UiRouteId = UiStableId<UiRouteIdentityTag>;
 
@@ -117,6 +120,8 @@ namespace Horo::Runtime::Ui {
     struct UiCanvasInstanceHandleTag;
     struct UiElementHandleTag;
     struct RuntimeUiInputContextHandleTag;
+    struct UiRouteStackHandleTag;
+    struct UiRouteInstanceHandleTag;
     /** @brief Generation-safe identity of one runtime document-tree instance. */
     using RuntimeUiInstanceId = UiRuntimeHandle<RuntimeUiInstanceHandleTag>;
     /** @brief Generation-safe identity of one instantiated canvas. */
@@ -125,6 +130,10 @@ namespace Horo::Runtime::Ui {
     using UiElementHandle = UiRuntimeHandle<UiElementHandleTag>;
     /** @brief Generation-safe identity of one Runtime UI input audience/viewport context. */
     using RuntimeUiInputContextId = UiRuntimeHandle<RuntimeUiInputContextHandleTag>;
+    /** @brief Generation-safe identity of one owner-scoped Runtime UI route stack. */
+    using UiRouteStackId = UiRuntimeHandle<UiRouteStackHandleTag>;
+    /** @brief Generation-safe identity of one committed route activation in a stack. */
+    using UiRouteInstanceId = UiRuntimeHandle<UiRouteInstanceHandleTag>;
 
     /** @brief Rejects malformed and cross-owner handles before registry access.
      * @param handle Handle submitted to a Runtime UI owner boundary.
@@ -230,6 +239,8 @@ namespace Horo::Runtime::Ui {
     struct UiInteractionRevisionTag;
     struct UiActionSequenceTag;
     struct UiActionOperationTag;
+    struct UiRouteStackRevisionTag;
+    struct UiRouteOperationSequenceTag;
     /** @brief Monotonic revision of one authored Runtime UI document. */
     using UiDocumentRevision = UiRevision<UiDocumentRevisionTag>;
     /** @brief Monotonic revision of one published runtime tree generation. */
@@ -240,6 +251,10 @@ namespace Horo::Runtime::Ui {
     using UiActionSequence = UiRevision<UiActionSequenceTag>;
     /** @brief Owner-local identity correlating a pending action with its terminal result. */
     using UiActionOperationSequence = UiRevision<UiActionOperationTag>;
+    /** @brief Monotonic revision of one committed route stack state. */
+    using UiRouteStackRevision = UiRevision<UiRouteStackRevisionTag>;
+    /** @brief Owner-local sequence assigned to one route operation transaction. */
+    using UiRouteOperationSequence = UiRevision<UiRouteOperationSequenceTag>;
 
     /** @brief Requires an expected revision to match the current owner-published revision.
      * @param expected Revision captured when the caller prepared its command.
@@ -260,4 +275,6 @@ namespace Horo::Runtime::Ui {
     static_assert(sizeof(UiCanvasInstanceId) == 16);
     static_assert(sizeof(UiElementHandle) == 16);
     static_assert(sizeof(RuntimeUiInputContextId) == 16);
+    static_assert(sizeof(UiRouteStackId) == 16);
+    static_assert(sizeof(UiRouteInstanceId) == 16);
 }  // namespace Horo::Runtime::Ui

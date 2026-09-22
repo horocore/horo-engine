@@ -1504,6 +1504,11 @@ add_executable(HoroRuntimeUiIdentityTests
 )
 target_compile_features(HoroRuntimeUiIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiIdentityTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiBindingTests
+        unit/runtime/ui/UiBindingTests.cpp
+)
+target_compile_features(HoroRuntimeUiBindingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiBindingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiDocumentSerializationTests.cpp
@@ -1583,6 +1588,13 @@ add_executable(HoroRuntimeUiActionsTests
 target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiActionsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiActionsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiScreenStackTests
+        unit/runtime/ui/UiScreenStackTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiScreenStackTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiScreenStackTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiScreenStackTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiFocusGraphTests
         unit/runtime/ui/UiFocusGraphTests.cpp
         support/AllocationProbe.cpp
@@ -2006,6 +2018,15 @@ add_executable(HoroBackendOperationRegistryTests
 target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
 add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
+
+add_executable(HoroScriptInvocationTests
+        unit/extensions/ScriptValueTests.cpp
+        unit/extensions/ScriptInvocationTests.cpp
+)
+target_compile_features(HoroScriptInvocationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroScriptInvocationTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroScriptInvocationTests COMMAND HoroScriptInvocationTests)
+
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests
@@ -2299,6 +2320,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveCaptureSnapshotTests
         HoroRuntimeSaveRestoreTransactionTests
         HoroRuntimeUiIdentityTests
+        HoroRuntimeUiBindingTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests
@@ -2313,6 +2335,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeUiPointerCaptureTests
         HoroRuntimeUiActionsTests
+        HoroRuntimeUiScreenStackTests
         HoroRuntimeUiFocusGraphTests
         HoroRuntimeUiControlsTests
         HoroRuntimeSaveArchiveMetadataTests

@@ -212,7 +212,8 @@ namespace Horo::Physics {
     }
 #endif
 
-    TEST_CASE("Physics reference unsupported scenes fail closed on capability evidence", "[physics][reference][capability][headless]") {
+    TEST_CASE("Physics reference unsupported scenes remain explicit beyond generic capabilities",
+              "[physics][reference][capability][headless]") {
         auto nullRuntime = PhysicsRuntime::Create(PhysicsRuntimeMode::Null).Value();
         for (std::size_t index = static_cast<std::size_t>(Test::PhysicsReferenceSceneId::CcdTunnelling);
              index <= static_cast<std::size_t>(Test::PhysicsReferenceSceneId::FixedJoint); ++index) {
@@ -225,11 +226,8 @@ namespace Horo::Physics {
 
 #if HORO_TEST_PHYSICS_NATIVE
         auto canonicalRuntime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
-        for (std::size_t index = static_cast<std::size_t>(Test::PhysicsReferenceSceneId::CcdTunnelling);
-             index <= static_cast<std::size_t>(Test::PhysicsReferenceSceneId::FixedJoint); ++index) {
-            const auto &expectation = Test::PhysicsReferenceSceneCorpusView()[index];
-            REQUIRE(canonicalRuntime->Capability(expectation.observation.requiredCapability) != PhysicsCapabilitySupport::Available);
-        }
+        REQUIRE(canonicalRuntime->Capability(PhysicsCapability::RigidBodies) == PhysicsCapabilitySupport::Available);
+        REQUIRE(canonicalRuntime->Capability(PhysicsCapability::Constraints) == PhysicsCapabilitySupport::Available);
 #endif
     }
 

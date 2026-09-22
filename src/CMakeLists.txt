@@ -285,6 +285,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAccessibilityErrors.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
+        runtime/ui/UiBinding.cpp
+        runtime/ui/UiBindingFingerprint.cpp
+        runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
@@ -303,6 +306,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiScreenStack.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusGraphOperations.cpp
         runtime/ui/UiControls.cpp
@@ -623,6 +627,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldInternal.h
+        physics/PhysicsWorldScene.cpp
         physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
@@ -635,16 +641,20 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.h
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQuery.h
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp
         PROPERTIES
@@ -653,7 +663,11 @@ else()
     target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
 endif()
 
-add_library(HoroPhysicsSceneIntegration STATIC physics/PhysicsSceneActivation.cpp)
+add_library(HoroPhysicsSceneIntegration STATIC
+        physics/PhysicsSceneActivation.cpp
+        physics/PhysicsSceneActivationPlan.cpp
+        physics/PhysicsSceneActivationCapabilities.cpp
+        physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene)
@@ -1556,9 +1570,19 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ScriptExportDescriptorFunctionValidation.cpp
         extensions/manifest/ScriptExportDescriptorCanonical.cpp
         extensions/manifest/ScriptExportDescriptorCompatibility.cpp
+        extensions/script/ScriptValue.cpp
+        extensions/script/ScriptValueValidation.cpp
+        extensions/script/ScriptValueCodec.cpp
+        extensions/script/ScriptValueCodecInternal.h
+        extensions/script/ScriptValueWire.cpp
+        extensions/script/ScriptInvocationInternal.cpp
+        extensions/script/ScriptInvocationInternal.h
+        extensions/script/ScriptInvocationRegistration.cpp
+        extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
+        extensions/registry/ScriptInvocationErrors.cpp
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
