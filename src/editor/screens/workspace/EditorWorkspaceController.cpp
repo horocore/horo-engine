@@ -77,6 +77,10 @@ namespace Horo::Editor {
           m_gameplayBuilds(dependencies.gameplayBuilds), m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment),
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr) {
+        if (dependencies.engineEvents != nullptr) {
+            m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
+            m_engineEventBridge->Attach();
+        }
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
         if (!m_diagnosticSourceNavigator) {
             m_diagnosticSourceNavigator = [](const DiagnosticSourceRequest &source) {
