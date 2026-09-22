@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <ranges>
 #include <span>
 #include <utility>
@@ -68,6 +69,8 @@ namespace Horo::Editor {
         EditorSurfaceEventContextLimits limits;
         std::array<bool, static_cast<std::size_t>(EditorEventKind::Count)> allowed{};
         std::vector<std::shared_ptr<Slot>> slots;
+        // Protects slot ownership across owner-thread admission/close and token revocation on any thread.
+        std::mutex slotsMutex;
         std::atomic<std::size_t> activeSubscriptions{};
         std::atomic<std::size_t> acceptedSubscriptions{};
         std::atomic<std::size_t> rejectedSubscriptions{};
@@ -90,6 +93,7 @@ namespace Horo::Editor {
         }
 
         void Remove(const Slot *slot) noexcept {
+            std::lock_guard lock(slotsMutex);
             const auto found = std::ranges::find_if(slots, [slot](const std::shared_ptr<Slot> &candidate) {
                 return candidate.get() == slot;
             });
@@ -102,10 +106,14 @@ namespace Horo::Editor {
         void Close() noexcept {
             if (closed.exchange(true, std::memory_order_acq_rel))
                 return;
-            for (const std::shared_ptr<Slot> &slot : slots)
+            std::vector<std::shared_ptr<Slot>> slotsToRevoke;
+            {
+                std::lock_guard lock(slotsMutex);
+                slotsToRevoke.swap(slots);
+                activeSubscriptions.store(0, std::memory_order_release);
+            }
+            for (const std::shared_ptr<Slot> &slot : slotsToRevoke)
                 slot->Revoke();
-            slots.clear();
-            activeSubscriptions.store(0, std::memory_order_release);
         }
 
         void Deliver(const EditorEventKind kind, EditorSurfaceEventPayload payload, const EditorSurfaceEventHandler &handler) {
@@ -159,6 +167,7 @@ namespace Horo::Editor {
 
         [[nodiscard]] Result<Subscription> Subscribe(const EditorEventKind kind, EditorSurfaceEventHandler handler,
                                                      const std::shared_ptr<State> &self) {
+            std::lock_guard lock(slotsMutex);
             if (closed.load(std::memory_order_acquire))
                 return Reject(ContextClosed);
             if (!IsKnownEditorEventKind(kind))

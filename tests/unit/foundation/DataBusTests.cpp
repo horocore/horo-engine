@@ -5,11 +5,13 @@
 #include "Horo/Foundation/ProcessEvents.h"
 
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -269,5 +271,45 @@ namespace {
         });
         REQUIRE(afterClose.HasError());
         CHECK(afterClose.ErrorValue().code.Value() == "surface_event_context_closed");
+    }
+
+    TEST_CASE("Surface Event Context Revocation Is Safe Across Threads", "[unit][editor][data_bus]") {
+        Horo::Editor::EditorDataBus editorEvents;
+        const std::array allowed{Horo::EditorEventKind::AssetImported};
+        Horo::Editor::EditorSurfaceEventContext context{
+            editorEvents,
+            Horo::Editor::EditorSurfaceProviderOwnership{"com.example.tools", "com.example.editor", 4},
+            allowed,
+        };
+        auto tokenResult = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([](const auto &) {
+        });
+        REQUIRE(tokenResult.HasValue());
+
+        std::atomic<bool> ready{false};
+        std::atomic<bool> release{false};
+        std::atomic<bool> finished{false};
+        std::thread revoker([token = std::move(tokenResult).Value(), &ready, &release, &finished]() mutable {
+            ready.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            token.Reset();
+            finished.store(true, std::memory_order_release);
+        });
+
+        while (!ready.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        release.store(true, std::memory_order_release);
+        while (!finished.load(std::memory_order_acquire)) {
+            auto candidate = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([](const auto &) {
+            });
+            if (candidate.HasValue())
+                std::move(candidate).Value().Reset();
+            std::this_thread::yield();
+        }
+        revoker.join();
+
+        context.Close();
+        CHECK(context.IsClosed());
+        CHECK(context.Stats().activeSubscriptions == 0);
     }
 }  // namespace

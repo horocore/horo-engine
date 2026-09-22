@@ -206,6 +206,9 @@ namespace Horo::Editor {
                     .buildOutputQuery = panelServices_.buildOutputQuery,
                     .operationQuery = panelServices_.operationQuery,
                     .operationControl = panelServices_.operationControl,
+                    // Built-in panels have no extension activation identity; extension hosts inject
+                    // their own provider-owned context at the descriptor activation boundary.
+                    .surfaceEvents = nullptr,
                 };
                 registry_.AttachAll(panelContext);
                 UpdateStatusItems();
