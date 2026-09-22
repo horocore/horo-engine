@@ -30,12 +30,14 @@ small retained game UI runtime dependent on undocumented external semantics. Hor
 needs a typed, versioned subset whose conflict, overflow and rounding results can
 be tested identically in editor, packaged, headless and renderer-peer compositions.
 
-This decision defines that subset. RUI-002.2 owns canvas reference-resolution,
-safe-area and scale-profile selection. RUI-002.3 owns the incremental engine and
-cache implementation. RUI-002.6 specializes the post-arrange overflow projection
-for clipping, bounded scrolling and focus-driven bring-into-view requests. Later
-tickets may add container features, RTL and pixel-snap policies, but they must
-preserve this precedence and snapshot model or explicitly revise this ADR.
+This decision defines that subset. RUI-002.2 owns canvas reference-resolution and
+scale-profile selection. RUI-002.7 owns the typed safe-area, DPI, UI/font-scale,
+and downstream pixel-snap presentation inputs that produce the logical viewport
+consumed here. RUI-002.3 owns the incremental engine and cache implementation.
+RUI-002.6 specializes the post-arrange overflow projection for clipping, bounded
+scrolling and focus-driven bring-into-view requests. Later tickets may add
+container features and RTL, but they must preserve this precedence and snapshot
+model or explicitly revise this ADR.
 
 ## Decision
 
@@ -277,7 +279,10 @@ validated document, provider revisions, logical viewport and policy must produce
 bit-identical logical boxes independent of frame rate, CPU thread scheduling,
 renderer backend and editor versus packaged host.
 
-RUI-002.7 may snap projected edges to physical pixels using the output/DPI policy.
+RUI-002.7 resolves the physical viewport, safe content rectangle, effective UI
+scale, and output/DPI evidence before layout. Its font scale is an explicit input
+to intrinsic text measurement; it does not change the meaning of non-text logical
+units. It may snap projected edges to physical pixels using the output/DPI policy.
 Snapping is derived render data: it cannot feed back into measure, alter scroll
 extent, become serialized state or replace logical hit-test geometry. If a product
 policy requires hit testing snapped geometry, Renderer must return the presented
