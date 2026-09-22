@@ -66,6 +66,23 @@ namespace {
         ScreenStats &stats_;
     };
 
+    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
+        host.Shutdown();
+        REQUIRE((host.IsShutdown()));
+        REQUIRE((stats.leaves == 1));
+        REQUIRE((stats.destructions == 1));
+        REQUIRE((host.Services().Empty()));
+
+        host.Shutdown();
+        REQUIRE((stats.leaves == 1));
+        REQUIRE((stats.destructions == 1));
+        const Result<void> navigation = host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}});
+        REQUIRE((navigation.HasError()));
+        REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
+        REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
+        jobs.Shutdown(ShutdownPolicy::Cancel);
+    }
+
     TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
@@ -106,19 +123,6 @@ namespace {
         REQUIRE((invalidRoute.ErrorValue().domain.Value() == "horo.editor.screens"));
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
 
-        host.Shutdown();
-        REQUIRE((host.IsShutdown()));
-        REQUIRE((stats.leaves == 1));
-        REQUIRE((stats.destructions == 1));
-        REQUIRE((host.Services().Empty()));
-
-        host.Shutdown();
-        REQUIRE((stats.leaves == 1));
-        REQUIRE((stats.destructions == 1));
-        const Result<void> navigation = host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}});
-        REQUIRE((navigation.HasError()));
-        REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
-        REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
-        jobs.Shutdown(ShutdownPolicy::Cancel);
+        ShutdownAndCheckGuiScreenHost(host, stats, jobs);
     }
 }  // namespace
