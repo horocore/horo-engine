@@ -57,31 +57,22 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] bool ValidateSizes(const EditorThemeSizeTokens &tokens) noexcept {
-            const std::array values{tokens.smallControlHeight,
-                                    tokens.mediumControlHeight,
-                                    tokens.largeControlHeight,
-                                    tokens.textLineHeight,
-                                    tokens.rowGap,
-                                    tokens.defaultWidth,
-                                    tokens.welcomeSideWidth,
-                                    tokens.welcomePadding,
-                                    tokens.modalWidth,
-                                    tokens.modalHeight,
-                                    tokens.modalHeaderHeight,
-                                    tokens.modalFooterHeight,
-                                    tokens.modalSidebarWidth,
-                                    tokens.settingsWidth,
-                                    tokens.settingsHeight,
-                                    tokens.iconSmall,
-                                    tokens.iconMedium,
-                                    tokens.iconLarge,
-                                    tokens.minimumInteractiveTarget};
-            for (const float value : values) {
+            const std::array positiveValues{tokens.smallControlHeight, tokens.mediumControlHeight,
+                                            tokens.largeControlHeight, tokens.textLineHeight,
+                                            tokens.defaultWidth,       tokens.modalWidth,
+                                            tokens.modalHeight,        tokens.modalHeaderHeight,
+                                            tokens.modalFooterHeight,  tokens.modalSidebarWidth,
+                                            tokens.settingsWidth,      tokens.settingsHeight,
+                                            tokens.iconSmall,          tokens.iconMedium,
+                                            tokens.iconLarge,          tokens.minimumInteractiveTarget};
+            for (const float value : positiveValues) {
                 if (!std::isfinite(value) || value <= 0.0F)
                     return false;
             }
-            return tokens.smallControlHeight <= tokens.mediumControlHeight && tokens.mediumControlHeight <= tokens.largeControlHeight &&
-                   tokens.iconSmall <= tokens.iconMedium && tokens.iconMedium <= tokens.iconLarge;
+            return IsFiniteNonNegative(tokens.rowGap) && IsFiniteNonNegative(tokens.welcomeSideWidth) &&
+                   IsFiniteNonNegative(tokens.welcomePadding) && tokens.smallControlHeight <= tokens.mediumControlHeight &&
+                   tokens.mediumControlHeight <= tokens.largeControlHeight && tokens.iconSmall <= tokens.iconMedium &&
+                   tokens.iconMedium <= tokens.iconLarge;
         }
 
         [[nodiscard]] bool ValidateRadii(const EditorThemeRadiusTokens &tokens) noexcept {

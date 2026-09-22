@@ -172,6 +172,8 @@ namespace Horo::Extensions {
                 return frame.metrics.largeControlHeight;
             case TextLineHeight:
                 return frame.metrics.textLineHeight;
+            case RowGap:
+                return frame.metrics.rowGap;
             case DefaultWidth:
                 return frame.metrics.defaultWidth;
             case WelcomeSideWidth:

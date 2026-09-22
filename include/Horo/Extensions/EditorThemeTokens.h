@@ -76,6 +76,7 @@ namespace Horo::Extensions {
         MediumControlHeight,
         LargeControlHeight,
         TextLineHeight,
+        RowGap,
         DefaultWidth,
         WelcomeSideWidth,
         WelcomePadding,
@@ -438,7 +439,7 @@ namespace Horo::Extensions {
         bool keyboardFocusVisible{true};
     };
 
-    /** @brief Resolved motion timings and accessibility motion policy. */
+    /** @brief Resolved motion timings; reduced-motion policy lives in accessibility evidence. */
     struct EditorThemeMotionTokens final {
         float instantSeconds{0.0F};
         float fastSeconds{0.10F};
@@ -448,7 +449,6 @@ namespace Horo::Extensions {
         float pressSeconds{0.08F};
         float focusSeconds{0.15F};
         float modalSeconds{0.22F};
-        bool reduceMotion{};
     };
 
     /** @brief Semantic font roles and their resolved logical sizes. */

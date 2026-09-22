@@ -6,7 +6,7 @@ namespace Horo::Extensions {
     EditorThemeMotionRole ResolveEditorThemeMotionRole(const EditorThemeMotionRole requested, const EditorThemeFrame &frame) noexcept {
         if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeMotionRole::Count) || requested == EditorThemeMotionRole::None)
             return EditorThemeMotionRole::None;
-        if (frame.accessibility.reduceMotion || frame.motion.reduceMotion)
+        if (frame.accessibility.reduceMotion)
             return ThemeTokenInternal::IsSupported(frame.supportedMotionMask, EditorThemeMotionRole::Instant, EditorThemeMotionRoleBit)
                        ? EditorThemeMotionRole::Instant
                        : EditorThemeMotionRole::None;

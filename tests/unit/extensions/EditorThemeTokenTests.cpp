@@ -45,6 +45,7 @@ namespace Horo::Extensions::Tests {
         CHECK(ColorFor(frame, EditorThemeColorRole::Accent).red == Catch::Approx(0.1F));
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Heading) == Catch::Approx(22.0F));
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::CardPadding) == Catch::Approx(18.0F));
+        CHECK(SizeFor(frame, EditorThemeSizeRole::RowGap) == Catch::Approx(8.0F));
         CHECK(SizeFor(frame, EditorThemeSizeRole::MinimumInteractiveTarget) == Catch::Approx(24.0F));
         CHECK(RadiusFor(frame, EditorThemeRadiusRole::FocusRing) == Catch::Approx(2.0F));
         CHECK(MotionFor(frame, EditorThemeMotionRole::Modal) == Catch::Approx(0.22F));
@@ -111,6 +112,12 @@ namespace Horo::Extensions::Tests {
         frame = {};
         frame.uiScale = 4.0F;
         RequireErrorCode(ValidateEditorThemeFrame(frame), "editor_theme_token_invalid");
+
+        frame = {};
+        frame.metrics.rowGap = 0.0F;
+        frame.metrics.welcomeSideWidth = 0.0F;
+        frame.metrics.welcomePadding = 0.0F;
+        REQUIRE(ValidateEditorThemeFrame(frame).HasValue());
 
         frame = {};
         frame.supportedIconMask = 1ULL << 63U;
