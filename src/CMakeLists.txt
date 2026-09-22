@@ -279,14 +279,23 @@ target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
+        runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiImageResourceErrors.cpp
+        runtime/ui/UiImageResource.cpp
         runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
+        runtime/ui/UiBinding.cpp
+        runtime/ui/UiBindingFingerprint.cpp
+        runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
+        runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
+        runtime/ui/UiCookedDocument.cpp
         runtime/ui/UiDocumentSerialization.cpp
+        runtime/ui/UiDocumentLocalizationSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
@@ -309,6 +318,12 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLayoutSemantics.cpp
         runtime/ui/UiLayoutArrangement.cpp
         runtime/ui/UiLayoutTypes.cpp
+        runtime/ui/UiTextLayoutErrors.cpp
+        runtime/ui/UiTextLayout.cpp
+        runtime/ui/UiTextLayoutOutput.cpp
+        runtime/ui/UiTextLayoutPlanning.cpp
+        runtime/ui/UiTextLayoutPublication.cpp
+        runtime/ui/UiTextLayoutTypes.cpp
         runtime/ui/UiStyle.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp
@@ -319,6 +334,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
         runtime/ui/UiRenderGeometry.cpp
+        runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
@@ -669,6 +685,8 @@ target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics Hor
 
 add_library(HoroAI STATIC
         runtime/ai/api/AIErrors.cpp
+        runtime/ai/api/AISceneComponents.cpp
+        runtime/ai/api/AISceneErrors.cpp
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/BehaviorTree.cpp
@@ -682,6 +700,14 @@ add_library(HoroAI STATIC
 add_library(HoroEngine::AI ALIAS HoroAI)
 target_compile_features(HoroAI PUBLIC cxx_std_20)
 target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
+
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
+
+add_library(HoroAISceneIntegration STATIC
+        runtime/ai/integration/AISceneActivation.cpp)
+add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
+target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
 
 add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationCompression.cpp
@@ -748,6 +774,7 @@ add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp
         runtime/cinematic/model/CinematicErrors.cpp
         runtime/cinematic/model/CinematicIdentity.cpp
+        runtime/cinematic/model/PropertyTrack.cpp
         runtime/cinematic/model/SequenceAsset.cpp
         runtime/cinematic/model/SequenceAssetCook.cpp
         runtime/cinematic/model/TransformTrack.cpp
@@ -756,7 +783,7 @@ add_library(HoroEngine::CinematicModel ALIAS HoroCinematicModel)
 target_compile_features(HoroCinematicModel PUBLIC cxx_std_20)
 target_include_directories(HoroCinematicModel PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroCinematicModel
-        PUBLIC HoroEngine::Foundation HoroEngine::Assets
+        PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json
 )
 
@@ -765,6 +792,9 @@ add_library(HoroCinematicRuntime STATIC
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
         runtime/cinematic/player/SequencePlayer.cpp
         runtime/cinematic/player/SequencePlayerErrors.cpp
+        runtime/cinematic/player/SequencePlaybackRuntime.cpp
+        runtime/cinematic/player/SequencePlaybackRuntimeErrors.cpp
+        runtime/cinematic/player/SequencePlaybackRuntimeService.cpp
 )
 add_library(HoroEngine::CinematicRuntime ALIAS HoroCinematicRuntime)
 target_compile_features(HoroCinematicRuntime PUBLIC cxx_std_20)
@@ -1072,6 +1102,8 @@ target_link_libraries(HoroRenderFrontend
 )
 
 add_library(HoroSceneModel STATIC
+        runtime/scene/PropertyBindingErrors.cpp
+        runtime/scene/PropertyBindingRegistry.cpp
         runtime/scene/primitive/PrimitiveCatalog.cpp
         runtime/scene/primitive/PrimitiveMesh.cpp
         runtime/scene/primitive/PrimitiveMeshErrors.cpp
@@ -1083,7 +1115,14 @@ target_include_directories(HoroSceneModel
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi)
+target_link_libraries(HoroSceneModel
+        PUBLIC HoroEngine::Foundation HoroEngine::GameplayApi HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi
+)
+
+# CinematicModel is declared earlier for the runtime target graph, while its
+# SceneModel dependency is defined in this block. Keep the public edge explicit
+# after both targets exist.
+target_link_libraries(HoroCinematicModel PUBLIC HoroEngine::SceneModel)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.
@@ -1202,6 +1241,7 @@ target_include_directories(HoroEditorModel
 target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::AI
         HoroEngine::Prefab
         HoroEngine::PrefabAuthoring
         HoroEngine::SceneModel
@@ -1558,6 +1598,9 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
+    extensions/manifest/EditorUiForm.cpp
+    extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h
         extensions/manifest/ScriptExportDescriptorValidationSupport.cpp
@@ -1565,9 +1608,19 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ScriptExportDescriptorFunctionValidation.cpp
         extensions/manifest/ScriptExportDescriptorCanonical.cpp
         extensions/manifest/ScriptExportDescriptorCompatibility.cpp
+        extensions/script/ScriptValue.cpp
+        extensions/script/ScriptValueValidation.cpp
+        extensions/script/ScriptValueCodec.cpp
+        extensions/script/ScriptValueCodecInternal.h
+        extensions/script/ScriptValueWire.cpp
+        extensions/script/ScriptInvocationInternal.cpp
+        extensions/script/ScriptInvocationInternal.h
+        extensions/script/ScriptInvocationRegistration.cpp
+        extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
+        extensions/registry/ScriptInvocationErrors.cpp
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp

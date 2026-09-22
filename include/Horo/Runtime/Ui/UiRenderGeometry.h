@@ -30,6 +30,7 @@ namespace Horo::Runtime::Ui {
         ImageRectangle,
         SpriteRectangle,
         TextGlyphs,
+        NineSliceRectangle,
     };
 
     /** @brief One logical vertex in 1/64-DIP coordinates and normalized source coordinates. */

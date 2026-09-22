@@ -556,6 +556,9 @@ dependency direction in [System Design](./foundation/system-design.md).
   [ADR-055](../adr/055-extension-manifest-v1-typed-model.md); external editor UI
   uses the host-rendered boundary in
   [ADR-056](../adr/056-external-editor-ui-boundary.md).
+- [Extension Declarative Form Kit](./extensions/editor-ui-form-kit.md): bounded
+  standard components, typed form composition, semantic theme roles, and the
+  shared GUI/headless render projection.
 
 ## Packages
 

@@ -26,6 +26,21 @@ namespace Horo::Runtime::Ui {
             return role >= UiRenderResourceRole::Image && role <= UiRenderResourceRole::Mask;
         }
 
+        bool ValidImageReference(const UiRenderResourceReference &resource) noexcept {
+            if (resource.role != UiRenderResourceRole::Image)
+                return true;
+            using enum UiImageResidencyState;
+            const bool validColorSpace =
+                static_cast<std::uint8_t>(resource.colorSpace) <= static_cast<std::uint8_t>(UiImageColorSpace::Srgb);
+            const bool validFallback =
+                static_cast<std::uint8_t>(resource.fallback) <= static_cast<std::uint8_t>(UiImageFallbackPolicy::Checkerboard);
+            const bool validResidency =
+                static_cast<std::uint8_t>(resource.residency) <= static_cast<std::uint8_t>(UiImageResidencyState::Failed);
+            const bool drawable = resource.residency == Resident ||
+                                  (resource.residency == MissingFallback && resource.fallback != UiImageFallbackPolicy::Reject);
+            return validColorSpace && resource.sampling.IsValid() && validFallback && validResidency && drawable;
+        }
+
         bool PresentIndex(const std::uint32_t index, const std::size_t size) noexcept {
             return index < size;
         }
@@ -99,9 +114,12 @@ namespace Horo::Runtime::Ui {
         }
 
         Result<void> ValidateResources(const std::span<const UiRenderResourceReference> resources) {
-            for (const auto &resource : resources)
+            for (const auto &resource : resources) {
                 if (!resource.asset.IsValid() || !resource.revision.IsValid() || !ValidRole(resource.role))
                     return Failure(UiErrors::RenderResourceReferenceInvalid);
+                if (!ValidImageReference(resource))
+                    return Failure(UiErrors::RenderResourceReferenceInvalid);
+            }
             return Result<void>::Success();
         }
 
@@ -160,6 +178,15 @@ namespace Horo::Runtime::Ui {
             if (!PresentIndex(draw.resource, resources.size()) || resources[draw.resource].role != UiRenderResourceRole::Image)
                 return Failure(UiErrors::RenderResourceReferenceInvalid);
             return draw.tint.IsValid() && ValidUvRect(draw.uv) ? Result<void>::Success() : Failure(UiErrors::RenderCommandInvalid);
+        }
+
+        Result<void> ValidatePayload(const UiNineSliceDraw &draw, const std::span<const UiTextRun>,
+                                     const std::span<const UiRenderResourceReference> resources) {
+            if (!PresentIndex(draw.resource, resources.size()) || resources[draw.resource].role != UiRenderResourceRole::Image)
+                return Failure(UiErrors::RenderResourceReferenceInvalid);
+            return draw.tint.IsValid() && ValidUvRect(draw.uv) && draw.sourceExtent.IsValid() && draw.insets.IsValid(draw.sourceExtent)
+                       ? Result<void>::Success()
+                       : Failure(UiErrors::RenderCommandInvalid);
         }
 
         Result<void> ValidatePayload(const UiTextDraw &draw, const std::span<const UiTextRun> runs,
