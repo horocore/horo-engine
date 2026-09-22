@@ -130,6 +130,27 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(utf8proc)
 
+# Runtime UI shaping uses HarfBuzz as a private, backend-neutral shaping strategy.
+# Keep the dependency self-contained and deterministic: platform shapers, font
+# discovery, and HarfBuzz types never cross the Horo public header boundary.
+set(HORO_HARFBUZZ_REVISION "7497c4147469fd4102a7229222586ad5c743c5a1")
+set(HB_BUILD_UTILS OFF CACHE BOOL "" FORCE)
+set(HB_BUILD_SUBSET OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_CAIRO OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_FREETYPE OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_GRAPHITE2 OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_GLIB OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_ICU OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_CORETEXT OFF CACHE BOOL "" FORCE)
+set(HB_HAVE_GOBJECT OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    harfbuzz
+    GIT_REPOSITORY https://github.com/harfbuzz/harfbuzz.git
+    GIT_TAG "${HORO_HARFBUZZ_REVISION}"
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(harfbuzz)
+
 # The extension marketplace is part of every editor distribution. Build its
 # HTTPS stack from pinned sources so users do not need a separately installed
 # libcurl SDK. Prefer the native Windows trust store through Schannel; use the

@@ -98,6 +98,11 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::TextLayoutInputInvalid,    &UiErrors::TextLayoutSourceStale,      &UiErrors::TextLayoutCapacityExceeded,
             &UiErrors::TextLayoutEllipsisInvalid, &UiErrors::TextLayoutStorageExhausted, &UiErrors::TextLayoutLifecycleUnavailable,
         };
+        const std::array textShaping{
+            &UiErrors::TextInputInvalid,          &UiErrors::TextFeatureInvalid,       &UiErrors::TextFontInvalid,
+            &UiErrors::TextFallbackInvalid,       &UiErrors::TextMissingCoverage,      &UiErrors::TextShapeInvalid,
+            &UiErrors::TextShapeStorageExhausted, &UiErrors::TextLifecycleUnavailable,
+        };
         const std::array glyphAtlas{
             &UiErrors::GlyphAtlasInputInvalid,
             &UiErrors::GlyphAtlasSourceStale,
@@ -175,12 +180,13 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + glyphAtlas.size() + pointerCapture.size() +
-                                                        actions.size() + bindings.size() + controls.size() + focus.size() +
-                                                        renderGeometry.size() + accessibility.size()>
+            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + textShaping.size() + glyphAtlas.size() +
+                                                        pointerCapture.size() + actions.size() + bindings.size() + controls.size() +
+                                                        focus.size() + renderGeometry.size() + accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
             output = std::ranges::copy(textLayout, output).out;
+            output = std::ranges::copy(textShaping, output).out;
             output = std::ranges::copy(glyphAtlas, output).out;
             output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;

@@ -1640,6 +1640,11 @@ add_executable(HoroRuntimeUiControlsTests
 target_compile_features(HoroRuntimeUiControlsTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiControlsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiControlsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiTextShapingTests
+        unit/runtime/ui/UiTextShapingTests.cpp
+)
+target_compile_features(HoroRuntimeUiTextShapingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiTextShapingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeSaveArchiveMetadataTests
         unit/runtime/save/SaveArchiveMetadataTests.cpp
 )
@@ -2375,6 +2380,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiScreenStackTests
         HoroRuntimeUiFocusGraphTests
         HoroRuntimeUiControlsTests
+        HoroRuntimeUiTextShapingTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests
         HoroRuntimeSaveArchiveFinalizationTests

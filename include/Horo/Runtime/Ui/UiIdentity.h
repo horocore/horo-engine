@@ -56,6 +56,7 @@ namespace Horo::Runtime::Ui {
     struct UiElementIdentityTag;
     struct UiCanvasIdentityTag;
     struct UiActionIdentityTag;
+    struct UiFontFaceIdentityTag;
     struct UiBindingIdentityTag;
     struct UiRouteIdentityTag;
 
@@ -67,6 +68,8 @@ namespace Horo::Runtime::Ui {
     using UiCanvasId = UiStableId<UiCanvasIdentityTag>;
     /** @brief Stable authored identity shared by a typed Runtime UI action contract. */
     using UiActionId = UiStableId<UiActionIdentityTag>;
+    /** @brief Stable authored identity of one Runtime UI font face instance source. */
+    using UiFontFaceId = UiStableId<UiFontFaceIdentityTag>;
     /** @brief Stable authored identity of one Runtime UI binding descriptor. */
     using UiBindingId = UiStableId<UiBindingIdentityTag>;
     /** @brief Stable authored identity of one Runtime UI route definition. */
@@ -239,6 +242,9 @@ namespace Horo::Runtime::Ui {
     struct UiInteractionRevisionTag;
     struct UiActionSequenceTag;
     struct UiActionOperationTag;
+    struct UiTextContentRevisionTag;
+    struct UiTextFontRevisionTag;
+    struct UiTextShapeRevisionTag;
     struct UiRouteStackRevisionTag;
     struct UiRouteOperationSequenceTag;
     /** @brief Monotonic revision of one authored Runtime UI document. */
@@ -251,6 +257,12 @@ namespace Horo::Runtime::Ui {
     using UiActionSequence = UiRevision<UiActionSequenceTag>;
     /** @brief Owner-local identity correlating a pending action with its terminal result. */
     using UiActionOperationSequence = UiRevision<UiActionOperationTag>;
+    /** @brief Monotonic source-content revision consumed by one text shaping request. */
+    using UiTextContentRevision = UiRevision<UiTextContentRevisionTag>;
+    /** @brief Monotonic immutable font-registry revision consumed by one text shaping request. */
+    using UiTextFontRevision = UiRevision<UiTextFontRevisionTag>;
+    /** @brief Monotonic immutable shaped-result revision published by one text shaper. */
+    using UiTextShapeRevision = UiRevision<UiTextShapeRevisionTag>;
     /** @brief Monotonic revision of one committed route stack state. */
     using UiRouteStackRevision = UiRevision<UiRouteStackRevisionTag>;
     /** @brief Owner-local sequence assigned to one route operation transaction. */
