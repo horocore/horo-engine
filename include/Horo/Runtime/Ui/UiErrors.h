@@ -184,6 +184,16 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor RenderPresentationInvalid;
     /** @brief Runtime UI render-completion evidence is older than the last observed or presented revision. */
     extern const ErrorCodeDescriptor RenderPresentationStale;
+    /** @brief A Runtime UI image or atlas resource declaration is malformed. */
+    extern const ErrorCodeDescriptor ImageResourceInvalid;
+    /** @brief A Runtime UI image region is absent, duplicated, or inconsistent with its page. */
+    extern const ErrorCodeDescriptor ImageRegionInvalid;
+    /** @brief A Runtime UI image publication carries incompatible residency or fallback evidence. */
+    extern const ErrorCodeDescriptor ImageResidencyInvalid;
+    /** @brief Every preallocated Runtime UI image-resource slot is occupied or permanently retired. */
+    extern const ErrorCodeDescriptor ImageResourceStorageExhausted;
+    /** @brief A Runtime UI image-resource registry is closed and rejects new admission. */
+    extern const ErrorCodeDescriptor ImageResourceLifecycleUnavailable;
     /** @brief Runtime UI diagnostic evidence is malformed or exceeds its fixed bounds. */
     extern const ErrorCodeDescriptor DiagnosticInvalid;
     /** @brief A Runtime UI diagnostic category or source error is not part of the declared contract. */

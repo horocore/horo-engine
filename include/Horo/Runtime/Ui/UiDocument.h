@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Runtime/Ui/UiAssetDependency.h"
 #include "Horo/Runtime/Ui/UiCanvasSpace.h"
 
 #include <compare>
@@ -108,15 +109,6 @@ namespace Horo::Runtime::Ui {
         bool modal{};
 
         [[nodiscard]] auto operator<=>(const UiRouteMetadata &) const noexcept = default;
-    };
-
-    /** @brief One asset required or optionally consumed by a UI document. */
-    struct UiAssetDependency final {
-        Assets::AssetId asset;            /**< Stable referenced asset identity. */
-        Assets::AssetTypeId expectedType; /**< Type required when the asset is resolved. */
-        bool required{true};              /**< Whether missing residency prevents instance activation. */
-        /** @brief Compares canonical dependency evidence. @return Structural ordering and equality. */
-        [[nodiscard]] auto operator<=>(const UiAssetDependency &) const noexcept = default;
     };
 
     /** @brief Immutable validated authoring model stored by a `.uicanvas` document owner. */

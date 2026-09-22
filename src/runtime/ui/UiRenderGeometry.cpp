@@ -24,7 +24,7 @@ namespace Horo::Runtime::Ui {
         inline constexpr std::uint64_t BuildingLease = std::numeric_limits<std::uint64_t>::max();
 
         [[nodiscard]] constexpr bool IsKnown(const UiRenderGeometryPrimitive value) noexcept {
-            return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::TextGlyphs;
+            return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::NineSliceRectangle;
         }
 
         [[nodiscard]] bool FitsRange(const std::uint32_t first, const std::uint32_t count, const std::size_t size) noexcept {
@@ -77,6 +77,9 @@ namespace Horo::Runtime::Ui {
                 } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
                     key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
                     key.resource = draw.resource;
+                } else if constexpr (std::is_same_v<Draw, UiNineSliceDraw>) {
+                    key.primitive = UiRenderGeometryPrimitive::NineSliceRectangle;
+                    key.resource = draw.resource;
                 } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
                     if (draw.run >= snapshot.TextRuns().size())
                         return Failure(UiErrors::RenderGeometryInvalid);
@@ -95,6 +98,8 @@ namespace Horo::Runtime::Ui {
                 if constexpr (std::is_same_v<Draw, UiSolidDraw> || std::is_same_v<Draw, UiImageDraw> ||
                               std::is_same_v<Draw, UiSpriteDraw>) {
                     return Result<std::array<std::size_t, 2>>::Success({4, 6});
+                } else if constexpr (std::is_same_v<Draw, UiNineSliceDraw>) {
+                    return Result<std::array<std::size_t, 2>>::Success({36, 54});
                 } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
                     const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
                     return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
@@ -147,6 +152,37 @@ namespace Horo::Runtime::Ui {
             AppendQuad(vertices, indices, {&transform, {x + extentX - vertical, y + horizontal}, {vertical, innerHeight}, uv, color});
         }
 
+        void AppendNineSlice(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices,
+                             const UiLogicalTransform &transform, const UiLogicalRect rect, const UiNineSliceDraw &draw,
+                             const UiLinearColor color) {
+            const float x = static_cast<float>(rect.origin.x);
+            const float y = static_cast<float>(rect.origin.y);
+            const float width = static_cast<float>(rect.extent.width);
+            const float height = static_cast<float>(rect.extent.height);
+            const float sourceWidth = static_cast<float>(draw.sourceExtent.width);
+            const float sourceHeight = static_cast<float>(draw.sourceExtent.height);
+            const float uvWidth = draw.uv[2] - draw.uv[0];
+            const float uvHeight = draw.uv[3] - draw.uv[1];
+            const float leftFraction = static_cast<float>(draw.insets.left) / sourceWidth;
+            const float rightFraction = static_cast<float>(draw.insets.right) / sourceWidth;
+            const float topFraction = static_cast<float>(draw.insets.top) / sourceHeight;
+            const float bottomFraction = static_cast<float>(draw.insets.bottom) / sourceHeight;
+            const std::array<float, 4> xPositions{x, x + width * leftFraction, x + width * (1.0F - rightFraction), x + width};
+            const std::array<float, 4> yPositions{y, y + height * topFraction, y + height * (1.0F - bottomFraction), y + height};
+            const std::array<float, 4> uCoordinates{draw.uv[0], draw.uv[0] + uvWidth * leftFraction, draw.uv[2] - uvWidth * rightFraction,
+                                                    draw.uv[2]};
+            const std::array<float, 4> vCoordinates{draw.uv[1], draw.uv[1] + uvHeight * topFraction, draw.uv[3] - uvHeight * bottomFraction,
+                                                    draw.uv[3]};
+            for (std::size_t row = 0; row < 3; ++row)
+                for (std::size_t column = 0; column < 3; ++column)
+                    AppendQuad(vertices, indices,
+                               {&transform,
+                                {xPositions[column], yPositions[row]},
+                                {xPositions[column + 1] - xPositions[column], yPositions[row + 1] - yPositions[row]},
+                                {uCoordinates[column], vCoordinates[row], uCoordinates[column + 1], vCoordinates[row + 1]},
+                                color});
+        }
+
         [[nodiscard]] Result<void> ValidateGenerated(const std::span<const UiRenderVertex> vertices,
                                                      const std::span<const std::uint32_t> indices,
                                                      const std::span<const UiRenderGeometryBatch> batches, const std::size_t commandCount) {
@@ -185,8 +221,9 @@ namespace Horo::Runtime::Ui {
     bool UiRenderGeometryBatchKey::IsValid() const noexcept {
         if (!IsKnown(primitive))
             return false;
-        const bool textured = primitive == UiRenderGeometryPrimitive::ImageRectangle ||
-                              primitive == UiRenderGeometryPrimitive::SpriteRectangle || primitive == UiRenderGeometryPrimitive::TextGlyphs;
+        const bool textured =
+            primitive == UiRenderGeometryPrimitive::ImageRectangle || primitive == UiRenderGeometryPrimitive::SpriteRectangle ||
+            primitive == UiRenderGeometryPrimitive::TextGlyphs || primitive == UiRenderGeometryPrimitive::NineSliceRectangle;
         return textured ? resource != NoUiRenderIndex : resource == NoUiRenderIndex;
     }
 
@@ -286,6 +323,8 @@ namespace Horo::Runtime::Ui {
                     appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, draw.tint);
                 } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
                     appendRectangle(draw.uv, draw.tint);
+                } else if constexpr (std::is_same_v<Draw, UiNineSliceDraw>) {
+                    AppendNineSlice(vertices, indices, transform, command.rect, draw, WithOpacity(draw.tint, command.opacity));
                 } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
                     if (draw.run >= snapshot.TextRuns().size())
                         return Failure(UiErrors::RenderGeometryInvalid);
