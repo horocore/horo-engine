@@ -95,6 +95,61 @@ namespace Horo::Runtime::Ui {
             return std::move(builder).Build();
         }
 
+        std::vector<UiTypedProperty> MakeTypedProperties(const UiReference &elementReference) {
+            return {UiTypedProperty{"boolean", true}, UiTypedProperty{"integer", std::int64_t{-7}}, UiTypedProperty{"number", -2.5},
+                    UiTypedProperty{"text", std::string{"typed"}}, UiTypedProperty{"reference", elementReference}};
+        }
+
+        UiLocalizedText MakeTypedLocalizedText() {
+            return UiLocalizedText::Create(UiMessageKey::Create("game", "typed_values").Value(),
+                                           std::vector<UiLocalizedArgument>{{"integer", std::int64_t{-7}},
+                                                                            {"number", 2.5},
+                                                                            {"boolean", true},
+                                                                            {"date", UiLocalizedDateTime{-10}},
+                                                                            {"duration", UiLocalizedDuration{25}},
+                                                                            {"enum", UiLocalizedStableEnum{3, 4}},
+                                                                            {"text", std::string{"display"}},
+                                                                            {"shortcut", UiLocalizedShortcut{2, 65}}},
+                                           {}, UiLocalizedTextFailurePolicy::UseSafePlaceholder)
+                .Value();
+        }
+
+        UiDocument MakeTypedValueDocument() {
+            const auto canvasId = IdWith<UiCanvasId>(41);
+            const auto root = IdWith<UiElementId>(42);
+            const auto asset = Asset(45);
+            const auto assetType = Type("core.texture");
+            const UiReference elementReference{.kind = UiReferenceKind::Element, .element = root};
+            const UiReference canvasReference{.kind = UiReferenceKind::Canvas, .canvas = canvasId};
+            const UiReference documentReference{.kind = UiReferenceKind::Document, .document = IdWith<UiDocumentId>(43)};
+            const UiReference assetReference{.kind = UiReferenceKind::Asset, .asset = asset, .expectedAssetType = assetType};
+
+            UiDocumentBuilder builder{IdWith<UiDocumentId>(40), Revision(8)};
+            REQUIRE(builder.AddCanvas({canvasId, root, UiRenderMode::ScreenSpaceCamera, {800, 600}, UiScaleMode::ConstantPixelSize})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddElement({root,
+                                     {},
+                                     Type("core.panel"),
+                                     MakeTypedProperties(elementReference),
+                                     {elementReference, canvasReference, documentReference, assetReference}})
+                        .HasValue());
+            REQUIRE(builder.RequireAsset({asset, assetType, true}).HasValue());
+            REQUIRE(builder.AddLocalizedText(MakeTypedLocalizedText()).HasValue());
+
+            const auto neutralAsset =
+                UiLocalizedAssetReference::Create(assetType, UiLocalizedAssetFallbackPolicy::UseNeutral,
+                                                  std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(46)}}, Asset(47));
+            REQUIRE(neutralAsset.HasValue());
+            REQUIRE(builder.AddLocalizedAsset(neutralAsset.Value()).HasValue());
+            const auto omittedAsset = UiLocalizedAssetReference::Create(assetType, UiLocalizedAssetFallbackPolicy::Omit,
+                                                                        std::vector<UiLocalizedAssetVariant>{{Locale("de-DE"), Asset(48)}});
+            REQUIRE(omittedAsset.HasValue());
+            REQUIRE(builder.AddLocalizedAsset(omittedAsset.Value()).HasValue());
+            REQUIRE(builder.AddRoute({IdWith<UiRouteId>(44), UiPresentationBand::Debug, 17, true}).HasValue());
+            return std::move(builder).Build().Value();
+        }
+
         TEST_CASE("Runtime UI document serialization round trips typed content canonically", "[runtime_ui][document][serialization]") {
             const auto document = MakeDocument();
             const auto encoded = SerializeUiDocument(document);
@@ -121,68 +176,13 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Runtime UI document serialization round trips every closed typed value and reference kind",
                   "[runtime_ui][document][serialization][typed]") {
-            const auto documentId = IdWith<UiDocumentId>(40);
-            const auto canvasId = IdWith<UiCanvasId>(41);
-            const auto root = IdWith<UiElementId>(42);
-            const auto referencedDocument = IdWith<UiDocumentId>(43);
-            const auto routeId = IdWith<UiRouteId>(44);
-            const auto asset = Asset(45);
-            const auto assetType = Type("core.texture");
-
-            const UiReference elementReference{.kind = UiReferenceKind::Element, .element = root};
-            const UiReference canvasReference{.kind = UiReferenceKind::Canvas, .canvas = canvasId};
-            const UiReference documentReference{.kind = UiReferenceKind::Document, .document = referencedDocument};
-            const UiReference assetReference{.kind = UiReferenceKind::Asset, .asset = asset, .expectedAssetType = assetType};
-            std::vector<UiTypedProperty> properties{{"boolean", true},
-                                                    {"integer", std::int64_t{-7}},
-                                                    {"number", -2.5},
-                                                    {"text", std::string{"typed"}},
-                                                    {"reference", elementReference}};
-
-            UiDocumentBuilder builder{documentId, Revision(8)};
-            REQUIRE(builder.AddCanvas({canvasId, root, UiRenderMode::ScreenSpaceCamera, {800, 600}, UiScaleMode::ConstantPixelSize})
-                        .HasValue());
-            REQUIRE(builder
-                        .AddElement({root,
-                                     {},
-                                     Type("core.panel"),
-                                     std::move(properties),
-                                     {elementReference, canvasReference, documentReference, assetReference}})
-                        .HasValue());
-            REQUIRE(builder.RequireAsset({asset, assetType, true}).HasValue());
-
-            const auto localizedText = UiLocalizedText::Create(UiMessageKey::Create("game", "typed_values").Value(),
-                                                               std::vector<UiLocalizedArgument>{{"integer", std::int64_t{-7}},
-                                                                                                {"number", 2.5},
-                                                                                                {"boolean", true},
-                                                                                                {"date", UiLocalizedDateTime{-10}},
-                                                                                                {"duration", UiLocalizedDuration{25}},
-                                                                                                {"enum", UiLocalizedStableEnum{3, 4}},
-                                                                                                {"text", std::string{"display"}},
-                                                                                                {"shortcut", UiLocalizedShortcut{2, 65}}},
-                                                               {}, UiLocalizedTextFailurePolicy::UseSafePlaceholder);
-            REQUIRE(localizedText.HasValue());
-            REQUIRE(builder.AddLocalizedText(localizedText.Value()).HasValue());
-
-            const auto neutralAsset =
-                UiLocalizedAssetReference::Create(assetType, UiLocalizedAssetFallbackPolicy::UseNeutral,
-                                                  std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(46)}}, Asset(47));
-            REQUIRE(neutralAsset.HasValue());
-            REQUIRE(builder.AddLocalizedAsset(neutralAsset.Value()).HasValue());
-            const auto omittedAsset = UiLocalizedAssetReference::Create(assetType, UiLocalizedAssetFallbackPolicy::Omit,
-                                                                        std::vector<UiLocalizedAssetVariant>{{Locale("de-DE"), Asset(48)}});
-            REQUIRE(omittedAsset.HasValue());
-            REQUIRE(builder.AddLocalizedAsset(omittedAsset.Value()).HasValue());
-            REQUIRE(builder.AddRoute({routeId, UiPresentationBand::Debug, 17, true}).HasValue());
-
-            const auto document = std::move(builder).Build();
-            REQUIRE(document.HasValue());
-            const auto encoded = SerializeUiDocument(document.Value());
+            const auto document = MakeTypedValueDocument();
+            const auto encoded = SerializeUiDocument(document);
             REQUIRE(encoded.HasValue());
             const auto decoded = DeserializeUiDocument(encoded.Value());
             REQUIRE(decoded.HasValue());
-            REQUIRE(std::ranges::equal(decoded.Value().Elements(), document.Value().Elements()));
-            REQUIRE(std::ranges::equal(decoded.Value().Routes(), document.Value().Routes()));
+            REQUIRE(std::ranges::equal(decoded.Value().Elements(), document.Elements()));
+            REQUIRE(std::ranges::equal(decoded.Value().Routes(), document.Routes()));
             REQUIRE(decoded.Value().LocalizedTexts().size() == 1);
             REQUIRE(decoded.Value().LocalizedTexts()[0].Arguments().size() == 8);
             REQUIRE(decoded.Value().LocalizedTexts()[0].FailurePolicy() == UiLocalizedTextFailurePolicy::UseSafePlaceholder);
