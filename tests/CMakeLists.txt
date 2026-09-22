@@ -1550,6 +1550,11 @@ add_executable(HoroRuntimeUiLayoutTests
 )
 target_compile_features(HoroRuntimeUiLayoutTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiStyleTests
+        unit/runtime/ui/UiStyleTests.cpp
+)
+target_compile_features(HoroRuntimeUiStyleTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiStyleTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiHitTestingTests
         unit/runtime/ui/UiHitTestingTests.cpp
         support/AllocationProbe.cpp
@@ -1578,6 +1583,20 @@ add_executable(HoroRuntimeUiActionsTests
 target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiActionsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiActionsTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiScreenStackTests
+        unit/runtime/ui/UiScreenStackTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiScreenStackTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiScreenStackTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiScreenStackTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiFocusGraphTests
+        unit/runtime/ui/UiFocusGraphTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiFocusGraphTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiFocusGraphTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiFocusGraphTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiControlsTests
         unit/runtime/ui/UiControlsTests.cpp
         support/AllocationProbe.cpp
@@ -2296,10 +2315,13 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiRenderSnapshotTests
         HoroRuntimeUiRenderGeometryTests
         HoroRuntimeUiLayoutTests
+        HoroRuntimeUiStyleTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests
         HoroRuntimeUiPointerCaptureTests
         HoroRuntimeUiActionsTests
+        HoroRuntimeUiScreenStackTests
+        HoroRuntimeUiFocusGraphTests
         HoroRuntimeUiControlsTests
         HoroRuntimeSaveArchiveMetadataTests
         HoroRuntimeSaveArchiveFramingTests

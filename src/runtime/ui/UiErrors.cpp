@@ -236,6 +236,81 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                          "Create a new engine for the active runtime canvas before submitting layout work.",
                                                          false,
                                                          false};
+    /** @copydoc StyleInvalid */
+    const ErrorCodeDescriptor StyleInvalid{UiDomain,
+                                           ErrorCode{"runtime_ui.style.invalid"},
+                                           ErrorSeverity::Error,
+                                           "The Runtime UI style schema or request is invalid.",
+                                           "Provide complete typed style identities, values, revisions, and bounded inputs.",
+                                           false,
+                                           true};
+    /** @copydoc StyleIdentityConflict */
+    const ErrorCodeDescriptor
+        StyleIdentityConflict{UiDomain,
+                              ErrorCode{"runtime_ui.style.identity_conflict"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI style generation repeats a stable identity.",
+                              "Use one unique asset, class, token, and property identity in the validated generation.",
+                              false,
+                              true};
+    /** @copydoc StyleReferenceInvalid */
+    const ErrorCodeDescriptor
+        StyleReferenceInvalid{UiDomain,
+                              ErrorCode{"runtime_ui.style.reference_invalid"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI style reference is missing or foreign.",
+                              "Resolve the exact qualified asset, class, token, or property identity before publication.",
+                              false,
+                              true};
+    /** @copydoc StyleTypeMismatch */
+    const ErrorCodeDescriptor StyleTypeMismatch{UiDomain,
+                                                ErrorCode{"runtime_ui.style.type_mismatch"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI style value has an incompatible type or range.",
+                                                "Use the exact registered property or token category and its declared bounds.",
+                                                false,
+                                                true};
+    /** @copydoc StyleCycle */
+    const ErrorCodeDescriptor StyleCycle{UiDomain,
+                                         ErrorCode{"runtime_ui.style.cycle"},
+                                         ErrorSeverity::Error,
+                                         "The Runtime UI style dependency graph contains a cycle.",
+                                         "Break the asset, class, or token cycle and prepare a complete candidate again.",
+                                         false,
+                                         true};
+    /** @copydoc StyleStateInvalid */
+    const ErrorCodeDescriptor StyleStateInvalid{UiDomain,
+                                                ErrorCode{"runtime_ui.style.state_invalid"},
+                                                ErrorSeverity::Error,
+                                                "The Runtime UI visual-state selector is invalid.",
+                                                "Use known state bits, disjoint required/forbidden evidence, and a declared layer.",
+                                                false,
+                                                true};
+    /** @copydoc StyleSourceStale */
+    const ErrorCodeDescriptor StyleSourceStale{UiDomain,
+                                               ErrorCode{"runtime_ui.style.source_stale"},
+                                               ErrorSeverity::Error,
+                                               "The Runtime UI style source belongs to another owner or generation.",
+                                               "Prepare the candidate from the active tree, registry, and exact source revisions.",
+                                               true,
+                                               false};
+    /** @copydoc StyleSnapshotStorageExhausted */
+    const ErrorCodeDescriptor
+        StyleSnapshotStorageExhausted{UiDomain,
+                                      ErrorCode{"runtime_ui.style_snapshot.storage_exhausted"},
+                                      ErrorSeverity::Error,
+                                      "Every bounded Runtime UI computed-style snapshot slot is still leased.",
+                                      "Retire an in-flight style snapshot before retrying; never overwrite or allocate fallback storage.",
+                                      true,
+                                      false};
+    /** @copydoc StyleLifecycleUnavailable */
+    const ErrorCodeDescriptor StyleLifecycleUnavailable{UiDomain,
+                                                        ErrorCode{"runtime_ui.style.lifecycle_unavailable"},
+                                                        ErrorSeverity::Error,
+                                                        "The Runtime UI style owner is closed.",
+                                                        "Create a new style registry or resolver for the active runtime generation.",
+                                                        false,
+                                                        false};
     /** @copydoc HitTestInvalid */
     const ErrorCodeDescriptor
         HitTestInvalid{UiDomain,
@@ -437,6 +512,57 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                 "Use a known direction and exact presented focus handles.",
                                                 false,
                                                 false};
+    /** @copydoc RouteStackInvalid */
+    const ErrorCodeDescriptor
+        RouteStackInvalid{UiDomain,
+                          ErrorCode{"runtime_ui.route_stack.invalid"},
+                          ErrorSeverity::Error,
+                          "The Runtime UI route-stack descriptor is invalid.",
+                          "Provide one non-zero owner-scoped stack identity, a finite route bound, and valid route definitions.",
+                          false,
+                          false};
+    /** @copydoc RouteOperationInvalid */
+    const ErrorCodeDescriptor
+        RouteOperationInvalid{UiDomain,
+                              ErrorCode{"runtime_ui.route_operation.invalid"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI route operation is malformed.",
+                              "Use a known operation, a valid route definition where required, and a complete optional guard.",
+                              false,
+                              false};
+    /** @copydoc RouteOperationStale */
+    const ErrorCodeDescriptor RouteOperationStale{UiDomain,
+                                                  ErrorCode{"runtime_ui.route_operation.stale"},
+                                                  ErrorSeverity::Warning,
+                                                  "The Runtime UI route operation guard is stale.",
+                                                  "Retarget the operation against the current route-stack revision and top instance.",
+                                                  true,
+                                                  false};
+    /** @copydoc RouteOperationReentrant */
+    const ErrorCodeDescriptor RouteOperationReentrant{UiDomain,
+                                                      ErrorCode{"runtime_ui.route_operation.reentrant"},
+                                                      ErrorSeverity::Error,
+                                                      "A Runtime UI route operation is already preparing or committing.",
+                                                      "Finish or cancel the active transaction before starting another route operation.",
+                                                      false,
+                                                      false};
+    /** @copydoc RouteOperationAlreadyCompleted */
+    const ErrorCodeDescriptor RouteOperationAlreadyCompleted{UiDomain,
+                                                             ErrorCode{"runtime_ui.route_operation.already_completed"},
+                                                             ErrorSeverity::Error,
+                                                             "The Runtime UI route transaction already has a terminal result.",
+                                                             "Use each prepared route transaction exactly once.",
+                                                             false,
+                                                             false};
+    /** @copydoc RouteOperationLifecycleUnavailable */
+    const ErrorCodeDescriptor
+        RouteOperationLifecycleUnavailable{UiDomain,
+                                           ErrorCode{"runtime_ui.route_operation.lifecycle_unavailable"},
+                                           ErrorSeverity::Error,
+                                           "The Runtime UI route stack is closed for new operations.",
+                                           "Create a route stack for the current runtime owner generation before navigating.",
+                                           false,
+                                           false};
     /** @copydoc RenderSnapshotInvalid */
     const ErrorCodeDescriptor RenderSnapshotInvalid{UiDomain,
                                                     ErrorCode{"runtime_ui.render_snapshot.invalid"},

@@ -282,11 +282,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
         runtime/ui/UiImageResourceErrors.cpp
         runtime/ui/UiImageResource.cpp
+        runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
-        runtime/ui/UiDiagnosticDescriptors.cpp
-        runtime/ui/UiAccessibility.cpp
-        runtime/ui/UiAccessibilityPolicy.cpp
-        runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiCanvasSpace.cpp
@@ -295,16 +292,30 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
+        runtime/ui/UiDiagnosticDescriptors.cpp
+        runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityPolicy.cpp
+        runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiElementTree.cpp
         runtime/ui/UiEventDispatch.cpp
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiScreenStack.cpp
+        runtime/ui/UiFocusGraph.cpp
+        runtime/ui/UiFocusGraphOperations.cpp
         runtime/ui/UiControls.cpp
         runtime/ui/UiControlStateMachine.cpp
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutTypes.cpp
+        runtime/ui/UiStyle.cpp
+        runtime/ui/UiStyleHash.cpp
+        runtime/ui/UiStyleRegistry.cpp
+        runtime/ui/UiStyleResolution.cpp
+        runtime/ui/UiStyleResolver.cpp
+        runtime/ui/UiStyleSnapshot.cpp
+        runtime/ui/UiStyleValidation.cpp
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
         runtime/ui/UiRenderGeometry.cpp
@@ -612,6 +623,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldInternal.h
+        physics/PhysicsWorldScene.cpp
         physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
@@ -624,16 +637,20 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.h
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQuery.h
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp
         PROPERTIES
@@ -642,7 +659,11 @@ else()
     target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
 endif()
 
-add_library(HoroPhysicsSceneIntegration STATIC physics/PhysicsSceneActivation.cpp)
+add_library(HoroPhysicsSceneIntegration STATIC
+        physics/PhysicsSceneActivation.cpp
+        physics/PhysicsSceneActivationPlan.cpp
+        physics/PhysicsSceneActivationCapabilities.cpp
+        physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene)

@@ -1,6 +1,7 @@
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsTestUtils.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <thread>
 #include <utility>
@@ -76,6 +77,19 @@ namespace Horo::Physics {
         REQUIRE(runtime->PrepareWorld(settings).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
     }
 
+    TEST_CASE("Null Physics rejects scene admission as unavailable", "[physics][lifecycle][scene]") {
+        auto runtime = std::move(PhysicsRuntime::Create(PhysicsRuntimeMode::Null).Value());
+        auto world = std::move(runtime->PrepareWorld(Test::SmallWorldSettings()).Value());
+        REQUIRE(world->Activate(PhysicsWorldId::Create(100).Value()).HasValue());
+        const PhysicsShapeDescriptor sceneShape = PhysicsBoxShape{};
+        const std::span<const PhysicsSceneShapeInstance> emptyInstances{};
+        REQUIRE(world->CreateSceneShape(sceneShape).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() ==
+                PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+    }
+
     TEST_CASE("Physics rejects unknown compositions and closes unactivated candidates on runtime shutdown", "[physics][lifecycle]") {
         const auto unknown = PhysicsRuntime::Create(static_cast<PhysicsRuntimeMode>(255));
         REQUIRE(unknown.HasError());
@@ -141,7 +155,7 @@ namespace Horo::Physics {
         auto runtime = std::move(created).Value();
         REQUIRE(runtime->Availability() == PhysicsAvailability::Available);
         REQUIRE(runtime->Capability(PhysicsCapability::WorldCreation) == PhysicsCapabilitySupport::Available);
-        REQUIRE(runtime->Capability(PhysicsCapability::RigidBodies) == PhysicsCapabilitySupport::Unsupported);
+        REQUIRE(runtime->Capability(PhysicsCapability::RigidBodies) == PhysicsCapabilitySupport::Available);
         const auto duplicate = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
         REQUIRE(duplicate.HasError());
         REQUIRE(duplicate.ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
@@ -166,4 +180,72 @@ namespace Horo::Physics {
         REQUIRE(created.ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
 #endif
     }
+
+#if HORO_TEST_PHYSICS_NATIVE
+    TEST_CASE("Canonical scene admission enforces lifecycle, ownership and descriptor boundaries", "[physics][native][scene]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const PhysicsShapeDescriptor sceneShape = PhysicsBoxShape{};
+        const std::span<const PhysicsSceneShapeInstance> emptyInstances{};
+        REQUIRE(world->CreateSceneShape(sceneShape).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
+        REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
+        REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
+        REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
+
+        const auto identity = PhysicsWorldId::Create(107).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+        REQUIRE(world->CreateSceneShape(PhysicsBoxShape{{0.0F, 0.5F, 0.5F}}).ErrorValue().code.Value() ==
+                PhysicsErrors::DescriptorInvalid.code.Value());
+        const auto shape = world->CreateSceneShape(sceneShape);
+        REQUIRE(shape.HasValue());
+        REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() == PhysicsErrors::DescriptorInvalid.code.Value());
+
+        const PhysicsSceneShapeInstance foreign{{PhysicsWorldId::Create(108).Value(), {0, 1}}, {}};
+        const std::array foreignInstances{foreign};
+        REQUIRE(world->CreateSceneCompoundShape(foreignInstances).ErrorValue().code.Value() ==
+                PhysicsErrors::HandleWorldMismatch.code.Value());
+        const PhysicsSceneShapeInstance local{shape.Value(), {}};
+        const std::array localInstances{local};
+        REQUIRE(world->CreateSceneCompoundShape(localInstances).HasValue());
+
+        PhysicsBodyDescriptor body;
+        body.shape = shape.Value();
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const auto bodyResult = world->CreateSceneBody({body, false});
+        REQUIRE(bodyResult.HasValue());
+
+        PhysicsConstraintDescriptor constraint;
+        constraint.first = {bodyResult.Value(), {}};
+        constraint.second = PhysicsWorldAnchor{};
+        constraint.parameters = PhysicsFixedConstraint{};
+        REQUIRE(world->CreateSceneConstraint(constraint).HasValue());
+    }
+
+    TEST_CASE("Canonical scene admission enforces owner-thread boundaries", "[physics][native][scene][thread]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(108).Value()).HasValue());
+        const PhysicsShapeDescriptor sceneShape = PhysicsBoxShape{};
+        const std::span<const PhysicsSceneShapeInstance> emptyInstances{};
+        bool shapeRejected = false;
+        bool compoundRejected = false;
+        bool bodyRejected = false;
+        bool constraintRejected = false;
+        std::thread foreignThread([&] {
+            shapeRejected =
+                world->CreateSceneShape(sceneShape).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            compoundRejected = world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() ==
+                               PhysicsErrors::ThreadAffinityViolation.code.Value();
+            bodyRejected = world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            constraintRejected =
+                world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+        });
+        foreignThread.join();
+        REQUIRE(shapeRejected);
+        REQUIRE(compoundRejected);
+        REQUIRE(bodyRejected);
+        REQUIRE(constraintRejected);
+    }
+#endif
 }  // namespace Horo::Physics

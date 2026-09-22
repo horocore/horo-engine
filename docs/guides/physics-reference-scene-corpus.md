@@ -31,15 +31,17 @@ The current matrix is:
 | --- | --- | --- |
 | `contact-lifecycle` | Supported | `ContactBegin@1`, `ContactPersist@2`, `ContactEnd@3`; Horo event projection, `WorldCreation` admission context |
 | `trigger-lifecycle` | Supported | `TriggerEnter@1`, no event at tick 2, `TriggerExit@3`; Horo event projection, `WorldCreation` admission context |
-| `ccd-tunnelling` | Expected unsupported | Requires `RigidBodies`; no observation is allowed when that capability is unavailable |
-| `stacking-and-sleep` | Expected unsupported | Requires `RigidBodies`; no observation is allowed when that capability is unavailable |
-| `fixed-joint` | Expected unsupported | Requires `Constraints`; no observation is allowed when that capability is unavailable |
+| `ccd-tunnelling` | Expected unsupported | Generic `RigidBodies` may be available; the CCD contract is not qualified and no observation is allowed |
+| `stacking-and-sleep` | Expected unsupported | Generic `RigidBodies` may be available; the stacking/sleep contract is not qualified and no observation is allowed |
+| `fixed-joint` | Expected unsupported | Generic `Constraints` may be available; the fixed-joint contract is not qualified and no observation is allowed |
 | `query-ordering` | Supported | Two closest-first hits: body slot/generation `0/1`, `1/2`, at exact float bit patterns `0x40900000`, `0x41180000`; requires `ImmediateQueries` |
 
 Supported contact and trigger entries qualify the Horo-owned copied-event and
-lifecycle projection contract. They do not claim that the current runtime admits
-solver rigid bodies. CCD, stacking/sleep and joints remain explicit capability
-gates until their owning runtime contracts are implemented and qualified.
+lifecycle projection contract. Generic rigid-body and constraint capabilities
+may be available for admission while the specialized CCD, stacking/sleep and
+fixed-joint contracts remain unqualified. Those scenes therefore remain
+explicitly unsupported until their owning runtime contracts are implemented and
+qualified.
 
 ### 2. Configure and run
 
@@ -91,9 +93,10 @@ silently skipped.
 
 This corpus is not a cross-platform determinism qualification or a rollback/replay
 contract. Those claims require the capability and evidence gates in ADR-088. The
-current native fixture path covers only the admitted analytic query path; live
-rigid-body, CCD, stacking/sleep and constraint scenes remain unsupported until
-their corresponding Physics capabilities and lifecycle contracts are qualified.
+current native fixture path covers only the admitted analytic query path; generic
+capability admission is not itself qualification for live rigid-body, CCD,
+stacking/sleep or constraint scenes. Those scenes remain unsupported until their
+corresponding Physics capabilities and lifecycle contracts are qualified.
 
 ## Validation Record
 
