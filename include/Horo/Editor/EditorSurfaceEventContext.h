@@ -137,7 +137,7 @@ namespace Horo::Editor {
          * @param handler Generic callback receiving the safe event envelope.
          * @return A revocable token, or a typed rejection for closed, unallowed, or over-capacity requests.
          */
-        [[nodiscard]] Result<Subscription> Subscribe(EditorEventKind kind, EditorSurfaceEventHandler handler);
+        [[nodiscard]] Result<Subscription> Subscribe(EditorEventKind kind, EditorSurfaceEventHandler handler) const;
 
         /**
          * @brief Subscribes to one admitted event with its concrete sanitized payload type.
