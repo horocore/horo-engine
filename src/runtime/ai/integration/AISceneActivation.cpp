@@ -105,6 +105,115 @@ namespace Horo::AI {
                 CancelOwnedWork(agent);
             state.agents.clear();
         }
+
+        [[nodiscard]] Result<void> ValidateSceneInputs(const std::span<const AiSceneAgentDescriptor> agents,
+                                                       const std::span<const AiControllerDescriptor> descriptors,
+                                                       const AiSceneActivationBinding binding) {
+            try {
+                std::vector<AiSceneComponentView> views;
+                views.reserve(agents.size());
+                {
+                    std::unordered_set<std::uint64_t> descriptorTypes;
+                    descriptorTypes.reserve(descriptors.size());
+                    for (const AiControllerDescriptor &descriptor : descriptors) {
+                        if (const Result<void> valid = ValidateAiControllerDescriptor(descriptor); valid.HasError())
+                            return Result<void>::Failure(valid.ErrorValue());
+                        if (!descriptorTypes.insert(descriptor.controller.Value()).second)
+                            return Failure(AIErrors::DescriptorConflict,
+                                           "AI controller descriptor identities must be unique in one activation catalog.");
+                    }
+                }
+                {
+                    std::vector<Runtime::EntityRef> owners;
+                    owners.reserve(agents.size());
+                    for (const AiSceneAgentDescriptor &agent : agents) {
+                        views.push_back({.agent = &agent.agent, .controller = agent.controller ? &*agent.controller : nullptr});
+                        if (!agent.owner.IsValid() || agent.owner.runtime != binding.scene ||
+                            std::ranges::find(owners, agent.owner) != owners.end())
+                            return Failure(AIErrors::SceneActivationInvalid,
+                                           "AI scene agents must reference unique live entity generations.");
+                        owners.push_back(agent.owner);
+                    }
+                }
+                return ValidateAiSceneComponents(views);
+            } catch (const std::bad_alloc &) {
+                return Failure(AIErrors::AgentCapacityExceeded, "AI scene admission could not allocate bounded validation storage.");
+            }
+        }
+
+        [[nodiscard]] Result<void> PrepareAgentRuntimeState(const AiSceneActivationBinding binding, const AiSceneAgentDescriptor &input,
+                                                            const std::span<const AiControllerDescriptor> descriptors,
+                                                            const AiCapabilitySet availableCapabilities, const std::uint32_t slotIndex,
+                                                            std::optional<AgentRuntimeState> &prepared) {
+            prepared.reset();
+            const bool sceneStartup = input.agent.enabled && input.agent.startupPolicy == AiStartupPolicy::OnSceneActivation;
+            const bool controllerStartup =
+                input.controller && input.controller->enabled && input.controller->startupPolicy == AiStartupPolicy::OnSceneActivation;
+            if (!sceneStartup || !controllerStartup)
+                return Result<void>::Success();
+
+            const AiControllerDescriptor *descriptor = FindDescriptor(descriptors, input.controller->controller);
+            if (descriptor == nullptr)
+                return Failure(AIErrors::ControllerDescriptorMissing,
+                               "An enabled AI controller has no matching immutable activation descriptor.");
+            if (const Result<void> valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError())
+                return Result<void>::Failure(valid.ErrorValue());
+            if (!HasCapabilities(availableCapabilities, input.controller->requiredCapabilities))
+                return Failure(AIErrors::CapabilityUnavailable, "An enabled AI controller requires an unavailable host capability.");
+
+            const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, 1}};
+            const auto schema = descriptor->blackboardSchema;
+            const BlackboardInstanceBinding blackboardBinding{.agent = handle,
+                                                              .schema = schema->Identity(),
+                                                              .schemaVersion = schema->Version(),
+                                                              .schemaGeneration = 1,
+                                                              .instanceGeneration = 1};
+            auto blackboard = BlackboardInstance::Create(blackboardBinding, schema);
+            if (blackboard.HasError())
+                return Result<void>::Failure(blackboard.ErrorValue());
+
+            prepared.emplace(AgentRuntimeState{
+                .record = AiAgentRuntimeRecord{.handle = handle,
+                                               .owner = input.owner,
+                                               .agent = input.agent,
+                                               .controller = input.controller,
+                                               .stagedCapabilities = input.controller->requiredCapabilities,
+                                               .state = AiAgentActivationState::Active,
+                                               .hasBlackboard = true,
+                                               .hasRunningTask = false},
+                .blackboard = std::move(blackboard).Value(),
+            });
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<std::unique_ptr<Detail::AiSceneRuntimeState>> BuildSceneState(
+            const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
+            const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet availableCapabilities) {
+            std::unique_ptr<Detail::AiSceneRuntimeState> state;
+            try {
+                state = std::make_unique<Detail::AiSceneRuntimeState>();
+                state->binding = binding;
+                state->agents.reserve(agents.size());
+                for (const AiSceneAgentDescriptor &input : agents) {
+                    std::optional<AgentRuntimeState> prepared;
+                    const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, availableCapabilities,
+                                                                        static_cast<std::uint32_t>(state->agents.size()), prepared);
+                    if (ready.HasError()) {
+                        ShutdownStateContents(*state);
+                        return Result<std::unique_ptr<Detail::AiSceneRuntimeState>>::Failure(ready.ErrorValue());
+                    }
+                    if (prepared)
+                        state->agents.push_back(std::move(*prepared));
+                }
+            } catch (const std::bad_alloc &) {
+                if (state != nullptr)
+                    ShutdownStateContents(*state);
+                return Failure<
+                    std::unique_ptr<Detail::AiSceneRuntimeState>>(AIErrors::AgentCapacityExceeded,
+                                                                  "AI scene activation could not allocate bounded runtime storage.");
+            }
+            return Result<std::unique_ptr<Detail::AiSceneRuntimeState>>::Success(std::move(state));
+        }
     }  // namespace
 
     /** @copydoc AiSceneSnapshot::Find */
@@ -189,114 +298,27 @@ namespace Horo::AI {
             return Failure<std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::AgentCapacityExceeded,
                                                                         "The AI scene exceeds its configured agent capacity.");
 
-        std::vector<AiSceneComponentView> views;
-        std::vector<Runtime::EntityRef> owners;
-        std::unordered_set<std::uint64_t> descriptorTypes;
-        try {
-            views.reserve(agents.size());
-            owners.reserve(agents.size());
-            descriptorTypes.reserve(descriptors.size());
-            for (const AiControllerDescriptor &descriptor : descriptors) {
-                if (const Result<void> valid = ValidateAiControllerDescriptor(descriptor); valid.HasError())
-                    return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(valid.ErrorValue());
-                if (!descriptorTypes.insert(descriptor.controller.Value()).second)
-                    return Failure<std::unique_ptr<
-                        AiSceneActivationCandidate>>(AIErrors::DescriptorConflict,
-                                                     "AI controller descriptor identities must be unique in one activation catalog.");
-            }
-            for (const AiSceneAgentDescriptor &agent : agents) {
-                views.push_back({.agent = &agent.agent, .controller = agent.controller ? &*agent.controller : nullptr});
-                if (!agent.owner.IsValid() || agent.owner.runtime != binding.scene ||
-                    std::ranges::find(owners, agent.owner) != owners.end())
-                    return Failure<
-                        std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::SceneActivationInvalid,
-                                                                     "AI scene agents must reference unique live entity generations.");
-                owners.push_back(agent.owner);
-            }
-        } catch (const std::bad_alloc &) {
-            return Failure<
-                std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::AgentCapacityExceeded,
-                                                             "AI scene admission could not allocate bounded validation storage.");
-        }
-
-        if (const Result<void> valid = ValidateAiSceneComponents(views); valid.HasError())
+        if (const Result<void> valid = ValidateSceneInputs(agents, descriptors, binding); valid.HasError())
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(valid.ErrorValue());
 
-        std::unique_ptr<Detail::AiSceneRuntimeState> state;
-        try {
-            state = std::make_unique<Detail::AiSceneRuntimeState>();
-            state->binding = binding;
-            state->agents.reserve(agents.size());
-            for (const AiSceneAgentDescriptor &input : agents) {
-                const bool sceneStartup = input.agent.enabled && input.agent.startupPolicy == AiStartupPolicy::OnSceneActivation;
-                const bool controllerStartup =
-                    input.controller && input.controller->enabled && input.controller->startupPolicy == AiStartupPolicy::OnSceneActivation;
-                if (!sceneStartup || !controllerStartup)
-                    continue;
-
-                const AiControllerDescriptor *descriptor = FindDescriptor(descriptors, input.controller->controller);
-                if (descriptor == nullptr) {
-                    ShutdownStateContents(*state);
-                    return Failure<std::unique_ptr<
-                        AiSceneActivationCandidate>>(AIErrors::ControllerDescriptorMissing,
-                                                     "An enabled AI controller has no matching immutable activation descriptor.");
-                }
-                if (const Result<void> valid = ValidateAiControllerBinding(*input.controller, *descriptor); valid.HasError()) {
-                    ShutdownStateContents(*state);
-                    return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(valid.ErrorValue());
-                }
-                if (!HasCapabilities(settings_.availableCapabilities, input.controller->requiredCapabilities)) {
-                    ShutdownStateContents(*state);
-                    return Failure<
-                        std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::CapabilityUnavailable,
-                                                                     "An enabled AI controller requires an unavailable host capability.");
-                }
-
-                const std::uint32_t slotIndex = static_cast<std::uint32_t>(state->agents.size());
-                const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, 1}};
-                const auto schema = descriptor->blackboardSchema;
-                const BlackboardInstanceBinding blackboardBinding{.agent = handle,
-                                                                  .schema = schema->Identity(),
-                                                                  .schemaVersion = schema->Version(),
-                                                                  .schemaGeneration = 1,
-                                                                  .instanceGeneration = 1};
-                auto blackboard = BlackboardInstance::Create(blackboardBinding, schema);
-                if (blackboard.HasError()) {
-                    ShutdownStateContents(*state);
-                    return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(blackboard.ErrorValue());
-                }
-                state->agents.push_back(AgentRuntimeState{
-                    .record = AiAgentRuntimeRecord{.handle = handle,
-                                                   .owner = input.owner,
-                                                   .agent = input.agent,
-                                                   .controller = input.controller,
-                                                   .stagedCapabilities = input.controller->requiredCapabilities,
-                                                   .state = AiAgentActivationState::Active,
-                                                   .hasBlackboard = true,
-                                                   .hasRunningTask = false},
-                    .blackboard = std::move(blackboard).Value(),
-                });
-            }
-        } catch (const std::bad_alloc &) {
-            if (state != nullptr)
-                ShutdownStateContents(*state);
-            return Failure<std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::AgentCapacityExceeded,
-                                                                        "AI scene activation could not allocate bounded runtime storage.");
-        }
+        auto state = BuildSceneState(binding, agents, descriptors, settings_.availableCapabilities);
+        if (state.HasError())
+            return Result<std::unique_ptr<AiSceneActivationCandidate>>::Failure(state.ErrorValue());
+        std::unique_ptr<Detail::AiSceneRuntimeState> ownedState = std::move(state).Value();
 
         if (nextPublicationToken_ == std::numeric_limits<std::uint64_t>::max()) {
-            ShutdownStateContents(*state);
+            ShutdownStateContents(*ownedState);
             return Failure<std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::SceneActivationInvalid,
                                                                         "AI scene publication generation is exhausted.");
         }
         const std::uint64_t publicationToken = nextPublicationToken_++;
         try {
             std::unique_ptr<AiSceneActivationCandidate> candidate{
-                new AiSceneActivationCandidate{*this, binding, std::move(state), publicationToken}};  // NOSONAR(cpp:S5950)
+                new AiSceneActivationCandidate{*this, binding, std::move(ownedState), publicationToken}};  // NOSONAR(cpp:S5950)
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
-            if (state != nullptr)
-                ShutdownStateContents(*state);
+            if (ownedState != nullptr)
+                ShutdownStateContents(*ownedState);
             return Failure<std::unique_ptr<AiSceneActivationCandidate>>(AIErrors::AgentCapacityExceeded,
                                                                         "AI scene activation candidate storage is unavailable.");
         }
