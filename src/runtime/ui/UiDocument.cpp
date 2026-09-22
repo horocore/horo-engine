@@ -490,7 +490,6 @@ namespace Horo::Runtime::Ui {
             return Result<UiDocument>::Failure(validated.ErrorValue());
         std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
         std::ranges::sort(routes_, {}, &UiRouteMetadata::id);
-        return Result<UiDocument>::Success(UiDocument{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_),
         return Result<UiDocument>::Success(UiDocument{
             UiDocument::State{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_), std::move(localizedTexts_),
                               std::move(localizedAssets_), std::move(dependencies_), std::move(routes_)}});
@@ -562,7 +561,6 @@ namespace Horo::Runtime::Ui {
     /** @copydoc CookedUiDocument::Payload */
     std::span<const std::uint8_t> CookedUiDocument::Payload() const noexcept {
         return payload_;
-    }
     }
 
     /** @copydoc ValidateUiCanvasAssetReference */
