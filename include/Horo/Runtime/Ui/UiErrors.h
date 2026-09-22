@@ -30,6 +30,26 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DocumentDuplicateIdentity;
     /** @brief An asset dependency is malformed or conflicts with an earlier requirement. */
     extern const ErrorCodeDescriptor DependencyInvalid;
+    /** @brief A locale tag is malformed, non-normalized, or exceeds its bound. */
+    extern const ErrorCodeDescriptor LocaleInvalid;
+    /** @brief A locale fallback chain is empty, duplicated, malformed, or too large. */
+    extern const ErrorCodeDescriptor LocaleFallbackChainInvalid;
+    /** @brief A localized message key is malformed or violates the stable key grammar. */
+    extern const ErrorCodeDescriptor LocalizedKeyInvalid;
+    /** @brief A localized message reference contains invalid fallback or policy data. */
+    extern const ErrorCodeDescriptor LocalizedMessageInvalid;
+    /** @brief A named localized argument is malformed or contains an unsupported value. */
+    extern const ErrorCodeDescriptor LocalizedArgumentInvalid;
+    /** @brief A localized message repeats a named argument. */
+    extern const ErrorCodeDescriptor LocalizedArgumentConflict;
+    /** @brief A localized message exceeds its bounded argument capacity. */
+    extern const ErrorCodeDescriptor LocalizedArgumentCapacityExceeded;
+    /** @brief A localized asset reference or fallback policy is malformed. */
+    extern const ErrorCodeDescriptor LocalizedAssetReferenceInvalid;
+    /** @brief A localized asset reference repeats a locale or conflicts in its manifest. */
+    extern const ErrorCodeDescriptor LocalizedAssetVariantConflict;
+    /** @brief No authored localized asset can satisfy the requested fallback policy. */
+    extern const ErrorCodeDescriptor LocalizedAssetUnavailable;
     /** @brief A bounded document or cooked payload limit was exceeded. */
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief Cooked bytes are empty or exceed the declared representation contract. */

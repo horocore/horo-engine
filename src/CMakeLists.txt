@@ -279,6 +279,7 @@ target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
+        runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
         runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
@@ -288,8 +289,11 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingFingerprint.cpp
         runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
+        runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
+        runtime/ui/UiCookedDocument.cpp
         runtime/ui/UiDocumentSerialization.cpp
+        runtime/ui/UiDocumentLocalizationSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
