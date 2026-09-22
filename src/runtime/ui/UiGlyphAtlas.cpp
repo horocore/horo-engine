@@ -609,7 +609,6 @@ namespace Horo::Runtime::Ui {
         if (storage_->pendingBytes > storage_->descriptor.limits.maximumPendingUploadBytes - raster.bytes.size() ||
             !storage_->AllocateStaging(raster.bytes.size(), stagingOffset)) {
             storage_->uploads[uploadIndex.Value()].occupied = false;
-            ++storage_->pressureCount;
             return Failure<UiGlyphAtlasUploadId>(UiErrors::GlyphAtlasUploadCapacityExceeded);
         }
 
@@ -625,10 +624,10 @@ namespace Horo::Runtime::Ui {
         entry.key = raster.key;
         entry.placement = storage_->Placement(*entryIndex, raster.width, raster.height);
         entry.state = Storage::EntryState::Pending;
-        entry.uploadSlot = static_cast<std::uint32_t>(*uploadIndex + 1U);
+        entry.uploadSlot = static_cast<std::uint32_t>(uploadIndex.Value() + 1U);
         entry.fallback = raster.key == storage_->descriptor.fallback;
 
-        auto &upload = storage_->uploads[*uploadIndex];
+        auto &upload = storage_->uploads[uploadIndex.Value()];
         upload.descriptor = {.upload = upload.id,
                              .entry = entry.id,
                              .key = raster.key,
@@ -644,7 +643,7 @@ namespace Horo::Runtime::Ui {
         upload.entrySlot = static_cast<std::uint32_t>(*entryIndex + 1U);
         std::ranges::copy(raster.bytes, storage_->staging.begin() + static_cast<std::ptrdiff_t>(stagingOffset));
         storage_->pendingBytes += raster.bytes.size();
-        storage_->nextUpload = (*uploadIndex + 1U) % storage_->uploads.size();
+        storage_->nextUpload = (uploadIndex.Value() + 1U) % storage_->uploads.size();
         return Result<UiGlyphAtlasUploadId>::Success(upload.id);
     }
 
