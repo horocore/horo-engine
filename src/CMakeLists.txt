@@ -281,6 +281,7 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiAssetErrors.cpp
         runtime/ui/UiImageResourceErrors.cpp
         runtime/ui/UiImageResource.cpp
         runtime/ui/UiFocusErrors.cpp
@@ -293,7 +294,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
-        runtime/ui/UiCookedDocument.cpp
+        runtime/ui/UiRuntimeInstance.cpp
+        runtime/ui/UiDocumentCook.cpp
+        runtime/ui/UiAssetLoading.cpp
+        runtime/ui/UiAssetLoadingService.cpp
         runtime/ui/UiDocumentSerialization.cpp
         runtime/ui/UiDocumentLocalizationSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
@@ -1592,6 +1596,7 @@ add_library(HoroExtensions STATIC
         extensions/discovery/DiscoveryRootPolicy.cpp
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
+        extensions/host/EditorSurfaceContext.cpp
         extensions/host/ExtensionActivationTransaction.cpp
         extensions/host/ExtensionModuleResolution.cpp
         extensions/host/HeadlessExtensionHost.cpp
@@ -1625,6 +1630,7 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptInvocationRegistration.cpp
         extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
+        extensions/registry/EditorSurfaceContextErrors.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
         extensions/registry/ScriptInvocationErrors.cpp

@@ -157,6 +157,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiCanvasSpace.h
     Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
+    Horo/Runtime/Ui/UiAssetLoading.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
     Horo/Runtime/Ui/UiDiagnostics.h
     Horo/Runtime/Ui/UiElementTree.h
@@ -683,6 +684,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
     Horo/Extensions/EditorSurfaceDescriptor.h
+    Horo/Extensions/EditorSurfaceContext.h
     Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h

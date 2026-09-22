@@ -483,6 +483,34 @@ void ShaderInspectorTab::RefreshFromAuthorities() {
 }
 ```
 
+The concrete host attachment contract is activation-scoped. The host creates
+an `ExtensionActivationLease` from the capability admission, validates the
+surface descriptor and its bounded allowlists, and attaches the surface through
+an `EditorSurfaceContextProvider`. The provider returns a move-only
+registration; retain only the copied typed context view in the surface adapter.
+Reset the registration during detach, before the matching activation admission
+is revoked:
+
+```cpp
+auto registration = contextProvider.Attach(std::move(surface), admission.ActivationLease(), approvedCapabilities);
+if (registration.HasError()) {
+    return registration.ErrorValue();
+}
+
+const EditorSurfaceContext &surfaceContext = registration.Value().Context();
+if (surfaceContext.Allows(EditorSurfaceCommandId{"shader.preview.compile"})) {
+    // Resolve the host-owned typed command adapter at the host boundary.
+}
+
+registration.Value().Reset();
+```
+
+The context is an allowlist and lifecycle proof, not a service locator. A
+surface must treat a revoked context as disconnected, and must not retain raw
+editor, renderer, native-window, ImGui, or callback objects. Capability handles
+that were not explicitly approved for this surface remain unavailable even when
+the parent contribution declares them.
+
 Important constraints:
 
 - Event payloads are invalidation hints, not authoritative data.
