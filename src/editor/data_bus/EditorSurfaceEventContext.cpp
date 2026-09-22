@@ -224,7 +224,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorSurfaceEventContext::Subscribe */
-    Result<Subscription> EditorSurfaceEventContext::Subscribe(const EditorEventKind kind, EditorSurfaceEventHandler handler) const {
+    Result<Subscription> EditorSurfaceEventContext::Subscribe(const EditorEventKind kind, const EditorSurfaceEventHandler &handler) const {
         if (m_state == nullptr)
             return Failure(ContextClosed);
         return m_state->Subscribe(kind, handler, m_state);
