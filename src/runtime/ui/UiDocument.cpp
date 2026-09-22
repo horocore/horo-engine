@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <new>
 #include <ranges>
 #include <type_traits>
 #include <unordered_map>
@@ -494,29 +495,80 @@ namespace Horo::Runtime::Ui {
                               std::move(localizedAssets_), std::move(dependencies_), std::move(routes_)}});
     }
 
+    /** @copydoc CookedUiDocument::CookedUiDocument */
+    CookedUiDocument::CookedUiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
+                                       std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
+                                       std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
+                                       std::vector<std::uint8_t> payload) noexcept
+        : schemaVersion_(schemaVersion), id_(id), revision_(revision), canvases_(std::move(canvases)), elements_(std::move(elements)),
+          dependencies_(std::move(dependencies)), routes_(std::move(routes)), payload_(std::move(payload)) {}
+
+    /** @copydoc CookedUiDocument::Create */
+    Result<CookedUiDocument> CookedUiDocument::Create(const UiDocument &document, std::vector<std::uint8_t> payload) {
+        if (payload.empty())
+            return Failure<CookedUiDocument>(UiErrors::PayloadInvalid);
+        if (payload.size() > MaximumCookedUiDocumentBytes)
+            return Failure<CookedUiDocument>(UiErrors::CapacityExceeded);
+        try {
+            return Result<CookedUiDocument>::Success(CookedUiDocument{document.SchemaVersion(),
+                                                                      document.Id(),
+                                                                      document.Revision(),
+                                                                      {document.Canvases().begin(), document.Canvases().end()},
+                                                                      {document.Elements().begin(), document.Elements().end()},
+                                                                      {document.Dependencies().begin(), document.Dependencies().end()},
+                                                                      {document.Routes().begin(), document.Routes().end()},
+                                                                      std::move(payload)});
+        } catch (const std::bad_alloc &) {
+            return Failure<CookedUiDocument>(UiErrors::CapacityExceeded);
+        }
+    }
+
+    /** @copydoc CookedUiDocument::Id */
+    UiDocumentId CookedUiDocument::Id() const noexcept {
+        return id_;
+    }
+
+    /** @copydoc CookedUiDocument::SourceRevision */
+    UiDocumentRevision CookedUiDocument::SourceRevision() const noexcept {
+        return revision_;
+    }
+
+    /** @copydoc CookedUiDocument::SchemaVersion */
+    UiDocumentSchemaVersion CookedUiDocument::SchemaVersion() const noexcept {
+        return schemaVersion_;
+    }
+
+    /** @copydoc CookedUiDocument::Canvases */
+    std::span<const UiCanvasDescriptor> CookedUiDocument::Canvases() const noexcept {
+        return canvases_;
+    }
+
+    /** @copydoc CookedUiDocument::Elements */
+    std::span<const UiDocumentElement> CookedUiDocument::Elements() const noexcept {
+        return elements_;
+    }
+
+    /** @copydoc CookedUiDocument::Dependencies */
+    std::span<const UiAssetDependency> CookedUiDocument::Dependencies() const noexcept {
+        return dependencies_;
+    }
+
+    /** @copydoc CookedUiDocument::Routes */
+    std::span<const UiRouteMetadata> CookedUiDocument::Routes() const noexcept {
+        return routes_;
+    }
+
+    /** @copydoc CookedUiDocument::Payload */
+    std::span<const std::uint8_t> CookedUiDocument::Payload() const noexcept {
+        return payload_;
+    }
+
     /** @copydoc ValidateUiCanvasAssetReference */
     Result<void> ValidateUiCanvasAssetReference(const UiCanvasAssetReference &reference) {
         if (!reference.asset.IsValid() || !reference.document.IsValid() || !reference.canvas.IsValid() ||
             !reference.minimumRevision.IsValid())
             return Failure(UiErrors::CanvasReferenceInvalid);
         return Result<void>::Success();
-    }
-
-    /** @copydoc UiRuntimeInstance::UiRuntimeInstance */
-    UiRuntimeInstance::UiRuntimeInstance(UiDocumentId document, UiDocumentRevision revision, std::vector<UiAssetDependency> dependencies,
-                                         std::vector<std::uint8_t> payload, RuntimeUiInstanceId instance) noexcept
-        : document_(document), revision_(revision), dependencies_(std::move(dependencies)), payload_(std::move(payload)),
-          instance_(instance) {}
-
-    /** @copydoc UiRuntimeInstance::Create */
-    Result<UiRuntimeInstance> UiRuntimeInstance::Create(CookedUiDocument document, RuntimeUiInstanceId instance) {
-        if (!instance.IsValid())
-            return Failure<UiRuntimeInstance>(UiErrors::HandleMalformed);
-        if (!document.Id().IsValid() || !document.SourceRevision().IsValid() || document.Payload().empty())
-            return Failure<UiRuntimeInstance>(UiErrors::PayloadInvalid);
-        return Result<UiRuntimeInstance>::Success(UiRuntimeInstance{document.Id(), document.SourceRevision(),
-                                                                    std::move(document.dependencies_), std::move(document.payload_),
-                                                                    instance});
     }
 
     /** @copydoc UiRuntimeInstance::InstanceId */
@@ -526,12 +578,22 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRuntimeInstance::DocumentId */
     UiDocumentId UiRuntimeInstance::DocumentId() const noexcept {
-        return document_;
+        return document_.Id();
     }
 
     /** @copydoc UiRuntimeInstance::DocumentRevision */
     UiDocumentRevision UiRuntimeInstance::DocumentRevision() const noexcept {
-        return revision_;
+        return document_.SourceRevision();
+    }
+
+    /** @copydoc UiRuntimeInstance::Canvases */
+    std::span<const UiCanvasDescriptor> UiRuntimeInstance::Canvases() const noexcept {
+        return document_.Canvases();
+    }
+
+    /** @copydoc UiRuntimeInstance::Elements */
+    std::span<const UiDocumentElement> UiRuntimeInstance::Elements() const noexcept {
+        return document_.Elements();
     }
 
     /** @copydoc UiRuntimeInstance::State */
@@ -541,12 +603,30 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRuntimeInstance::Dependencies */
     std::span<const UiAssetDependency> UiRuntimeInstance::Dependencies() const noexcept {
-        return dependencies_;
+        return document_.Dependencies();
+    }
+
+    /** @copydoc UiRuntimeInstance::ResolvedAssets */
+    std::span<const UiRuntimeAsset> UiRuntimeInstance::ResolvedAssets() const noexcept {
+        return assets_;
+    }
+
+    /** @copydoc UiRuntimeInstance::FindAsset */
+    const UiRuntimeAsset *UiRuntimeInstance::FindAsset(const Assets::AssetId id) const noexcept {
+        const auto found = std::ranges::lower_bound(assets_, id, {}, [](const UiRuntimeAsset &asset) {
+            return asset.dependency.asset;
+        });
+        return found != assets_.end() && found->dependency.asset == id ? &*found : nullptr;
+    }
+
+    /** @copydoc UiRuntimeInstance::Routes */
+    std::span<const UiRouteMetadata> UiRuntimeInstance::Routes() const noexcept {
+        return document_.Routes();
     }
 
     /** @copydoc UiRuntimeInstance::Payload */
     std::span<const std::uint8_t> UiRuntimeInstance::Payload() const noexcept {
-        return payload_;
+        return document_.Payload();
     }
 
     /** @copydoc UiRuntimeInstance::Activate */
@@ -569,7 +649,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRuntimeInstance::Shutdown */
     void UiRuntimeInstance::Shutdown() noexcept {
         state_ = UiRuntimeInstanceState::Stopped;
-        std::vector<UiAssetDependency>{}.swap(dependencies_);
-        std::vector<std::uint8_t>{}.swap(payload_);
+        std::vector<UiCanvasDescriptor>{}.swap(document_.canvases_);
+        std::vector<UiDocumentElement>{}.swap(document_.elements_);
+        std::vector<UiAssetDependency>{}.swap(document_.dependencies_);
+        std::vector<UiRouteMetadata>{}.swap(document_.routes_);
+        std::vector<std::uint8_t>{}.swap(document_.payload_);
+        std::vector<UiRuntimeAsset>{}.swap(assets_);
     }
 }  // namespace Horo::Runtime::Ui
