@@ -6,6 +6,7 @@
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,7 +17,9 @@ namespace Horo::Cinematic {
     namespace {
         struct Component final {
             float weight{};
+            Math::Vec2 scale{};
             Math::Vec3 position{};
+            Math::Vec4 color{};
             bool enabled{};
         };
 
@@ -55,6 +58,17 @@ namespace Horo::Cinematic {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<Runtime::PropertyBindingValue> ReadScale(const void *component) {
+            return Result<Runtime::PropertyBindingValue>::Success(static_cast<const Component *>(component)->scale);
+        }
+
+        [[nodiscard]] Result<void> WriteScale(void *component, const Runtime::PropertyBindingValue &value) {
+            if (!std::holds_alternative<Math::Vec2>(value))
+                return Result<void>::Failure(MakeError(Runtime::PropertyBindingErrors::ValueTypeMismatch));
+            static_cast<Component *>(component)->scale = std::get<Math::Vec2>(value);
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<Runtime::PropertyBindingValue> ReadPosition(const void *component) {
             return Result<Runtime::PropertyBindingValue>::Success(static_cast<const Component *>(component)->position);
         }
@@ -63,6 +77,17 @@ namespace Horo::Cinematic {
             if (!std::holds_alternative<Math::Vec3>(value))
                 return Result<void>::Failure(MakeError(Runtime::PropertyBindingErrors::ValueTypeMismatch));
             static_cast<Component *>(component)->position = std::get<Math::Vec3>(value);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<Runtime::PropertyBindingValue> ReadColor(const void *component) {
+            return Result<Runtime::PropertyBindingValue>::Success(static_cast<const Component *>(component)->color);
+        }
+
+        [[nodiscard]] Result<void> WriteColor(void *component, const Runtime::PropertyBindingValue &value) {
+            if (!std::holds_alternative<Math::Vec4>(value))
+                return Result<void>::Failure(MakeError(Runtime::PropertyBindingErrors::ValueTypeMismatch));
+            static_cast<Component *>(component)->color = std::get<Math::Vec4>(value);
             return Result<void>::Success();
         }
 
@@ -75,6 +100,10 @@ namespace Horo::Cinematic {
                 return Result<void>::Failure(MakeError(Runtime::PropertyBindingErrors::ValueTypeMismatch));
             static_cast<Component *>(component)->enabled = std::get<bool>(value);
             return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> RejectWrite(void *, const Runtime::PropertyBindingValue &) {
+            return Result<void>::Failure(MakeError(Runtime::PropertyBindingErrors::WriteRejected));
         }
 
         [[nodiscard]] ScalarCurveView Curve(const std::array<ScalarCurveKey, 2> &keys) {
@@ -177,6 +206,74 @@ namespace Horo::Cinematic {
         RequireError(duplicate, Runtime::PropertyBindingErrors::RegistryFrozen);
     }
 
+    TEST_CASE("Property binding registry rejects invalid descriptors and exposes its frozen snapshot",
+              "[unit][cinematic][property-binding][registry][validation]") {
+        const auto makeDescriptor = [&] {
+            return Runtime::PropertyBindingDescriptor{.id = Binding(20),
+                                                      .componentType = ComponentType(),
+                                                      .property = Property("weight"),
+                                                      .type = Runtime::PropertyBindingType::Float,
+                                                      .getter = ReadWeight,
+                                                      .setter = WriteWeight};
+        };
+
+        auto registerAndExpectInvalid = [&makeDescriptor](auto mutate) {
+            Runtime::PropertyBindingRegistry registry;
+            auto descriptor = makeDescriptor();
+            mutate(descriptor);
+            RequireError(registry.Register(std::move(descriptor)), Runtime::PropertyBindingErrors::InvalidDescriptor);
+        };
+
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.id = {};
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.property = {};
+            descriptor.propertyName.clear();
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.property = {};
+            descriptor.propertyName = "MoveWeight";
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.propertyName = "position";
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.type = static_cast<Runtime::PropertyBindingType>(99);
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.getter = nullptr;
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.setter = nullptr;
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.writePolicy = static_cast<Runtime::PropertyWritePolicy>(99);
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.range = {.minimum = 2.0F, .maximum = 1.0F};
+        });
+        registerAndExpectInvalid([](auto &descriptor) {
+            descriptor.range = {.minimum = std::numeric_limits<float>::quiet_NaN(), .maximum = 1.0F};
+        });
+
+        Runtime::PropertyBindingRegistry registry;
+        auto first = makeDescriptor();
+        REQUIRE(registry.Register(first).HasValue());
+        auto duplicateProperty = makeDescriptor();
+        duplicateProperty.id = Binding(21);
+        RequireError(registry.Register(std::move(duplicateProperty)), Runtime::PropertyBindingErrors::DuplicateBinding);
+        auto duplicateId = makeDescriptor();
+        duplicateId.property = Property("position");
+        RequireError(registry.Register(std::move(duplicateId)), Runtime::PropertyBindingErrors::DuplicateBinding);
+        REQUIRE(registry.Freeze().HasValue());
+        REQUIRE(registry.Freeze().HasValue());
+        CHECK(registry.Descriptors().size() == 1);
+        CHECK(registry.Find({}) == nullptr);
+        CHECK(registry.FindByName({}, "weight") == nullptr);
+        CHECK(registry.FindByName(ComponentType(), "") == nullptr);
+    }
+
     TEST_CASE("Property tracks sample float vectors and bools through one shared plan", "[unit][cinematic][property-track][typed]") {
         BindingFixture fixture;
         Component component{};
@@ -220,6 +317,68 @@ namespace Horo::Cinematic {
         CHECK(component.weight == Catch::Approx(5.0F));
         CHECK(component.position == Math::Vec3{5.0F, 7.0F, 9.0F});
         CHECK(component.enabled);
+    }
+
+    TEST_CASE("Property tracks sample and apply vec2 and vec4 channels", "[unit][cinematic][property-track][typed]") {
+        Runtime::PropertyBindingRegistry registry;
+        const auto componentType = ComponentType();
+        const PropertyBindingId scaleBinding = Binding(20);
+        const PropertyBindingId colorBinding = Binding(21);
+        REQUIRE(registry
+                    .Register({.id = scaleBinding,
+                               .componentType = componentType,
+                               .property = Property("scale"),
+                               .type = Runtime::PropertyBindingType::Vec2,
+                               .getter = ReadScale,
+                               .setter = WriteScale,
+                               .range = {.minimum = 0.0F, .maximum = 10.0F}})
+                    .HasValue());
+        REQUIRE(registry
+                    .Register({.id = colorBinding,
+                               .componentType = componentType,
+                               .property = Property("color"),
+                               .type = Runtime::PropertyBindingType::Vec4,
+                               .getter = ReadColor,
+                               .setter = WriteColor,
+                               .range = {.minimum = 0.0F, .maximum = 10.0F}})
+                    .HasValue());
+        REQUIRE(registry.Freeze().HasValue());
+
+        const std::array<ScalarCurveKey, 2> scaleX{ScalarCurveKey{0, 0.0F}, ScalarCurveKey{10, 10.0F}};
+        const std::array<ScalarCurveKey, 2> scaleY{ScalarCurveKey{0, 2.0F}, ScalarCurveKey{10, 8.0F}};
+        const std::array<ScalarCurveKey, 2> colorR{ScalarCurveKey{0, 1.0F}, ScalarCurveKey{10, 3.0F}};
+        const std::array<ScalarCurveKey, 2> colorG{ScalarCurveKey{0, 2.0F}, ScalarCurveKey{10, 4.0F}};
+        const std::array<ScalarCurveKey, 2> colorB{ScalarCurveKey{0, 3.0F}, ScalarCurveKey{10, 5.0F}};
+        const std::array<ScalarCurveKey, 2> colorA{ScalarCurveKey{0, 4.0F}, ScalarCurveKey{10, 6.0F}};
+        PropertyCurveSet scaleCurves{.type = Runtime::PropertyBindingType::Vec2};
+        scaleCurves.channels[0] = Curve(scaleX);
+        scaleCurves.channels[1] = Curve(scaleY);
+        PropertyCurveSet colorCurves{.type = Runtime::PropertyBindingType::Vec4};
+        colorCurves.channels[0] = Curve(colorR);
+        colorCurves.channels[1] = Curve(colorG);
+        colorCurves.channels[2] = Curve(colorB);
+        colorCurves.channels[3] = Curve(colorA);
+
+        Component component{};
+        const std::array targets{PropertyBindingTargetSnapshot{scaleBinding, Object(20), componentType, 1, &component},
+                                 PropertyBindingTargetSnapshot{colorBinding, Object(21), componentType, 1, &component}};
+        const std::array
+            tracks{PropertyTrackDescriptor{.track = Track(2), .targetObject = Object(21), .binding = colorBinding, .curves = colorCurves},
+                   PropertyTrackDescriptor{.track = Track(1), .targetObject = Object(20), .binding = scaleBinding, .curves = scaleCurves}};
+        constexpr PropertySceneVersion scene{1, 1};
+        auto plan = PropertyEvaluationPlan::Create(scene, tracks, targets, registry);
+        REQUIRE(plan.HasValue());
+        CHECK(plan.Value().SceneVersion() == scene);
+        std::array<PropertyEvaluationValue, 2> values{};
+        REQUIRE(plan.Value().Evaluate(5, PropertyEvaluationContext{scene, targets}, values).Value() == 2);
+        CHECK(std::get<Math::Vec2>(values[0].value) == Math::Vec2{5.0F, 5.0F});
+        CHECK(std::get<Math::Vec4>(values[1].value) == Math::Vec4{2.0F, 3.0F, 4.0F, 5.0F});
+        std::array<PropertyEvaluationDiagnostic, 2> diagnostics{};
+        auto applied = plan.Value().Apply(PropertyEvaluationContext{scene, targets}, values, diagnostics);
+        REQUIRE(applied.HasValue());
+        CHECK(applied.Value().applied == 2);
+        CHECK(component.scale == Math::Vec2{5.0F, 5.0F});
+        CHECK(component.color == Math::Vec4{2.0F, 3.0F, 4.0F, 5.0F});
     }
 
     TEST_CASE("Property sampling is history-independent and allocation-free after activation",
@@ -311,6 +470,178 @@ namespace Horo::Cinematic {
             PropertyTrackDescriptor{.track = Track(3), .targetObject = Object(3), .binding = fixture.enabled, .curves = badBoolCurves};
         RequireError(PropertyEvaluationPlan::Create({1, 1}, std::span{&badBool, 1}, boolTargets, fixture.registry),
                      CinematicErrors::PropertyMalformed);
+    }
+
+    TEST_CASE("Property plans reject malformed snapshots and surface typed write diagnostics",
+              "[unit][cinematic][property-track][validation][diagnostics]") {
+        BindingFixture fixture;
+        Component component{};
+        const CurveFixture curves{0.0F, 1.0F};
+        constexpr PropertySceneVersion scene{1, 1};
+        const std::array targets{PropertyBindingTargetSnapshot{fixture.weight, Object(1), fixture.componentType, 1, &component}};
+        const auto makeTrack = [&curves](const PropertyBindingId binding = Binding(10), const TrackId track = Track(1),
+                                         const Runtime::SceneObjectId object = Object(1)) {
+            return PropertyTrackDescriptor{.track = track, .targetObject = object, .binding = binding, .curves = curves.FloatCurves()};
+        };
+
+        auto validTrack = makeTrack();
+        RequireError(PropertyEvaluationPlan::Create({}, std::span{&validTrack, 1}, targets, fixture.registry),
+                     CinematicErrors::PropertyMalformed);
+
+        auto unsupportedVersion = validTrack;
+        unsupportedVersion.version = {2, 0};
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&unsupportedVersion, 1}, targets, fixture.registry),
+                     CinematicErrors::PropertyVersionUnsupported);
+
+        auto invalidIdentity = validTrack;
+        invalidIdentity.track = {};
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&invalidIdentity, 1}, targets, fixture.registry),
+                     CinematicErrors::PropertyMalformed);
+
+        const std::array duplicateTracks{validTrack, validTrack};
+        RequireError(PropertyEvaluationPlan::Create(scene, duplicateTracks, targets, fixture.registry), CinematicErrors::PropertyMalformed);
+
+        auto invalidRevision = targets;
+        invalidRevision[0].componentRevision = 0;
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&validTrack, 1}, invalidRevision, fixture.registry),
+                     CinematicErrors::PropertyMalformed);
+        auto missingComponent = targets;
+        missingComponent[0].component = nullptr;
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&validTrack, 1}, missingComponent, fixture.registry),
+                     CinematicErrors::PropertyBindingTargetMissing);
+        const std::array duplicateTargets{targets[0], targets[0]};
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&validTrack, 1}, duplicateTargets, fixture.registry),
+                     CinematicErrors::PropertyMalformed);
+
+        auto missingBinding = makeTrack(Binding(999));
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&missingBinding, 1}, targets, fixture.registry),
+                     CinematicErrors::PropertyBindingMissing);
+        auto missingTarget = makeTrack(fixture.weight, Track(2), Object(99));
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&missingTarget, 1}, targets, fixture.registry),
+                     CinematicErrors::PropertyBindingTargetMissing);
+        auto wrongComponent = targets;
+        wrongComponent[0].componentType = ComponentType("game.cinematic.other");
+        RequireError(PropertyEvaluationPlan::Create(scene, std::span{&validTrack, 1}, wrongComponent, fixture.registry),
+                     CinematicErrors::PropertyComponentMismatch);
+
+        Runtime::PropertyBindingRegistry invalidRangeRegistry;
+        RequireError(invalidRangeRegistry.Register({.id = fixture.weight,
+                                                    .componentType = fixture.componentType,
+                                                    .property = Property("weight"),
+                                                    .type = Runtime::PropertyBindingType::Float,
+                                                    .getter = ReadWeight,
+                                                    .setter = WriteWeight,
+                                                    .range = {.minimum = 2.0F, .maximum = 1.0F}}),
+                     Runtime::PropertyBindingErrors::InvalidDescriptor);
+
+        auto plan = PropertyEvaluationPlan::Create(scene, std::span{&validTrack, 1}, targets, fixture.registry);
+        REQUIRE(plan.HasValue());
+        std::array<PropertyEvaluationValue, 1> values{};
+        REQUIRE(plan.Value().Evaluate(1, PropertyEvaluationContext{scene, targets}, values).Value() == 1);
+        std::array<PropertyEvaluationDiagnostic, 1> diagnostics{};
+        CHECK(plan.Value().Evaluate(1, PropertyEvaluationContext{scene, targets}, std::span<PropertyEvaluationValue>{}).HasError());
+        CHECK(plan.Value().Evaluate(1, PropertyEvaluationContext{{2, 1}, targets}, values).ErrorValue().code.Value() ==
+              CinematicErrors::PropertyBindingStale.code.Value());
+        CHECK(plan.Value().Evaluate(1, PropertyEvaluationContext{scene, {}}, values).ErrorValue().code.Value() ==
+              CinematicErrors::PropertyBindingTargetMissing.code.Value());
+
+        auto staleTargets = targets;
+        staleTargets[0].componentRevision = 2;
+        auto staleApply = plan.Value().Apply(PropertyEvaluationContext{scene, staleTargets}, values, diagnostics);
+        REQUIRE(staleApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::BindingStale);
+        auto missingApply = plan.Value().Apply(PropertyEvaluationContext{scene, {}}, values, diagnostics);
+        REQUIRE(missingApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::TargetMissing);
+        auto wrongTypeApplyTargets = targets;
+        wrongTypeApplyTargets[0].componentType = ComponentType("game.cinematic.other");
+        auto wrongTypeApply = plan.Value().Apply(PropertyEvaluationContext{scene, wrongTypeApplyTargets}, values, diagnostics);
+        REQUIRE(wrongTypeApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::BindingStale);
+
+        auto wrongValue = values;
+        wrongValue[0].value = true;
+        auto mismatchApply = plan.Value().Apply(PropertyEvaluationContext{scene, targets}, wrongValue, diagnostics);
+        REQUIRE(mismatchApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::TypeMismatch);
+        wrongValue[0].track = Track(99);
+        RequireError(plan.Value().Apply(PropertyEvaluationContext{scene, targets}, wrongValue, diagnostics),
+                     CinematicErrors::PropertyMalformed);
+        std::array<PropertyEvaluationValue, 2> tooManyValues{};
+        RequireError(plan.Value().Apply(PropertyEvaluationContext{scene, targets}, tooManyValues, diagnostics),
+                     CinematicErrors::PropertyLimitExceeded);
+        std::array<PropertyEvaluationDiagnostic, 0> noDiagnostics{};
+        RequireError(plan.Value().Apply(PropertyEvaluationContext{scene, targets}, values, noDiagnostics),
+                     CinematicErrors::PropertyLimitExceeded);
+        std::array<PropertyEvaluationValue, 0> noValues{};
+        RequireError(plan.Value().Apply(PropertyEvaluationContext{scene, targets}, noValues, diagnostics),
+                     CinematicErrors::PropertyLimitExceeded);
+        RequireError(plan.Value().Apply(PropertyEvaluationContext{{2, 1}, targets}, values, diagnostics),
+                     CinematicErrors::PropertyBindingStale);
+
+        Runtime::PropertyBindingRegistry readOnlyRegistry;
+        const PropertyBindingId readOnlyBinding = Binding(30);
+        REQUIRE(readOnlyRegistry
+                    .Register({.id = readOnlyBinding,
+                               .componentType = fixture.componentType,
+                               .property = Property("weight"),
+                               .type = Runtime::PropertyBindingType::Float,
+                               .getter = ReadWeight,
+                               .setter = WriteWeight,
+                               .writePolicy = Runtime::PropertyWritePolicy::ReadOnly})
+                    .HasValue());
+        REQUIRE(readOnlyRegistry.Freeze().HasValue());
+        auto readOnlyTrack = makeTrack(readOnlyBinding);
+        const std::array readOnlyTargets{PropertyBindingTargetSnapshot{readOnlyBinding, Object(1), fixture.componentType, 1, &component}};
+        auto readOnlyPlan = PropertyEvaluationPlan::Create(scene, std::span{&readOnlyTrack, 1}, readOnlyTargets, readOnlyRegistry);
+        REQUIRE(readOnlyPlan.HasValue());
+        REQUIRE(readOnlyPlan.Value().Evaluate(1, PropertyEvaluationContext{scene, readOnlyTargets}, values).HasValue());
+        auto readOnlyApply = readOnlyPlan.Value().Apply(PropertyEvaluationContext{scene, readOnlyTargets}, values, diagnostics);
+        REQUIRE(readOnlyApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::ReadOnly);
+
+        Runtime::PropertyBindingRegistry rangedRegistry;
+        const PropertyBindingId rangedBinding = Binding(31);
+        REQUIRE(rangedRegistry
+                    .Register({.id = rangedBinding,
+                               .componentType = fixture.componentType,
+                               .property = Property("weight"),
+                               .type = Runtime::PropertyBindingType::Float,
+                               .getter = ReadWeight,
+                               .setter = WriteWeight,
+                               .range = {.minimum = 0.0F, .maximum = 1.0F}})
+                    .HasValue());
+        REQUIRE(rangedRegistry.Freeze().HasValue());
+        auto rangedTrack = makeTrack(rangedBinding);
+        const std::array rangedTargets{PropertyBindingTargetSnapshot{rangedBinding, Object(1), fixture.componentType, 1, &component}};
+        auto rangedPlan = PropertyEvaluationPlan::Create(scene, std::span{&rangedTrack, 1}, rangedTargets, rangedRegistry);
+        REQUIRE(rangedPlan.HasValue());
+        auto outOfRange = values;
+        outOfRange[0].binding = rangedBinding;
+        outOfRange[0].value = 2.0F;
+        auto rangeApply = rangedPlan.Value().Apply(PropertyEvaluationContext{scene, rangedTargets}, outOfRange, diagnostics);
+        REQUIRE(rangeApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::ValueOutOfRange);
+
+        Runtime::PropertyBindingRegistry rejectingRegistry;
+        const PropertyBindingId rejectingBinding = Binding(32);
+        REQUIRE(rejectingRegistry
+                    .Register({.id = rejectingBinding,
+                               .componentType = fixture.componentType,
+                               .property = Property("weight"),
+                               .type = Runtime::PropertyBindingType::Float,
+                               .getter = ReadWeight,
+                               .setter = RejectWrite})
+                    .HasValue());
+        REQUIRE(rejectingRegistry.Freeze().HasValue());
+        auto rejectingTrack = makeTrack(rejectingBinding);
+        const std::array rejectingTargets{PropertyBindingTargetSnapshot{rejectingBinding, Object(1), fixture.componentType, 1, &component}};
+        auto rejectingPlan = PropertyEvaluationPlan::Create(scene, std::span{&rejectingTrack, 1}, rejectingTargets, rejectingRegistry);
+        REQUIRE(rejectingPlan.HasValue());
+        REQUIRE(rejectingPlan.Value().Evaluate(1, PropertyEvaluationContext{scene, rejectingTargets}, values).HasValue());
+        auto rejectedApply = rejectingPlan.Value().Apply(PropertyEvaluationContext{scene, rejectingTargets}, values, diagnostics);
+        REQUIRE(rejectedApply.HasValue());
+        CHECK(diagnostics[0].outcome == PropertyBindingEvaluationOutcome::WriteRejected);
     }
 
     TEST_CASE("Property activation requires a frozen binding registry", "[unit][cinematic][property-track][diagnostics]") {

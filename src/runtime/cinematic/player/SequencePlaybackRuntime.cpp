@@ -122,10 +122,10 @@ namespace Horo::Cinematic {
                 return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
             if (left.required && right.required && left.mode == Exclusive && right.mode == Exclusive && left.priority == right.priority)
                 return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
-            const bool requiredExclusiveBlendConflict =
-                left.required && right.required &&
-                ((left.mode == Exclusive && right.mode == Blend) || (left.mode == Blend && right.mode == Exclusive));
-            if (requiredExclusiveBlendConflict)
+            if (const bool requiredExclusiveBlendConflict =
+                    left.required && right.required &&
+                    ((left.mode == Exclusive && right.mode == Blend) || (left.mode == Blend && right.mode == Exclusive));
+                requiredExclusiveBlendConflict)
                 return Failed<void>(SequencePlaybackRuntimeErrors::AuthorityConflict);
             return Result<void>::Success();
         }

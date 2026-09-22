@@ -63,6 +63,21 @@ namespace Horo::Cinematic {
             return Result<SequenceCoordinationLease>::Success({player, kind, probe.nextRevision++});
         }
 
+        Result<SequenceCoordinationLease> RejectCoordination(void *, const SequencePlayerHandle &, SequenceCoordinationLeaseKind) {
+            return Result<SequenceCoordinationLease>::Failure(MakeError(SequencePlaybackRuntimeErrors::CapacityExceeded));
+        }
+
+        Result<SequenceCoordinationLease> RejectHudCoordination(void *context, const SequencePlayerHandle &player,
+                                                                const SequenceCoordinationLeaseKind kind) {
+            if (kind == SequenceCoordinationLeaseKind::HudSuppression)
+                return Result<SequenceCoordinationLease>::Failure(MakeError(SequencePlaybackRuntimeErrors::CapacityExceeded));
+            return AcquireCoordination(context, player, kind);
+        }
+
+        Result<SequenceCoordinationLease> InvalidCoordination(void *, const SequencePlayerHandle &, SequenceCoordinationLeaseKind) {
+            return Result<SequenceCoordinationLease>::Success({});
+        }
+
         void ReleaseCoordination(void *context, const SequenceCoordinationLease &) noexcept {
             ++static_cast<CoordinationProbe *>(context)->released;
         }
@@ -75,6 +90,7 @@ namespace Horo::Cinematic {
     }  // namespace
 
     TEST_CASE("Cinematic evaluation tiers enforce aggregate typed limits", "[unit][cinematic][playback][budget]") {
+        CHECK(Plan(SequenceLoopMode::Loop).LoopMode() == SequenceLoopMode::Loop);
         const auto compact = GetSequenceEvaluationBudget(SequenceCookTier::Compact);
         REQUIRE(compact.HasValue());
         CHECK(compact.Value().maximumActivePlayers == 2);
@@ -101,6 +117,93 @@ namespace Horo::Cinematic {
                          SequencePlaybackRuntimeErrors::CapacityExceeded);
             CHECK(service.ActivePlayerCount() == capacity);
         }
+    }
+
+    TEST_CASE("Runtime service fences handles and completes terminal command boundaries", "[unit][cinematic][playback][lifecycle]") {
+        auto service = Service();
+        const SequencePlayerHandle invalid{};
+        const SequencePlayerHandle unknown{{99, 3}, {7, 1}};
+        const SequencePlayerHandle staleSession{{41, 2}, {7, 1}};
+        const SequencePlayerHandle unknownPlayer = Handle(999);
+        const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, std::span<SequenceFrameEventOccurrence>{},
+                                           std::span<SequenceFrameCameraCutRequest>{}};
+        std::array<SequenceRestoreDiagnostic, 0> noDiagnostics{};
+
+        RequireError(service.Snapshot(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Snapshot(unknown), SequencePlaybackRuntimeErrors::HandleUnknown);
+        RequireError(service.Snapshot(staleSession), SequencePlaybackRuntimeErrors::HandleStale);
+        RequireError(service.Snapshot(unknownPlayer), SequencePlaybackRuntimeErrors::HandleUnknown);
+        RequireError(service.Play(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Pause(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Stop(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.FinishStop(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Seek(invalid, 1), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.SetPlaybackSpeed(invalid, {1, 1}), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Cancel(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Fail(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Evaluate(invalid, 1, scratch, {}), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.ResolveGameplayPause(invalid, {1, false}), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.CoordinationSnapshot(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.ResolveGameplayWrite(invalid, SequenceGameplayWriteRequest{}), SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Restore(invalid, std::span<const SequenceRestoreTargetSnapshot>{}, noDiagnostics),
+                     SequencePlaybackRuntimeErrors::HandleInvalid);
+        RequireError(service.Release(invalid), SequencePlaybackRuntimeErrors::HandleInvalid);
+
+        auto handleResult = service.Activate({{Handle(), 10, 0, {1, 1}}, Plan()});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        RequireError(service.Snapshot(Handle(7, 2)), SequencePlaybackRuntimeErrors::HandleStale);
+        RequireError(service.Restore(handle, std::span<const SequenceRestoreTargetSnapshot>{}, noDiagnostics),
+                     SequencePlaybackRuntimeErrors::PlayerNotTerminal);
+        RequireError(service.Release(handle), SequencePlaybackRuntimeErrors::PlayerNotTerminal);
+        const std::array invalidOrder{SequenceFramePlayerOrder{invalid, 0}};
+        std::array<SequenceFramePlayerOrder, 1> ordered{};
+        RequireError(service.OrderActivePlayers(invalidOrder, ordered), SequencePlaybackRuntimeErrors::HandleInvalid);
+        const std::array order{SequenceFramePlayerOrder{handle, 0}};
+        REQUIRE(service.OrderActivePlayers(order, ordered).Value() == 1);
+        REQUIRE(service.Play(handle).HasValue());
+        REQUIRE(service.Pause(handle).HasValue());
+        REQUIRE(service.Play(handle).HasValue());
+        REQUIRE(service.Seek(handle, 3).HasValue());
+        REQUIRE(service.SetPlaybackSpeed(handle, {2, 1}).HasValue());
+        REQUIRE(service.Stop(handle).HasValue());
+        REQUIRE(service.Stop(handle).HasValue());
+        REQUIRE(service.FinishStop(handle).HasValue());
+        RequireError(service.ResolveGameplayWrite(handle, SequenceGameplayWriteRequest{}),
+                     SequencePlaybackRuntimeErrors::ActivationInvalid);
+        auto acceptedAfterStop =
+            service.ResolveGameplayWrite(handle, {AuthorityTarget(500), CinematicControlChannel::CharacterTranslation, 1, 1});
+        REQUIRE(acceptedAfterStop.HasValue());
+        CHECK(acceptedAfterStop.Value().outcome == SequenceGameplayWriteOutcome::AcceptedGameplay);
+        auto keptRestore = service.Restore(handle, std::span<const SequenceRestoreTargetSnapshot>{}, noDiagnostics);
+        REQUIRE(keptRestore.HasValue());
+        REQUIRE(service.Restore(handle, std::span<const SequenceRestoreTargetSnapshot>{}, noDiagnostics).HasValue());
+        CHECK(service.Fail(handle).HasError());
+        REQUIRE(service.Cancel(handle).HasValue());
+        REQUIRE(service.Release(handle).HasValue());
+
+        const std::array restoreEntries{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(901), 1, 4.0F}};
+        auto restoreSnapshot = SequenceRestoreSnapshot::Create(restoreEntries);
+        REQUIRE(restoreSnapshot.HasValue());
+        auto restoreActivation = SequencePlaybackActivation{{Handle(8), 10, 0, {1, 1}},
+                                                            Plan(),
+                                                            {{SequenceBlendMode::Cut, 0},
+                                                             {SequenceBlendMode::Cut, 0},
+                                                             SequenceRestorePolicy::RestorePrePlayback},
+                                                            std::nullopt,
+                                                            std::move(restoreSnapshot).Value(),
+                                                            0};
+        auto restoreHandleResult = service.Activate(std::move(restoreActivation));
+        REQUIRE(restoreHandleResult.HasValue());
+        const auto restoreHandle = restoreHandleResult.Value();
+        REQUIRE(service.Stop(restoreHandle).HasValue());
+        REQUIRE(service.FinishStop(restoreHandle).HasValue());
+        RequireError(service.Release(restoreHandle), SequencePlaybackRuntimeErrors::RestoreRequired);
+        RestoreProbe restoreProbe{};
+        const std::array restoreTargets{SequenceRestoreTargetSnapshot{RestoreTarget(901), 1, &restoreProbe, ApplyRestore}};
+        std::array<SequenceRestoreDiagnostic, 1> restoreDiagnostics{};
+        REQUIRE(service.Restore(restoreHandle, restoreTargets, restoreDiagnostics).HasValue());
+        REQUIRE(service.Release(restoreHandle).HasValue());
     }
 
     TEST_CASE("Blend helpers are bounded and deterministic", "[unit][cinematic][playback][blend]") {
@@ -205,6 +308,117 @@ namespace Horo::Cinematic {
         CHECK(probe.released == 2);
     }
 
+    TEST_CASE("Runtime activation rejects malformed policy and ownership transactions", "[unit][cinematic][playback][activation]") {
+        RequireError(CinematicRuntimeService::Create({{}, SequenceCookTier::Standard}), SequencePlaybackRuntimeErrors::SessionInvalid);
+        auto service = Service();
+
+        auto invalidHandle = SequencePlaybackActivation{{}, Plan()};
+        RequireError(service.Activate(std::move(invalidHandle)), SequencePlaybackRuntimeErrors::SessionInvalid);
+
+        auto invalidBlend = SequencePlaybackActivation{{Handle(60), 10, 0, {1, 1}}, Plan()};
+        invalidBlend.blend.blendIn = {SequenceBlendMode::Blend, 0};
+        RequireError(service.Activate(std::move(invalidBlend)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+
+        auto invalidCoordination = SequencePlaybackActivation{{Handle(61), 10, 0, {1, 1}}, Plan()};
+        invalidCoordination.coordination = {SequenceClockSource::CommittedSimulation, SequencePausePolicy::PlayerOnly,
+                                            SequenceDilationPolicy::SourceNative, false, false};
+        RequireError(service.Activate(std::move(invalidCoordination)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+
+        auto missingHooks = SequencePlaybackActivation{{Handle(62), 10, 0, {1, 1}}, Plan()};
+        missingHooks.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                     SequenceDilationPolicy::SourceNative, true, false};
+        RequireError(service.Activate(std::move(missingHooks)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+
+        auto missingRestore = SequencePlaybackActivation{{Handle(63), 10, 0, {1, 1}}, Plan()};
+        missingRestore.blend.restorePolicy = SequenceRestorePolicy::RestorePrePlayback;
+        RequireError(service.Activate(std::move(missingRestore)), SequencePlaybackRuntimeErrors::RestoreInvalid);
+
+        auto mismatchedDuration = SequencePlaybackActivation{{Handle(64), 9, 0, {1, 1}}, Plan()};
+        RequireError(service.Activate(std::move(mismatchedDuration)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+
+        auto overRetainedBudget = SequencePlaybackActivation{{Handle(65), 10, 0, {1, 1}}, Plan()};
+        overRetainedBudget.retainedBytes = 8'388'609;
+        RequireError(service.Activate(std::move(overRetainedBudget)), SequencePlaybackRuntimeErrors::CapacityExceeded);
+
+        const std::array wrongOwnerClaim{SequenceAuthorityClaim{Handle(67), AuthorityTarget(700), CinematicControlChannel::GameplayAction,
+                                                                CinematicClaimMode::Exclusive, 1, 1, 1, true}};
+        auto wrongOwnerAuthority = SequenceAuthorityPlan::Create(1, 1, wrongOwnerClaim);
+        REQUIRE(wrongOwnerAuthority.HasValue());
+        auto wrongOwner = SequencePlaybackActivation{{Handle(66), 10, 0, {1, 1}}, Plan()};
+        wrongOwner.authority = std::move(wrongOwnerAuthority).Value();
+        RequireError(service.Activate(std::move(wrongOwner)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+
+        const std::array pauseClaim{SequenceAuthorityClaim{Handle(68), AuthorityTarget(701), CinematicControlChannel::GameplayAction,
+                                                           CinematicClaimMode::Exclusive, 1, 1, 1, true}};
+        auto pauseAuthority = SequenceAuthorityPlan::Create(1, 1, pauseClaim);
+        REQUIRE(pauseAuthority.HasValue());
+        auto pauseActivation = SequencePlaybackActivation{{Handle(68), 10, 0, {1, 1}}, Plan()};
+        pauseActivation.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                        SequenceDilationPolicy::SourceNative, true, false};
+        pauseActivation.coordinationHooks = {nullptr, AcquireCoordination, ReleaseCoordination};
+        pauseActivation.authority = std::move(pauseAuthority).Value();
+        RequireError(service.Activate(std::move(pauseActivation)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+    }
+
+    TEST_CASE("Runtime coordination acquisition rolls back and move assignment releases old leases",
+              "[unit][cinematic][playback][coordination][lifetime]") {
+        CoordinationProbe rollbackProbe;
+        auto service = Service();
+        auto rollback = SequencePlaybackActivation{{Handle(70), 10, 0, {1, 1}}, Plan()};
+        rollback.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                 SequenceDilationPolicy::SourceNative, true, true};
+        rollback.coordinationHooks = {&rollbackProbe, RejectHudCoordination, ReleaseCoordination};
+        RequireError(service.Activate(std::move(rollback)), SequencePlaybackRuntimeErrors::CapacityExceeded);
+        CHECK(rollbackProbe.acquired == 1);
+        CHECK(rollbackProbe.released == 1);
+
+        auto invalidLease = SequencePlaybackActivation{{Handle(71), 10, 0, {1, 1}}, Plan()};
+        invalidLease.coordination.pauseGameplay = true;
+        invalidLease.coordinationHooks = {nullptr, InvalidCoordination, ReleaseCoordination};
+        RequireError(service.Activate(std::move(invalidLease)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+
+        auto failedFirstLease = SequencePlaybackActivation{{Handle(72), 10, 0, {1, 1}}, Plan()};
+        failedFirstLease.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                         SequenceDilationPolicy::SourceNative, true, false};
+        failedFirstLease.coordinationHooks = {nullptr, RejectCoordination, ReleaseCoordination};
+        RequireError(service.Activate(std::move(failedFirstLease)), SequencePlaybackRuntimeErrors::CapacityExceeded);
+
+        CoordinationProbe destinationProbe;
+        CoordinationProbe sourceProbe;
+        {
+            auto destination = Service();
+            auto destinationActivation = SequencePlaybackActivation{{Handle(73), 10, 0, {1, 1}}, Plan()};
+            destinationActivation.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                                  SequenceDilationPolicy::SourceNative, true, true};
+            destinationActivation.coordinationHooks = {&destinationProbe, AcquireCoordination, ReleaseCoordination};
+            REQUIRE(destination.Activate(std::move(destinationActivation)).HasValue());
+
+            auto source = Service();
+            auto sourceActivation = SequencePlaybackActivation{{Handle(74), 10, 0, {1, 1}}, Plan()};
+            sourceActivation.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                             SequenceDilationPolicy::SourceNative, true, true};
+            sourceActivation.coordinationHooks = {&sourceProbe, AcquireCoordination, ReleaseCoordination};
+            REQUIRE(source.Activate(std::move(sourceActivation)).HasValue());
+
+            destination = std::move(source);
+            CHECK(destinationProbe.released == 2);
+            CHECK(destination.ActivePlayerCount() == 1);
+        }
+        CHECK(sourceProbe.released == 2);
+    }
+
+    TEST_CASE("Runtime shutdown closes active players and admission exactly once", "[unit][cinematic][playback][lifecycle]") {
+        auto service = Service();
+        const auto handleResult = service.Activate({{Handle(80), 10, 0, {1, 1}}, Plan()});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        REQUIRE(service.BeginShutdown().HasValue());
+        CHECK(!service.ServiceSnapshot().admissionOpen);
+        RequireError(service.Activate({{Handle(81), 10, 0, {1, 1}}, Plan()}), SequencePlaybackRuntimeErrors::AdmissionClosed);
+        REQUIRE(service.BeginShutdown().HasValue());
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
     TEST_CASE("Restore snapshots never write destroyed or replaced targets", "[unit][cinematic][playback][restore]") {
         const std::array entries{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(100), 4, 3.0F},
                                  SequenceRestoreEntry{TrackId{2, 1}, RestoreTarget(200), 7, 8.0F}};
@@ -254,6 +468,8 @@ namespace Horo::Cinematic {
                                                        CinematicClaimMode::Exclusive, 5, 9, 42, false}};
         auto plan = SequenceAuthorityPlan::Create(9, 42, claims);
         REQUIRE(plan.HasValue());
+        CHECK(plan.Value().AuthorityRevision() == 9);
+        CHECK(plan.Value().EligibleSimulationTick() == 42);
         auto suppressed = plan.Value().ResolveGameplayWrite({AuthorityTarget(500), CinematicControlChannel::CharacterTranslation, 9, 42});
         REQUIRE(suppressed.HasValue());
         CHECK(suppressed.Value().outcome == SequenceGameplayWriteOutcome::SuppressedByCinematic);
