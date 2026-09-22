@@ -94,6 +94,10 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ElementTreeLifecycleUnavailable;
     /** @brief A layout request, geometry value, evaluator result, or dirty target is malformed. */
     extern const ErrorCodeDescriptor LayoutInvalid;
+    /** @brief A layout descriptor combines constraints that have no unambiguous semantic interpretation. */
+    extern const ErrorCodeDescriptor LayoutConstraintConflict;
+    /** @brief A required text or image intrinsic metric is unavailable for the frozen content revision. */
+    extern const ErrorCodeDescriptor LayoutIntrinsicUnavailable;
     /** @brief Layout source identity or revision evidence does not match the active tree/canvas. */
     extern const ErrorCodeDescriptor LayoutSourceStale;
     /** @brief Arrange-time dependency resolution changed more than the one bounded remeasure permits. */
