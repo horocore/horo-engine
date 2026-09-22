@@ -281,6 +281,8 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiImageResourceErrors.cpp
+        runtime/ui/UiImageResource.cpp
         runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
         runtime/ui/UiControlErrors.cpp
@@ -331,6 +333,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiHitTesting.cpp
         runtime/ui/UiRenderSnapshot.cpp
         runtime/ui/UiRenderGeometry.cpp
+        runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
