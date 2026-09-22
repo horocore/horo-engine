@@ -147,11 +147,12 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiErrors.h
+    Horo/Runtime/Ui/UiAssetDependency.h
+    Horo/Runtime/Ui/UiImageResource.h
     Horo/Runtime/Ui/UiAccessibility.h
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiCanvasSpace.h
-    Horo/Runtime/Ui/UiAssetDependency.h
     Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
@@ -352,6 +353,7 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AIErrors.h
+    Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h
     Horo/AI/AITaskLifecycle.h
     Horo/AI/BehaviorTree.h
@@ -360,6 +362,9 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
+)
+horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
+    Horo/AI/AISceneActivation.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h

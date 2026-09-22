@@ -5,6 +5,7 @@
  * @brief Editor-private authoritative scene state and narrow command boundary.
  */
 
+#include "Horo/AI/AISceneComponents.h"
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Gameplay/BehaviorTypes.h"
@@ -114,6 +115,8 @@ namespace Horo::Editor {
         std::optional<Runtime::NavigationModifierComponent> navigationModifier;
         std::optional<Runtime::NavigationLinkComponent> navigationLink;
         std::optional<Runtime::NavigationAgentComponent> navigationAgent;
+        std::optional<AI::AiAgentComponent> aiAgent;
+        std::optional<AI::AiControllerComponent> aiController;
         std::optional<Runtime::RigidBodyComponent> rigidBody;
         std::vector<Runtime::ColliderComponent> colliders;
         std::vector<Runtime::PhysicsConstraintComponent> physicsConstraints;
@@ -565,6 +568,7 @@ namespace Horo::Editor {
         std::uint64_t m_nextNavigationRegionId{1};
         std::uint64_t m_nextNavigationModifierId{1};
         std::uint64_t m_nextNavigationLinkId{1};
+        std::uint64_t m_nextAiAgentId{1};
     };
 
     /** @brief Sole mutation boundary for the minimum typed scene command set. */

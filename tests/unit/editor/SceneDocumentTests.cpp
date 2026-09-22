@@ -247,6 +247,12 @@ namespace {
         components.navigationModifier = NavigationModifier(17, 8);
         components.navigationLink = NavigationLink(23, 8);
         components.navigationAgent = NavigationAgent();
+        components.aiAgent = Horo::AI::AiAgentComponent{.agent = Horo::AI::AgentId::Create(41).Value()};
+        components.aiController =
+            Horo::AI::AiControllerComponent{.controller = Horo::AI::ControllerTypeId::Create(51).Value(),
+                                            .decisionAsset = Horo::AI::DecisionGraphAssetId::Create(61).Value(),
+                                            .blackboardSchema = Horo::AI::BlackboardSchemaId::Create(71).Value(),
+                                            .requiredCapabilities = Horo::AI::AiCapabilitySet::Of(Horo::AI::AiCapability::Behavior)};
         const auto source = commands.Execute(CreateSceneObjectCommand{.name = "Source", .components = components});
         REQUIRE(source.HasValue());
         const auto duplicate = commands.Execute(DuplicateSceneObjectCommand{source.Value().object, "Duplicate"});
@@ -263,6 +269,12 @@ namespace {
         REQUIRE(duplicated.navigationLink->start.surface == duplicated.navigationSurface->id);
         REQUIRE(duplicated.navigationLink->end.surface == duplicated.navigationSurface->id);
         REQUIRE(duplicated.navigationAgent == components.navigationAgent);
+        REQUIRE(duplicated.aiAgent->agent != components.aiAgent->agent);
+        REQUIRE(duplicated.aiAgent->agent.Value() == 42);
+        REQUIRE(duplicated.aiAgent->schemaVersion == components.aiAgent->schemaVersion);
+        REQUIRE(duplicated.aiAgent->startupPolicy == components.aiAgent->startupPolicy);
+        REQUIRE(duplicated.aiAgent->enabled == components.aiAgent->enabled);
+        REQUIRE(duplicated.aiController == components.aiController);
     }
 
     TEST_CASE("Catalog Owns Stable Core Primitive Ids", "[unit][editor]") {
