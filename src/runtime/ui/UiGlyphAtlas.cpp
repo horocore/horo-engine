@@ -3,8 +3,6 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 
 #include <algorithm>
-#include <array>
-#include <cmath>
 #include <limits>
 #include <new>
 #include <optional>
@@ -19,44 +17,12 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
-        [[nodiscard]] constexpr bool IsKnown(const UiGlyphAtlasRasterFormat value) noexcept {
-            return value < UiGlyphAtlasRasterFormat::Count;
-        }
-
-        [[nodiscard]] constexpr bool IsKnown(const UiGlyphAtlasUploadState value) noexcept {
-            return value < UiGlyphAtlasUploadState::Count;
-        }
-
-        [[nodiscard]] constexpr bool IsKnown(const UiGlyphAtlasResolutionState value) noexcept {
-            return value < UiGlyphAtlasResolutionState::Count;
-        }
-
         [[nodiscard]] constexpr bool IsKnown(const UiGlyphAtlasFrameOutcome value) noexcept {
             return value < UiGlyphAtlasFrameOutcome::Count;
         }
 
         [[nodiscard]] constexpr bool IsKnown(const UiGlyphAtlasResetReason value) noexcept {
             return value < UiGlyphAtlasResetReason::Count;
-        }
-
-        [[nodiscard]] constexpr std::size_t BytesPerPixel(const UiGlyphAtlasRasterFormat format) noexcept {
-            switch (format) {
-                case UiGlyphAtlasRasterFormat::Alpha8:
-                    return 1;
-                case UiGlyphAtlasRasterFormat::Rgba8:
-                    return 4;
-                case UiGlyphAtlasRasterFormat::Count:
-                    break;
-            }
-            return 0;
-        }
-
-        [[nodiscard]] bool UnitInterval(const float value) noexcept {
-            return std::isfinite(value) && value >= 0.0F && value <= 1.0F;
-        }
-
-        [[nodiscard]] bool ValidUv(const std::array<float, 4> &uv) noexcept {
-            return std::ranges::all_of(uv, UnitInterval) && uv[0] <= uv[2] && uv[1] <= uv[3];
         }
 
         [[nodiscard]] bool SameOwner(const UiGlyphAtlasPageId id, const UiOwnershipGeneration owner) noexcept {
@@ -89,62 +55,6 @@ namespace Horo::Runtime::Ui {
         }
 
     }  // namespace
-
-    /** @copydoc UiGlyphAtlasVariant::IsValid */
-    bool UiGlyphAtlasVariant::IsValid() const noexcept {
-        return scale.IsValid();
-    }
-
-    /** @copydoc UiGlyphAtlasGlyphKey::IsValid */
-    bool UiGlyphAtlasGlyphKey::IsValid() const noexcept {
-        return face.IsValid() && variant.IsValid();
-    }
-
-    /** @copydoc UiGlyphAtlasPlacement::IsValid */
-    bool UiGlyphAtlasPlacement::IsValid() const noexcept {
-        return page.IsValid() && pixels.IsValid() && ValidUv(uv);
-    }
-
-    /** @copydoc UiGlyphAtlasDescriptor::IsValid */
-    bool UiGlyphAtlasDescriptor::IsValid() const noexcept {
-        if (!ownership.IsValid() || !pageExtent.IsValid() || !tileExtent.IsValid() || !IsKnown(format) || !fallback.IsValid() ||
-            !limits.IsValid() || !initialRevision.IsValid() || pageExtent.width % tileExtent.width != 0 ||
-            pageExtent.height % tileExtent.height != 0)
-            return false;
-
-        const auto columns = static_cast<std::uint64_t>(pageExtent.width / tileExtent.width);
-        const auto rows = static_cast<std::uint64_t>(pageExtent.height / tileExtent.height);
-        const auto tiles = columns * rows;
-        if (columns == 0 || rows == 0 || tiles == 0 || tiles > MaximumUiGlyphAtlasTilesPerPage)
-            return false;
-
-        const auto bytesPerPixel = BytesPerPixel(format);
-        const auto pageBytes = static_cast<std::uint64_t>(pageExtent.width) * pageExtent.height * bytesPerPixel;
-        const auto tileBytes = static_cast<std::uint64_t>(tileExtent.width) * tileExtent.height * bytesPerPixel;
-        return bytesPerPixel != 0 && pageBytes > 0 && pageBytes <= MaximumUiGlyphAtlasPageBytes && tileBytes > 0 &&
-               tileBytes <= limits.maximumPendingUploadBytes;
-    }
-
-    /** @copydoc UiGlyphAtlasRasterData::IsValid */
-    bool UiGlyphAtlasRasterData::IsValid() const noexcept {
-        const auto bytesPerPixel = BytesPerPixel(format);
-        if (!key.IsValid() || !IsKnown(format) || width == 0 || height == 0 || rowBytes == 0 || bytesPerPixel == 0 ||
-            static_cast<std::uint64_t>(width) * bytesPerPixel > rowBytes)
-            return false;
-        const auto expectedBytes = static_cast<std::uint64_t>(rowBytes) * height;
-        return expectedBytes > 0 && expectedBytes <= MaximumUiGlyphAtlasPendingUploadBytes && bytes.size() == expectedBytes;
-    }
-
-    /** @copydoc UiGlyphAtlasUploadDescriptor::IsValid */
-    bool UiGlyphAtlasUploadDescriptor::IsValid() const noexcept {
-        return upload.IsValid() && entry.IsValid() && key.IsValid() && placement.IsValid() && revision.IsValid() && IsKnown(format) &&
-               rowBytes > 0 && byteCount > 0;
-    }
-
-    /** @copydoc UiGlyphAtlasLookup::IsValid */
-    bool UiGlyphAtlasLookup::IsValid() const noexcept {
-        return requested.IsValid() && resolved.IsValid() && entry.IsValid() && placement.IsValid() && revision.IsValid() && IsKnown(state);
-    }
 
     struct UiGlyphAtlas::Storage final {
         enum class EntryState : std::uint8_t {
@@ -378,6 +288,52 @@ namespace Horo::Runtime::Ui {
             return Result<std::size_t>::Success(*free);
         }
 
+        [[nodiscard]] Result<std::size_t> AcquireUploadEntry() {
+            auto entryIndex = FindFreeEntry();
+            std::uint32_t evictions{};
+            while (!entryIndex.has_value() && evictions < descriptor.limits.maximumEvictionsPerRequest) {
+                const auto candidate = FindEvictable();
+                if (!candidate.has_value())
+                    break;
+                EvictEntry(*candidate);
+                ++evictions;
+                entryIndex = FindFreeEntry();
+            }
+            if (!entryIndex.has_value()) {
+                ++pressureCount;
+                return Failure<std::size_t>(UiErrors::GlyphAtlasPressure);
+            }
+            return AcquireEntry();
+        }
+
+        void PublishUpload(const std::size_t uploadIndex, const std::size_t entryIndex, const UiGlyphAtlasRasterData &raster,
+                           const std::size_t stagingOffset) noexcept {
+            auto &entry = entries[entryIndex];
+            entry.key = raster.key;
+            entry.placement = Placement(entryIndex, raster.width, raster.height);
+            entry.state = EntryState::Pending;
+            entry.uploadSlot = static_cast<std::uint32_t>(uploadIndex + 1U);
+            entry.fallback = raster.key == descriptor.fallback;
+
+            auto &upload = uploads[uploadIndex];
+            upload.descriptor = {.upload = upload.id,
+                                 .entry = entry.id,
+                                 .key = raster.key,
+                                 .placement = entry.placement,
+                                 .revision = revision,
+                                 .format = raster.format,
+                                 .rowBytes = raster.rowBytes,
+                                 .byteCount = raster.bytes.size(),
+                                 .fallback = entry.fallback};
+            upload.state = UiGlyphAtlasUploadState::Pending;
+            upload.stagingOffset = stagingOffset;
+            upload.stagingBytes = raster.bytes.size();
+            upload.entrySlot = static_cast<std::uint32_t>(entryIndex + 1U);
+            std::ranges::copy(raster.bytes, staging.begin() + static_cast<std::ptrdiff_t>(stagingOffset));
+            pendingBytes += raster.bytes.size();
+            nextUpload = (uploadIndex + 1U) % uploads.size();
+        }
+
         [[nodiscard]] Result<std::size_t> AcquireUpload() {
             const auto free = FindFreeUpload();
             if (!free.has_value())
@@ -456,6 +412,38 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
+        void ResetUploads(UiGlyphAtlasResetReport &report) noexcept {
+            for (auto &upload : uploads) {
+                if (!upload.occupied)
+                    continue;
+                if (upload.state == UiGlyphAtlasUploadState::Pending)
+                    ++report.cancelledUploads;
+                if (upload.entrySlot != 0) {
+                    const auto entryIndex = static_cast<std::size_t>(upload.entrySlot - 1U);
+                    if (entryIndex < entries.size())
+                        ReleaseEntry(entryIndex);
+                }
+                ReleaseStaging(upload);
+                upload.occupied = false;
+                upload.entrySlot = 0;
+                upload.failure.reset();
+                upload.descriptor = {};
+                upload.state = UiGlyphAtlasUploadState::Retired;
+            }
+        }
+
+        void ResetEntries() noexcept {
+            for (std::size_t index = 0; index < entries.size(); ++index)
+                ReleaseEntry(index);
+        }
+
+        void AdvancePageGenerations() noexcept {
+            for (std::size_t index = 0; index < pages.size(); ++index) {
+                ++pages[index].generation;
+                pages[index] = {descriptor.ownership, static_cast<std::uint32_t>(index + 1U), pages[index].generation};
+            }
+        }
+
         [[nodiscard]] Result<UiGlyphAtlasResetReport> ResetInternal(const UiGlyphAtlasResetReason reason) {
             if (!IsActive())
                 return Failure<UiGlyphAtlasResetReport>(UiErrors::GlyphAtlasLifecycleUnavailable);
@@ -483,29 +471,9 @@ namespace Horo::Runtime::Ui {
             for (const auto &entry : entries)
                 if (entry.state != EntryState::Free)
                     ++report.invalidatedEntries;
-            for (auto &upload : uploads) {
-                if (!upload.occupied)
-                    continue;
-                if (upload.state == UiGlyphAtlasUploadState::Pending)
-                    ++report.cancelledUploads;
-                if (upload.entrySlot != 0) {
-                    const auto entryIndex = static_cast<std::size_t>(upload.entrySlot - 1U);
-                    if (entryIndex < entries.size())
-                        ReleaseEntry(entryIndex);
-                }
-                ReleaseStaging(upload);
-                upload.occupied = false;
-                upload.entrySlot = 0;
-                upload.failure.reset();
-                upload.descriptor = {};
-                upload.state = UiGlyphAtlasUploadState::Retired;
-            }
-            for (std::size_t index = 0; index < entries.size(); ++index)
-                ReleaseEntry(index);
-            for (std::size_t index = 0; index < pages.size(); ++index) {
-                ++pages[index].generation;
-                pages[index] = {descriptor.ownership, static_cast<std::uint32_t>(index + 1U), pages[index].generation};
-            }
+            ResetUploads(report);
+            ResetEntries();
+            AdvancePageGenerations();
             revision = nextRevision.Value();
             report.requiresFallbackUpload = true;
             return Result<UiGlyphAtlasResetReport>::Success(report);
@@ -589,22 +557,6 @@ namespace Horo::Runtime::Ui {
         if (uploadIndex.HasError())
             return Result<UiGlyphAtlasUploadId>::Failure(uploadIndex.ErrorValue());
 
-        auto entryIndex = storage_->FindFreeEntry();
-        std::uint32_t evictions{};
-        while (!entryIndex.has_value() && evictions < storage_->descriptor.limits.maximumEvictionsPerRequest) {
-            const auto candidate = storage_->FindEvictable();
-            if (!candidate.has_value())
-                break;
-            storage_->EvictEntry(*candidate);
-            ++evictions;
-            entryIndex = storage_->FindFreeEntry();
-        }
-        if (!entryIndex.has_value()) {
-            storage_->uploads[uploadIndex.Value()].occupied = false;
-            ++storage_->pressureCount;
-            return Failure<UiGlyphAtlasUploadId>(UiErrors::GlyphAtlasPressure);
-        }
-
         std::size_t stagingOffset{};
         if (storage_->pendingBytes > storage_->descriptor.limits.maximumPendingUploadBytes - raster.bytes.size() ||
             !storage_->AllocateStaging(raster.bytes.size(), stagingOffset)) {
@@ -612,39 +564,13 @@ namespace Horo::Runtime::Ui {
             return Failure<UiGlyphAtlasUploadId>(UiErrors::GlyphAtlasUploadCapacityExceeded);
         }
 
-        const auto acquiredEntry = storage_->AcquireEntry();
+        const auto acquiredEntry = storage_->AcquireUploadEntry();
         if (acquiredEntry.HasError()) {
             storage_->uploads[uploadIndex.Value()].occupied = false;
             return Result<UiGlyphAtlasUploadId>::Failure(acquiredEntry.ErrorValue());
         }
-        if (acquiredEntry.Value() != *entryIndex)
-            entryIndex = acquiredEntry.Value();
-
-        auto &entry = storage_->entries[*entryIndex];
-        entry.key = raster.key;
-        entry.placement = storage_->Placement(*entryIndex, raster.width, raster.height);
-        entry.state = Storage::EntryState::Pending;
-        entry.uploadSlot = static_cast<std::uint32_t>(uploadIndex.Value() + 1U);
-        entry.fallback = raster.key == storage_->descriptor.fallback;
-
-        auto &upload = storage_->uploads[uploadIndex.Value()];
-        upload.descriptor = {.upload = upload.id,
-                             .entry = entry.id,
-                             .key = raster.key,
-                             .placement = entry.placement,
-                             .revision = storage_->revision,
-                             .format = raster.format,
-                             .rowBytes = raster.rowBytes,
-                             .byteCount = raster.bytes.size(),
-                             .fallback = entry.fallback};
-        upload.state = UiGlyphAtlasUploadState::Pending;
-        upload.stagingOffset = stagingOffset;
-        upload.stagingBytes = raster.bytes.size();
-        upload.entrySlot = static_cast<std::uint32_t>(*entryIndex + 1U);
-        std::ranges::copy(raster.bytes, storage_->staging.begin() + static_cast<std::ptrdiff_t>(stagingOffset));
-        storage_->pendingBytes += raster.bytes.size();
-        storage_->nextUpload = (uploadIndex.Value() + 1U) % storage_->uploads.size();
-        return Result<UiGlyphAtlasUploadId>::Success(upload.id);
+        storage_->PublishUpload(uploadIndex.Value(), acquiredEntry.Value(), raster, stagingOffset);
+        return Result<UiGlyphAtlasUploadId>::Success(storage_->uploads[uploadIndex.Value()].id);
     }
 
     /** @copydoc UiGlyphAtlas::QueueUpload */
