@@ -345,12 +345,16 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiRenderGeometry.cpp
         runtime/ui/UiRenderGeometryInternal.cpp
         runtime/ui/UiPresentationReceipt.cpp
+        runtime/ui/UiTextShaping.cpp
+        runtime/ui/UiTextErrors.cpp
+        runtime/ui/UiTextShape.cpp
+        runtime/ui/UiTextShaper.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
-        PRIVATE nlohmann_json::nlohmann_json)
+        PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz)
 
 add_library(HoroGameplayApi STATIC
         gameplay/api/BehaviorTypes.cpp
