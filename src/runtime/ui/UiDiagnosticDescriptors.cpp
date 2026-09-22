@@ -80,6 +80,25 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::TextLayoutInputInvalid,    &UiErrors::TextLayoutSourceStale,      &UiErrors::TextLayoutCapacityExceeded,
             &UiErrors::TextLayoutEllipsisInvalid, &UiErrors::TextLayoutStorageExhausted, &UiErrors::TextLayoutLifecycleUnavailable,
         };
+        const std::array glyphAtlas{
+            &UiErrors::GlyphAtlasInputInvalid,
+            &UiErrors::GlyphAtlasSourceStale,
+            &UiErrors::GlyphAtlasCapacityExceeded,
+            &UiErrors::GlyphAtlasPressure,
+            &UiErrors::GlyphAtlasFallbackUnavailable,
+            &UiErrors::GlyphAtlasUploadInvalid,
+            &UiErrors::GlyphAtlasUploadCapacityExceeded,
+            &UiErrors::GlyphAtlasUploadStale,
+            &UiErrors::GlyphAtlasUploadInvalidTransition,
+            &UiErrors::GlyphAtlasFrameInvalid,
+            &UiErrors::GlyphAtlasFrameCapacityExceeded,
+            &UiErrors::GlyphAtlasFrameInFlight,
+            &UiErrors::GlyphAtlasEvictionInvalid,
+            &UiErrors::GlyphAtlasResetInvalid,
+            &UiErrors::GlyphAtlasResetBusy,
+            &UiErrors::GlyphAtlasLifecycleUnavailable,
+            &UiErrors::GlyphAtlasUploadInFlight,
+        };
         const std::array actions{
             &UiErrors::ActionInvalid,
             &UiErrors::ActionPayloadInvalid,
@@ -138,12 +157,13 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + pointerCapture.size() + actions.size() +
-                                                        bindings.size() + controls.size() + focus.size() + renderGeometry.size() +
-                                                        accessibility.size()>
+            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + glyphAtlas.size() + pointerCapture.size() +
+                                                        actions.size() + bindings.size() + controls.size() + focus.size() +
+                                                        renderGeometry.size() + accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
             output = std::ranges::copy(textLayout, output).out;
+            output = std::ranges::copy(glyphAtlas, output).out;
             output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;
             output = std::ranges::copy(bindings, output).out;
