@@ -153,7 +153,6 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiCanvasSpace.h
-    Horo/Runtime/Ui/UiAssetDependency.h
     Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
