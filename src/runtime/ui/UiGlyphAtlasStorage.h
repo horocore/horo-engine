@@ -9,6 +9,7 @@
 #include "Horo/Runtime/Ui/UiGlyphAtlas.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <new>
 #include <optional>
@@ -17,6 +18,24 @@
 #include <vector>
 
 namespace Horo::Runtime::Ui {
+    namespace UiGlyphAtlasStorageDetail {
+        template <typename T = void> [[nodiscard]] inline Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
+            return Result<T>::Failure(MakeError(descriptor));
+        }
+
+        [[nodiscard]] inline constexpr bool IsKnown(const UiGlyphAtlasResetReason value) noexcept {
+            return value < UiGlyphAtlasResetReason::Count;
+        }
+
+        [[nodiscard]] inline bool SameOwner(const UiGlyphAtlasUploadId id, const UiOwnershipGeneration owner) noexcept {
+            return id.IsValid() && id.ownership == owner;
+        }
+
+        [[nodiscard]] inline bool SameOwner(const UiGlyphAtlasFrameId id, const UiOwnershipGeneration owner) noexcept {
+            return id.IsValid() && id.ownership == owner;
+        }
+    }  // namespace UiGlyphAtlasStorageDetail
+
     struct UiGlyphAtlas::Storage final {
         enum class EntryState : std::uint8_t {
             Free,
@@ -84,25 +103,10 @@ namespace Horo::Runtime::Ui {
         std::uint64_t evictionCount{};
         std::uint64_t pressureCount{};
 
-        template <typename T = void> [[nodiscard]] static Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
-            return Result<T>::Failure(MakeError(descriptor));
-        }
-
-        [[nodiscard]] static bool IsKnown(const UiGlyphAtlasResetReason value) noexcept {
-            return value < UiGlyphAtlasResetReason::Count;
-        }
-
-        [[nodiscard]] static bool SameOwner(const UiGlyphAtlasUploadId id, const UiOwnershipGeneration owner) noexcept {
-            return id.IsValid() && id.ownership == owner;
-        }
-
-        [[nodiscard]] static bool SameOwner(const UiGlyphAtlasFrameId id, const UiOwnershipGeneration owner) noexcept {
-            return id.IsValid() && id.ownership == owner;
-        }
-
-        explicit Storage(const UiGlyphAtlasDescriptor &source) : descriptor(source), revision(source.initialRevision) {
-            columnsPerPage = source.pageExtent.width / source.tileExtent.width;
-            tilesPerPage = columnsPerPage * (source.pageExtent.height / source.tileExtent.height);
+        explicit Storage(const UiGlyphAtlasDescriptor &source)
+            : descriptor(source), revision(source.initialRevision),
+              tilesPerPage((source.pageExtent.width / source.tileExtent.width) * (source.pageExtent.height / source.tileExtent.height)),
+              columnsPerPage(source.pageExtent.width / source.tileExtent.width) {
             pages.reserve(source.limits.pages);
             for (std::uint32_t page = 0; page < source.limits.pages; ++page)
                 pages.push_back({source.ownership, page + 1U, 1U});
@@ -125,30 +129,25 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<std::size_t> UploadIndex(const UiGlyphAtlasUploadId id) const {
-            if (!SameOwner(id, descriptor.ownership) || id.slot > uploads.size())
-                return Failure<std::size_t>(UiErrors::GlyphAtlasUploadStale);
+            if (!UiGlyphAtlasStorageDetail::SameOwner(id, descriptor.ownership) || id.slot > uploads.size())
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasUploadStale);
             const auto index = static_cast<std::size_t>(id.slot - 1U);
-            const auto &upload = uploads[index];
-            if (!upload.occupied || upload.id != id)
-                return Failure<std::size_t>(UiErrors::GlyphAtlasUploadStale);
+            if (const auto &upload = uploads[index]; !upload.occupied || upload.id != id)
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasUploadStale);
             return Result<std::size_t>::Success(index);
         }
 
         [[nodiscard]] Result<std::size_t> FrameIndex(const UiGlyphAtlasFrameId id) const {
-            if (!SameOwner(id, descriptor.ownership) || id.slot > frames.size())
-                return Failure<std::size_t>(UiErrors::GlyphAtlasFrameInvalid);
+            if (!UiGlyphAtlasStorageDetail::SameOwner(id, descriptor.ownership) || id.slot > frames.size())
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasFrameInvalid);
             const auto index = static_cast<std::size_t>(id.slot - 1U);
-            const auto &frame = frames[index];
-            if (!frame.active || frame.id != id)
-                return Failure<std::size_t>(UiErrors::GlyphAtlasFrameInvalid);
+            if (const auto &frame = frames[index]; !frame.active || frame.id != id)
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasFrameInvalid);
             return Result<std::size_t>::Success(index);
         }
 
         [[nodiscard]] std::optional<std::size_t> FindEntry(const UiGlyphAtlasGlyphKey &key) const {
-            const auto position = std::lower_bound(entriesByKey.begin(), entriesByKey.end(), key,
-                                                   [](const KeyIndex &record, const UiGlyphAtlasGlyphKey &requested) {
-                return record.key < requested;
-            });
+            const auto position = std::ranges::lower_bound(entriesByKey, key, std::ranges::less{}, &KeyIndex::key);
             if (position == entriesByKey.end() || position->key != key)
                 return std::nullopt;
             return position->entry;
@@ -195,10 +194,7 @@ namespace Horo::Runtime::Ui {
         }
 
         void EraseEntryKey(const UiGlyphAtlasGlyphKey &key) noexcept {
-            const auto position = std::lower_bound(entriesByKey.begin(), entriesByKey.end(), key,
-                                                   [](const KeyIndex &record, const UiGlyphAtlasGlyphKey &requested) {
-                return record.key < requested;
-            });
+            const auto position = std::ranges::lower_bound(entriesByKey, key, std::ranges::less{}, &KeyIndex::key);
             if (position != entriesByKey.end() && position->key == key)
                 entriesByKey.erase(position);
         }
@@ -226,7 +222,7 @@ namespace Horo::Runtime::Ui {
             const auto uploadIndex = static_cast<std::size_t>(entry.uploadSlot - 1U);
             if (uploadIndex >= uploads.size())
                 return;
-            auto &upload = uploads[uploadIndex];
+            const auto &upload = uploads[uploadIndex];
             if (upload.occupied && upload.state == UiGlyphAtlasUploadState::Failed && upload.entrySlot == entry.uploadSlot)
                 static_cast<void>(FreeUpload(uploadIndex));
         }
@@ -283,8 +279,8 @@ namespace Horo::Runtime::Ui {
             const auto tileIndex = static_cast<std::uint32_t>(entryIndex % tilesPerPage);
             const auto x = (tileIndex % columnsPerPage) * descriptor.tileExtent.width;
             const auto y = (tileIndex / columnsPerPage) * descriptor.tileExtent.height;
-            const float pageWidth = static_cast<float>(descriptor.pageExtent.width);
-            const float pageHeight = static_cast<float>(descriptor.pageExtent.height);
+            const auto pageWidth = static_cast<float>(descriptor.pageExtent.width);
+            const auto pageHeight = static_cast<float>(descriptor.pageExtent.height);
             return {pages[pageIndex],
                     {x, y, width, height},
                     {static_cast<float>(x) / pageWidth, static_cast<float>(y) / pageHeight, static_cast<float>(x + width) / pageWidth,
@@ -307,7 +303,7 @@ namespace Horo::Runtime::Ui {
                 entry.id = {descriptor.ownership, static_cast<std::uint32_t>(index + 1U), entry.generation};
                 return Result<std::size_t>::Success(index);
             }
-            return Failure<std::size_t>(UiErrors::GlyphAtlasCapacityExceeded);
+            return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasCapacityExceeded);
         }
 
         [[nodiscard]] Result<std::size_t> AcquireUploadEntry() {
@@ -323,7 +319,7 @@ namespace Horo::Runtime::Ui {
             }
             if (!entryIndex.has_value()) {
                 ++pressureCount;
-                return Failure<std::size_t>(UiErrors::GlyphAtlasPressure);
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasPressure);
             }
             return AcquireEntry();
         }
@@ -334,12 +330,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::size_t> AcquireUpload() {
             const auto free = FindFreeUpload();
             if (!free.has_value())
-                return Failure<std::size_t>(UiErrors::GlyphAtlasUploadCapacityExceeded);
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasUploadCapacityExceeded);
             auto &upload = uploads[*free];
             if (!upload.generation) {
                 upload.generation = 1;
             } else if (upload.generation == std::numeric_limits<std::uint32_t>::max()) {
-                return Failure<std::size_t>(UiErrors::GlyphAtlasUploadCapacityExceeded);
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasUploadCapacityExceeded);
             } else {
                 ++upload.generation;
             }
@@ -351,14 +347,14 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::size_t> AcquireFrame() {
             const auto free = FindFreeFrame();
             if (!free.has_value())
-                return Failure<std::size_t>(UiErrors::GlyphAtlasFrameInFlight);
+                return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasFrameInFlight);
             auto &frame = frames[*free];
             if (!frame.everUsed) {
                 frame.everUsed = true;
                 frame.generation = 1;
             } else {
                 if (frame.generation == std::numeric_limits<std::uint32_t>::max())
-                    return Failure<std::size_t>(UiErrors::GlyphAtlasFrameInFlight);
+                    return UiGlyphAtlasStorageDetail::Failure<std::size_t>(UiErrors::GlyphAtlasFrameInFlight);
                 ++frame.generation;
             }
             frame.id = {descriptor.ownership, static_cast<std::uint32_t>(*free + 1U), frame.generation};
@@ -374,7 +370,7 @@ namespace Horo::Runtime::Ui {
             if (entry.lastPinnedFrame == frame.id)
                 return Result<void>::Success();
             if (frame.entries.size() >= descriptor.limits.maximumUsesPerFrame)
-                return Failure(UiErrors::GlyphAtlasFrameCapacityExceeded);
+                return UiGlyphAtlasStorageDetail::Failure(UiErrors::GlyphAtlasFrameCapacityExceeded);
             frame.entries.push_back(static_cast<std::uint32_t>(entryIndex));
             entry.lastPinnedFrame = frame.id;
             ++entry.pinCount;
@@ -384,8 +380,8 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<void> CancelPendingUpload(UploadRecord &upload) {
             if (upload.entrySlot != 0) {
-                const auto entryIndex = static_cast<std::size_t>(upload.entrySlot - 1U);
-                if (entryIndex < entries.size() && entries[entryIndex].uploadSlot == upload.id.slot)
+                if (const auto entryIndex = static_cast<std::size_t>(upload.entrySlot - 1U);
+                    entryIndex < entries.size() && entries[entryIndex].uploadSlot == upload.id.slot)
                     ReleaseEntry(entryIndex);
                 upload.entrySlot = 0;
             }
@@ -397,7 +393,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> FreeUpload(const std::size_t index) {
             auto &upload = uploads[index];
             if (!upload.occupied)
-                return Failure(UiErrors::GlyphAtlasUploadStale);
+                return UiGlyphAtlasStorageDetail::Failure(UiErrors::GlyphAtlasUploadStale);
             upload.failure.reset();
             upload.descriptor = {};
             upload.completion = {};
@@ -410,9 +406,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<void> RecycleFailedEntry(const std::size_t index) {
-            auto &entry = entries[index];
-            if (entry.state != EntryState::Failed)
-                return Failure(UiErrors::GlyphAtlasUploadInvalidTransition);
+            if (const auto &entry = entries[index]; entry.state != EntryState::Failed)
+                return UiGlyphAtlasStorageDetail::Failure(UiErrors::GlyphAtlasUploadInvalidTransition);
             ReleaseFailedUpload(index);
             ReleaseEntry(index);
             return Result<void>::Success();

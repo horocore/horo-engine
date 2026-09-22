@@ -16,12 +16,13 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] constexpr std::size_t BytesPerPixel(const UiGlyphAtlasRasterFormat format) noexcept {
+            using enum UiGlyphAtlasRasterFormat;
             switch (format) {
-                case UiGlyphAtlasRasterFormat::Alpha8:
+                case Alpha8:
                     return 1;
-                case UiGlyphAtlasRasterFormat::Rgba8:
+                case Rgba8:
                     return 4;
-                case UiGlyphAtlasRasterFormat::Count:
+                case Count:
                     break;
             }
             return 0;
@@ -60,8 +61,7 @@ namespace Horo::Runtime::Ui {
 
         const auto columns = static_cast<std::uint64_t>(pageExtent.width / tileExtent.width);
         const auto rows = static_cast<std::uint64_t>(pageExtent.height / tileExtent.height);
-        const auto tiles = columns * rows;
-        if (columns == 0 || rows == 0 || tiles == 0 || tiles > MaximumUiGlyphAtlasTilesPerPage)
+        if (const auto tiles = columns * rows; columns == 0 || rows == 0 || tiles == 0 || tiles > MaximumUiGlyphAtlasTilesPerPage)
             return false;
 
         const auto bytesPerPixel = BytesPerPixel(format);
@@ -73,9 +73,9 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiGlyphAtlasRasterData::IsValid */
     bool UiGlyphAtlasRasterData::IsValid() const noexcept {
-        const auto bytesPerPixel = BytesPerPixel(format);
-        if (!key.IsValid() || !IsKnown(format) || width == 0 || height == 0 || rowBytes == 0 || bytesPerPixel == 0 ||
-            static_cast<std::uint64_t>(width) * bytesPerPixel > rowBytes)
+        if (const auto bytesPerPixel = BytesPerPixel(format); !key.IsValid() || !IsKnown(format) || width == 0 || height == 0 ||
+                                                              rowBytes == 0 || bytesPerPixel == 0 ||
+                                                              static_cast<std::uint64_t>(width) * bytesPerPixel > rowBytes)
             return false;
         const auto expectedBytes = static_cast<std::uint64_t>(rowBytes) * height;
         return expectedBytes > 0 && expectedBytes <= MaximumUiGlyphAtlasPendingUploadBytes && bytes.size() == expectedBytes;

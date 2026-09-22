@@ -18,8 +18,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool IsTerminal(const UiGlyphAtlasUploadState state) noexcept {
-            return state == UiGlyphAtlasUploadState::Ready || state == UiGlyphAtlasUploadState::Failed ||
-                   state == UiGlyphAtlasUploadState::Cancelled || state == UiGlyphAtlasUploadState::Retired;
+            using enum UiGlyphAtlasUploadState;
+            return state == Ready || state == Failed || state == Cancelled || state == Retired;
         }
 
         [[nodiscard]] Result<void> InvalidUploadTransition() {
@@ -191,15 +191,16 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiGlyphAtlas::Cancel */
     Result<void> UiGlyphAtlas::Cancel(const UiGlyphAtlasUploadId upload) {
+        using enum UiGlyphAtlasUploadState;
         if (!storage_)
             return Failure(UiErrors::GlyphAtlasLifecycleUnavailable);
         const auto index = storage_->UploadIndex(upload);
         if (index.HasError())
             return Result<void>::Failure(index.ErrorValue());
         auto &record = storage_->uploads[index.Value()];
-        if (record.state == UiGlyphAtlasUploadState::Pending)
+        if (record.state == Pending)
             return storage_->CancelPendingUpload(record);
-        if (record.state != UiGlyphAtlasUploadState::Submitted)
+        if (record.state != Submitted)
             return InvalidUploadTransition();
         record.state = UiGlyphAtlasUploadState::Cancelled;
         return Result<void>::Success();
@@ -230,7 +231,7 @@ namespace Horo::Runtime::Ui {
         const auto index = storage_->UploadIndex(upload);
         if (index.HasError())
             return Result<void>::Failure(index.ErrorValue());
-        auto &record = storage_->uploads[index.Value()];
+        const auto &record = storage_->uploads[index.Value()];
         if (!IsTerminal(record.state) || record.stagingBytes != 0)
             return InvalidUploadTransition();
         if (record.state == UiGlyphAtlasUploadState::Failed && record.entrySlot != 0 && record.entrySlot <= storage_->entries.size())
