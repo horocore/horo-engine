@@ -384,27 +384,13 @@ namespace Horo::Runtime::Ui {
     private:
         /** @brief Adopts validated cooked state into one Prepared instance. */
         struct InitialState final {
-            UiDocumentSchemaVersion schemaVersion;
-            UiDocumentId document;
-            UiDocumentRevision revision;
-            std::vector<UiCanvasDescriptor> canvases;
-            std::vector<UiDocumentElement> elements;
-            std::vector<UiAssetDependency> dependencies;
-            std::vector<UiRouteMetadata> routes;
-            std::vector<std::uint8_t> payload;
+            CookedUiDocument document;
             std::vector<UiRuntimeAsset> assets;
             RuntimeUiInstanceId instance;
         };
 
         explicit UiRuntimeInstance(InitialState initialState) noexcept;
-        UiDocumentSchemaVersion schemaVersion_;                          /**< Source schema represented by this instance. */
-        UiDocumentId document_;                                          /**< Stable source document identity. */
-        UiDocumentRevision revision_;                                    /**< Exact cooked source revision. */
-        std::vector<UiCanvasDescriptor> canvases_;                       /**< Runtime-ready immutable canvases. */
-        std::vector<UiDocumentElement> elements_;                        /**< Runtime-ready immutable elements. */
-        std::vector<UiAssetDependency> dependencies_;                    /**< Retained dependency manifest. */
-        std::vector<UiRouteMetadata> routes_;                            /**< Runtime-ready immutable routes. */
-        std::vector<std::uint8_t> payload_;                              /**< Retained cooked representation. */
+        CookedUiDocument document_;                                      /**< Owned immutable cooked document. */
         std::vector<UiRuntimeAsset> assets_;                             /**< Retained dependency payload leases. */
         RuntimeUiInstanceId instance_;                                   /**< Owner-issued transient identity. */
         UiRuntimeInstanceState state_{UiRuntimeInstanceState::Prepared}; /**< Owner-thread lifecycle state. */

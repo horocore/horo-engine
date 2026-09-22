@@ -50,8 +50,8 @@ namespace Horo::Runtime::Ui {
 
         void CompleteFailure(UiRuntimeAssetLoadHandle::Request &request, Error error, bool cancelled = false);
 
-        [[nodiscard]] Result<void> AdvanceRequest(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request,
-                                                  UiRuntimeAssetLoadService::State &state);
+        void AdvanceRequest(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request,
+                            UiRuntimeAssetLoadService::State &state) noexcept;
 
         void DrainRequest(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request) noexcept;
     }  // namespace UiAssetLoadingDetail

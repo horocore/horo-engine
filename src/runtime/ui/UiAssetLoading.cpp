@@ -88,10 +88,14 @@ namespace Horo::Runtime::Ui {
                     static_cast<void>(entry.load->RequestCancel());
         }
 
-        void CompleteFailureInternal(UiRuntimeAssetLoadHandle::Request &request, Error error, const bool cancelled = false) {
+        void CompleteFailureInternal(UiRuntimeAssetLoadHandle::Request &request, Error error, const bool cancelled = false) noexcept {
             if (!cancelled)
                 CancelHandlesInternal(request);
-            request.result = Result<UiRuntimeAssetLoadResult>::Failure(std::move(error));
+            try {
+                request.result = Result<UiRuntimeAssetLoadResult>::Failure(std::move(error));
+            } catch (...) {
+                request.result.reset();
+            }
             request.state.store(cancelled ? UiRuntimeAssetLoadState::Cancelled : UiRuntimeAssetLoadState::Failed);
         }
 
@@ -151,9 +155,9 @@ namespace Horo::Runtime::Ui {
             return document;
         }
 
-        [[nodiscard]] Result<void> ProcessRoot(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state) {
+        void ProcessRoot(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state) {
             if (!request.rootLoad || !IsTerminal(request.rootLoad->State()))
-                return Result<void>::Success();
+                return;
 
             Result<Assets::AssetLoadResult> loaded = request.rootLoad->TakeResult();
             request.rootLoad.reset();
@@ -163,16 +167,16 @@ namespace Horo::Runtime::Ui {
                 const Error error = loaded.ErrorValue();
                 if (IsError(error, "asset.load.cancelled")) {
                     CompleteCancelled(request);
-                    return Result<void>::Success();
+                    return;
                 }
                 CompleteFailure(request, TranslateLoadError(error));
-                return Result<void>::Success();
+                return;
             }
 
             auto document = DecodeRootDocument(request, state, std::move(loaded).Value());
             if (document.HasError()) {
                 CompleteFailure(request, document.ErrorValue());
-                return Result<void>::Success();
+                return;
             }
             request.residentBytes = document.Value().Payload().size();
             request.document = std::move(document).Value();
@@ -180,7 +184,6 @@ namespace Horo::Runtime::Ui {
             for (const UiAssetDependency &dependency : request.document->Dependencies())
                 request.dependencies.push_back({dependency});
             request.state.store(UiRuntimeAssetLoadState::LoadingDependencies);
-            return Result<void>::Success();
         }
 
         [[nodiscard]] bool HandleDependencyError(UiRuntimeAssetLoadHandle::Request &request,
@@ -242,28 +245,30 @@ namespace Horo::Runtime::Ui {
             return true;
         }
 
-        [[nodiscard]] Result<void> ProcessDependencyCompletions(UiRuntimeAssetLoadHandle::Request &request,
-                                                                UiRuntimeAssetLoadService::State &state) {
-            for (auto &entry : request.dependencies) {
-                if (!entry.load || !IsTerminal(entry.load->State()))
-                    continue;
-                Result<Assets::AssetLoadResult> loaded = entry.load->TakeResult();
-                entry.load.reset();
-                if (request.activeLoads > 0)
-                    --request.activeLoads;
-                if (loaded.HasError()) {
-                    if (!HandleDependencyError(request, entry, loaded.ErrorValue()))
-                        return Result<void>::Success();
-                    continue;
-                }
-                if (!StoreDependencyPayload(request, state, entry, std::move(loaded).Value()))
-                    return Result<void>::Success();
+        void ProcessDependencyCompletion(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state,
+                                         UiRuntimeAssetLoadHandle::Request::DependencyEntry &entry) {
+            if (!entry.load || !IsTerminal(entry.load->State()))
+                return;
+            Result<Assets::AssetLoadResult> loaded = entry.load->TakeResult();
+            entry.load.reset();
+            if (request.activeLoads > 0)
+                --request.activeLoads;
+            if (loaded.HasError()) {
+                static_cast<void>(HandleDependencyError(request, entry, loaded.ErrorValue()));
+                return;
             }
-            return Result<void>::Success();
+            static_cast<void>(StoreDependencyPayload(request, state, entry, std::move(loaded).Value()));
         }
 
-        [[nodiscard]] Result<void> SubmitDependencyLoads(UiRuntimeAssetLoadHandle::Request &request,
-                                                         UiRuntimeAssetLoadService::State &state) {
+        void ProcessDependencyCompletions(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state) {
+            for (auto &entry : request.dependencies) {
+                ProcessDependencyCompletion(request, state, entry);
+                if (IsTerminal(request.state.load()))
+                    return;
+            }
+        }
+
+        void SubmitDependencyLoads(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state) {
             for (auto &entry : request.dependencies) {
                 if (entry.skipped || entry.payload || entry.load)
                     continue;
@@ -271,14 +276,14 @@ namespace Horo::Runtime::Ui {
                 if (record == nullptr) {
                     if (entry.dependency.required) {
                         CompleteFailure(request, MakeError(UiErrors::AssetMissing));
-                        return Result<void>::Success();
+                        return;
                     }
                     entry.skipped = true;
                     continue;
                 }
                 if (record->type != entry.dependency.expectedType) {
                     CompleteFailure(request, MakeError(UiErrors::AssetTypeMismatch));
-                    return Result<void>::Success();
+                    return;
                 }
                 if (request.activeLoads >= state.limits.maximumConcurrentLoads)
                     break;
@@ -290,26 +295,29 @@ namespace Horo::Runtime::Ui {
                         continue;
                     }
                     CompleteFailure(request, TranslateLoadError(error));
-                    return Result<void>::Success();
+                    return;
                 }
                 Assets::AssetLoadHandle dependencyLoad = std::move(submitted).Value();
+                std::shared_ptr<Assets::AssetLoadHandle> retainedLoad;
                 try {
-                    entry.load = std::make_shared<Assets::AssetLoadHandle>(std::move(dependencyLoad));
+                    retainedLoad = std::make_shared<Assets::AssetLoadHandle>();
                 } catch (const std::bad_alloc &) {
                     static_cast<void>(dependencyLoad.RequestCancel());
-                    return Failure<void>(UiErrors::AssetBudgetExceeded);
+                    CompleteFailure(request, MakeError(UiErrors::AssetBudgetExceeded));
+                    return;
                 }
+                *retainedLoad = std::move(dependencyLoad);
+                entry.load = std::move(retainedLoad);
                 ++request.activeLoads;
             }
-            return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> FinalizeRequest(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state) {
+        void FinalizeRequest(UiRuntimeAssetLoadHandle::Request &request, UiRuntimeAssetLoadService::State &state) {
             if (!request.document || request.activeLoads != 0 || HasPendingDependencies(request) || HasUnsubmittedDependencies(request))
-                return Result<void>::Success();
+                return;
             if (state.registry.Snapshot().Revision() != request.snapshot.Revision()) {
                 CompleteFailure(request, RegistryStaleError());
-                return Result<void>::Success();
+                return;
             }
             std::vector<UiRuntimeAsset> assets;
             assets.reserve(request.dependencies.size());
@@ -320,33 +328,38 @@ namespace Horo::Runtime::Ui {
                 {request.request.canvas.asset, request.snapshot.Revision(), std::move(*request.document), std::move(assets)});
             request.document.reset();
             request.state.store(UiRuntimeAssetLoadState::Succeeded);
-            return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> AdvanceRequestInternal(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request,
-                                                          UiRuntimeAssetLoadService::State &state) {
+        void AdvanceRequestInternal(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request,
+                                    UiRuntimeAssetLoadService::State &state) {
             std::scoped_lock lock{request->mutex};
             if (IsTerminal(request->state.load()))
-                return Result<void>::Success();
+                return;
             if (request->parentCancellation.IsCancellationRequested()) {
                 CompleteCancelled(*request);
-                return Result<void>::Success();
+                return;
             }
             if (request->state.load() == UiRuntimeAssetLoadState::Queued)
                 request->state.store(UiRuntimeAssetLoadState::LoadingDocument);
-            if (const auto root = ProcessRoot(*request, state); root.HasError())
-                return root;
+            ProcessRoot(*request, state);
             if (IsTerminal(request->state.load()))
-                return Result<void>::Success();
-            if (const auto completed = ProcessDependencyCompletions(*request, state); completed.HasError())
-                return completed;
+                return;
+            ProcessDependencyCompletions(*request, state);
             if (IsTerminal(request->state.load()))
-                return Result<void>::Success();
-            if (const auto submitted = SubmitDependencyLoads(*request, state); submitted.HasError())
-                return submitted;
+                return;
+            SubmitDependencyLoads(*request, state);
             if (IsTerminal(request->state.load()))
-                return Result<void>::Success();
-            return FinalizeRequest(*request, state);
+                return;
+            FinalizeRequest(*request, state);
+        }
+
+        void CompleteFailureAfterException(UiRuntimeAssetLoadHandle::Request &request, const ErrorCodeDescriptor &descriptor) noexcept {
+            try {
+                CompleteFailure(request, MakeError(descriptor));
+            } catch (...) {
+                CancelHandlesInternal(request);
+                request.state.store(UiRuntimeAssetLoadState::Failed);
+            }
         }
 
         void DrainRequestInternal(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request) noexcept {
@@ -376,9 +389,19 @@ namespace Horo::Runtime::Ui {
             CompleteFailureInternal(request, std::move(error), cancelled);
         }
 
-        [[nodiscard]] Result<void> AdvanceRequest(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request,
-                                                  UiRuntimeAssetLoadService::State &state) {
-            return AdvanceRequestInternal(request, state);
+        void AdvanceRequest(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request,
+                            UiRuntimeAssetLoadService::State &state) noexcept {
+            try {
+                AdvanceRequestInternal(request, state);
+            } catch (const std::bad_alloc &) {
+                std::scoped_lock lock{request->mutex};
+                if (!IsTerminal(request->state.load()))
+                    CompleteFailureAfterException(*request, UiErrors::AssetBudgetExceeded);
+            } catch (...) {
+                std::scoped_lock lock{request->mutex};
+                if (!IsTerminal(request->state.load()))
+                    CompleteFailureAfterException(*request, UiErrors::AssetLoadShutdown);
+            }
         }
 
         void DrainRequest(const std::shared_ptr<UiRuntimeAssetLoadHandle::Request> &request) noexcept {

@@ -41,10 +41,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRuntimeInstance::UiRuntimeInstance */
     UiRuntimeInstance::UiRuntimeInstance(InitialState initialState) noexcept
-        : schemaVersion_(initialState.schemaVersion), document_(initialState.document), revision_(initialState.revision),
-          canvases_(std::move(initialState.canvases)), elements_(std::move(initialState.elements)),
-          dependencies_(std::move(initialState.dependencies)), routes_(std::move(initialState.routes)),
-          payload_(std::move(initialState.payload)), assets_(std::move(initialState.assets)), instance_(initialState.instance) {}
+        : document_(std::move(initialState.document)), assets_(std::move(initialState.assets)), instance_(initialState.instance) {}
 
     /** @copydoc UiRuntimeInstance::Create */
     Result<UiRuntimeInstance> UiRuntimeInstance::Create(CookedUiDocument document, RuntimeUiInstanceId instance) {
@@ -52,16 +49,7 @@ namespace Horo::Runtime::Ui {
             return Failure<UiRuntimeInstance>(UiErrors::HandleMalformed);
         if (!document.Id().IsValid() || !document.SourceRevision().IsValid() || document.Payload().empty())
             return Failure<UiRuntimeInstance>(UiErrors::PayloadInvalid);
-        return Result<UiRuntimeInstance>::Success(UiRuntimeInstance{InitialState{document.SchemaVersion(),
-                                                                                 document.Id(),
-                                                                                 document.SourceRevision(),
-                                                                                 std::move(document.canvases_),
-                                                                                 std::move(document.elements_),
-                                                                                 std::move(document.dependencies_),
-                                                                                 std::move(document.routes_),
-                                                                                 std::move(document.payload_),
-                                                                                 {},
-                                                                                 instance}});
+        return Result<UiRuntimeInstance>::Success(UiRuntimeInstance{InitialState{std::move(document), {}, instance}});
     }
 
     /** @copydoc UiRuntimeInstance::Create */
@@ -76,9 +64,6 @@ namespace Horo::Runtime::Ui {
         std::ranges::sort(assets, {}, [](const UiRuntimeAsset &asset) {
             return asset.dependency.asset;
         });
-        return Result<UiRuntimeInstance>::Success(
-            UiRuntimeInstance{InitialState{document.SchemaVersion(), document.Id(), document.SourceRevision(),
-                                           std::move(document.canvases_), std::move(document.elements_), std::move(document.dependencies_),
-                                           std::move(document.routes_), std::move(document.payload_), std::move(assets), instance}});
+        return Result<UiRuntimeInstance>::Success(UiRuntimeInstance{InitialState{std::move(document), std::move(assets), instance}});
     }
 }  // namespace Horo::Runtime::Ui

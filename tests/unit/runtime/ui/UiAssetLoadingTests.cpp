@@ -197,6 +197,111 @@ namespace Horo::Runtime::Ui {
             jobs.Shutdown(ShutdownPolicy::Drain);
         }
 
+        TEST_CASE("Runtime UI asset loading rejects cooked document size overflow", "[runtime_ui][asset_loading][limits]") {
+            const Assets::AssetId root = Asset(1);
+            const Assets::AssetTypeId rootType = Type("runtime.ui.document");
+            const UiDocument source = MakeDocument(Asset(7), false);
+            const auto cooked = CookedUiDocument::Cook(source);
+            REQUIRE(cooked.HasValue());
+            REQUIRE(cooked.Value().Payload().size() > 1);
+
+            Assets::AssetRegistry registry;
+            REQUIRE(registry.Publish({Record(root, rootType)}).status == Assets::AssetRegistryBuildStatus::Complete);
+            Assets::MemoryAssetProvider provider;
+            provider.Insert(root, Artifact(root, rootType, {cooked.Value().Payload().begin(), cooked.Value().Payload().end()}));
+            JobSystem jobs{JobSystemConfig{1, 8}};
+            Assets::AssetLoadService assetLoads{jobs, provider};
+            UiRuntimeAssetLoadLimits limits;
+            limits.cookedDocument.maximumPayloadBytes = cooked.Value().Payload().size() - 1;
+            UiRuntimeAssetLoadService loader{registry, assetLoads, limits};
+
+            auto requested = loader.LoadAsync(Request(root, rootType));
+            REQUIRE(requested.HasValue());
+            auto handle = std::move(requested).Value();
+            REQUIRE(handle.Wait().HasValue());
+            const auto result = handle.TakeResult();
+            REQUIRE(result.HasError());
+            REQUIRE(result.ErrorValue().code.Value() == UiErrors::AssetBudgetExceeded.code.Value());
+            REQUIRE(handle.State() == UiRuntimeAssetLoadState::Failed);
+
+            loader.Shutdown();
+            assetLoads.Shutdown();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+
+        TEST_CASE("Runtime UI asset loading rejects resident memory overflow", "[runtime_ui][asset_loading][limits]") {
+            const Assets::AssetId root = Asset(1);
+            const Assets::AssetId dependency = Asset(7);
+            const Assets::AssetTypeId rootType = Type("runtime.ui.document");
+            const UiDocument source = MakeDocument(dependency);
+            const auto cooked = CookedUiDocument::Cook(source);
+            REQUIRE(cooked.HasValue());
+
+            Assets::AssetRegistry registry;
+            REQUIRE(registry.Publish({Record(root, rootType), Record(dependency, Type("core.texture"))}).status ==
+                    Assets::AssetRegistryBuildStatus::Complete);
+            Assets::MemoryAssetProvider provider;
+            provider.Insert(root, Artifact(root, rootType, {cooked.Value().Payload().begin(), cooked.Value().Payload().end()}));
+            provider.Insert(dependency, Artifact(dependency, Type("core.texture"), {9, 8, 7}));
+            JobSystem jobs{JobSystemConfig{2, 16}};
+            Assets::AssetLoadService assetLoads{jobs, provider};
+            UiRuntimeAssetLoadLimits limits;
+            limits.maximumResidentBytes = cooked.Value().Payload().size();
+            limits.cookedDocument.maximumPayloadBytes = limits.maximumResidentBytes;
+            UiRuntimeAssetLoadService loader{registry, assetLoads, limits};
+
+            auto requested = loader.LoadAsync(Request(root, rootType));
+            REQUIRE(requested.HasValue());
+            auto handle = std::move(requested).Value();
+            REQUIRE(handle.Wait().HasValue());
+            const auto result = handle.TakeResult();
+            REQUIRE(result.HasError());
+            REQUIRE(result.ErrorValue().code.Value() == UiErrors::AssetBudgetExceeded.code.Value());
+            REQUIRE(handle.State() == UiRuntimeAssetLoadState::Failed);
+
+            loader.Shutdown();
+            assetLoads.Shutdown();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+
+        TEST_CASE("Runtime UI asset loading enforces queue capacity and advances terminal cleanup", "[runtime_ui][asset_loading][limits]") {
+            const Assets::AssetId root = Asset(1);
+            const Assets::AssetTypeId rootType = Type("runtime.ui.document");
+            const UiDocument source = MakeDocument(Asset(7), false);
+            const auto cooked = CookedUiDocument::Cook(source);
+            REQUIRE(cooked.HasValue());
+
+            Assets::AssetRegistry registry;
+            REQUIRE(registry.Publish({Record(root, rootType)}).status == Assets::AssetRegistryBuildStatus::Complete);
+            Assets::MemoryAssetProvider provider;
+            provider.Insert(root, Artifact(root, rootType, {cooked.Value().Payload().begin(), cooked.Value().Payload().end()}));
+            JobSystem jobs{JobSystemConfig{1, 8}};
+            Assets::AssetLoadService assetLoads{jobs, provider};
+            UiRuntimeAssetLoadLimits limits;
+            limits.maximumOutstanding = 1;
+            UiRuntimeAssetLoadService loader{registry, assetLoads, limits};
+
+            auto firstRequest = loader.LoadAsync(Request(root, rootType));
+            REQUIRE(firstRequest.HasValue());
+            auto first = std::move(firstRequest).Value();
+            const auto rejected = loader.LoadAsync(Request(root, rootType));
+            REQUIRE(rejected.HasError());
+            REQUIRE(rejected.ErrorValue().code.Value() == UiErrors::AssetLoadQueueFull.code.Value());
+
+            REQUIRE(first.RequestCancel().HasValue());
+            REQUIRE(loader.Advance().HasValue());
+
+            auto admitted = loader.LoadAsync(Request(root, rootType));
+            REQUIRE(admitted.HasValue());
+            auto second = std::move(admitted).Value();
+            REQUIRE(second.RequestCancel().HasValue());
+            REQUIRE(loader.Advance().HasValue());
+
+            loader.Shutdown();
+            assetLoads.Shutdown();
+            jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+
         TEST_CASE("Runtime UI loading rejects stale registry generations and cancellation", "[runtime_ui][asset_loading][reload]") {
             const Assets::AssetId root = Asset(1);
             const Assets::AssetTypeId rootType = Type("runtime.ui.document");

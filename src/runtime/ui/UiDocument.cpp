@@ -578,22 +578,22 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRuntimeInstance::DocumentId */
     UiDocumentId UiRuntimeInstance::DocumentId() const noexcept {
-        return document_;
+        return document_.Id();
     }
 
     /** @copydoc UiRuntimeInstance::DocumentRevision */
     UiDocumentRevision UiRuntimeInstance::DocumentRevision() const noexcept {
-        return revision_;
+        return document_.SourceRevision();
     }
 
     /** @copydoc UiRuntimeInstance::Canvases */
     std::span<const UiCanvasDescriptor> UiRuntimeInstance::Canvases() const noexcept {
-        return canvases_;
+        return document_.Canvases();
     }
 
     /** @copydoc UiRuntimeInstance::Elements */
     std::span<const UiDocumentElement> UiRuntimeInstance::Elements() const noexcept {
-        return elements_;
+        return document_.Elements();
     }
 
     /** @copydoc UiRuntimeInstance::State */
@@ -603,7 +603,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRuntimeInstance::Dependencies */
     std::span<const UiAssetDependency> UiRuntimeInstance::Dependencies() const noexcept {
-        return dependencies_;
+        return document_.Dependencies();
     }
 
     /** @copydoc UiRuntimeInstance::ResolvedAssets */
@@ -621,12 +621,12 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiRuntimeInstance::Routes */
     std::span<const UiRouteMetadata> UiRuntimeInstance::Routes() const noexcept {
-        return routes_;
+        return document_.Routes();
     }
 
     /** @copydoc UiRuntimeInstance::Payload */
     std::span<const std::uint8_t> UiRuntimeInstance::Payload() const noexcept {
-        return payload_;
+        return document_.Payload();
     }
 
     /** @copydoc UiRuntimeInstance::Activate */
@@ -649,11 +649,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRuntimeInstance::Shutdown */
     void UiRuntimeInstance::Shutdown() noexcept {
         state_ = UiRuntimeInstanceState::Stopped;
-        std::vector<UiCanvasDescriptor>{}.swap(canvases_);
-        std::vector<UiDocumentElement>{}.swap(elements_);
-        std::vector<UiAssetDependency>{}.swap(dependencies_);
-        std::vector<UiRouteMetadata>{}.swap(routes_);
-        std::vector<std::uint8_t>{}.swap(payload_);
+        std::vector<UiCanvasDescriptor>{}.swap(document_.canvases_);
+        std::vector<UiDocumentElement>{}.swap(document_.elements_);
+        std::vector<UiAssetDependency>{}.swap(document_.dependencies_);
+        std::vector<UiRouteMetadata>{}.swap(document_.routes_);
+        std::vector<std::uint8_t>{}.swap(document_.payload_);
         std::vector<UiRuntimeAsset>{}.swap(assets_);
     }
 }  // namespace Horo::Runtime::Ui

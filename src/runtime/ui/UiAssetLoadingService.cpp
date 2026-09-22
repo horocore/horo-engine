@@ -44,13 +44,7 @@ namespace Horo::Runtime::Ui {
             return UiAssetLoadingDetail::IsTerminal(request_->state.load()) ? Result<void>::Success()
                                                                             : Failure<void>(UiErrors::AssetLoadShutdown);
         while (!UiAssetLoadingDetail::IsTerminal(request_->state.load())) {
-            try {
-                static_cast<void>(UiAssetLoadingDetail::AdvanceRequest(request_, *owner));
-            } catch (const std::bad_alloc &) {
-                std::scoped_lock lock{request_->mutex};
-                if (!UiAssetLoadingDetail::IsTerminal(request_->state.load()))
-                    UiAssetLoadingDetail::CompleteFailure(*request_, MakeError(UiErrors::AssetBudgetExceeded));
-            }
+            UiAssetLoadingDetail::AdvanceRequest(request_, *owner);
             if (UiAssetLoadingDetail::IsTerminal(request_->state.load()))
                 break;
             std::shared_ptr<Assets::AssetLoadHandle> waitFor;
@@ -66,8 +60,12 @@ namespace Horo::Runtime::Ui {
                         }
             }
             if (waitFor) {
-                if (const Result<void> waited = waitFor->Wait(); waited.HasError())
+                if (const Result<void> waited = waitFor->Wait(); waited.HasError()) {
+                    std::scoped_lock lock{request_->mutex};
+                    if (!UiAssetLoadingDetail::IsTerminal(request_->state.load()))
+                        UiAssetLoadingDetail::CompleteFailure(*request_, UiAssetLoadingDetail::TranslateLoadError(waited.ErrorValue()));
                     return waited;
+                }
             } else {
                 std::this_thread::yield();
             }
@@ -79,15 +77,8 @@ namespace Horo::Runtime::Ui {
     Result<UiRuntimeAssetLoadResult> UiRuntimeAssetLoadHandle::TakeResult() {
         if (!request_)
             return Failure<UiRuntimeAssetLoadResult>(UiErrors::AssetLoadShutdown);
-        if (const auto owner = request_->owner.lock()) {
-            try {
-                static_cast<void>(UiAssetLoadingDetail::AdvanceRequest(request_, *owner));
-            } catch (const std::bad_alloc &) {
-                std::scoped_lock requestLock{request_->mutex};
-                if (!UiAssetLoadingDetail::IsTerminal(request_->state.load()))
-                    UiAssetLoadingDetail::CompleteFailure(*request_, MakeError(UiErrors::AssetBudgetExceeded));
-            }
-        }
+        if (const auto owner = request_->owner.lock())
+            UiAssetLoadingDetail::AdvanceRequest(request_, *owner);
         std::scoped_lock lock{request_->mutex};
         if (!UiAssetLoadingDetail::IsTerminal(request_->state.load()))
             return Failure<UiRuntimeAssetLoadResult>(UiErrors::AssetLoadNotReady);
@@ -95,7 +86,8 @@ namespace Horo::Runtime::Ui {
             return Failure<UiRuntimeAssetLoadResult>(UiErrors::AssetLoadConsumed);
         request_->consumed = true;
         if (!request_->result)
-            return Failure<UiRuntimeAssetLoadResult>(UiErrors::AssetLoadCancelled);
+            return Failure<UiRuntimeAssetLoadResult>(
+                request_->state.load() == UiRuntimeAssetLoadState::Failed ? UiErrors::AssetBudgetExceeded : UiErrors::AssetLoadCancelled);
         return std::move(*request_->result);
     }
 
@@ -181,15 +173,13 @@ namespace Horo::Runtime::Ui {
         } catch (const std::bad_alloc &) {
             return Failure<void>(UiErrors::AssetBudgetExceeded);
         }
-        try {
-            for (const auto &request : requests)
-                static_cast<void>(UiAssetLoadingDetail::AdvanceRequest(request, *state_));
-        } catch (const std::bad_alloc &) {
-            for (const auto &request : requests) {
-                std::scoped_lock lock{request->mutex};
-                if (!UiAssetLoadingDetail::IsTerminal(request->state.load()))
-                    UiAssetLoadingDetail::CompleteFailure(*request, MakeError(UiErrors::AssetBudgetExceeded));
-            }
+        for (const auto &request : requests)
+            UiAssetLoadingDetail::AdvanceRequest(request, *state_);
+        {
+            std::scoped_lock lock{state_->mutex};
+            std::erase_if(state_->requests, [](const auto &request) {
+                return UiAssetLoadingDetail::IsTerminal(request->state.load());
+            });
         }
         return Result<void>::Success();
     }

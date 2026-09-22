@@ -211,7 +211,7 @@ namespace Horo::Runtime::Ui {
             [[nodiscard]] bool Bytes(std::span<std::uint8_t> output) {
                 if (!CanRead(output.size()))
                     return false;
-                std::copy_n(bytes_.data() + offset_, output.size(), output.begin());
+                std::ranges::copy(bytes_.subspan(offset_, output.size()), output.begin());
                 offset_ += output.size();
                 return true;
             }
@@ -456,6 +456,44 @@ namespace Horo::Runtime::Ui {
             return Result<UiRouteMetadata>::Success({id.Value(), static_cast<UiPresentationBand>(band), order, modal != 0});
         }
 
+        [[nodiscard]] Result<void> DecodeCanvases(CookedReader &reader, const CookedDocumentHeader &header, UiDocumentBuilder &builder) {
+            for (std::uint32_t index = 0; index < header.canvasCount; ++index) {
+                const auto canvas = ReadCanvas(reader);
+                if (canvas.HasError() || builder.AddCanvas(canvas.Value()).HasError())
+                    return Failure(UiErrors::CookedPayloadMalformed);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> DecodeElements(CookedReader &reader, const CookedDocumentHeader &header,
+                                                  const UiDocumentCookLimits &limits, UiDocumentBuilder &builder) {
+            for (std::uint32_t index = 0; index < header.elementCount; ++index) {
+                auto element = ReadElement(reader, limits);
+                if (element.HasError() || builder.AddElement(std::move(element).Value()).HasError())
+                    return Failure(UiErrors::CookedPayloadMalformed);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> DecodeDependencies(CookedReader &reader, const CookedDocumentHeader &header,
+                                                      const UiDocumentCookLimits &limits, UiDocumentBuilder &builder) {
+            for (std::uint32_t index = 0; index < header.dependencyCount; ++index) {
+                auto dependency = ReadDependency(reader, limits);
+                if (dependency.HasError() || builder.RequireAsset(std::move(dependency).Value()).HasError())
+                    return Failure(UiErrors::CookedPayloadMalformed);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> DecodeRoutes(CookedReader &reader, const CookedDocumentHeader &header, UiDocumentBuilder &builder) {
+            for (std::uint32_t index = 0; index < header.routeCount; ++index) {
+                auto route = ReadRoute(reader);
+                if (route.HasError() || builder.AddRoute(std::move(route).Value()).HasError())
+                    return Failure(UiErrors::CookedPayloadMalformed);
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<UiDocument> DecodeDocument(const std::span<const std::uint8_t> payload, const UiDocumentCookLimits &limits) {
             CookedReader reader{payload};
             const auto header = ReadDocumentHeader(reader, payload, limits);
@@ -463,29 +501,14 @@ namespace Horo::Runtime::Ui {
                 return Result<UiDocument>::Failure(header.ErrorValue());
             const auto &headerValue = header.Value();
             UiDocumentBuilder builder{headerValue.document, headerValue.revision, headerValue.schemaVersion};
-            for (std::uint32_t index = 0; index < headerValue.canvasCount; ++index) {
-                const auto canvas = ReadCanvas(reader);
-                if (canvas.HasError() || builder.AddCanvas(canvas.Value()).HasError())
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            }
-
-            for (std::uint32_t index = 0; index < headerValue.elementCount; ++index) {
-                auto element = ReadElement(reader, limits);
-                if (element.HasError() || builder.AddElement(std::move(element).Value()).HasError())
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            }
-
-            for (std::uint32_t index = 0; index < headerValue.dependencyCount; ++index) {
-                auto dependency = ReadDependency(reader, limits);
-                if (dependency.HasError() || builder.RequireAsset(std::move(dependency).Value()).HasError())
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            }
-
-            for (std::uint32_t index = 0; index < headerValue.routeCount; ++index) {
-                auto route = ReadRoute(reader);
-                if (route.HasError() || builder.AddRoute(std::move(route).Value()).HasError())
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            }
+            if (const auto canvases = DecodeCanvases(reader, headerValue, builder); canvases.HasError())
+                return Result<UiDocument>::Failure(canvases.ErrorValue());
+            if (const auto elements = DecodeElements(reader, headerValue, limits, builder); elements.HasError())
+                return Result<UiDocument>::Failure(elements.ErrorValue());
+            if (const auto dependencies = DecodeDependencies(reader, headerValue, limits, builder); dependencies.HasError())
+                return Result<UiDocument>::Failure(dependencies.ErrorValue());
+            if (const auto routes = DecodeRoutes(reader, headerValue, builder); routes.HasError())
+                return Result<UiDocument>::Failure(routes.ErrorValue());
             if (!reader.AtEnd())
                 return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
             return std::move(builder).Build();
