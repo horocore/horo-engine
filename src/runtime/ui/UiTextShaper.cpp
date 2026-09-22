@@ -200,6 +200,10 @@ namespace Horo::Runtime::Ui {
             auto *font = fonts[group.faceIndex];
             hb_font_set_scale(font, request.fontSize.value, request.fontSize.value);
             hb_buffer_clear_contents(buffer);
+            // hb_buffer_add preserves the cleared buffer's INVALID content type; the explicit
+            // cluster values below are byte offsets, so retain this low-level append and mark
+            // the buffer as Unicode before populating it.
+            hb_buffer_set_content_type(buffer, HB_BUFFER_CONTENT_TYPE_UNICODE);
             hb_buffer_set_direction(buffer, ToHbDirection(group.direction));
             hb_buffer_set_script(buffer, ToHbScript(group.script));
             hb_buffer_set_language(buffer, request.language.IsAuto()
