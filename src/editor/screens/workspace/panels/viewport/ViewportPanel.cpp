@@ -44,6 +44,11 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc ViewportPanel::GetId */
+    std::string ViewportPanel::GetId() const {
+        return "horo.viewport";
+    }
+
     /** @copydoc ViewportPanel::GetDisplayName */
     std::string ViewportPanel::GetDisplayName() const {
         return "horo.panel.viewport.title";
