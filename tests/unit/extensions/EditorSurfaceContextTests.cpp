@@ -164,6 +164,7 @@ namespace Horo::Extensions::Tests {
         registration.Reset();
         CHECK_FALSE(registration.IsRegistered());
         CHECK_FALSE(context.IsUsable());
+        CHECK_FALSE(registration.Context().IsUsable());
         RequireErrorCode(context.AcquireCapabilityUse({"editor.selection.query"}), "editor_surface_context_revoked");
 
         auto replacement = provider.Attach(ContextDescriptor(), admission.ActivationLease(), grants);

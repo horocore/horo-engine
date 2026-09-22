@@ -245,11 +245,14 @@ namespace Horo::Extensions {
     void EditorSurfaceContextRegistration::Reset() const noexcept {
         if (context_ == nullptr)
             return;
+        const std::shared_ptr<EditorSurfaceContextState> context = context_;
         if (auto provider = provider_.lock())
-            RemoveContext(provider, context_);
+            RemoveContext(provider, context);
         else
-            context_->active.store(false, std::memory_order_release);
+            context->active.store(false, std::memory_order_release);
         provider_.reset();
+        context_.reset();
+        view_ = EditorSurfaceContext{std::shared_ptr<const EditorSurfaceContextState>{}};
     }
 
     /** @copydoc EditorSurfaceContextRegistration::IsRegistered */

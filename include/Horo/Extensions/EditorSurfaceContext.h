@@ -198,8 +198,8 @@ namespace Horo::Extensions {
                                          std::shared_ptr<EditorSurfaceContextState> context, EditorSurfaceContext view) noexcept;
 
         mutable std::weak_ptr<EditorSurfaceContextProviderState> provider_;
-        std::shared_ptr<EditorSurfaceContextState> context_;
-        EditorSurfaceContext view_;
+        mutable std::shared_ptr<EditorSurfaceContextState> context_;
+        mutable EditorSurfaceContext view_;
     };
 
     /**

@@ -122,7 +122,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionActivationLease::Activation */
     const ExtensionActivationIdentity &ExtensionActivationLease::Activation() const noexcept {
-        return state_->activation;
+        static const ExtensionActivationIdentity empty{"", "", 0};
+        return state_ == nullptr ? empty : state_->activation;
     }
 
     /** @copydoc ExtensionActivationLease::IsUsable */
@@ -141,7 +142,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionCapabilityUseLease::Activation */
     const ExtensionActivationIdentity &ExtensionCapabilityUseLease::Activation() const noexcept {
-        return state_->activation;
+        static const ExtensionActivationIdentity empty{"", "", 0};
+        return state_ == nullptr ? empty : state_->activation;
     }
 
     /** @copydoc ExtensionCapabilityUseLease::IsUsable */
@@ -160,7 +162,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionCapabilityHandle::Activation */
     const ExtensionActivationIdentity &ExtensionCapabilityHandle::Activation() const noexcept {
-        return state_->activation;
+        static const ExtensionActivationIdentity empty{"", "", 0};
+        return state_ == nullptr ? empty : state_->activation;
     }
 
     /** @copydoc ExtensionCapabilityHandle::AcquireUse */
