@@ -1596,6 +1596,7 @@ add_library(HoroExtensions STATIC
         extensions/discovery/DiscoveryRootPolicy.cpp
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
+        extensions/host/EditorSurfaceContext.cpp
         extensions/host/ExtensionActivationTransaction.cpp
         extensions/host/ExtensionModuleResolution.cpp
         extensions/host/HeadlessExtensionHost.cpp
@@ -1629,6 +1630,7 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptInvocationRegistration.cpp
         extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
+        extensions/registry/EditorSurfaceContextErrors.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
         extensions/registry/ScriptInvocationErrors.cpp

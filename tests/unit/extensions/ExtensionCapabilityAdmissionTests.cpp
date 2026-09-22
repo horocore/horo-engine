@@ -136,6 +136,25 @@ namespace Horo::Extensions::Tests {
         admission.Revoke();
     }
 
+    TEST_CASE("Activation leases expose only live activation evidence", "[Extensions][Capabilities][Admission]") {
+        auto admitted = ExtensionCapabilityAdmission::Evaluate(Request(), Policy());
+        REQUIRE(admitted.HasValue());
+        ExtensionCapabilityAdmission admission = std::move(admitted).Value();
+
+        ExtensionActivationLease lease = admission.ActivationLease();
+        CHECK(lease.Activation().ExtensionId() == "com.example.asset-tools");
+        CHECK(lease.Activation().ModuleId() == "com.example.asset-tools.backend");
+        CHECK(lease.Activation().Generation() == 12);
+        CHECK(lease.IsUsable());
+
+        ExtensionActivationLease movedLease = std::move(lease);
+        CHECK(lease.Activation().ExtensionId().empty());
+        CHECK(movedLease.Activation().ExtensionId() == "com.example.asset-tools");
+
+        admission.Revoke();
+        CHECK_FALSE(movedLease.IsUsable());
+    }
+
     TEST_CASE("Capability admission destruction revokes retained handles", "[Extensions][Capabilities][Admission]") {
         auto makeHandle = [] {
             auto admitted = ExtensionCapabilityAdmission::Evaluate(Request(), Policy());
