@@ -232,6 +232,89 @@ namespace {
         CHECK(imported == 1);
     }
 
+    TEST_CASE("Process Bridge Forwards Every Approved Event And Drops Worker Events", "[unit][editor][data_bus]") {
+        Horo::EngineDataBus engineEvents;
+        Horo::Editor::EditorDataBus editorEvents;
+        Horo::Editor::EditorEngineEventBridge bridge{engineEvents, editorEvents};
+        std::array<int, 9> delivered{};
+        auto openedSubscription = editorEvents.Subscribe<Horo::Editor::EditorProjectOpenedEvent>([&](const auto &event) {
+            delivered[0] = static_cast<int>(event.revision);
+        });
+        auto closedSubscription = editorEvents.Subscribe<Horo::Editor::EditorProjectClosedEvent>([&](const auto &event) {
+            delivered[1] = static_cast<int>(event.revision);
+        });
+        auto importedSubscription = editorEvents.Subscribe<Horo::Editor::EditorAssetImportedEvent>([&](const auto &event) {
+            delivered[2] = static_cast<int>(event.revision);
+        });
+        auto reloadedSubscription = editorEvents.Subscribe<Horo::Editor::EditorAssetReloadedEvent>([&](const auto &event) {
+            delivered[3] = static_cast<int>(event.revision);
+        });
+        auto operationSubscription = editorEvents.Subscribe<Horo::Editor::EditorOperationStoreRevisionChangedEvent>([&](const auto &event) {
+            delivered[4] = static_cast<int>(event.revision);
+        });
+        auto consoleSubscription = editorEvents.Subscribe<Horo::Editor::EditorConsoleLogEvent>([&](const auto &event) {
+            delivered[5] = static_cast<int>(event.revision);
+        });
+        auto metricsSubscription = editorEvents.Subscribe<Horo::Editor::EditorMetricsChangedEvent>([&](const auto &event) {
+            delivered[6] = static_cast<int>(event.revision);
+        });
+        auto profilerSubscription = editorEvents.Subscribe<Horo::Editor::EditorProfilerCaptureStateEvent>([&](const auto &event) {
+            delivered[7] = static_cast<int>(event.captureId);
+        });
+        auto mcpSubscription = editorEvents.Subscribe<Horo::Editor::EditorMcpToolInvocationEvent>([&](const auto &event) {
+            delivered[8] = static_cast<int>(event.historyRevision);
+        });
+
+        bridge.Attach();
+        REQUIRE(bridge.IsAttached());
+        engineEvents.Publish(Horo::ProjectOpenedEvent{.revision = 1});
+        engineEvents.Publish(Horo::ProjectClosedEvent{.revision = 2});
+        engineEvents.Publish(Horo::AssetImportedEvent{.revision = 3, .assetId = "asset.imported"});
+        engineEvents.Publish(Horo::AssetReloadedEvent{.revision = 4, .assetId = "asset.reloaded"});
+        engineEvents.Publish(Horo::OperationStoreRevisionChangedEvent{
+            .revision = 5,
+            .changedOperation = Horo::OperationId{7},
+            .state = Horo::OperationState::Running,
+        });
+        engineEvents.Publish(Horo::ConsoleLogEvent{.revision = 6, .appendedCount = 2, .category = "test", .message = "private"});
+        engineEvents.Publish(Horo::MetricsChangedEvent{.revision = 7, .changedGroups = 3});
+        engineEvents.Publish(Horo::ProfilerCaptureStateEvent{
+            .captureId = 8,
+            .state = Horo::ProfilerCaptureState::Complete,
+            .failureReason = "private",
+        });
+        engineEvents.Publish(Horo::McpToolInvocationEvent{
+            .requestId = 9,
+            .toolName = "private-tool",
+            .operationId = 10,
+            .state = Horo::OperationState::Succeeded,
+            .historyRevision = 11,
+            .arguments = "private",
+        });
+
+        CHECK(delivered == std::array{1, 2, 3, 4, 5, 6, 7, 8, 11});
+        CHECK(bridge.Stats().forwarded == 9);
+
+        engineEvents.Publish(Horo::AssetReloadedEvent{.assetId = "../private"});
+        engineEvents.Publish(Horo::OperationStoreRevisionChangedEvent{
+            .state = static_cast<Horo::OperationState>(255),
+        });
+        engineEvents.Publish(Horo::ProfilerCaptureStateEvent{
+            .state = static_cast<Horo::ProfilerCaptureState>(255),
+        });
+        engineEvents.Publish(Horo::McpToolInvocationEvent{
+            .state = static_cast<Horo::OperationState>(255),
+        });
+        CHECK(bridge.Stats().filtered == 4);
+
+        const auto threadDropsBefore = bridge.Stats().threadDrops;
+        std::thread worker([&engineEvents] {
+            engineEvents.Publish(Horo::ProjectClosedEvent{.revision = 12});
+        });
+        worker.join();
+        CHECK(bridge.Stats().threadDrops == threadDropsBefore + 1);
+    }
+
     TEST_CASE("Surface Event Context Bounds And Revokes Provider Tokens", "[unit][editor][data_bus]") {
         Horo::Editor::EditorDataBus editorEvents;
         const std::array allowed{Horo::EditorEventKind::AssetImported};
@@ -271,6 +354,108 @@ namespace {
         });
         REQUIRE(afterClose.HasError());
         CHECK(afterClose.ErrorValue().code.Value() == "surface_event_context_closed");
+    }
+
+    TEST_CASE("Surface Event Context Delivers Every Admitted Event Kind", "[unit][editor][data_bus]") {
+        Horo::Editor::EditorDataBus editorEvents;
+        const std::array allowed{
+            Horo::EditorEventKind::ProjectOpened,
+            Horo::EditorEventKind::ProjectClosed,
+            Horo::EditorEventKind::AssetImported,
+            Horo::EditorEventKind::AssetReloaded,
+            Horo::EditorEventKind::OperationStoreRevisionChanged,
+            Horo::EditorEventKind::ConsoleLog,
+            Horo::EditorEventKind::MetricsChanged,
+            Horo::EditorEventKind::ProfilerCaptureState,
+            Horo::EditorEventKind::McpToolInvocation,
+        };
+        Horo::Editor::EditorSurfaceEventContext context{
+            editorEvents,
+            Horo::Editor::EditorSurfaceProviderOwnership{"com.example.tools", "com.example.editor", 5},
+            allowed,
+        };
+        std::array<int, 9> delivered{};
+        std::vector<Horo::Subscription> tokens;
+        tokens.reserve(9);
+
+        auto opened = context.Subscribe<Horo::Editor::EditorProjectOpenedEvent>([&](const auto &event) {
+            delivered[0] = static_cast<int>(event.revision);
+        });
+        auto closed = context.Subscribe<Horo::Editor::EditorProjectClosedEvent>([&](const auto &event) {
+            delivered[1] = static_cast<int>(event.revision);
+        });
+        auto imported = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([&](const auto &event) {
+            delivered[2] = static_cast<int>(event.revision);
+        });
+        auto reloaded = context.Subscribe<Horo::Editor::EditorAssetReloadedEvent>([&](const auto &event) {
+            delivered[3] = static_cast<int>(event.revision);
+        });
+        auto operation = context.Subscribe<Horo::Editor::EditorOperationStoreRevisionChangedEvent>([&](const auto &event) {
+            delivered[4] = static_cast<int>(event.revision);
+        });
+        auto console = context.Subscribe<Horo::Editor::EditorConsoleLogEvent>([&](const auto &event) {
+            delivered[5] = static_cast<int>(event.revision);
+        });
+        auto metrics = context.Subscribe<Horo::Editor::EditorMetricsChangedEvent>([&](const auto &event) {
+            delivered[6] = static_cast<int>(event.revision);
+        });
+        auto profiler = context.Subscribe<Horo::Editor::EditorProfilerCaptureStateEvent>([&](const auto &event) {
+            delivered[7] = static_cast<int>(event.captureId);
+        });
+        auto mcp = context.Subscribe<Horo::Editor::EditorMcpToolInvocationEvent>([&](const auto &event) {
+            delivered[8] = static_cast<int>(event.historyRevision);
+        });
+        for (auto *result : {&opened, &closed, &imported, &reloaded, &operation, &console, &metrics, &profiler, &mcp}) {
+            REQUIRE(result->HasValue());
+            tokens.push_back(std::move(*result).Value());
+        }
+
+        editorEvents.Publish(Horo::Editor::EditorProjectOpenedEvent{.revision = 1});
+        editorEvents.Publish(Horo::Editor::EditorProjectClosedEvent{.revision = 2});
+        editorEvents.Publish(Horo::Editor::EditorAssetImportedEvent{.revision = 3, .assetId = "asset.imported"});
+        editorEvents.Publish(Horo::Editor::EditorAssetReloadedEvent{.revision = 4, .assetId = "asset.reloaded"});
+        editorEvents.Publish(Horo::Editor::EditorOperationStoreRevisionChangedEvent{
+            .revision = 5,
+            .changedOperation = Horo::OperationId{7},
+            .state = Horo::OperationState::Running,
+        });
+        editorEvents.Publish(Horo::Editor::EditorConsoleLogEvent{.revision = 6, .appendedCount = 2});
+        editorEvents.Publish(Horo::Editor::EditorMetricsChangedEvent{.revision = 7, .changedGroups = 3});
+        editorEvents.Publish(Horo::Editor::EditorProfilerCaptureStateEvent{
+            .captureId = 8,
+            .state = Horo::ProfilerCaptureState::Complete,
+        });
+        editorEvents.Publish(Horo::Editor::EditorMcpToolInvocationEvent{
+            .state = Horo::OperationState::Succeeded,
+            .historyRevision = 9,
+        });
+
+        CHECK(delivered == std::array{1, 2, 3, 4, 5, 6, 7, 8, 9});
+        CHECK(context.ProviderOwnership().activationGeneration == 5);
+        CHECK(context.Stats().acceptedSubscriptions == 9);
+        CHECK(context.Stats().activeSubscriptions == 9);
+        tokens.front().Reset();
+        CHECK(context.Stats().activeSubscriptions == 8);
+
+        const auto invalid = context.Subscribe(static_cast<Horo::EditorEventKind>(255),
+                                               Horo::Editor::EditorSurfaceEventHandler{[](const Horo::Editor::EditorSurfaceEvent &) {
+        }});
+        REQUIRE(invalid.HasError());
+        CHECK(invalid.ErrorValue().code.Value() == "surface_event_invalid");
+
+        Horo::Editor::EditorSurfaceEventContext invalidContext{
+            editorEvents,
+            Horo::Editor::EditorSurfaceProviderOwnership{},
+            allowed,
+        };
+        CHECK(invalidContext.IsClosed());
+        const auto closedResult =
+            invalidContext.Subscribe(Horo::EditorEventKind::ProjectOpened,
+                                     Horo::Editor::EditorSurfaceEventHandler{[](const Horo::Editor::EditorSurfaceEvent &) {
+        }});
+        REQUIRE(closedResult.HasError());
+        CHECK(closedResult.ErrorValue().code.Value() == "surface_event_context_closed");
+        invalidContext.Close();
     }
 
     TEST_CASE("Surface Event Context Revocation Is Safe Across Threads", "[unit][editor][data_bus]") {

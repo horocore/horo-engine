@@ -19,12 +19,10 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsSafeAssetIdentity(const std::string_view value) noexcept {
             if (value.empty() || value.size() > kMaximumAssetIdentityBytes)
                 return false;
-            for (const unsigned char character : value) {
+            return std::ranges::all_of(value, [](const unsigned char character) {
                 const bool alphaNumeric = (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9');
-                if (!alphaNumeric && character != '.' && character != '_' && character != '-')
-                    return false;
-            }
-            return true;
+                return alphaNumeric || character == '.' || character == '_' || character == '-';
+            });
         }
 
         /** @brief Rejects invalid enum representations before publishing a safe operation hint. */
@@ -52,10 +50,10 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool CanForward() noexcept {
             if (std::this_thread::get_id() != ownerThread) {
-                threadDrops.fetch_add(1, std::memory_order_relaxed);
+                threadDrops.fetch_add(1);
                 return false;
             }
-            return attached.load(std::memory_order_acquire);
+            return attached.load();
         }
 
         template <typename EventT> void SubscribeOne(const std::weak_ptr<State> &weakState, Subscription &target) {
@@ -89,43 +87,43 @@ namespace Horo::Editor {
             if (!CanForward())
                 return;
             editorEvents.Publish(EditorProjectOpenedEvent{.revision = event.revision});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::ProjectClosedEvent &event) {
             if (!CanForward())
                 return;
             editorEvents.Publish(EditorProjectClosedEvent{.revision = event.revision});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::AssetImportedEvent &event) {
             if (!CanForward())
                 return;
             if (!IsSafeAssetIdentity(event.assetId)) {
-                filtered.fetch_add(1, std::memory_order_relaxed);
+                filtered.fetch_add(1);
                 return;
             }
             editorEvents.Publish(EditorAssetImportedEvent{.revision = event.revision, .assetId = event.assetId});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::AssetReloadedEvent &event) {
             if (!CanForward())
                 return;
             if (!IsSafeAssetIdentity(event.assetId)) {
-                filtered.fetch_add(1, std::memory_order_relaxed);
+                filtered.fetch_add(1);
                 return;
             }
             editorEvents.Publish(EditorAssetReloadedEvent{.revision = event.revision, .assetId = event.assetId});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::OperationStoreRevisionChangedEvent &event) {
             if (!CanForward())
                 return;
             if (!IsKnownOperationState(event.state)) {
-                filtered.fetch_add(1, std::memory_order_relaxed);
+                filtered.fetch_add(1);
                 return;
             }
             editorEvents.Publish(EditorOperationStoreRevisionChangedEvent{
@@ -133,43 +131,43 @@ namespace Horo::Editor {
                 .changedOperation = event.changedOperation,
                 .state = event.state,
             });
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::ConsoleLogEvent &event) {
             if (!CanForward())
                 return;
             editorEvents.Publish(EditorConsoleLogEvent{.revision = event.revision, .appendedCount = event.appendedCount});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::MetricsChangedEvent &event) {
             if (!CanForward())
                 return;
             editorEvents.Publish(EditorMetricsChangedEvent{.revision = event.revision, .changedGroups = event.changedGroups});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::ProfilerCaptureStateEvent &event) {
             if (!CanForward())
                 return;
             if (!IsKnownProfilerState(event.state)) {
-                filtered.fetch_add(1, std::memory_order_relaxed);
+                filtered.fetch_add(1);
                 return;
             }
             editorEvents.Publish(EditorProfilerCaptureStateEvent{.captureId = event.captureId, .state = event.state});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
 
         void Forward(const Horo::McpToolInvocationEvent &event) {
             if (!CanForward())
                 return;
             if (!IsKnownOperationState(event.state)) {
-                filtered.fetch_add(1, std::memory_order_relaxed);
+                filtered.fetch_add(1);
                 return;
             }
             editorEvents.Publish(EditorMcpToolInvocationEvent{.state = event.state, .historyRevision = event.historyRevision});
-            forwarded.fetch_add(1, std::memory_order_relaxed);
+            forwarded.fetch_add(1);
         }
     };
 
@@ -183,33 +181,32 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorEngineEventBridge::Attach */
-    void EditorEngineEventBridge::Attach() {
+    void EditorEngineEventBridge::Attach() {  // NOSONAR(cpp:S5817)
         assert(m_state != nullptr);
         if (m_state == nullptr || std::this_thread::get_id() != m_state->ownerThread)
             return;
-        if (m_state->attached.load(std::memory_order_acquire))
+        if (m_state->attached.load())
             return;
 
-        const std::weak_ptr<State> weakState = m_state;
-        if (!m_state->SubscribeAll(weakState)) {
+        if (const std::weak_ptr<State> weakState = m_state; !m_state->SubscribeAll(weakState)) {
             m_state->ResetSubscriptions();
             LOG_WARN("editor.data_bus", "process bridge attach rejected reason=subscription_limit");
             return;
         }
-        m_state->attached.store(true, std::memory_order_release);
+        m_state->attached.store(true);
     }
 
     /** @copydoc EditorEngineEventBridge::Detach */
-    void EditorEngineEventBridge::Detach() noexcept {
+    void EditorEngineEventBridge::Detach() noexcept {  // NOSONAR(cpp:S5817)
         if (m_state == nullptr)
             return;
-        m_state->attached.store(false, std::memory_order_release);
+        m_state->attached.store(false);
         m_state->ResetSubscriptions();
     }
 
     /** @copydoc EditorEngineEventBridge::IsAttached */
     bool EditorEngineEventBridge::IsAttached() const noexcept {
-        return m_state != nullptr && m_state->attached.load(std::memory_order_acquire);
+        return m_state != nullptr && m_state->attached.load();
     }
 
     /** @copydoc EditorEngineEventBridge::Stats */
@@ -217,9 +214,9 @@ namespace Horo::Editor {
         if (m_state == nullptr)
             return {};
         return EditorEngineEventBridgeStats{
-            .forwarded = m_state->forwarded.load(std::memory_order_relaxed),
-            .filtered = m_state->filtered.load(std::memory_order_relaxed),
-            .threadDrops = m_state->threadDrops.load(std::memory_order_relaxed),
+            .forwarded = m_state->forwarded.load(),
+            .filtered = m_state->filtered.load(),
+            .threadDrops = m_state->threadDrops.load(),
         };
     }
 }  // namespace Horo::Editor

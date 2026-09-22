@@ -115,6 +115,11 @@ namespace Horo::Extensions {
                 return std::ranges::find(processEvents, event) != processEvents.end();
             });
         }
+
+        [[nodiscard]] bool HasValidProviderOwnership(const EditorSurfaceProviderOwnership &provider, const std::size_t maximumBytes) {
+            return IsCanonicalIdentity(provider.extensionId, maximumBytes) && IsCanonicalIdentity(provider.moduleId, maximumBytes) &&
+                   provider.activationGeneration != 0;
+        }
     }  // namespace
 
     /** @copydoc ValidateEditorSurfaceDescriptor */
@@ -151,9 +156,7 @@ namespace Horo::Extensions {
         if (!HasUniqueCanonicalIds(descriptor.requiredCapabilities, limits.maximumIdentityBytes) ||
             !HasUniqueCanonicalIds(descriptor.requiredPermissions, limits.maximumIdentityBytes))
             return Invalid("Editor surface capability and permission identities must be unique and canonical.");
-        if (!IsCanonicalIdentity(descriptor.provider.extensionId, limits.maximumIdentityBytes) ||
-            !IsCanonicalIdentity(descriptor.provider.moduleId, limits.maximumIdentityBytes) ||
-            descriptor.provider.activationGeneration == 0)
+        if (!HasValidProviderOwnership(descriptor.provider, limits.maximumIdentityBytes))
             return Invalid("Editor surface provider ownership is incomplete or invalid.");
         return Result<void>::Success();
     }

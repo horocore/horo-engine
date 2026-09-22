@@ -85,7 +85,7 @@ namespace Horo::Editor {
                     allowed[static_cast<std::size_t>(kind)] = true;
             }
             if (!provider.IsValid())
-                closed.store(true, std::memory_order_release);
+                closed.store(true);
         }
 
         [[nodiscard]] bool IsAllowed(const EditorEventKind kind) const noexcept {
@@ -100,27 +100,27 @@ namespace Horo::Editor {
             if (found == slots.end())
                 return;
             slots.erase(found);
-            activeSubscriptions.fetch_sub(1, std::memory_order_relaxed);
+            activeSubscriptions.fetch_sub(1);
         }
 
         void Close() noexcept {
-            if (closed.exchange(true, std::memory_order_acq_rel))
+            if (closed.exchange(true))
                 return;
             std::vector<std::shared_ptr<Slot>> slotsToRevoke;
             {
                 std::lock_guard lock(slotsMutex);
                 slotsToRevoke.swap(slots);
-                activeSubscriptions.store(0, std::memory_order_release);
+                activeSubscriptions.store(0);
             }
             for (const std::shared_ptr<Slot> &slot : slotsToRevoke)
                 slot->Revoke();
         }
 
-        void Deliver(const EditorEventKind kind, EditorSurfaceEventPayload payload, const EditorSurfaceEventHandler &handler) {
-            if (closed.load(std::memory_order_acquire))
+        template <typename HandlerT> void Deliver(const EditorEventKind kind, EditorSurfaceEventPayload payload, HandlerT &&handler) {
+            if (closed.load())
                 return;
-            handler(EditorSurfaceEvent{.kind = kind, .payload = std::move(payload)});
-            deliveredEvents.fetch_add(1, std::memory_order_relaxed);
+            std::forward<HandlerT>(handler)(EditorSurfaceEvent{.kind = kind, .payload = std::move(payload)});
+            deliveredEvents.fetch_add(1);
         }
 
         template <typename EventT>
@@ -135,57 +135,57 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool AddSubscription(const EditorEventKind kind, const std::shared_ptr<Slot> &slot,
                                            const std::weak_ptr<State> &weakState, const EditorSurfaceEventHandler &handler) {
+            using enum EditorEventKind;
             switch (kind) {
-                case EditorEventKind::ProjectOpened:
+                case ProjectOpened:
                     return AddTyped<EditorProjectOpenedEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::ProjectClosed:
+                case ProjectClosed:
                     return AddTyped<EditorProjectClosedEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::AssetImported:
+                case AssetImported:
                     return AddTyped<EditorAssetImportedEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::AssetReloaded:
+                case AssetReloaded:
                     return AddTyped<EditorAssetReloadedEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::OperationStoreRevisionChanged:
+                case OperationStoreRevisionChanged:
                     return AddTyped<EditorOperationStoreRevisionChangedEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::ConsoleLog:
+                case ConsoleLog:
                     return AddTyped<EditorConsoleLogEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::MetricsChanged:
+                case MetricsChanged:
                     return AddTyped<EditorMetricsChangedEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::ProfilerCaptureState:
+                case ProfilerCaptureState:
                     return AddTyped<EditorProfilerCaptureStateEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::McpToolInvocation:
+                case McpToolInvocation:
                     return AddTyped<EditorMcpToolInvocationEvent>(kind, slot, weakState, handler);
-                case EditorEventKind::Count:
+                case Count:
                     return false;
             }
             return false;
         }
 
         [[nodiscard]] Result<Subscription> Reject(const ErrorCodeDescriptor &descriptor) {
-            rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
+            rejectedSubscriptions.fetch_add(1);
             return Failure(descriptor);
         }
 
-        [[nodiscard]] Result<Subscription> Subscribe(const EditorEventKind kind, EditorSurfaceEventHandler handler,
+        [[nodiscard]] Result<Subscription> Subscribe(const EditorEventKind kind, const EditorSurfaceEventHandler &handler,
                                                      const std::shared_ptr<State> &self) {
             std::lock_guard lock(slotsMutex);
-            if (closed.load(std::memory_order_acquire))
+            if (closed.load())
                 return Reject(ContextClosed);
             if (!IsKnownEditorEventKind(kind))
                 return Reject(InvalidEvent);
             if (!IsAllowed(kind))
                 return Reject(EventNotAllowed);
-            if (activeSubscriptions.load(std::memory_order_relaxed) >= limits.maximumSubscriptions)
+            if (activeSubscriptions.load() >= limits.maximumSubscriptions)
                 return Reject(SubscriptionLimitExceeded);
 
             auto slot = std::make_shared<Slot>();
             slot->owner = self;
-            const std::weak_ptr<State> weakState = self;
-            if (!AddSubscription(kind, slot, weakState, handler))
+            if (const std::weak_ptr<State> weakState = self; !AddSubscription(kind, slot, weakState, handler))
                 return Reject(SubscriptionLimitExceeded);
 
             slots.push_back(slot);
-            activeSubscriptions.fetch_add(1, std::memory_order_relaxed);
-            acceptedSubscriptions.fetch_add(1, std::memory_order_relaxed);
+            activeSubscriptions.fetch_add(1);
+            acceptedSubscriptions.fetch_add(1);
             const std::weak_ptr<Slot> weakSlot = slot;
             return Result<Subscription>::Success(Subscription::Adopt([weakSlot] {
                 if (const auto lockedSlot = weakSlot.lock()) {
@@ -224,21 +224,22 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorSurfaceEventContext::Subscribe */
-    Result<Subscription> EditorSurfaceEventContext::Subscribe(const EditorEventKind kind, EditorSurfaceEventHandler handler) {
+    Result<Subscription> EditorSurfaceEventContext::Subscribe(const EditorEventKind kind,
+                                                              EditorSurfaceEventHandler handler) {  // NOSONAR(cpp:S5817)
         if (m_state == nullptr)
             return Failure(ContextClosed);
-        return m_state->Subscribe(kind, std::move(handler), m_state);
+        return m_state->Subscribe(kind, handler, m_state);
     }
 
     /** @copydoc EditorSurfaceEventContext::Close */
-    void EditorSurfaceEventContext::Close() noexcept {
+    void EditorSurfaceEventContext::Close() noexcept {  // NOSONAR(cpp:S5817)
         if (m_state != nullptr)
             m_state->Close();
     }
 
     /** @copydoc EditorSurfaceEventContext::IsClosed */
     bool EditorSurfaceEventContext::IsClosed() const noexcept {
-        return m_state == nullptr || m_state->closed.load(std::memory_order_acquire);
+        return m_state == nullptr || m_state->closed.load();
     }
 
     /** @copydoc EditorSurfaceEventContext::Stats */
@@ -246,11 +247,11 @@ namespace Horo::Editor {
         if (m_state == nullptr)
             return EditorSurfaceEventContextStats{.closed = true};
         return EditorSurfaceEventContextStats{
-            .activeSubscriptions = m_state->activeSubscriptions.load(std::memory_order_relaxed),
-            .acceptedSubscriptions = m_state->acceptedSubscriptions.load(std::memory_order_relaxed),
-            .rejectedSubscriptions = m_state->rejectedSubscriptions.load(std::memory_order_relaxed),
-            .deliveredEvents = m_state->deliveredEvents.load(std::memory_order_relaxed),
-            .closed = m_state->closed.load(std::memory_order_acquire),
+            .activeSubscriptions = m_state->activeSubscriptions.load(),
+            .acceptedSubscriptions = m_state->acceptedSubscriptions.load(),
+            .rejectedSubscriptions = m_state->rejectedSubscriptions.load(),
+            .deliveredEvents = m_state->deliveredEvents.load(),
+            .closed = m_state->closed.load(),
         };
     }
 

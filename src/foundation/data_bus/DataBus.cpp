@@ -40,7 +40,7 @@ namespace Horo {
         std::uint64_t droppedOldest{};
         std::uint64_t merged{};
 
-        explicit State(EngineDataBusConfig value) : config(value) {}
+        explicit State(const EngineDataBusConfig &value) : config(value) {}
     };
 
     Subscription::~Subscription() {
