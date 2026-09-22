@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Ui/UiGlyphAtlas.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <ranges>
