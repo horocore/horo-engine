@@ -135,13 +135,17 @@ namespace Horo::Runtime::Ui {
         /** @brief Replaces this lease by transfer. @param other Snapshot to transfer. @return This snapshot. */
         UiLayoutClipSnapshot &operator=(UiLayoutClipSnapshot &&other) noexcept;
 
-        /** @brief Returns exact source and interaction lineage. @return Borrowed immutable descriptor. */
+        /** @brief Returns exact source and interaction lineage. @return Borrowed immutable descriptor, or an invalid empty descriptor after
+         * move. */
         [[nodiscard]] const UiLayoutClipSnapshotDescriptor &Descriptor() const noexcept;
-        /** @brief Returns one record per source layout element in preorder. @return Borrowed immutable records. */
+        /** @brief Returns one record per source layout element in preorder. @return Borrowed immutable records, or an empty span after
+         * move. */
         [[nodiscard]] std::span<const UiLayoutClipRecord> Records() const noexcept;
-        /** @brief Returns clip nodes in ancestor-before-descendant order. @return Borrowed immutable clip nodes. */
+        /** @brief Returns clip nodes in ancestor-before-descendant order. @return Borrowed immutable clip nodes, or an empty span after
+         * move. */
         [[nodiscard]] std::span<const UiLayoutClipNode> Clips() const noexcept;
-        /** @brief Returns resolved scroll records in source preorder. @return Borrowed immutable scroll records. */
+        /** @brief Returns resolved scroll records in source preorder. @return Borrowed immutable scroll records, or an empty span after
+         * move. */
         [[nodiscard]] std::span<const UiLayoutScrollRecord> Scrolls() const noexcept;
         /** @brief Finds one source element's clip projection. @param element Exact current handle. @return Record or stale failure. */
         [[nodiscard]] Result<UiLayoutClipRecord> Get(UiElementHandle element) const;

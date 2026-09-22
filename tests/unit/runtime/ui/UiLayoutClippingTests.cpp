@@ -173,6 +173,29 @@ namespace Horo::Runtime::Ui {
             REQUIRE(snapshot.Records()[3].scrollTranslation == UiLogicalPoint{-300, -300});
         }
 
+        TEST_CASE("Clip snapshots keep leases during copy assignment and expose empty moved-from views",
+                  "[runtime_ui][layout][clipping][lifecycle]") {
+            auto fixture = Fixture::Create();
+            const auto descriptors = fixture.Descriptors();
+            auto first = fixture.clipping.Update(fixture.tree, fixture.snapshot, {descriptors, std::nullopt});
+            auto second = fixture.clipping.Update(fixture.tree, fixture.snapshot, {descriptors, std::nullopt});
+            REQUIRE(first.HasValue());
+            REQUIRE(second.HasValue());
+
+            auto source = std::move(first).Value();
+            auto destination = std::move(second).Value();
+            destination = source;
+            REQUIRE(destination.Records().size() == 4);
+            REQUIRE(source.Scrolls().size() == 2);
+
+            auto moved = std::move(destination);
+            REQUIRE(destination.Records().empty());
+            REQUIRE(destination.Clips().empty());
+            REQUIRE(destination.Scrolls().empty());
+            REQUIRE_FALSE(destination.Descriptor().IsValid());
+            REQUIRE(moved.Records().size() == 4);
+        }
+
         TEST_CASE("Bring-into-view updates nested scroll state inner-to-outer", "[runtime_ui][layout][scroll]") {
             auto fixture = Fixture::Create();
             auto descriptors = fixture.Descriptors(UiLayoutOverflowPolicy::Visible);
