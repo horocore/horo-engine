@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiDiagnostics.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
@@ -38,8 +39,24 @@ namespace Horo::Runtime::Ui {
         }
 
         TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
-            REQUIRE(UiDiagnosticErrorDescriptors().size() == 173);
-            for (const ErrorCodeDescriptor *descriptor : UiDiagnosticErrorDescriptors()) {
+            const auto descriptors = UiDiagnosticErrorDescriptors();
+            REQUIRE(descriptors.size() == 187);
+            const std::array newlyRegistered{
+                &UiErrors::CookedFormatUnsupported, &UiErrors::CookedPayloadMalformed, &UiErrors::AssetMissing,
+                &UiErrors::AssetTypeMismatch,       &UiErrors::AssetIdentityMismatch,  &UiErrors::AssetTargetMismatch,
+                &UiErrors::AssetRegistryStale,      &UiErrors::AssetPayloadEmpty,      &UiErrors::AssetBudgetExceeded,
+                &UiErrors::AssetLoadQueueFull,      &UiErrors::AssetLoadNotReady,      &UiErrors::AssetLoadConsumed,
+                &UiErrors::AssetLoadShutdown,       &UiErrors::AssetLoadCancelled,
+            };
+            for (const ErrorCodeDescriptor *expected : newlyRegistered)
+                REQUIRE(std::ranges::find(descriptors, expected) != descriptors.end());
+            for (std::size_t index = 0; index < descriptors.size(); ++index) {
+                const ErrorCodeDescriptor *descriptor = descriptors[index];
+                REQUIRE(descriptor != nullptr);
+                REQUIRE(descriptor->domain.Value() == "horo.runtime_ui");
+                REQUIRE_FALSE(descriptor->code.Value().empty());
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    REQUIRE(descriptor->code.Value() != descriptors[previous]->code.Value());
                 CAPTURE(descriptor->code.Value());
                 const auto record = MakeUiDiagnosticRecord(UiDiagnosticCategory::Document, MakeError(*descriptor));
                 REQUIRE((record.HasValue() && record.Value().code.Value() == descriptor->code.Value()));

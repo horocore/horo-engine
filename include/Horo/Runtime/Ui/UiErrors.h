@@ -54,6 +54,34 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief Cooked bytes are empty or exceed the declared representation contract. */
     extern const ErrorCodeDescriptor PayloadInvalid;
+    /** @brief A cooked Runtime UI payload uses an unsupported format version. */
+    extern const ErrorCodeDescriptor CookedFormatUnsupported;
+    /** @brief A cooked Runtime UI payload is truncated, malformed, or semantically invalid. */
+    extern const ErrorCodeDescriptor CookedPayloadMalformed;
+    /** @brief A required Runtime UI asset is absent from the captured registry or package. */
+    extern const ErrorCodeDescriptor AssetMissing;
+    /** @brief A resolved Runtime UI asset has the wrong registered type. */
+    extern const ErrorCodeDescriptor AssetTypeMismatch;
+    /** @brief A provider envelope names a different asset identity than the requested one. */
+    extern const ErrorCodeDescriptor AssetIdentityMismatch;
+    /** @brief A provider envelope was cooked for a different requested target. */
+    extern const ErrorCodeDescriptor AssetTargetMismatch;
+    /** @brief The captured Runtime UI asset registry revision is no longer authoritative. */
+    extern const ErrorCodeDescriptor AssetRegistryStale;
+    /** @brief A resolved dependency has an empty cooked payload. */
+    extern const ErrorCodeDescriptor AssetPayloadEmpty;
+    /** @brief Runtime UI dependency residency or request capacity was exceeded. */
+    extern const ErrorCodeDescriptor AssetBudgetExceeded;
+    /** @brief The Runtime UI asset-load request queue is full. */
+    extern const ErrorCodeDescriptor AssetLoadQueueFull;
+    /** @brief A Runtime UI asset-load result is not terminal yet. */
+    extern const ErrorCodeDescriptor AssetLoadNotReady;
+    /** @brief A Runtime UI asset-load result was already consumed. */
+    extern const ErrorCodeDescriptor AssetLoadConsumed;
+    /** @brief The Runtime UI asset-load service is stopped and rejects new work. */
+    extern const ErrorCodeDescriptor AssetLoadShutdown;
+    /** @brief A Runtime UI asset-load request was cooperatively cancelled. */
+    extern const ErrorCodeDescriptor AssetLoadCancelled;
     /** @brief A durable document schema version is not supported by this Runtime UI build. */
     extern const ErrorCodeDescriptor DocumentSchemaUnsupported;
     /** @brief A serialized UI document is malformed or has an invalid typed value. */
