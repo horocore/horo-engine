@@ -6,6 +6,7 @@
 #include <cmath>
 #include <new>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -263,7 +264,7 @@ namespace Horo::Extensions {
             }
 
             [[nodiscard]] std::size_t ChildCount(const EditorUiId &parent) const noexcept {
-                return static_cast<std::size_t>(std::count_if(nodes_.begin(), nodes_.end(), [&](const EditorUiNode &node) {
+                return static_cast<std::size_t>(std::ranges::count_if(nodes_, [this, &parent](const EditorUiNode &node) {
                     return BaseOf(node).parent == parent;
                 }));
             }
@@ -275,7 +276,7 @@ namespace Horo::Extensions {
             [[nodiscard]] float MeasureVertical(const EditorUiId &parent, const float width) {
                 float height = 0.0F;
                 std::size_t childCount = 0;
-                ForEachChild(parent, [&](const std::size_t childIndex) {
+                ForEachChild(parent, [this, &height, &childCount, width](const std::size_t childIndex) {
                     if (childCount != 0)
                         height += metrics_.rowGap;
                     height += MeasureNode(childIndex, width);
@@ -290,7 +291,7 @@ namespace Horo::Extensions {
                     return metrics_.textLineHeight;
                 const float childWidth = width / static_cast<float>(childCount);
                 float height = 0.0F;
-                ForEachChild(parent, [&](const std::size_t childIndex) {
+                ForEachChild(parent, [this, &height, childWidth](const std::size_t childIndex) {
                     height = std::max(height, MeasureNode(childIndex, childWidth));
                 });
                 return height;
@@ -303,7 +304,8 @@ namespace Horo::Extensions {
                 float rowHeight = 0.0F;
                 std::size_t column = 0;
                 std::size_t rowCount = 0;
-                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                ForEachChild(container.base.id,
+                             [this, &height, &rowHeight, &column, &rowCount, childWidth, columns](const std::size_t childIndex) {
                     rowHeight = std::max(rowHeight, MeasureNode(childIndex, childWidth));
                     ++column;
                     if (column == columns) {
@@ -362,8 +364,7 @@ namespace Horo::Extensions {
                 for (std::size_t index = 0; index < nodes_.size(); ++index) {
                     if (BaseOf(nodes_[index]).parent != parent)
                         continue;
-                    const std::size_t row = ordinal / columns;
-                    if (row >= targetRow)
+                    if (const std::size_t row = ordinal / columns; row >= targetRow)
                         break;
                     rowHeight = std::max(rowHeight, heights_[index]);
                     ++ordinal;
@@ -377,7 +378,7 @@ namespace Horo::Extensions {
 
             void PlaceVertical(const EditorUiContainerNode &container, const float x, const float y, const float width) {
                 float cursorY = y;
-                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                ForEachChild(container.base.id, [this, &cursorY, x, width](const std::size_t childIndex) {
                     PlaceNode(childIndex, x, cursorY, width);
                     cursorY += heights_[childIndex] + metrics_.rowGap;
                 });
@@ -389,7 +390,7 @@ namespace Horo::Extensions {
                     return;
                 const float childWidth = width / static_cast<float>(childCount);
                 std::size_t column = 0;
-                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                ForEachChild(container.base.id, [this, &column, childWidth, x, y](const std::size_t childIndex) {
                     PlaceNode(childIndex, x + childWidth * static_cast<float>(column), y, childWidth);
                     ++column;
                 });
@@ -399,7 +400,7 @@ namespace Horo::Extensions {
                 const std::size_t columns = GridColumns(container);
                 const float childWidth = width / static_cast<float>(columns);
                 std::size_t ordinal = 0;
-                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                ForEachChild(container.base.id, [this, &ordinal, columns, childWidth, x, y, &container](const std::size_t childIndex) {
                     const std::size_t row = ordinal / columns;
                     const std::size_t column = ordinal % columns;
                     const float rowY = y + GridRowOffset(container.base.id, row, columns);
@@ -417,7 +418,7 @@ namespace Horo::Extensions {
                     float cursorY = y + NodeHeight(kind, base.size, metrics_);
                     if (ChildCount(base.id) != 0) {
                         cursorY += metrics_.rowGap;
-                        ForEachChild(base.id, [&](const std::size_t childIndex) {
+                        ForEachChild(base.id, [this, &cursorY, x, width](const std::size_t childIndex) {
                             PlaceNode(childIndex, x, cursorY, width);
                             cursorY += heights_[childIndex] + metrics_.rowGap;
                         });
