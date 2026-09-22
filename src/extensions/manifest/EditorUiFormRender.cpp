@@ -4,9 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 #include <new>
-#include <ranges>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -50,14 +49,6 @@ namespace Horo::Extensions {
 
         [[nodiscard]] const EditorUiNodeBase &BaseOf(const EditorUiNode &node) noexcept {
             return EditorUiNodeBaseOf(node);
-        }
-
-        [[nodiscard]] std::size_t FindNodeIndex(const std::vector<EditorUiNode> &nodes, const EditorUiId &id) noexcept {
-            for (std::size_t index = 0; index < nodes.size(); ++index) {
-                if (BaseOf(nodes[index]).id == id)
-                    return index;
-            }
-            return nodes.size();
         }
 
         [[nodiscard]] bool IsValidMetric(const float value) noexcept {
@@ -247,43 +238,234 @@ namespace Horo::Extensions {
             return style;
         }
 
-        [[nodiscard]] std::size_t SiblingIndex(const std::vector<EditorUiNode> &nodes, const std::size_t nodeIndex) noexcept {
-            const EditorUiId parent = BaseOf(nodes[nodeIndex]).parent;
-            std::size_t siblingIndex = 0;
-            for (std::size_t index = 0; index < nodeIndex; ++index) {
-                if (BaseOf(nodes[index]).parent == parent)
-                    ++siblingIndex;
+        struct LayoutBounds final {
+            float x{};
+            float y{};
+            float width{};
+            float height{};
+        };
+
+        class LayoutPlan final {
+        public:
+            LayoutPlan(const std::vector<EditorUiNode> &nodes, const EditorUiThemeMetrics &metrics, const float width)
+                : nodes_(nodes), metrics_(metrics), width_(width), heights_(nodes.size()), bounds_(nodes.size()) {}
+
+            void Build() {
+                for (std::size_t index = 0; index < nodes_.size(); ++index) {
+                    if (BaseOf(nodes_[index]).parent.value.empty())
+                        heights_[index] = MeasureNode(index, width_);
+                }
+
+                float cursorY = 0.0F;
+                for (std::size_t index = 0; index < nodes_.size(); ++index) {
+                    if (!BaseOf(nodes_[index]).parent.value.empty())
+                        continue;
+                    PlaceNode(index, 0.0F, cursorY, width_);
+                    cursorY += heights_[index] + metrics_.rowGap;
+                }
             }
-            return siblingIndex;
-        }
 
-        [[nodiscard]] std::size_t SiblingCount(const std::vector<EditorUiNode> &nodes, const EditorUiId &parent) noexcept {
-            return static_cast<std::size_t>(std::ranges::count_if(nodes, [&](const EditorUiNode &node) {
-                return BaseOf(node).parent == parent;
-            }));
-        }
+            [[nodiscard]] const LayoutBounds &Bounds(const std::size_t index) const noexcept {
+                return bounds_[index];
+            }
 
-        [[nodiscard]] std::pair<float, float> ResponsiveWidthAndOffset(const std::vector<EditorUiNode> &nodes, const std::size_t nodeIndex,
-                                                                       const float width) noexcept {
-            const EditorUiId parent = BaseOf(nodes[nodeIndex]).parent;
-            if (parent.value.empty())
-                return {width, 0.0F};
-            const std::size_t parentIndex = FindNodeIndex(nodes, parent);
-            if (parentIndex >= nodes.size())
-                return {width, 0.0F};
-            const EditorUiNodeKind parentKind = EditorUiNodeKindOf(nodes[parentIndex]);
-            const std::size_t siblings = std::max<std::size_t>(SiblingCount(nodes, parent), 1U);
-            std::size_t columns = 1;
-            if (parentKind == EditorUiNodeKind::Row)
-                columns = siblings;
-            else if (parentKind == EditorUiNodeKind::Grid)
-                columns = std::max<std::size_t>(std::get<EditorUiContainerNode>(nodes[parentIndex].payload).columns, 1U);
-            if (columns == 1)
-                return {width, 0.0F};
-            const float cellWidth = width / static_cast<float>(columns);
-            const std::size_t column = SiblingIndex(nodes, nodeIndex) % columns;
-            return {cellWidth, cellWidth * static_cast<float>(column)};
-        }
+        private:
+            template <typename Function> void ForEachChild(const EditorUiId &parent, Function &&function) const {
+                for (std::size_t index = 0; index < nodes_.size(); ++index) {
+                    if (BaseOf(nodes_[index]).parent == parent)
+                        function(index);
+                }
+            }
+
+            [[nodiscard]] std::size_t ChildCount(const EditorUiId &parent) const noexcept {
+                std::size_t count = 0;
+                for (const EditorUiNode &node : nodes_) {
+                    if (BaseOf(node).parent == parent)
+                        ++count;
+                }
+                return count;
+            }
+
+            [[nodiscard]] std::size_t GridColumns(const EditorUiContainerNode &container) const noexcept {
+                return std::max<std::size_t>(container.columns, 1U);
+            }
+
+            [[nodiscard]] float MeasureVertical(const EditorUiId &parent, const float width) {
+                float height = 0.0F;
+                std::size_t childCount = 0;
+                ForEachChild(parent, [&](const std::size_t childIndex) {
+                    if (childCount != 0)
+                        height += metrics_.rowGap;
+                    height += MeasureNode(childIndex, width);
+                    ++childCount;
+                });
+                return height;
+            }
+
+            [[nodiscard]] float MeasureRow(const EditorUiId &parent, const float width) {
+                const std::size_t childCount = ChildCount(parent);
+                if (childCount == 0)
+                    return metrics_.textLineHeight;
+                const float childWidth = width / static_cast<float>(childCount);
+                float height = 0.0F;
+                ForEachChild(parent, [&](const std::size_t childIndex) {
+                    height = std::max(height, MeasureNode(childIndex, childWidth));
+                });
+                return height;
+            }
+
+            [[nodiscard]] float MeasureGrid(const EditorUiContainerNode &container, const float width) {
+                const std::size_t columns = GridColumns(container);
+                const float childWidth = width / static_cast<float>(columns);
+                float height = 0.0F;
+                float rowHeight = 0.0F;
+                std::size_t column = 0;
+                std::size_t rowCount = 0;
+                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                    rowHeight = std::max(rowHeight, MeasureNode(childIndex, childWidth));
+                    ++column;
+                    if (column == columns) {
+                        if (rowCount != 0)
+                            height += metrics_.rowGap;
+                        height += rowHeight;
+                        ++rowCount;
+                        rowHeight = 0.0F;
+                        column = 0;
+                    }
+                });
+                if (column != 0) {
+                    if (rowCount != 0)
+                        height += metrics_.rowGap;
+                    height += rowHeight;
+                }
+                return height == 0.0F ? metrics_.textLineHeight : height;
+            }
+
+            [[nodiscard]] float MeasureContainer(const EditorUiContainerNode &container, const float width) {
+                using enum EditorUiLayoutKind;
+                if (ChildCount(container.base.id) == 0)
+                    return metrics_.textLineHeight;
+                switch (container.layout) {
+                    case Group:
+                    case Stack:
+                        return MeasureVertical(container.base.id, width);
+                    case Row:
+                        return MeasureRow(container.base.id, width);
+                    case Grid:
+                        return MeasureGrid(container, width);
+                    default:
+                        return metrics_.textLineHeight;
+                }
+            }
+
+            [[nodiscard]] float MeasureNode(const std::size_t index, const float width) {
+                const EditorUiNode &node = nodes_[index];
+                const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
+                const EditorUiNodeBase &base = BaseOf(node);
+                const float baseHeight = NodeHeight(kind, base.size, metrics_);
+                float height = baseHeight;
+                if (IsContainer(kind))
+                    height = MeasureContainer(std::get<EditorUiContainerNode>(node.payload), width);
+                else if (ChildCount(base.id) != 0)
+                    height += metrics_.rowGap + MeasureVertical(base.id, width);
+                heights_[index] = height;
+                return height;
+            }
+
+            [[nodiscard]] float GridRowOffset(const EditorUiId &parent, const std::size_t targetRow,
+                                              const std::size_t columns) const noexcept {
+                float offset = 0.0F;
+                float rowHeight = 0.0F;
+                std::size_t ordinal = 0;
+                for (std::size_t index = 0; index < nodes_.size(); ++index) {
+                    if (BaseOf(nodes_[index]).parent != parent)
+                        continue;
+                    const std::size_t row = ordinal / columns;
+                    if (row >= targetRow)
+                        break;
+                    rowHeight = std::max(rowHeight, heights_[index]);
+                    ++ordinal;
+                    if (ordinal % columns == 0) {
+                        offset += rowHeight + metrics_.rowGap;
+                        rowHeight = 0.0F;
+                    }
+                }
+                return offset;
+            }
+
+            void PlaceVertical(const EditorUiContainerNode &container, const float x, const float y, const float width) {
+                float cursorY = y;
+                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                    PlaceNode(childIndex, x, cursorY, width);
+                    cursorY += heights_[childIndex] + metrics_.rowGap;
+                });
+            }
+
+            void PlaceRow(const EditorUiContainerNode &container, const float x, const float y, const float width) {
+                const std::size_t childCount = ChildCount(container.base.id);
+                if (childCount == 0)
+                    return;
+                const float childWidth = width / static_cast<float>(childCount);
+                std::size_t column = 0;
+                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                    PlaceNode(childIndex, x + childWidth * static_cast<float>(column), y, childWidth);
+                    ++column;
+                });
+            }
+
+            void PlaceGrid(const EditorUiContainerNode &container, const float x, const float y, const float width) {
+                const std::size_t columns = GridColumns(container);
+                const float childWidth = width / static_cast<float>(columns);
+                std::size_t ordinal = 0;
+                ForEachChild(container.base.id, [&](const std::size_t childIndex) {
+                    const std::size_t row = ordinal / columns;
+                    const std::size_t column = ordinal % columns;
+                    const float rowY = y + GridRowOffset(container.base.id, row, columns);
+                    PlaceNode(childIndex, x + childWidth * static_cast<float>(column), rowY, childWidth);
+                    ++ordinal;
+                });
+            }
+
+            void PlaceNode(const std::size_t index, const float x, const float y, const float width) {
+                bounds_[index] = {.x = x, .y = y, .width = width, .height = heights_[index]};
+                const EditorUiNode &node = nodes_[index];
+                const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
+                const EditorUiNodeBase &base = BaseOf(node);
+                if (!IsContainer(kind)) {
+                    float cursorY = y + NodeHeight(kind, base.size, metrics_);
+                    if (ChildCount(base.id) != 0) {
+                        cursorY += metrics_.rowGap;
+                        ForEachChild(base.id, [&](const std::size_t childIndex) {
+                            PlaceNode(childIndex, x, cursorY, width);
+                            cursorY += heights_[childIndex] + metrics_.rowGap;
+                        });
+                    }
+                    return;
+                }
+                const auto &container = std::get<EditorUiContainerNode>(node.payload);
+                using enum EditorUiLayoutKind;
+                switch (container.layout) {
+                    case Group:
+                    case Stack:
+                        PlaceVertical(container, x, y, width);
+                        return;
+                    case Row:
+                        PlaceRow(container, x, y, width);
+                        return;
+                    case Grid:
+                        PlaceGrid(container, x, y, width);
+                        return;
+                    default:
+                        return;
+                }
+            }
+
+            const std::vector<EditorUiNode> &nodes_;
+            const EditorUiThemeMetrics &metrics_;
+            float width_;
+            std::vector<float> heights_;
+            std::vector<LayoutBounds> bounds_;
+        };
 
         [[nodiscard]] Result<EditorUiRenderSnapshot> CreateRenderSnapshot(const EditorUiForm &form, const EditorUiThemeFrame &theme,
                                                                           const float logicalWidth) {
@@ -302,12 +484,11 @@ namespace Horo::Extensions {
         }
 
         void AppendRenderNode(EditorUiRenderSnapshot &snapshot, const std::vector<EditorUiNode> &nodes, const std::size_t index,
-                              const EditorUiThemeFrame &theme, const float logicalWidth, float &cursorY, std::uint32_t &focusOrder) {
+                              const EditorUiThemeFrame &theme, const LayoutPlan &layout, std::uint32_t &focusOrder) {
             const EditorUiNode &node = nodes[index];
             const EditorUiNodeBase &base = BaseOf(node);
             const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
-            const auto [logicalNodeWidth, logicalNodeX] = ResponsiveWidthAndOffset(nodes, index, logicalWidth);
-            const float logicalHeight = NodeHeight(kind, base.size, theme.metrics);
+            const LayoutBounds &bounds = layout.Bounds(index);
             const ResolvedStyle style = StyleForNode(node, theme);
             EditorUiRenderNode renderNode{.id = base.id,
                                           .parent = base.parent,
@@ -322,14 +503,13 @@ namespace Horo::Extensions {
                                           .focusable =
                                               base.enabled && base.focusPolicy == EditorUiFocusPolicy::Automatic && IsInteractive(kind),
                                           .focusOrder = 0,
-                                          .x = logicalNodeX * theme.uiScale,
-                                          .y = cursorY,
-                                          .width = logicalNodeWidth * theme.uiScale,
-                                          .height = logicalHeight * theme.uiScale};
+                                          .x = bounds.x * theme.uiScale,
+                                          .y = bounds.y * theme.uiScale,
+                                          .width = bounds.width * theme.uiScale,
+                                          .height = bounds.height * theme.uiScale};
             if (renderNode.focusable)
                 renderNode.focusOrder = ++focusOrder;
             snapshot.nodes.push_back(std::move(renderNode));
-            cursorY += (logicalHeight + theme.metrics.rowGap) * theme.uiScale;
         }
     }  // namespace
 
@@ -354,10 +534,17 @@ namespace Horo::Extensions {
         if (snapshotResult.HasError())
             return Result<EditorUiRenderSnapshot>::Failure(std::move(snapshotResult).ErrorValue());
         auto snapshot = std::move(snapshotResult).Value();
-        float cursorY = 0.0F;
+        std::optional<LayoutPlan> layout;
+        try {
+            layout.emplace(form.nodes, theme.metrics, logicalWidth);
+            layout->Build();
+        } catch (const std::bad_alloc &) {
+            return Result<EditorUiRenderSnapshot>::Failure(
+                MakeError(ExtensionErrors::EditorUiFormCapacityExceeded, "Editor UI layout storage could not be reserved."));
+        }
         std::uint32_t focusOrder = 0;
         for (std::size_t index = 0; index < form.nodes.size(); ++index) {
-            AppendRenderNode(snapshot, form.nodes, index, theme, logicalWidth, cursorY, focusOrder);
+            AppendRenderNode(snapshot, form.nodes, index, theme, *layout, focusOrder);
         }
         return Result<EditorUiRenderSnapshot>::Success(std::move(snapshot));
     }

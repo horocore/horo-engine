@@ -167,6 +167,83 @@ namespace Horo::Extensions::Tests {
             return std::move(form).Value();
         }
 
+        void AddNestedLayoutContainers(EditorUiFormBuilder &builder) {
+            REQUIRE(builder
+                        .AddContainer(EditorUiContainerNode{.base = Base("root", {}, "examples.nested.root", EditorUiFocusPolicy::Never),
+                                                            .layout = EditorUiLayoutKind::Group,
+                                                            .columns = 1})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddContainer(EditorUiContainerNode{.base = Base("row", "root", {}, EditorUiFocusPolicy::Never),
+                                                            .layout = EditorUiLayoutKind::Row,
+                                                            .columns = 1})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddContainer(EditorUiContainerNode{.base = Base("nested", "row", {}, EditorUiFocusPolicy::Never),
+                                                            .layout = EditorUiLayoutKind::Stack,
+                                                            .columns = 1})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddContainer(EditorUiContainerNode{.base = Base("grid", "root", {}, EditorUiFocusPolicy::Never),
+                                                            .layout = EditorUiLayoutKind::Grid,
+                                                            .columns = 2})
+                        .HasValue());
+        }
+
+        void AddNestedLayoutFields(EditorUiFormBuilder &builder) {
+            REQUIRE(builder
+                        .AddTextField(EditorUiTextFieldNode{.base = Base("inner", "nested", "examples.nested.inner"),
+                                                            .binding = EditorUiBindingId{"nested.inner"},
+                                                            .value = "inner",
+                                                            .placeholder = {},
+                                                            .maximumBytes = 32,
+                                                            .multiline = false})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddTextField(EditorUiTextFieldNode{.base = Base("sibling", "row", "examples.nested.sibling"),
+                                                            .binding = EditorUiBindingId{"row.sibling"},
+                                                            .value = "sibling",
+                                                            .placeholder = {},
+                                                            .maximumBytes = 32,
+                                                            .multiline = false})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddTextField(EditorUiTextFieldNode{.base = Base("grid_a", "grid", "examples.nested.grid_a"),
+                                                            .binding = EditorUiBindingId{"grid.a"},
+                                                            .value = "a",
+                                                            .placeholder = {},
+                                                            .maximumBytes = 32,
+                                                            .multiline = false})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddTextField(EditorUiTextFieldNode{.base = Base("grid_b", "grid", "examples.nested.grid_b"),
+                                                            .binding = EditorUiBindingId{"grid.b"},
+                                                            .value = "b",
+                                                            .placeholder = {},
+                                                            .maximumBytes = 32,
+                                                            .multiline = false})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddTextField(EditorUiTextFieldNode{.base = Base("grid_c", "grid", "examples.nested.grid_c"),
+                                                            .binding = EditorUiBindingId{"grid.c"},
+                                                            .value = "c",
+                                                            .placeholder = {},
+                                                            .maximumBytes = 32,
+                                                            .multiline = false})
+                        .HasValue());
+        }
+
+        EditorUiForm BuildNestedLayoutForm() {
+            auto builderResult = EditorUiFormBuilder::Create(EditorUiId{"com.example.nested.form"}, Localized("examples.nested.title"));
+            REQUIRE(builderResult.HasValue());
+            auto builder = std::move(builderResult).Value();
+            AddNestedLayoutContainers(builder);
+            AddNestedLayoutFields(builder);
+            auto form = std::move(builder).Build();
+            REQUIRE(form.HasValue());
+            return std::move(form).Value();
+        }
+
         void RequireError(const Result<void> &result, const std::string_view code) {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == code);
@@ -273,6 +350,8 @@ namespace Horo::Extensions::Tests {
         CHECK(first.Value().nodes[3].backgroundToken == EditorUiThemeToken::Surface);
         CHECK(first.Value().nodes[10].borderToken == EditorUiThemeToken::Accent);
         CHECK(first.Value().nodes[11].foregroundToken == EditorUiThemeToken::Warning);
+        CHECK(first.Value().nodes[11].width == Catch::Approx(320.0F));
+        CHECK(first.Value().nodes[11].y > first.Value().nodes[4].y);
     }
 
     TEST_CASE("Responsive row projection shares the same deterministic model across adapters", "[Extensions][EditorUiForm]") {
@@ -294,6 +373,35 @@ namespace Horo::Extensions::Tests {
         CHECK(narrow.Value().nodes[1].borderToken == EditorUiThemeToken::TextSecondary);
         CHECK(narrow.Value().nodes[1].focusOrder == 1);
         CHECK(narrow.Value().nodes[2].focusOrder == 2);
+    }
+
+    TEST_CASE("Nested containers propagate width, row baselines, and measured height", "[Extensions][EditorUiForm]") {
+        const EditorUiForm form = BuildNestedLayoutForm();
+        EditorUiThemeFrame theme;
+        const auto snapshot = BuildEditorUiRenderSnapshot(form, theme, 400.0F);
+        REQUIRE(snapshot.HasValue());
+        REQUIRE(snapshot.Value().nodes.size() == 9);
+
+        const auto &nodes = snapshot.Value().nodes;
+        CHECK(nodes[1].width == Catch::Approx(400.0F));
+        CHECK(nodes[1].height == Catch::Approx(32.0F));
+        CHECK(nodes[2].x == Catch::Approx(0.0F));
+        CHECK(nodes[2].width == Catch::Approx(200.0F));
+        CHECK(nodes[4].x == Catch::Approx(0.0F));
+        CHECK(nodes[4].width == Catch::Approx(200.0F));
+        CHECK(nodes[5].x == Catch::Approx(200.0F));
+        CHECK(nodes[5].width == Catch::Approx(200.0F));
+        CHECK(nodes[4].y == Catch::Approx(nodes[5].y));
+        CHECK(nodes[3].y == Catch::Approx(40.0F));
+        CHECK(nodes[3].width == Catch::Approx(400.0F));
+        CHECK(nodes[6].x == Catch::Approx(0.0F));
+        CHECK(nodes[7].x == Catch::Approx(200.0F));
+        CHECK(nodes[6].y == Catch::Approx(40.0F));
+        CHECK(nodes[7].y == Catch::Approx(40.0F));
+        CHECK(nodes[8].x == Catch::Approx(0.0F));
+        CHECK(nodes[8].y == Catch::Approx(80.0F));
+        CHECK(nodes[3].height == Catch::Approx(72.0F));
+        CHECK(nodes[0].height == Catch::Approx(112.0F));
     }
 
     TEST_CASE("Unavailable semantic theme roles fall back without exposing color constants", "[Extensions][EditorUiForm]") {
