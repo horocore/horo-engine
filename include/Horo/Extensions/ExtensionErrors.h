@@ -9,6 +9,16 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor ContributionRejected;
     /** @brief An editor-surface descriptor is malformed or violates its host contract. */
     extern const ErrorCodeDescriptor EditorSurfaceDescriptorInvalid;
+    /** @brief An editor-surface context or one of its access allowlists is malformed. */
+    extern const ErrorCodeDescriptor EditorSurfaceContextInvalid;
+    /** @brief A surface context was requested for a different provider activation. */
+    extern const ErrorCodeDescriptor EditorSurfaceContextProviderMismatch;
+    /** @brief A retained surface context outlived its provider activation or registration. */
+    extern const ErrorCodeDescriptor EditorSurfaceContextRevoked;
+    /** @brief The bounded editor-surface context capacity was exhausted. */
+    extern const ErrorCodeDescriptor EditorSurfaceContextCapacityExceeded;
+    /** @brief Surface context attachment and access admission are closed. */
+    extern const ErrorCodeDescriptor EditorSurfaceContextShutdown;
     /** @brief A declarative editor form or standard-component node is malformed. */
     extern const ErrorCodeDescriptor EditorUiFormInvalid;
     /** @brief A declarative editor form exceeded one of its explicit finite bounds. */

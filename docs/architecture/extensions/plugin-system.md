@@ -989,6 +989,20 @@ or trust policy does not allow the requested operation. The contribution must
 render a disconnected or permission-required state instead of probing global
 state.
 
+The implemented host boundary is `EditorSurfaceContextDescriptor` plus the
+host-owned `EditorSurfaceContextProvider` in the Extensions module. The
+descriptor carries the inert surface descriptor and bounded, typed allowlists
+for commands, state keys, backend-neutral services, localization keys, and
+diagnostic identities. `EditorSurfaceContextProvider::Attach` binds that
+descriptor to an `ExtensionActivationLease` and returns a move-only
+`EditorSurfaceContextRegistration`; the copied `EditorSurfaceContext` view
+contains only immutable metadata, allowlist queries, and activation-scoped
+capability-use leases. A provider shutdown or activation revocation invalidates
+every retained view and rejects new attachments. Omitted capability grants
+remain unavailable even when the surface descriptor declares that capability.
+The contract exposes no `EditorLayer`, ImGui, renderer, native platform handle,
+service locator, or callback ownership across the extension boundary.
+
 ### Data Bus Participation
 
 Host-owned surface sessions are normal `EditorDataBus` subscribers. They may

@@ -677,6 +677,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
     Horo/Extensions/EditorSurfaceDescriptor.h
+    Horo/Extensions/EditorSurfaceContext.h
     Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h
