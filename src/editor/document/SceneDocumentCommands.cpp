@@ -23,6 +23,8 @@ namespace Horo::Editor {
             if (const Result<void> navigation = ValidateSceneNavigationComponents(objects, std::nullopt, &command.components);
                 navigation.HasError())
                 return navigation;
+            if (const Result<void> ai = ValidateSceneAiComponents(objects, std::nullopt, &command.components); ai.HasError())
+                return ai;
             if (command.parent.has_value() && FindObject(objects, *command.parent) == objects.end())
                 return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::ParentNotFound, "Scene object parent does not exist."));
             if (command.parent.has_value() && IsEffectivelyLocked(objects, *command.parent))
@@ -195,6 +197,10 @@ namespace Horo::Editor {
         }
         ObserveNavigationComponentIds(command.components, m_document.m_nextNavigationSurfaceId, m_document.m_nextNavigationRegionId,
                                       m_document.m_nextNavigationModifierId, m_document.m_nextNavigationLinkId);
+        if (command.components.aiAgent && m_document.m_nextAiAgentId == 0)
+            return Result<SceneCommandResult>::Failure(
+                MakeError(AI::AIErrors::AgentCapacityExceeded, "AI agent identities are exhausted for this document session."));
+        ObserveAiAgentId(command.components, m_document.m_nextAiAgentId);
         ++m_document.m_nextObjectId;
         return CommitObject({std::move(delta), id, DocumentChangeKind::Created});
     }

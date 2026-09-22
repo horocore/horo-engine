@@ -285,6 +285,50 @@ namespace {
         REQUIRE(converted.Value().Entities().front().components.navigationAgent->radiusOverride == 0.75F);
     }
 
+    TEST_CASE("Runtime conversion remaps duplicated prefab AI agent identities", "[unit][editor][prefab][runtime][ai]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const Assets::AssetId prefab = PrefabAsset(17).Asset();
+        const auto agentType = Gameplay::ComponentTypeId::Parse("game.horo.ai_agent").Value();
+        const auto controllerType = Gameplay::ComponentTypeId::Parse("game.horo.ai_controller").Value();
+        const Prefab::RawComponentPayload agentPayload{
+            .instance = Prefab::PrefabComponentInstanceId::Create(1).Value(),
+            .component = {.typeId = agentType,
+                          .schemaVersion = 1,
+                          .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                          .payload = Bytes(R"({"agent":7,"schemaVersion":1,"startupPolicy":"scene_activation","enabled":true})")},
+        };
+        const Prefab::RawComponentPayload controllerPayload{
+            .instance = Prefab::PrefabComponentInstanceId::Create(2).Value(),
+            .component =
+                {.typeId = controllerType,
+                 .schemaVersion = 1,
+                 .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                 .payload = Bytes(
+                     R"({"controller":8,"decisionAsset":9,"blackboardSchema":10,"decisionKind":"behavior_tree","requiredCapabilities":1,"schemaVersion":1,"startupPolicy":"scene_activation","enabled":true})")},
+        };
+        const auto resolver =
+            ScenePrefabResolver(prefab, {{.localId = {}, .name = "AI root", .components = {agentPayload, controllerPayload}}});
+        const SceneDocumentSnapshot document{
+            .revision = {},
+            .state = DocumentStateId{1},
+            .prefabInstances = {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(11).Value(), PrefabAsset(17), std::nullopt, {}},
+                                ScenePrefabInstance{Prefab::PrefabInstanceId::Create(12).Value(), PrefabAsset(17), std::nullopt, {}}},
+        };
+
+        const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{18}, resolver, ScenePrefabLimits());
+        REQUIRE(converted.HasValue());
+        REQUIRE(converted.Value().Entities().size() == 2);
+        const auto &first = converted.Value().Entities()[0].components;
+        const auto &second = converted.Value().Entities()[1].components;
+        REQUIRE(first.aiAgent.has_value());
+        REQUIRE(second.aiAgent.has_value());
+        REQUIRE(first.aiController.has_value());
+        REQUIRE(second.aiController.has_value());
+        CHECK(first.aiAgent->agent != second.aiAgent->agent);
+        CHECK(first.aiController == second.aiController);
+    }
+
     TEST_CASE("Runtime conversion rejects cyclic prefab dependency expansion", "[unit][editor][prefab][runtime][malformed]") {
         using namespace Horo;
         using namespace Horo::Editor;
