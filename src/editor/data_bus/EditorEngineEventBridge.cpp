@@ -58,6 +58,33 @@ namespace Horo::Editor {
             return attached.load(std::memory_order_acquire);
         }
 
+        template <typename EventT> void SubscribeOne(const std::weak_ptr<State> &weakState, Subscription &target) {
+            target = engineEvents.Subscribe<EventT>([weakState](const auto &event) {
+                if (const auto state = weakState.lock())
+                    state->Forward(event);
+            });
+        }
+
+        [[nodiscard]] bool SubscribeAll(const std::weak_ptr<State> &weakState) {
+            SubscribeOne<Horo::ProjectOpenedEvent>(weakState, subscriptions[0]);
+            SubscribeOne<Horo::ProjectClosedEvent>(weakState, subscriptions[1]);
+            SubscribeOne<Horo::AssetImportedEvent>(weakState, subscriptions[2]);
+            SubscribeOne<Horo::AssetReloadedEvent>(weakState, subscriptions[3]);
+            SubscribeOne<Horo::OperationStoreRevisionChangedEvent>(weakState, subscriptions[4]);
+            SubscribeOne<Horo::ConsoleLogEvent>(weakState, subscriptions[5]);
+            SubscribeOne<Horo::MetricsChangedEvent>(weakState, subscriptions[6]);
+            SubscribeOne<Horo::ProfilerCaptureStateEvent>(weakState, subscriptions[7]);
+            SubscribeOne<Horo::McpToolInvocationEvent>(weakState, subscriptions[8]);
+            return std::ranges::all_of(subscriptions, [](const Subscription &subscription) {
+                return static_cast<bool>(subscription);
+            });
+        }
+
+        void ResetSubscriptions() noexcept {
+            for (Subscription &subscription : subscriptions)
+                subscription.Reset();
+        }
+
         void Forward(const Horo::ProjectOpenedEvent &event) {
             if (!CanForward())
                 return;
@@ -164,50 +191,8 @@ namespace Horo::Editor {
             return;
 
         const std::weak_ptr<State> weakState = m_state;
-        m_state->subscriptions[0] = m_state->engineEvents.Subscribe<Horo::ProjectOpenedEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[1] = m_state->engineEvents.Subscribe<Horo::ProjectClosedEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[2] = m_state->engineEvents.Subscribe<Horo::AssetImportedEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[3] = m_state->engineEvents.Subscribe<Horo::AssetReloadedEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[4] =
-            m_state->engineEvents.Subscribe<Horo::OperationStoreRevisionChangedEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[5] = m_state->engineEvents.Subscribe<Horo::ConsoleLogEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[6] = m_state->engineEvents.Subscribe<Horo::MetricsChangedEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[7] = m_state->engineEvents.Subscribe<Horo::ProfilerCaptureStateEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-        m_state->subscriptions[8] = m_state->engineEvents.Subscribe<Horo::McpToolInvocationEvent>([weakState](const auto &event) {
-            if (const auto state = weakState.lock())
-                state->Forward(event);
-        });
-
-        const bool complete = std::ranges::all_of(m_state->subscriptions, [](const Subscription &subscription) {
-            return static_cast<bool>(subscription);
-        });
-        if (!complete) {
-            for (Subscription &subscription : m_state->subscriptions)
-                subscription.Reset();
+        if (!m_state->SubscribeAll(weakState)) {
+            m_state->ResetSubscriptions();
             LOG_WARN("editor.data_bus", "process bridge attach rejected reason=subscription_limit");
             return;
         }
@@ -219,8 +204,7 @@ namespace Horo::Editor {
         if (m_state == nullptr)
             return;
         m_state->attached.store(false, std::memory_order_release);
-        for (Subscription &subscription : m_state->subscriptions)
-            subscription.Reset();
+        m_state->ResetSubscriptions();
     }
 
     /** @copydoc EditorEngineEventBridge::IsAttached */

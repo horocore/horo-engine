@@ -125,64 +125,54 @@ namespace Horo::Editor {
             return static_cast<bool>(slot->busSubscription);
         }
 
+        [[nodiscard]] bool AddSubscription(const EditorEventKind kind, const std::shared_ptr<Slot> &slot,
+                                           const std::weak_ptr<State> &weakState, const EditorSurfaceEventHandler &handler) {
+            switch (kind) {
+                case EditorEventKind::ProjectOpened:
+                    return AddTyped<EditorProjectOpenedEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::ProjectClosed:
+                    return AddTyped<EditorProjectClosedEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::AssetImported:
+                    return AddTyped<EditorAssetImportedEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::AssetReloaded:
+                    return AddTyped<EditorAssetReloadedEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::OperationStoreRevisionChanged:
+                    return AddTyped<EditorOperationStoreRevisionChangedEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::ConsoleLog:
+                    return AddTyped<EditorConsoleLogEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::MetricsChanged:
+                    return AddTyped<EditorMetricsChangedEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::ProfilerCaptureState:
+                    return AddTyped<EditorProfilerCaptureStateEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::McpToolInvocation:
+                    return AddTyped<EditorMcpToolInvocationEvent>(kind, slot, weakState, handler);
+                case EditorEventKind::Count:
+                    return false;
+            }
+            return false;
+        }
+
+        [[nodiscard]] Result<Subscription> Reject(const ErrorCodeDescriptor &descriptor) {
+            rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
+            return Failure(descriptor);
+        }
+
         [[nodiscard]] Result<Subscription> Subscribe(const EditorEventKind kind, EditorSurfaceEventHandler handler,
                                                      const std::shared_ptr<State> &self) {
-            if (closed.load(std::memory_order_acquire)) {
-                rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
-                return Failure(ContextClosed);
-            }
-            if (!IsKnownEditorEventKind(kind)) {
-                rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
-                return Failure(InvalidEvent);
-            }
-            if (!IsAllowed(kind)) {
-                rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
-                return Failure(EventNotAllowed);
-            }
-            if (activeSubscriptions.load(std::memory_order_relaxed) >= limits.maximumSubscriptions) {
-                rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
-                return Failure(SubscriptionLimitExceeded);
-            }
+            if (closed.load(std::memory_order_acquire))
+                return Reject(ContextClosed);
+            if (!IsKnownEditorEventKind(kind))
+                return Reject(InvalidEvent);
+            if (!IsAllowed(kind))
+                return Reject(EventNotAllowed);
+            if (activeSubscriptions.load(std::memory_order_relaxed) >= limits.maximumSubscriptions)
+                return Reject(SubscriptionLimitExceeded);
 
             auto slot = std::make_shared<Slot>();
             slot->owner = self;
             const std::weak_ptr<State> weakState = self;
-            bool subscribed = false;
-            switch (kind) {
-                case EditorEventKind::ProjectOpened:
-                    subscribed = AddTyped<EditorProjectOpenedEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::ProjectClosed:
-                    subscribed = AddTyped<EditorProjectClosedEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::AssetImported:
-                    subscribed = AddTyped<EditorAssetImportedEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::AssetReloaded:
-                    subscribed = AddTyped<EditorAssetReloadedEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::OperationStoreRevisionChanged:
-                    subscribed = AddTyped<EditorOperationStoreRevisionChangedEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::ConsoleLog:
-                    subscribed = AddTyped<EditorConsoleLogEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::MetricsChanged:
-                    subscribed = AddTyped<EditorMetricsChangedEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::ProfilerCaptureState:
-                    subscribed = AddTyped<EditorProfilerCaptureStateEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::McpToolInvocation:
-                    subscribed = AddTyped<EditorMcpToolInvocationEvent>(kind, slot, weakState, handler);
-                    break;
-                case EditorEventKind::Count:
-                    break;
-            }
-            if (!subscribed) {
-                rejectedSubscriptions.fetch_add(1, std::memory_order_relaxed);
-                return Failure(SubscriptionLimitExceeded);
-            }
+            if (!AddSubscription(kind, slot, weakState, handler))
+                return Reject(SubscriptionLimitExceeded);
 
             slots.push_back(slot);
             activeSubscriptions.fetch_add(1, std::memory_order_relaxed);
