@@ -619,6 +619,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsWorldInternal.h
+        physics/PhysicsWorldScene.cpp
         physics/PhysicsWorldTickHelpers.h
         physics/PhysicsWorldBudgets.cpp
         physics/PhysicsWorldDescriptor.cpp
@@ -631,16 +633,20 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
-        physics/CanonicalPhysicsRuntimeDiagnostics.h
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
-        physics/CanonicalPhysicsRuntimeQuery.h
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
+        physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
+        physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp
         PROPERTIES
@@ -649,7 +655,11 @@ else()
     target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
 endif()
 
-add_library(HoroPhysicsSceneIntegration STATIC physics/PhysicsSceneActivation.cpp)
+add_library(HoroPhysicsSceneIntegration STATIC
+        physics/PhysicsSceneActivation.cpp
+        physics/PhysicsSceneActivationPlan.cpp
+        physics/PhysicsSceneActivationCapabilities.cpp
+        physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene)

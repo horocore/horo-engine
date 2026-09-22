@@ -5,10 +5,13 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
+#include "Horo/Physics/PhysicsConstraintDescriptor.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsQuery.h"
+#include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsTickPipeline.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
@@ -61,6 +64,23 @@ namespace Horo::Physics {
     class PhysicsWorld;
 
     /**
+     * @brief One immutable analytic child shape bound to a body-local pose while a scene candidate is staged.
+     *
+     * The handle is borrowed from the receiving unpublished world. The span passed to compound-shape
+     * admission remains caller-owned for the duration of the call; no native pointer or storage is retained.
+     */
+    struct PhysicsSceneShapeInstance final {
+        ShapeHandle shape;
+        PhysicsPose localPose;
+    };
+
+    /** @brief Complete body request for scene activation, including the uniform sensor policy admitted by the native body. */
+    struct PhysicsSceneBodyDescriptor final {
+        PhysicsBodyDescriptor body;
+        bool sensor{};
+    };
+
+    /**
      * @brief Process-composition owner for canonical native registration or explicit Null behavior.
      *
      * A headless/dedicated host selects Canonical when it requires simulation; Null is an explicit
@@ -103,8 +123,8 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsAvailability Availability() const noexcept;
         /** @brief Reports current implemented support; Null reports every known feature Unsupported.
          * @param capability Known Horo feature to inspect.
-         * @return WorldCreation and ImmediateQueries are available only while Canonical is ready;
-         * rigid-body, constraint and snapshot-query features remain unsupported.
+         * @return WorldCreation, rigid bodies, immutable analytic shapes, constraints and immediate queries
+         * are available only while Canonical is ready; snapshot, origin-rebasing and other future features remain unsupported.
          */
         [[nodiscard]] PhysicsCapabilitySupport Capability(PhysicsCapability capability) const noexcept;
 
@@ -186,6 +206,38 @@ namespace Horo::Physics {
          * @return Success or a typed malformed, foreign-world, stale or lifecycle error.
          */
         [[nodiscard]] Result<void> DestroyQueryFixture(const PhysicsQueryFixture &fixture) const;
+        /**
+         * @brief Stages one validated analytic shape in the active scene candidate.
+         * @param descriptor Scale-free analytic geometry in canonical SI units.
+         * @return World-scoped shape identity or a typed validation/capacity/native error.
+         * @pre Active canonical world, owner-thread scene preparation, and no fixed-step execution.
+         * @post The shape is private to this world generation and is destroyed by reset, unload or shutdown.
+         */
+        [[nodiscard]] Result<ShapeHandle> CreateSceneShape(const PhysicsShapeDescriptor &descriptor) const;
+        /**
+         * @brief Stages one immutable compound shape from already admitted child shapes.
+         * @param instances Caller-owned child shape identities and body-local poses.
+         * @return World-scoped compound shape identity or a typed validation/capacity/native error.
+         * @pre Every child belongs to this active world generation and the span remains valid for the call.
+         * @post No identity escapes until the enclosing scene activation candidate succeeds.
+         */
+        [[nodiscard]] Result<ShapeHandle> CreateSceneCompoundShape(std::span<const PhysicsSceneShapeInstance> instances) const;
+        /**
+         * @brief Stages one native body against an already admitted scene shape.
+         * @param descriptor Body policy, initial pose, shape identity and sensor policy.
+         * @return World-scoped body identity or a typed validation/capacity/native error.
+         * @pre Active canonical world, owner-thread scene preparation, and no fixed-step execution.
+         * @post Partial native state remains owned by this world and is released on any later activation failure.
+         */
+        [[nodiscard]] Result<BodyHandle> CreateSceneBody(const PhysicsSceneBodyDescriptor &descriptor) const;
+        /**
+         * @brief Stages one fixed or distance constraint after its body endpoints are resident.
+         * @param descriptor World-scoped body anchors and typed constraint policy.
+         * @return World-scoped constraint identity or a typed validation/capacity/native error.
+         * @pre Active canonical world, owner-thread scene preparation, and every body endpoint is resident.
+         * @post Constraint ownership remains private to this world until aggregate publication.
+         */
+        [[nodiscard]] Result<ConstraintHandle> CreateSceneConstraint(const PhysicsConstraintDescriptor &descriptor) const;
         /**
          * @brief Executes one immediate query against the current owner-thread broadphase.
          * @param descriptor Exact world/scene query request.
