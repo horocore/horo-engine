@@ -109,12 +109,8 @@ namespace Horo::Runtime::Ui {
     }
 
     Result<void> UiTextLayoutEngine::Storage::AppendSourceCluster(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
-                                                                  const std::uint32_t start, const std::uint32_t clusterIndex,
-                                                                  const std::uint32_t lineIndex, const UiLogicalPoint lineOrigin,
-                                                                  const std::int64_t lineOriginX, std::int64_t &cursor,
-                                                                  const std::uint32_t optionalGaps, const std::int64_t justifyExtra,
-                                                                  std::int64_t &justifyRemainder, std::uint32_t &gapIndex,
-                                                                  std::int64_t &justificationAdded) {
+                                                                  const std::uint32_t clusterIndex,
+                                                                  UiTextLayoutInternal::SourceAppendState &state) {
         const auto &cluster = request.shaped.clusters[clusterIndex];
         for (std::uint32_t glyphOffset = 0; glyphOffset < cluster.glyphCount; ++glyphOffset) {
             const auto &glyph = request.shaped.glyphs[cluster.firstGlyph + glyphOffset];
@@ -123,38 +119,31 @@ namespace Horo::Runtime::Ui {
             const auto advanceX = UiTextLayoutInternal::ScaleValue(glyph.advance.x, request.options.scale);
             if (offsetX.HasError() || offsetY.HasError() || advanceX.HasError())
                 return Failure(UiErrors::TextLayoutCapacityExceeded);
-            const auto glyphX = UiTextLayoutInternal::AddValue(cursor, offsetX.Value());
-            const auto glyphY = UiTextLayoutInternal::AddValue(lineOrigin.y, offsetY.Value());
+            const auto glyphX = UiTextLayoutInternal::AddValue(state.cursor, offsetX.Value());
+            const auto glyphY = UiTextLayoutInternal::AddValue(state.lineOrigin.y, offsetY.Value());
             if (glyphX.HasError() || glyphY.HasError())
                 return Failure(UiErrors::TextLayoutCapacityExceeded);
             if (const auto appended = AppendGlyph(slot, glyphFaces[cluster.firstGlyph + glyphOffset], glyph.glyph, clusterIndex,
-                                                  {glyphX.Value(), glyphY.Value()}, {advanceX.Value(), 0}, lineIndex, false);
+                                                  {glyphX.Value(), glyphY.Value()}, {advanceX.Value(), 0}, state.lineIndex, false);
                 appended.HasError())
                 return appended;
-            cursor += advanceX.Value();
+            state.cursor += advanceX.Value();
         }
 
-        cursor = lineOriginX + (clusterPrefix[clusterIndex + 1U] - clusterPrefix[start]) + justificationAdded;
-        if (cluster.breakOpportunity == UiTextBreakOpportunity::Optional && gapIndex < optionalGaps) {
-            const auto addition = justifyExtra + (justifyRemainder-- > 0 ? 1 : 0);
-            cursor += addition;
-            justificationAdded += addition;
-            ++gapIndex;
+        state.cursor = state.lineOriginX + (clusterPrefix[clusterIndex + 1U] - clusterPrefix[state.start]) + state.justificationAdded;
+        if (cluster.breakOpportunity == UiTextBreakOpportunity::Optional && state.gapIndex < state.optionalGaps) {
+            const auto addition = state.justifyExtra + (state.justifyRemainder-- > 0 ? 1 : 0);
+            state.cursor += addition;
+            state.justificationAdded += addition;
+            ++state.gapIndex;
         }
         return Result<void>::Success();
     }
 
     Result<void> UiTextLayoutEngine::Storage::AppendSourceRange(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
-                                                                const std::uint32_t start, const std::uint32_t end,
-                                                                const std::uint32_t lineIndex, const UiLogicalPoint lineOrigin,
-                                                                const std::int64_t lineOriginX, std::int64_t &cursor,
-                                                                const std::uint32_t optionalGaps, const std::int64_t justifyExtra,
-                                                                std::int64_t &justifyRemainder, std::uint32_t &gapIndex,
-                                                                std::int64_t &justificationAdded) {
-        for (std::uint32_t clusterIndex = start; clusterIndex < end; ++clusterIndex) {
-            if (const auto appended = AppendSourceCluster(request, slot, start, clusterIndex, lineIndex, lineOrigin, lineOriginX, cursor,
-                                                          optionalGaps, justifyExtra, justifyRemainder, gapIndex, justificationAdded);
-                appended.HasError())
+                                                                const std::uint32_t end, UiTextLayoutInternal::SourceAppendState &state) {
+        for (std::uint32_t clusterIndex = state.start; clusterIndex < end; ++clusterIndex) {
+            if (const auto appended = AppendSourceCluster(request, slot, clusterIndex, state); appended.HasError())
                 return appended;
         }
         return Result<void>::Success();
@@ -205,64 +194,72 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    Result<void> UiTextLayoutEngine::Storage::BuildLine(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
-                                                        const std::int32_t lineHeight, const std::uint32_t visibleLines,
-                                                        const std::uint32_t lineIndex, const bool verticallyTruncated,
-                                                        const std::int64_t ellipsisWidth, const std::int64_t verticalOffset,
-                                                        const std::int32_t scaledAscent) {
-        const auto windowResult = PrepareLineWindow(request, lineIndex, visibleLines, verticallyTruncated, ellipsisWidth);
-        if (windowResult.HasError())
-            return Result<void>::Failure(windowResult.ErrorValue());
-        const auto window = windowResult.Value();
-        const auto placementResult =
-            PrepareLinePlacement(request, window, lineIndex, visibleLines, lineHeight, verticalOffset, scaledAscent);
-        if (placementResult.HasError())
-            return Result<void>::Failure(placementResult.ErrorValue());
-        const auto placement = placementResult.Value();
-        const auto &clusters = request.shaped.clusters;
-        const auto firstGlyph = static_cast<std::uint32_t>(slot.glyphs.size());
-        const auto firstRun = static_cast<std::uint32_t>(slot.runs.size());
-        std::int64_t cursor = placement.originX;
-        std::uint32_t optionalGaps{};
-        if (request.options.horizontal == UiTextHorizontalAlignment::Justify && lineIndex + 1U < visibleLines && !window.ellipsis)
-            for (std::uint32_t cluster = window.start; cluster < window.end; ++cluster)
-                optionalGaps += clusters[cluster].breakOpportunity == UiTextBreakOpportunity::Optional ? 1U : 0U;
-        const auto justifyExtra = optionalGaps == 0 ? 0 : placement.freeWidth / optionalGaps;
-        auto justifyRemainder = optionalGaps == 0 ? 0 : placement.freeWidth % optionalGaps;
-        std::uint32_t gapIndex{};
-        std::int64_t justificationAdded{};
-
-        if (const auto appended =
-                AppendSourceRange(request, slot, window.start, window.end, lineIndex, {placement.originX, placement.originY},
-                                  placement.originX, cursor, optionalGaps, justifyExtra, justifyRemainder, gapIndex, justificationAdded);
-            appended.HasError())
-            return appended;
-        if (window.ellipsis) {
-            if (const auto appended = AppendEllipsisGlyphs(request, slot, window.ellipsisGlyphCount, lineIndex,
-                                                           {placement.originX, placement.originY}, cursor);
-                appended.HasError())
-                return appended;
-        }
-
-        const auto renderedWidth = UiTextLayoutInternal::AddValue(0, cursor - placement.originX);
-        if (renderedWidth.HasError())
-            return Result<void>::Failure(renderedWidth.ErrorValue());
-        const auto lineExtentWidth =
-            request.options.horizontal == UiTextHorizontalAlignment::Justify && lineIndex + 1U < visibleLines && !window.ellipsis
-                ? request.assignedContent.extent.width
-                : renderedWidth.Value();
+    Result<void> UiTextLayoutEngine::Storage::AppendLineRecord(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
+                                                               const UiTextLayoutInternal::LineBuildContext &context,
+                                                               const UiTextLayoutInternal::LineWindow &window,
+                                                               const UiTextLayoutInternal::LinePlacement &placement,
+                                                               const std::int32_t renderedWidth) {
+        const auto lineExtentWidth = request.options.horizontal == UiTextHorizontalAlignment::Justify &&
+                                             context.lineIndex + 1U < context.visibleLines && !window.ellipsis
+                                         ? request.assignedContent.extent.width
+                                         : renderedWidth;
+        const auto firstGlyph = slot.lines.empty() ? 0U : slot.lines.back().firstGlyph + slot.lines.back().glyphCount;
+        const auto firstRun = slot.lines.empty() ? 0U : slot.lines.back().firstRun + slot.lines.back().runCount;
         slot.lines.push_back(
             {firstGlyph,
              static_cast<std::uint32_t>(slot.glyphs.size()) - firstGlyph,
              firstRun,
              static_cast<std::uint32_t>(slot.runs.size()) - firstRun,
              {placement.originX, placement.originY},
-             {lineExtentWidth, lineHeight},
+             {lineExtentWidth, context.lineHeight},
              placement.baseline,
              static_cast<std::int32_t>(std::min<std::int64_t>(placement.lineAdvance, std::numeric_limits<std::int32_t>::max())),
-             linePlans[lineIndex].hardBreak,
+             linePlans[context.lineIndex].hardBreak,
              window.ellipsis});
         return Result<void>::Success();
+    }
+
+    Result<void> UiTextLayoutEngine::Storage::BuildLine(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
+                                                        const UiTextLayoutInternal::LineBuildContext &context) {
+        const auto windowResult =
+            PrepareLineWindow(request, context.lineIndex, context.visibleLines, context.verticallyTruncated, context.ellipsisWidth);
+        if (windowResult.HasError())
+            return Result<void>::Failure(windowResult.ErrorValue());
+        const auto window = windowResult.Value();
+        const auto placementResult = PrepareLinePlacement(request, window, context.lineIndex, context.visibleLines, context.lineHeight,
+                                                          context.verticalOffset, context.scaledAscent);
+        if (placementResult.HasError())
+            return Result<void>::Failure(placementResult.ErrorValue());
+        const auto placement = placementResult.Value();
+        const auto &clusters = request.shaped.clusters;
+        std::uint32_t optionalGaps{};
+        if (request.options.horizontal == UiTextHorizontalAlignment::Justify && context.lineIndex + 1U < context.visibleLines &&
+            !window.ellipsis)
+            for (std::uint32_t cluster = window.start; cluster < window.end; ++cluster)
+                optionalGaps += clusters[cluster].breakOpportunity == UiTextBreakOpportunity::Optional ? 1U : 0U;
+        const auto justifyExtra = optionalGaps == 0 ? 0 : placement.freeWidth / optionalGaps;
+        UiTextLayoutInternal::SourceAppendState state{.start = window.start,
+                                                      .lineIndex = context.lineIndex,
+                                                      .lineOrigin = {placement.originX, placement.originY},
+                                                      .lineOriginX = placement.originX,
+                                                      .cursor = placement.originX,
+                                                      .optionalGaps = optionalGaps,
+                                                      .justifyExtra = justifyExtra,
+                                                      .justifyRemainder = optionalGaps == 0 ? 0 : placement.freeWidth % optionalGaps};
+
+        if (const auto appended = AppendSourceRange(request, slot, window.end, state); appended.HasError())
+            return appended;
+        if (window.ellipsis) {
+            if (const auto appended =
+                    AppendEllipsisGlyphs(request, slot, window.ellipsisGlyphCount, context.lineIndex, state.lineOrigin, state.cursor);
+                appended.HasError())
+                return appended;
+        }
+
+        const auto renderedWidth = UiTextLayoutInternal::AddValue(0, state.cursor - placement.originX);
+        if (renderedWidth.HasError())
+            return Result<void>::Failure(renderedWidth.ErrorValue());
+        return AppendLineRecord(request, slot, context, window, placement, renderedWidth.Value());
     }
 
     Result<void> UiTextLayoutEngine::Storage::BuildOutput(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
@@ -290,11 +287,17 @@ namespace Horo::Runtime::Ui {
         const auto scaledAscent = UiTextLayoutInternal::ScaleValue(request.shaped.metrics.ascent, request.options.scale);
         if (scaledAscent.HasError())
             return Result<void>::Failure(scaledAscent.ErrorValue());
-        for (std::uint32_t lineIndex = 0; lineIndex < visibleLines; ++lineIndex)
-            if (const auto line = BuildLine(request, slot, lineHeight, visibleLines, lineIndex, metrics.Value().verticallyTruncated,
-                                            metrics.Value().ellipsisWidth, verticalOffset, scaledAscent.Value());
-                line.HasError())
+        for (std::uint32_t lineIndex = 0; lineIndex < visibleLines; ++lineIndex) {
+            const UiTextLayoutInternal::LineBuildContext context{.lineHeight = lineHeight,
+                                                                 .visibleLines = visibleLines,
+                                                                 .lineIndex = lineIndex,
+                                                                 .verticallyTruncated = metrics.Value().verticallyTruncated,
+                                                                 .ellipsisWidth = metrics.Value().ellipsisWidth,
+                                                                 .verticalOffset = verticalOffset,
+                                                                 .scaledAscent = scaledAscent.Value()};
+            if (const auto line = BuildLine(request, slot, context); line.HasError())
                 return line;
+        }
 
         slot.overflow = {request.assignedContent.extent,
                          slot.measurement.desired,

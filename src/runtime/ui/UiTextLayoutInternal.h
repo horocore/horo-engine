@@ -46,6 +46,29 @@ namespace Horo::Runtime::Ui {
             bool needsEllipsis{};
         };
 
+        struct LineBuildContext final {
+            std::int32_t lineHeight{};
+            std::uint32_t visibleLines{};
+            std::uint32_t lineIndex{};
+            bool verticallyTruncated{};
+            std::int64_t ellipsisWidth{};
+            std::int64_t verticalOffset{};
+            std::int32_t scaledAscent{};
+        };
+
+        struct SourceAppendState final {
+            std::uint32_t start{};
+            std::uint32_t lineIndex{};
+            UiLogicalPoint lineOrigin;
+            std::int64_t lineOriginX{};
+            std::int64_t cursor{};
+            std::uint32_t optionalGaps{};
+            std::int64_t justifyExtra{};
+            std::int64_t justifyRemainder{};
+            std::uint32_t gapIndex{};
+            std::int64_t justificationAdded{};
+        };
+
         [[nodiscard]] Result<std::int32_t> ScaleValue(std::int32_t value, UiTextScale scale);
         [[nodiscard]] Result<std::int32_t> AddValue(std::int64_t left, std::int64_t right);
         [[nodiscard]] bool IsOlder(const UiLayoutSourceRevisions &candidate, const UiLayoutSourceRevisions &current) noexcept;
@@ -111,20 +134,16 @@ namespace Horo::Runtime::Ui {
                                                                                        std::uint32_t lineIndex, std::uint32_t visibleLines,
                                                                                        std::int32_t lineHeight, std::int64_t verticalOffset,
                                                                                        std::int32_t scaledAscent) const;
-        [[nodiscard]] Result<void> BuildLine(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot, std::int32_t lineHeight,
-                                             std::uint32_t visibleLines, std::uint32_t lineIndex, bool verticallyTruncated,
-                                             std::int64_t ellipsisWidth, std::int64_t verticalOffset, std::int32_t scaledAscent);
+        [[nodiscard]] Result<void> BuildLine(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
+                                             const UiTextLayoutInternal::LineBuildContext &context);
+        [[nodiscard]] Result<void> AppendLineRecord(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
+                                                    const UiTextLayoutInternal::LineBuildContext &context,
+                                                    const UiTextLayoutInternal::LineWindow &window,
+                                                    const UiTextLayoutInternal::LinePlacement &placement, std::int32_t renderedWidth);
         [[nodiscard]] Result<void> AppendSourceRange(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
-                                                     std::uint32_t start, std::uint32_t end, std::uint32_t lineIndex,
-                                                     UiLogicalPoint lineOrigin, std::int64_t lineOriginX, std::int64_t &cursor,
-                                                     std::uint32_t optionalGaps, std::int64_t justifyExtra, std::int64_t &justifyRemainder,
-                                                     std::uint32_t &gapIndex, std::int64_t &justificationAdded);
+                                                     std::uint32_t end, UiTextLayoutInternal::SourceAppendState &state);
         [[nodiscard]] Result<void> AppendSourceCluster(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
-                                                       std::uint32_t start, std::uint32_t clusterIndex, std::uint32_t lineIndex,
-                                                       UiLogicalPoint lineOrigin, std::int64_t lineOriginX, std::int64_t &cursor,
-                                                       std::uint32_t optionalGaps, std::int64_t justifyExtra,
-                                                       std::int64_t &justifyRemainder, std::uint32_t &gapIndex,
-                                                       std::int64_t &justificationAdded);
+                                                       std::uint32_t clusterIndex, UiTextLayoutInternal::SourceAppendState &state);
         [[nodiscard]] Result<std::uint32_t> CountEllipsisGlyphs(const UiTextLayoutRequest &request, std::int64_t available,
                                                                 std::int64_t &usedWidth) const;
         [[nodiscard]] Result<void> AppendEllipsisGlyphs(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
