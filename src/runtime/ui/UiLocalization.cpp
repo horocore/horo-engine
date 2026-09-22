@@ -80,8 +80,8 @@ namespace Horo::Runtime::Ui {
             while (segmentStart < value.size()) {
                 const std::size_t separator = value.find('-', segmentStart);
                 const std::size_t segmentEnd = separator == std::string_view::npos ? value.size() : separator;
-                const std::string_view segment = value.substr(segmentStart, segmentEnd - segmentStart);
-                if (!IsNormalizedLocaleSegment(segment, segmentIndex))
+                if (const auto segment = value.substr(segmentStart, segmentEnd - segmentStart);
+                    !IsNormalizedLocaleSegment(segment, segmentIndex))
                     return false;
 
                 ++segmentIndex;
@@ -228,8 +228,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> MergeLocalizedAssetDependency(std::vector<UiAssetDependency> &dependencies,
                                                                  UiAssetDependency dependency) {
             using enum Internal::UiAssetDependencyMergeResult;
-            const auto merged = Internal::MergeUiAssetDependency(dependencies, std::move(dependency));
-            switch (merged) {
+            switch (const auto merged = Internal::MergeUiAssetDependency(dependencies, std::move(dependency)); merged) {
                 case Inserted:
                 case Strengthened:
                     return Result<void>::Success();
@@ -364,7 +363,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLocalizedText::FindArgument */
     const UiLocalizedArgument *UiLocalizedText::FindArgument(const std::string_view name) const noexcept {
         const auto found = std::ranges::lower_bound(arguments_, name, {}, &UiLocalizedArgument::name);
-        return found != arguments_.end() && found->name == name ? &*found : nullptr;
+        return found != arguments_.end() && found->name == name ? std::to_address(found) : nullptr;
     }
 
     /** @copydoc UiLocalizedText::FallbackText */
