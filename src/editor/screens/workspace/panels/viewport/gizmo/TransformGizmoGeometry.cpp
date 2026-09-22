@@ -229,8 +229,8 @@ namespace Horo::Editor {
                 }
                 MeasureRotationRingPointerDistance(rings[axis], request.pointer);
             }
-            float closestDistance = 8.0F;
             if (request.hovered) {
+                float closestDistance = 8.0F;
                 for (int axis = 0; axis < 3; ++axis) {
                     if (rings[axis].pointerDistance >= closestDistance)
                         continue;
@@ -248,15 +248,21 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Shared hit-test state accumulated while drawing linear gizmo handles. */
+        struct LinearHandleHitState {
+            float closestDistance{std::numeric_limits<float>::max()};
+            std::optional<int> endOnAxis;
+        };
+
         [[nodiscard]] Result<void> DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
                                                         TransformGizmoFrameGeometry &geometry, const int axis, const ImU32 axisColor,
                                                         const RotationScreenBasis &screenBasis, const float centerPixelsPerWorldUnit,
-                                                        float &closestDistance, std::optional<int> &endOnAxis) {
+                                                        LinearHandleHitState &hitState) {
             const Result<bool> directional = HasTransformGizmoLinearAxisScreenDirection(request.camera, geometry.worldAxes[axis]);
             if (directional.HasError())
                 return Result<void>::Failure(directional.ErrorValue());
             if (!directional.Value()) {
-                PrepareEndOnAxis(geometry, axis, centerPixelsPerWorldUnit, endOnAxis);
+                PrepareEndOnAxis(geometry, axis, centerPixelsPerWorldUnit, hitState.endOnAxis);
                 return Result<void>::Success();
             }
             // Project only the axis orientation: perspective displacement of the pivot must not shear the gizmo.
@@ -264,7 +270,7 @@ namespace Horo::Editor {
                                        -Math::Dot(geometry.worldAxes[axis], screenBasis.up)};
             const float projectedLength = std::hypot(projectedAxis.x, projectedAxis.y);
             if (!std::isfinite(projectedLength) || projectedLength < 0.001F) {
-                PrepareEndOnAxis(geometry, axis, centerPixelsPerWorldUnit, endOnAxis);
+                PrepareEndOnAxis(geometry, axis, centerPixelsPerWorldUnit, hitState.endOnAxis);
                 return Result<void>::Success();
             }
             geometry.pixelsPerWorldUnit[axis] = projectedLength * centerPixelsPerWorldUnit;
@@ -287,8 +293,8 @@ namespace Horo::Editor {
                 DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
             // A visible cube handle wins over another axis shaft crossing beneath it.
             const float hitDistance = overScaleHandle ? -1.0F : distance;
-            if (hit && hitDistance < closestDistance) {
-                closestDistance = hitDistance;
+            if (hit && hitDistance < hitState.closestDistance) {
+                hitState.closestDistance = hitDistance;
                 geometry.hoveredAxis = axis;
             }
             return Result<void>::Success();
@@ -302,20 +308,20 @@ namespace Horo::Editor {
             const Result<float> centerPixelsPerWorldUnit = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
             if (centerPixelsPerWorldUnit.HasError())
                 return Result<void>::Failure(centerPixelsPerWorldUnit.ErrorValue());
-            float closestDistance = std::numeric_limits<float>::max();
-            std::optional<int> endOnAxis;
+            LinearHandleHitState hitState;
             for (int axis = 0; axis < 3; ++axis) {
                 const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry, axis, axisColors[axis], screenBasis.Value(),
-                                                                centerPixelsPerWorldUnit.Value(), closestDistance, endOnAxis);
+                                                                centerPixelsPerWorldUnit.Value(), hitState);
                 if (drawn.HasError())
                     return drawn;
             }
-            if (endOnAxis.has_value()) {
+            if (hitState.endOnAxis.has_value()) {
                 const float ringDistance = Distance(request.pointer, *geometry.center);
                 const bool hit = request.hovered && std::fabs(ringDistance - EndOnAxisRadius) <= 4.0F;
-                DrawEndOnAxisHandle(drawList, *geometry.center, axisColors[*endOnAxis], request.activeAxis == endOnAxis || hit);
+                DrawEndOnAxisHandle(drawList, *geometry.center, axisColors[*hitState.endOnAxis],
+                                    request.activeAxis == hitState.endOnAxis || hit);
                 if (hit)
-                    geometry.hoveredAxis = endOnAxis;
+                    geometry.hoveredAxis = hitState.endOnAxis;
             }
             if (request.tool == EditorTransformTool::Scale) {
                 const bool uniformHit = request.hovered && std::fabs(request.pointer.x - geometry.center->x) <= ScaleHubHalfSize &&

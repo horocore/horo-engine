@@ -54,6 +54,8 @@ namespace Horo::Editor {
                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                      Math::ClipDepthRange depthRange);
         void CancelAssetPlacementPreview(EditorWorkspaceViewCommandData &command);
+        static void DrawAssetPlacementHint(ImDrawList &drawList, const ViewportSurfaceLayout &layout, ImVec2 pointer,
+                                           const EditorGuiContext &context);
         static void DrawViewportSurface(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                         const EditorViewportTextureView &textureView, bool hasRenderedViewport);
 

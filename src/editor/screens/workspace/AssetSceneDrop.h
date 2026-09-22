@@ -51,6 +51,7 @@ namespace Horo::Editor {
     struct AssetSceneDropRequest {
         std::string assetId;
         std::string assetType;
+        std::string absoluteAssetPath; /**< Canonical source path copied from the drag payload. */
         std::optional<SceneObjectId> parent;
         AssetSceneDropTarget target{AssetSceneDropTarget::HierarchyRoot};
         float normalizedX{0.5F};
