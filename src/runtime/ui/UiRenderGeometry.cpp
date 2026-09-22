@@ -137,6 +137,7 @@ namespace Horo::Runtime::Ui {
                 return RequiredGeometryForDraw(snapshot, command, draw);
             }, command.payload);
         }
+
         [[nodiscard]] Result<void> ValidateGenerated(const std::span<const UiRenderVertex> vertices,
                                                      const std::span<const std::uint32_t> indices,
                                                      const std::span<const UiRenderGeometryBatch> batches, const std::size_t commandCount) {
