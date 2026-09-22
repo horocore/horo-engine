@@ -71,16 +71,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValidReferenceShape(const UiReference &reference) noexcept {
             if (!IsValidReferenceKind(reference.kind))
                 return false;
+            using enum UiReferenceKind;
             switch (reference.kind) {
-                case UiReferenceKind::Element:
+                case Element:
                     return IsElementReferenceShape(reference);
-                case UiReferenceKind::Canvas:
+                case Canvas:
                     return IsCanvasReferenceShape(reference);
-                case UiReferenceKind::Document:
+                case Document:
                     return IsDocumentReferenceShape(reference);
-                case UiReferenceKind::Asset:
+                case Asset:
                     return IsAssetReferenceShape(reference);
-                case UiReferenceKind::Count:
+                case Count:
                     return false;
             }
             return false;
@@ -89,8 +90,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValidProperty(const UiTypedProperty &property) noexcept {
             if (!IsValidText(property.key))
                 return false;
-            return std::visit([](const auto &value) {
-                using Value = std::decay_t<decltype(value)>;
+            return std::visit([]<typename T>(const T &value) {
+                using Value = std::decay_t<T>;
                 if constexpr (std::is_same_v<Value, double>)
                     return std::isfinite(value);
                 if constexpr (std::is_same_v<Value, std::string>)
@@ -147,7 +148,7 @@ namespace Horo::Runtime::Ui {
             std::unordered_map<UiElementId, std::size_t, UiElementIdHash> indices;
             indices.reserve(elements.size());
             for (std::size_t index = 0; index < elements.size(); ++index)
-                if (!indices.emplace(elements[index].id, index).second)
+                if (!indices.try_emplace(elements[index].id, index).second)
                     return false;
 
             enum class VisitState : std::uint8_t {
@@ -155,18 +156,19 @@ namespace Horo::Runtime::Ui {
                 Visiting,
                 Visited
             };
-            std::vector<VisitState> states(elements.size(), VisitState::Unvisited);
+            using enum VisitState;
+            std::vector states(elements.size(), Unvisited);
             std::vector<std::size_t> path;
             path.reserve(elements.size());
             for (std::size_t start = 0; start < elements.size(); ++start) {
-                if (states[start] == VisitState::Visited)
+                if (states[start] == Visited)
                     continue;
                 path.clear();
                 auto current = start;
-                while (states[current] != VisitState::Visited) {
-                    if (states[current] == VisitState::Visiting)
+                while (states[current] != Visited) {
+                    if (states[current] == Visiting)
                         return false;
-                    states[current] = VisitState::Visiting;
+                    states[current] = Visiting;
                     path.push_back(current);
                     const auto parent = elements[current].parent;
                     if (!parent.IsValid())
@@ -177,7 +179,7 @@ namespace Horo::Runtime::Ui {
                     current = found->second;
                 }
                 for (const auto index : path)
-                    states[index] = VisitState::Visited;
+                    states[index] = Visited;
             }
             return true;
         }
@@ -228,19 +230,20 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ValidateReferenceTarget(const UiReference &reference, const std::vector<UiCanvasDescriptor> &canvases,
                                                            const std::vector<UiDocumentElement> &elements,
                                                            const std::vector<UiAssetDependency> &dependencies) {
+            using enum UiReferenceKind;
             switch (reference.kind) {
-                case UiReferenceKind::Element:
+                case Element:
                     return ContainsElement(elements, reference.element) ? Result<void>::Success()
                                                                         : Failure(UiErrors::DocumentReferenceInvalid);
-                case UiReferenceKind::Canvas:
+                case Canvas:
                     return ContainsCanvas(canvases, reference.canvas) ? Result<void>::Success()
                                                                       : Failure(UiErrors::DocumentReferenceInvalid);
-                case UiReferenceKind::Asset:
+                case Asset:
                     return ContainsDependency(dependencies, reference) ? Result<void>::Success()
                                                                        : Failure(UiErrors::DocumentReferenceInvalid);
-                case UiReferenceKind::Document:
+                case Document:
                     return Result<void>::Success();
-                case UiReferenceKind::Count:
+                case Count:
                     return Failure(UiErrors::DocumentReferenceInvalid);
             }
             return Failure(UiErrors::DocumentReferenceInvalid);

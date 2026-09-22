@@ -1,6 +1,7 @@
 #include "JsonUtils.h"
 #include "UiDocumentSerializationInternal.h"
 
+#include <memory>
 #include <new>
 #include <ranges>
 #include <utility>
@@ -287,7 +288,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiDocumentMigrationStep *FindMigrationStep(const UiDocumentSchemaVersion version,
                                                                        const std::span<const UiDocumentMigrationStep> steps) {
             const auto found = std::ranges::find(steps, version, &UiDocumentMigrationStep::from);
-            return found == steps.end() ? nullptr : &*found;
+            return found == steps.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] Result<UiDocument> ApplyMigration(const UiDocument &current, const UiDocumentMigrationStep &step,

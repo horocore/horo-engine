@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -18,8 +19,16 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
+        [[nodiscard]] bool IsAsciiLower(const char value) noexcept {
+            return value >= 'a' && value <= 'z';
+        }
+
+        [[nodiscard]] bool IsAsciiUpper(const char value) noexcept {
+            return value >= 'A' && value <= 'Z';
+        }
+
         [[nodiscard]] bool IsAsciiAlpha(const char value) noexcept {
-            return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+            return IsAsciiLower(value) || IsAsciiUpper(value);
         }
 
         [[nodiscard]] bool IsAsciiDigit(const char value) noexcept {
@@ -38,8 +47,28 @@ namespace Horo::Runtime::Ui {
             return value >= 'a' && value <= 'z' ? static_cast<char>(value - 'a' + 'A') : value;
         }
 
-        [[nodiscard]] bool IsAll(const std::string_view value, bool (*predicate)(char) noexcept) noexcept {
+        template <typename Predicate> [[nodiscard]] bool IsAll(const std::string_view value, Predicate predicate) noexcept {
             return !value.empty() && std::ranges::all_of(value, predicate);
+        }
+
+        [[nodiscard]] bool IsLowercaseAlphaNumeric(const std::string_view value) noexcept {
+            return IsAll(value, IsAsciiAlphaNumeric) && std::ranges::all_of(value, [](const char character) noexcept {
+                return !IsAsciiAlpha(character) || IsAsciiLower(character);
+            });
+        }
+
+        [[nodiscard]] bool IsNormalizedLocaleSegment(const std::string_view segment, const std::size_t segmentIndex) noexcept {
+            if (segment.empty())
+                return false;
+            if (segmentIndex == 0)
+                return segment.size() >= 2 && segment.size() <= 8 && IsAll(segment, IsAsciiLower);
+            if (segment.size() == 4 && IsAll(segment, IsAsciiAlpha))
+                return IsAsciiUpper(segment.front()) && IsAll(segment.substr(1), IsAsciiLower);
+            if (segment.size() == 2 && IsAll(segment, IsAsciiAlpha))
+                return IsAll(segment, IsAsciiUpper);
+            if (segment.size() == 3 && IsAll(segment, IsAsciiDigit))
+                return true;
+            return segment.size() <= 8 && IsLowercaseAlphaNumeric(segment);
         }
 
         [[nodiscard]] bool IsNormalizedLocale(const std::string_view value) noexcept {
@@ -52,40 +81,47 @@ namespace Horo::Runtime::Ui {
                 const std::size_t separator = value.find('-', segmentStart);
                 const std::size_t segmentEnd = separator == std::string_view::npos ? value.size() : separator;
                 const std::string_view segment = value.substr(segmentStart, segmentEnd - segmentStart);
-                if (segment.empty())
+                if (!IsNormalizedLocaleSegment(segment, segmentIndex))
                     return false;
-
-                if (segmentIndex == 0) {
-                    if (segment.size() < 2 || segment.size() > 8 || !IsAll(segment, IsAsciiAlpha) ||
-                        !std::ranges::all_of(segment, [](const char character) noexcept {
-                        return character >= 'a' && character <= 'z';
-                    }))
-                        return false;
-                } else if (segment.size() == 4 && IsAll(segment, IsAsciiAlpha)) {
-                    if (!(segment.front() >= 'A' && segment.front() <= 'Z') ||
-                        !std::ranges::all_of(segment.substr(1), [](const char character) noexcept {
-                        return character >= 'a' && character <= 'z';
-                    }))
-                        return false;
-                } else if (segment.size() == 2 && IsAll(segment, IsAsciiAlpha)) {
-                    if (!std::ranges::all_of(segment, [](const char character) noexcept {
-                        return character >= 'A' && character <= 'Z';
-                    }))
-                        return false;
-                } else if (segment.size() == 3 && IsAll(segment, IsAsciiDigit)) {
-                    // Numeric regions are already canonical.
-                } else if (segment.size() < 1 || segment.size() > 8 || !IsAll(segment, IsAsciiAlphaNumeric) ||
-                           !std::ranges::all_of(segment, [](const char character) noexcept {
-                    return !IsAsciiAlpha(character) || (character >= 'a' && character <= 'z');
-                })) {
-                    return false;
-                }
 
                 ++segmentIndex;
                 if (separator == std::string_view::npos)
                     break;
                 segmentStart = separator + 1;
             }
+            return true;
+        }
+
+        [[nodiscard]] bool AppendNormalizedLocaleSegment(const std::string_view segment, const std::size_t segmentIndex,
+                                                         std::string &normalized) {
+            if (segment.empty())
+                return false;
+            if (segmentIndex == 0) {
+                if (segment.size() < 2 || segment.size() > 8 || !IsAll(segment, IsAsciiAlpha))
+                    return false;
+                for (const char character : segment)
+                    normalized.push_back(ToLowerAscii(character));
+                return true;
+            }
+            if (segment.size() == 4 && IsAll(segment, IsAsciiAlpha)) {
+                normalized.push_back(ToUpperAscii(segment.front()));
+                for (std::size_t index = 1; index < segment.size(); ++index)
+                    normalized.push_back(ToLowerAscii(segment[index]));
+                return true;
+            }
+            if (segment.size() == 2 && IsAll(segment, IsAsciiAlpha)) {
+                for (const char character : segment)
+                    normalized.push_back(ToUpperAscii(character));
+                return true;
+            }
+            if (segment.size() == 3 && IsAll(segment, IsAsciiDigit)) {
+                normalized.append(segment);
+                return true;
+            }
+            if (segment.size() > 8 || !IsAll(segment, IsAsciiAlphaNumeric))
+                return false;
+            for (const char character : segment)
+                normalized.push_back(ToLowerAscii(character));
             return true;
         }
 
@@ -101,31 +137,10 @@ namespace Horo::Runtime::Ui {
                 const std::size_t separator = tag.find('-', segmentStart);
                 const std::size_t segmentEnd = separator == std::string_view::npos ? tag.size() : separator;
                 const std::string_view segment = tag.substr(segmentStart, segmentEnd - segmentStart);
-                if (segment.empty())
-                    return std::nullopt;
-
                 if (segmentIndex != 0 && normalized.size() != 0)
                     normalized.push_back('-');
-                if (segmentIndex == 0) {
-                    if (segment.size() < 2 || segment.size() > 8 || !IsAll(segment, IsAsciiAlpha))
-                        return std::nullopt;
-                    for (const char character : segment)
-                        normalized.push_back(ToLowerAscii(character));
-                } else if (segment.size() == 4 && IsAll(segment, IsAsciiAlpha)) {
-                    normalized.push_back(ToUpperAscii(segment.front()));
-                    for (std::size_t index = 1; index < segment.size(); ++index)
-                        normalized.push_back(ToLowerAscii(segment[index]));
-                } else if (segment.size() == 2 && IsAll(segment, IsAsciiAlpha)) {
-                    for (const char character : segment)
-                        normalized.push_back(ToUpperAscii(character));
-                } else if (segment.size() == 3 && IsAll(segment, IsAsciiDigit)) {
-                    normalized.append(segment);
-                } else if (segment.size() < 1 || segment.size() > 8 || !IsAll(segment, IsAsciiAlphaNumeric)) {
+                if (!AppendNormalizedLocaleSegment(segment, segmentIndex, normalized))
                     return std::nullopt;
-                } else {
-                    for (const char character : segment)
-                        normalized.push_back(ToLowerAscii(character));
-                }
 
                 ++segmentIndex;
                 if (separator == std::string_view::npos)
@@ -137,13 +152,10 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool IsSafeKey(const std::string_view value) noexcept {
-            if (value.empty() || value.size() > MaximumUiMessageKeyBytes)
-                return false;
-            for (const char character : value) {
-                if (!IsAsciiAlphaNumeric(character) && character != '_' && character != '-' && character != '.')
-                    return false;
-            }
-            return true;
+            return !value.empty() && value.size() <= MaximumUiMessageKeyBytes &&
+                   std::ranges::all_of(value, [](const char character) noexcept {
+                return IsAsciiAlphaNumeric(character) || character == '_' || character == '-' || character == '.';
+            });
         }
 
         [[nodiscard]] bool IsSafeArgumentName(const std::string_view value) noexcept {
@@ -156,8 +168,8 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool IsValidArgumentValue(const UiLocalizedArgumentValue &value) noexcept {
-            return std::visit([](const auto &typed) noexcept {
-                using Value = std::decay_t<decltype(typed)>;
+            return std::visit([]<typename T>(const T &typed) noexcept {
+                using Value = std::decay_t<T>;
                 if constexpr (std::is_same_v<Value, double>) {
                     return std::isfinite(typed);
                 } else if constexpr (std::is_same_v<Value, UiLocalizedDuration>) {
@@ -181,6 +193,73 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValidAssetFallbackPolicy(const UiLocalizedAssetFallbackPolicy policy) noexcept {
             using enum UiLocalizedAssetFallbackPolicy;
             return policy == Required || policy == UseNeutral || policy == Omit;
+        }
+
+        [[nodiscard]] Result<void> ValidateLocalizedAssetReferenceInput(const Assets::AssetTypeId &expectedType,
+                                                                        const UiLocalizedAssetFallbackPolicy fallbackPolicy,
+                                                                        const std::vector<UiLocalizedAssetVariant> &variants,
+                                                                        const std::optional<Assets::AssetId> &neutralAsset) {
+            if (variants.size() > MaximumUiLocalizedAssetVariants)
+                return Failure(UiErrors::CapacityExceeded);
+            if (expectedType.Value().empty() || !IsValidAssetFallbackPolicy(fallbackPolicy))
+                return Failure(UiErrors::LocalizedAssetReferenceInvalid);
+
+            const bool hasNeutral = neutralAsset.has_value();
+            using enum UiLocalizedAssetFallbackPolicy;
+            if ((fallbackPolicy == Required && hasNeutral) || (fallbackPolicy == Omit && hasNeutral) ||
+                (fallbackPolicy == UseNeutral && !hasNeutral) || (variants.empty() && !(fallbackPolicy == UseNeutral && hasNeutral)))
+                return Failure(UiErrors::LocalizedAssetReferenceInvalid);
+            if (hasNeutral && !neutralAsset->IsValid())
+                return Failure(UiErrors::LocalizedAssetReferenceInvalid);
+            for (const UiLocalizedAssetVariant &variant : variants)
+                if (!variant.locale.IsValid() || !variant.asset.IsValid())
+                    return Failure(UiErrors::LocalizedAssetReferenceInvalid);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> SortAndValidateLocalizedAssetVariants(std::vector<UiLocalizedAssetVariant> &variants) {
+            std::ranges::sort(variants, {}, &UiLocalizedAssetVariant::locale);
+            for (std::size_t index = 1; index < variants.size(); ++index)
+                if (variants[index - 1].locale == variants[index].locale)
+                    return Failure(UiErrors::LocalizedAssetVariantConflict);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> MergeLocalizedAssetDependency(std::vector<UiAssetDependency> &dependencies,
+                                                                 UiAssetDependency dependency) {
+            using enum Internal::UiAssetDependencyMergeResult;
+            const auto merged = Internal::MergeUiAssetDependency(dependencies, std::move(dependency));
+            switch (merged) {
+                case Inserted:
+                case Strengthened:
+                    return Result<void>::Success();
+                case Invalid:
+                    return Failure(UiErrors::DependencyInvalid);
+                case Conflict:
+                    return Failure(UiErrors::LocalizedAssetVariantConflict);
+                case CapacityExceeded:
+                    return Failure(UiErrors::CapacityExceeded);
+            }
+            return Failure(UiErrors::DependencyInvalid);
+        }
+
+        [[nodiscard]] Result<std::vector<UiAssetDependency>> BuildLocalizedAssetDependencies(
+            const Assets::AssetTypeId &expectedType, const UiLocalizedAssetFallbackPolicy fallbackPolicy,
+            const std::vector<UiLocalizedAssetVariant> &variants, const std::optional<Assets::AssetId> &neutralAsset) {
+            std::vector<UiAssetDependency> dependencies;
+            dependencies.reserve(variants.size() + (neutralAsset.has_value() ? 1U : 0U));
+            const bool localizedVariantsRequired = fallbackPolicy == UiLocalizedAssetFallbackPolicy::Required;
+            for (const UiLocalizedAssetVariant &variant : variants) {
+                if (auto result = MergeLocalizedAssetDependency(dependencies, {variant.asset, expectedType, localizedVariantsRequired});
+                    result.HasError())
+                    return Result<std::vector<UiAssetDependency>>::Failure(result.ErrorValue());
+            }
+            if (neutralAsset.has_value()) {
+                if (auto result = MergeLocalizedAssetDependency(dependencies, {neutralAsset.value(), expectedType, true});
+                    result.HasError())
+                    return Result<std::vector<UiAssetDependency>>::Failure(result.ErrorValue());
+            }
+            return Result<std::vector<UiAssetDependency>>::Success(std::move(dependencies));
         }
     }  // namespace
 
@@ -312,48 +391,18 @@ namespace Horo::Runtime::Ui {
                                                                         const UiLocalizedAssetFallbackPolicy fallbackPolicy,
                                                                         std::vector<UiLocalizedAssetVariant> variants,
                                                                         const std::optional<Assets::AssetId> neutralAsset) {
-        if (expectedType.Value().empty() || !IsValidAssetFallbackPolicy(fallbackPolicy) ||
-            variants.size() > MaximumUiLocalizedAssetVariants)
-            return Failure<UiLocalizedAssetReference>(
-                variants.size() > MaximumUiLocalizedAssetVariants ? UiErrors::CapacityExceeded : UiErrors::LocalizedAssetReferenceInvalid);
+        if (auto validation = ValidateLocalizedAssetReferenceInput(expectedType, fallbackPolicy, variants, neutralAsset);
+            validation.HasError())
+            return Result<UiLocalizedAssetReference>::Failure(validation.ErrorValue());
+        if (auto validation = SortAndValidateLocalizedAssetVariants(variants); validation.HasError())
+            return Result<UiLocalizedAssetReference>::Failure(validation.ErrorValue());
+        auto dependencies = BuildLocalizedAssetDependencies(expectedType, fallbackPolicy, variants, neutralAsset);
+        if (dependencies.HasError())
+            return Result<UiLocalizedAssetReference>::Failure(dependencies.ErrorValue());
 
-        const bool hasNeutral = neutralAsset.has_value();
-        using enum UiLocalizedAssetFallbackPolicy;
-        if ((fallbackPolicy == Required && hasNeutral) || (fallbackPolicy == Omit && hasNeutral) ||
-            (fallbackPolicy == UseNeutral && !hasNeutral) || (variants.empty() && !(fallbackPolicy == UseNeutral && hasNeutral)))
-            return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetReferenceInvalid);
-        if (hasNeutral && !neutralAsset->IsValid())
-            return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetReferenceInvalid);
-
-        for (const UiLocalizedAssetVariant &variant : variants)
-            if (!variant.locale.IsValid() || !variant.asset.IsValid())
-                return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetReferenceInvalid);
-
-        std::ranges::sort(variants, {}, &UiLocalizedAssetVariant::locale);
-        for (std::size_t index = 1; index < variants.size(); ++index)
-            if (variants[index - 1].locale == variants[index].locale)
-                return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetVariantConflict);
-
-        std::vector<UiAssetDependency> dependencies;
-        dependencies.reserve(variants.size() + (hasNeutral ? 1U : 0U));
-        const bool localizedVariantsRequired = fallbackPolicy == Required;
-        for (const UiLocalizedAssetVariant &variant : variants) {
-            const auto merged = Internal::MergeUiAssetDependency(dependencies, {variant.asset, expectedType, localizedVariantsRequired});
-            if (merged == Internal::UiAssetDependencyMergeResult::Invalid)
-                return Failure<UiLocalizedAssetReference>(UiErrors::DependencyInvalid);
-            if (merged == Internal::UiAssetDependencyMergeResult::Conflict)
-                return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetVariantConflict);
-        }
-        if (hasNeutral) {
-            const auto merged = Internal::MergeUiAssetDependency(dependencies, {neutralAsset.value(), expectedType, true});
-            if (merged == Internal::UiAssetDependencyMergeResult::Invalid)
-                return Failure<UiLocalizedAssetReference>(UiErrors::DependencyInvalid);
-            if (merged == Internal::UiAssetDependencyMergeResult::Conflict)
-                return Failure<UiLocalizedAssetReference>(UiErrors::LocalizedAssetVariantConflict);
-        }
-
-        return Result<UiLocalizedAssetReference>::Success(
-            UiLocalizedAssetReference{std::move(expectedType), fallbackPolicy, std::move(variants), neutralAsset, std::move(dependencies)});
+        return Result<UiLocalizedAssetReference>::Success(UiLocalizedAssetReference{std::move(expectedType), fallbackPolicy,
+                                                                                    std::move(variants), neutralAsset,
+                                                                                    std::move(dependencies).Value()});
     }
 
     /** @copydoc UiLocalizedAssetReference::IsValid */

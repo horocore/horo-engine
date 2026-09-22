@@ -34,19 +34,20 @@ namespace Horo::Runtime::Ui::Internal {
     [[nodiscard]] inline UiAssetDependencyMergeResult MergeUiAssetDependency(
         std::vector<UiAssetDependency> &dependencies, UiAssetDependency dependency,
         const std::size_t maximumSize = std::numeric_limits<std::size_t>::max()) {
+        using enum UiAssetDependencyMergeResult;
         if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
-            return UiAssetDependencyMergeResult::Invalid;
+            return Invalid;
 
         const auto position = std::ranges::lower_bound(dependencies, dependency.asset, {}, &UiAssetDependency::asset);
         if (position != dependencies.end() && position->asset == dependency.asset) {
             if (position->expectedType != dependency.expectedType)
-                return UiAssetDependencyMergeResult::Conflict;
+                return Conflict;
             position->required = position->required || dependency.required;
-            return UiAssetDependencyMergeResult::Strengthened;
+            return Strengthened;
         }
         if (dependencies.size() >= maximumSize)
-            return UiAssetDependencyMergeResult::CapacityExceeded;
+            return CapacityExceeded;
         dependencies.insert(position, std::move(dependency));
-        return UiAssetDependencyMergeResult::Inserted;
+        return Inserted;
     }
 }  // namespace Horo::Runtime::Ui::Internal

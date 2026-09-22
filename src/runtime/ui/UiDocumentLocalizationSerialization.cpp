@@ -37,12 +37,13 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         if (!value.is_string())
             return Failed<UiLocalizedTextFailurePolicy>(UiErrors::LocalizedMessageInvalid);
         const auto name = value.get<std::string>();
+        using enum UiLocalizedTextFailurePolicy;
         if (name == "fallback")
-            return Result<UiLocalizedTextFailurePolicy>::Success(UiLocalizedTextFailurePolicy::UseFallback);
+            return Result<UiLocalizedTextFailurePolicy>::Success(UseFallback);
         if (name == "placeholder")
-            return Result<UiLocalizedTextFailurePolicy>::Success(UiLocalizedTextFailurePolicy::UseSafePlaceholder);
+            return Result<UiLocalizedTextFailurePolicy>::Success(UseSafePlaceholder);
         if (name == "required")
-            return Result<UiLocalizedTextFailurePolicy>::Success(UiLocalizedTextFailurePolicy::RequireTranslation);
+            return Result<UiLocalizedTextFailurePolicy>::Success(RequireTranslation);
         return Failed<UiLocalizedTextFailurePolicy>(UiErrors::LocalizedMessageInvalid);
     }
 
@@ -63,12 +64,13 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         if (!value.is_string())
             return Failed<UiLocalizedAssetFallbackPolicy>(UiErrors::LocalizedAssetReferenceInvalid);
         const auto name = value.get<std::string>();
+        using enum UiLocalizedAssetFallbackPolicy;
         if (name == "required")
-            return Result<UiLocalizedAssetFallbackPolicy>::Success(UiLocalizedAssetFallbackPolicy::Required);
+            return Result<UiLocalizedAssetFallbackPolicy>::Success(Required);
         if (name == "neutral")
-            return Result<UiLocalizedAssetFallbackPolicy>::Success(UiLocalizedAssetFallbackPolicy::UseNeutral);
+            return Result<UiLocalizedAssetFallbackPolicy>::Success(UseNeutral);
         if (name == "omit")
-            return Result<UiLocalizedAssetFallbackPolicy>::Success(UiLocalizedAssetFallbackPolicy::Omit);
+            return Result<UiLocalizedAssetFallbackPolicy>::Success(Omit);
         return Failed<UiLocalizedAssetFallbackPolicy>(UiErrors::LocalizedAssetReferenceInvalid);
     }
 
@@ -89,8 +91,8 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     }
 
     [[nodiscard]] OrderedJson EncodeLocalizedArgumentValue(const UiLocalizedArgumentValue &value) {
-        return std::visit([](const auto &typed) -> OrderedJson {
-            using Value = std::decay_t<decltype(typed)>;
+        return std::visit([]<typename T>(const T &typed) {
+            using Value = std::decay_t<T>;
             if constexpr (std::is_same_v<Value, std::int64_t>)
                 return OrderedJson{{"type", "int"}, {"value", typed}};
             if constexpr (std::is_same_v<Value, double>)
@@ -227,7 +229,7 @@ namespace Horo::Runtime::Ui::SerializationInternal {
                 return Result<UiLocalizedText>::Failure(name.ErrorValue());
             if (argumentValue.HasError())
                 return Result<UiLocalizedText>::Failure(argumentValue.ErrorValue());
-            arguments.push_back({std::move(name).Value(), std::move(argumentValue).Value()});
+            arguments.emplace_back(std::move(name).Value(), std::move(argumentValue).Value());
         }
         auto key = UiMessageKey::Create(namespaceId.Value(), localKey.Value());
         if (key.HasError())
@@ -280,11 +282,10 @@ namespace Horo::Runtime::Ui::SerializationInternal {
                 return Result<UiLocalizedAssetReference>::Failure(locale.ErrorValue());
             if (asset.HasError() || asset.Value().ToString() != assetText.Value())
                 return Failed<UiLocalizedAssetReference>(UiErrors::LocalizedAssetReferenceInvalid);
-            variants.push_back({std::move(locale).Value(), asset.Value()});
+            variants.emplace_back(std::move(locale).Value(), asset.Value());
         }
         std::optional<Assets::AssetId> neutralAsset;
-        const auto &encodedNeutral = value.at("neutralAsset");
-        if (!encodedNeutral.is_null()) {
+        if (const auto &encodedNeutral = value.at("neutralAsset"); !encodedNeutral.is_null()) {
             auto neutralText = ReadLocalizedString(encodedNeutral, limits.maximumTextBytes, UiErrors::LocalizedAssetReferenceInvalid);
             if (neutralText.HasError())
                 return Result<UiLocalizedAssetReference>::Failure(neutralText.ErrorValue());

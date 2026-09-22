@@ -59,6 +59,48 @@ namespace Horo::Runtime::Ui {
             REQUIRE(text.Value().FailurePolicy() == UiLocalizedTextFailurePolicy::UseFallback);
         }
 
+        TEST_CASE("Runtime UI localization normalizes BCP 47 script, region, and extension segments",
+                  "[runtime_ui][localization][locale]") {
+            REQUIRE(UiLocaleTag::Parse("zh-hant-tw").Value().Value() == "zh-Hant-TW");
+            REQUIRE(UiLocaleTag::Parse("en-latn-001").Value().Value() == "en-Latn-001");
+            REQUIRE(UiLocaleTag::Parse("en-x-private").Value().Value() == "en-x-private");
+            REQUIRE(UiLocaleTag::Parse("de-419").Value().Value() == "de-419");
+
+            REQUIRE(UiLocaleTag::Parse("en--US").HasError());
+            REQUIRE(UiLocaleTag::Parse("e-US").HasError());
+            REQUIRE(UiLocaleTag{"EN-us"}.IsValid() == false);
+        }
+
+        TEST_CASE("Runtime UI localized text validates every closed argument value", "[runtime_ui][localization][arguments]") {
+            const auto key = UiMessageKey::Create("game", "typed_values").Value();
+            const auto text = UiLocalizedText::Create(key,
+                                                      std::vector<UiLocalizedArgument>{{"integer", std::int64_t{-7}},
+                                                                                       {"number", 2.5},
+                                                                                       {"boolean", true},
+                                                                                       {"date", UiLocalizedDateTime{-10}},
+                                                                                       {"duration", UiLocalizedDuration{25}},
+                                                                                       {"enum", UiLocalizedStableEnum{3, 4}},
+                                                                                       {"text", std::string{"display"}},
+                                                                                       {"shortcut", UiLocalizedShortcut{2, 65}}},
+                                                      {}, UiLocalizedTextFailurePolicy::UseSafePlaceholder);
+            REQUIRE(text.HasValue());
+            REQUIRE(text.Value().FindArgument("missing") == nullptr);
+            REQUIRE(std::get<UiLocalizedDateTime>(text.Value().FindArgument("date")->value).unixMilliseconds == -10);
+            REQUIRE(std::get<UiLocalizedShortcut>(text.Value().FindArgument("shortcut")->value).key == 65);
+
+            REQUIRE(
+                UiLocalizedText::Create(key, std::vector<UiLocalizedArgument>{{"bad", UiLocalizedDuration{-1}}}, "fallback").HasError());
+            REQUIRE(UiLocalizedText::Create(key, std::vector<UiLocalizedArgument>{{"bad", UiLocalizedStableEnum{0, 1}}}, "fallback")
+                        .HasError());
+            REQUIRE(
+                UiLocalizedText::Create(key, std::vector<UiLocalizedArgument>{{"bad", UiLocalizedShortcut{0, 0}}}, "fallback").HasError());
+            REQUIRE(
+                UiLocalizedText::Create(key, std::vector<UiLocalizedArgument>{{"bad", std::string{static_cast<char>(0xC3)}}}, "fallback")
+                    .HasError());
+            REQUIRE(UiLocalizedText::Create(key, std::vector<UiLocalizedArgument>{{"bad:name", true}}, "fallback").HasError());
+            REQUIRE(UiLocalizedText::Create(key, {}, "", static_cast<UiLocalizedTextFailurePolicy>(255)).HasError());
+        }
+
         TEST_CASE("Runtime UI localization rejects malformed and unbounded references", "[runtime_ui][localization][edge]") {
             REQUIRE(UiLocaleTag::Parse("tr_tr").HasError());
             REQUIRE(UiMessageKey::Create("game:invalid", "menu.title").HasError());
@@ -113,6 +155,57 @@ namespace Horo::Runtime::Ui {
             REQUIRE(reference.Dependencies()[1].asset == Asset(2));
             REQUIRE(reference.Dependencies()[2].asset == Asset(3));
             REQUIRE(reference.Dependencies()[2].required);
+        }
+
+        TEST_CASE("Runtime UI localized asset policies reject invalid combinations and preserve strengthened dependencies",
+                  "[runtime_ui][localization][asset]") {
+            const auto neutralOnly =
+                UiLocalizedAssetReference::Create(Type("core.texture"), UiLocalizedAssetFallbackPolicy::UseNeutral, {}, Asset(10));
+            REQUIRE(neutralOnly.HasValue());
+            REQUIRE(neutralOnly.Value().Dependencies().size() == 1);
+            REQUIRE(neutralOnly.Value().Dependencies()[0].required);
+
+            const auto strengthened =
+                UiLocalizedAssetReference::Create(Type("core.texture"), UiLocalizedAssetFallbackPolicy::UseNeutral,
+                                                  std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(11)}}, Asset(11));
+            REQUIRE(strengthened.HasValue());
+            REQUIRE(strengthened.Value().Dependencies().size() == 1);
+            REQUIRE(strengthened.Value().Dependencies()[0].required);
+
+            REQUIRE(UiLocalizedAssetReference::Create(Type("core.texture"), UiLocalizedAssetFallbackPolicy::Required, {}, std::nullopt)
+                        .HasError());
+            REQUIRE(
+                UiLocalizedAssetReference::Create(Type("core.texture"), UiLocalizedAssetFallbackPolicy::Omit, {}, std::nullopt).HasError());
+            REQUIRE(UiLocalizedAssetReference::Create(Type("core.texture"), UiLocalizedAssetFallbackPolicy::UseNeutral,
+                                                      std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(12)}})
+                        .HasError());
+            REQUIRE(UiLocalizedAssetReference::Create(Type("core.texture"), UiLocalizedAssetFallbackPolicy::Required,
+                                                      std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(12)}}, Asset(13))
+                        .HasError());
+            REQUIRE(UiLocalizedAssetReference::Create(Assets::AssetTypeId{}, UiLocalizedAssetFallbackPolicy::Required,
+                                                      std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(12)}})
+                        .HasError());
+            REQUIRE(UiLocalizedAssetReference::Create(Type("core.texture"), static_cast<UiLocalizedAssetFallbackPolicy>(255),
+                                                      std::vector<UiLocalizedAssetVariant>{{Locale("en-US"), Asset(12)}})
+                        .HasError());
+        }
+
+        TEST_CASE("Runtime UI localized asset resolution rejects malformed fallback evidence", "[runtime_ui][localization][asset]") {
+            const auto reference = LocalizedAsset();
+            const std::array emptyChain<UiLocaleTag, 0>{};
+            REQUIRE(reference.Resolve(emptyChain).HasError());
+
+            const std::array duplicateChain{Locale("en-US"), Locale("en-US")};
+            REQUIRE(reference.Resolve(duplicateChain).HasError());
+
+            const UiLocaleTag invalid{"not normalized"};
+            const std::array invalidChain{invalid};
+            REQUIRE(reference.Resolve(invalidChain).HasError());
+
+            std::vector<UiLocaleTag> oversized(MaximumUiLocaleFallbackChain + 1, Locale("en-US"));
+            REQUIRE(reference.Resolve(oversized).HasError());
+            REQUIRE(UiLocaleFallbackChain::Create({}).HasError());
+            REQUIRE(UiLocaleFallbackChain::Create({invalid}).HasError());
         }
 
         TEST_CASE("Runtime UI documents atomically enumerate localized asset dependencies", "[runtime_ui][localization][document]") {
