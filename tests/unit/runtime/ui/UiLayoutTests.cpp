@@ -564,5 +564,326 @@ namespace Horo::Runtime::Ui {
             REQUIRE(engine.Update(tree, Request(evaluator.Value(), 3)).Value().Get(image).Value().measurement.desired ==
                     UiLogicalExtent{40, 20});
         }
+
+        TEST_CASE("Declarative stack supports horizontal direction, gap and cross alignment", "[runtime_ui][layout][containers]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            rootStyle.container.gap = 10;
+            rootStyle.container.crossAlignment = UiLayoutAlignment::Center;
+            UiLayoutStyle itemStyle;
+            itemStyle.width = UiLength::Dip(100);
+            itemStyle.height = UiLength::Dip(20);
+            const std::array descriptors{Descriptor(root, rootStyle), Descriptor(first, itemStyle), Descriptor(second, itemStyle),
+                                         Descriptor(third, itemStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            auto snapshot = Engine().Update(tree, Request(evaluator.Value()));
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox == UiLogicalRect{{0, 374}, {100, 20}});
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox == UiLogicalRect{{110, 374}, {100, 20}});
+            REQUIRE(snapshot.Value().Get(third).Value().arrangement.contentBox == UiLogicalRect{{220, 374}, {100, 20}});
+        }
+
+        TEST_CASE("Declarative stack preserves authored order for odd free space", "[runtime_ui][layout][containers][distribution]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            UiLayoutStyle itemStyle;
+            itemStyle.width = UiLength::Dip(10);
+            itemStyle.height = UiLength::Dip(10);
+            const std::array descriptors{Descriptor(root, rootStyle), Descriptor(first, itemStyle), Descriptor(second, itemStyle),
+                                         Descriptor(third, itemStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            auto request = Request(evaluator.Value());
+            request.rootConstraints.maximum = {35, 100};
+            request.rootContent.extent = {35, 100};
+
+            auto snapshot = Engine().Update(tree, request);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox.origin.x == 0);
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox.origin.x == 10);
+        }
+
+        TEST_CASE("Declarative stack centers odd free space with ties to even", "[runtime_ui][layout][containers][distribution]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle rootStyle;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            rootStyle.container.mainAlignment = UiLayoutDistribution::Center;
+            UiLayoutStyle itemStyle;
+            itemStyle.width = UiLength::Dip(10);
+            itemStyle.height = UiLength::Dip(10);
+            const std::array centeredDescriptors{Descriptor(root, rootStyle), Descriptor(first, itemStyle), Descriptor(second, itemStyle),
+                                                 Descriptor(third, itemStyle)};
+            auto centeredEvaluator = UiDeclarativeLayoutEvaluator::Create(centeredDescriptors);
+            REQUIRE(centeredEvaluator.HasValue());
+            auto centeredRequest = Request(centeredEvaluator.Value(), 2);
+            centeredRequest.rootConstraints.maximum = {35, 100};
+            centeredRequest.rootContent.extent = {35, 100};
+            const auto snapshot = Engine().Update(tree, centeredRequest);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox.origin.x == 2);
+        }
+
+        TEST_CASE("Declarative stack distributes SpaceBetween remainders in authored order",
+                  "[runtime_ui][layout][containers][distribution]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle rootStyle;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            rootStyle.container.mainAlignment = UiLayoutDistribution::SpaceBetween;
+            UiLayoutStyle itemStyle;
+            itemStyle.width = UiLength::Dip(10);
+            itemStyle.height = UiLength::Dip(10);
+            const std::array betweenDescriptors{Descriptor(root, rootStyle), Descriptor(first, itemStyle), Descriptor(second, itemStyle),
+                                                Descriptor(third, itemStyle)};
+            auto betweenEvaluator = UiDeclarativeLayoutEvaluator::Create(betweenDescriptors);
+            REQUIRE(betweenEvaluator.HasValue());
+            auto betweenRequest = Request(betweenEvaluator.Value(), 3);
+            betweenRequest.rootConstraints.maximum = {35, 100};
+            betweenRequest.rootContent.extent = {35, 100};
+            const auto snapshot = Engine().Update(tree, betweenRequest);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox.origin.x == 12);
+            REQUIRE(snapshot.Value().Get(third).Value().arrangement.contentBox.origin.x == 25);
+        }
+
+        TEST_CASE("Declarative stack distributes SpaceEvenly remainders in authored order",
+                  "[runtime_ui][layout][containers][distribution]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle rootStyle;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            rootStyle.container.mainAlignment = UiLayoutDistribution::SpaceEvenly;
+            UiLayoutStyle itemStyle;
+            itemStyle.width = UiLength::Dip(10);
+            itemStyle.height = UiLength::Dip(10);
+            const std::array evenlyDescriptors{Descriptor(root, rootStyle), Descriptor(first, itemStyle), Descriptor(second, itemStyle),
+                                               Descriptor(third, itemStyle)};
+            auto evenlyEvaluator = UiDeclarativeLayoutEvaluator::Create(evenlyDescriptors);
+            REQUIRE(evenlyEvaluator.HasValue());
+            auto evenlyRequest = Request(evenlyEvaluator.Value(), 4);
+            evenlyRequest.rootConstraints.maximum = {35, 100};
+            evenlyRequest.rootContent.extent = {35, 100};
+            const auto snapshot = Engine().Update(tree, evenlyRequest);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox.origin.x == 1);
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox.origin.x == 12);
+            REQUIRE(snapshot.Value().Get(third).Value().arrangement.contentBox.origin.x == 24);
+        }
+
+        TEST_CASE("Declarative flex distributes positive space and wraps deterministically", "[runtime_ui][layout][containers][flex]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.kind = UiLayoutContainerKind::Flex;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            rootStyle.container.gap = 10;
+            UiLayoutStyle flexItem;
+            flexItem.width = UiLength::Dip(100);
+            flexItem.height = UiLength::Dip(20);
+            flexItem.flex.grow = 1;
+            const std::array descriptors{Descriptor(root, rootStyle), Descriptor(first, flexItem), Descriptor(second, flexItem),
+                                         Descriptor(third, flexItem)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            auto request = Request(evaluator.Value());
+            request.rootConstraints.maximum.width = 700;
+            request.rootContent.extent.width = 700;
+            auto snapshot = Engine().Update(tree, request);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox.extent.width == 226);
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox.origin.x == 236);
+            REQUIRE(snapshot.Value().Get(third).Value().arrangement.contentBox.origin.x == 473);
+
+            rootStyle.container.wrap = UiLayoutWrapMode::Wrap;
+            flexItem.flex.grow = 0;
+            flexItem.width = UiLength::Dip(300);
+            const std::array wrappedDescriptors{Descriptor(root, rootStyle), Descriptor(first, flexItem), Descriptor(second, flexItem),
+                                                Descriptor(third, flexItem)};
+            auto wrappedEvaluator = UiDeclarativeLayoutEvaluator::Create(wrappedDescriptors);
+            REQUIRE(wrappedEvaluator.HasValue());
+            auto wrappedRequest = Request(wrappedEvaluator.Value());
+            wrappedRequest.rootConstraints.maximum.width = 700;
+            wrappedRequest.rootContent.extent.width = 700;
+            auto wrapped = Engine().Update(tree, wrappedRequest);
+            REQUIRE(wrapped.HasValue());
+            REQUIRE(wrapped.Value().Get(third).Value().arrangement.contentBox == UiLogicalRect{{0, 30}, {300, 20}});
+        }
+
+        TEST_CASE("Declarative containers arrange nested container descendants", "[runtime_ui][layout][containers][nested]") {
+            auto tree = Tree();
+            const auto root = tree.Root().Value().handle;
+            const auto container = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto nested = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto sibling = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.kind = UiLayoutContainerKind::Flex;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            rootStyle.container.gap = 10;
+            UiLayoutStyle containerStyle;
+            containerStyle.width = UiLength::Dip(300);
+            containerStyle.height = UiLength::Dip(100);
+            containerStyle.container.kind = UiLayoutContainerKind::Flex;
+            containerStyle.container.orientation = UiLayoutOrientation::Vertical;
+            containerStyle.container.gap = 5;
+            UiLayoutStyle nestedStyle;
+            nestedStyle.width = UiLength::Dip(80);
+            nestedStyle.height = UiLength::Dip(20);
+            UiLayoutStyle siblingStyle;
+            siblingStyle.width = UiLength::Dip(50);
+            siblingStyle.height = UiLength::Dip(20);
+
+            const std::array descriptors{Descriptor(root, rootStyle), Descriptor(container, containerStyle),
+                                         Descriptor(nested, nestedStyle), Descriptor(sibling, siblingStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            auto request = Request(evaluator.Value());
+            request.rootConstraints.maximum = {500, 200};
+            request.rootContent.extent = {500, 200};
+            auto snapshot = Engine().Update(tree, request);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(container).Value().arrangement.contentBox == UiLogicalRect{{0, 0}, {300, 100}});
+            REQUIRE(snapshot.Value().Get(nested).Value().arrangement.contentBox == UiLogicalRect{{0, 0}, {80, 20}});
+            REQUIRE(snapshot.Value().Get(sibling).Value().arrangement.contentBox == UiLogicalRect{{310, 0}, {50, 20}});
+        }
+
+        TEST_CASE("Declarative flex clamps negative and positive space to min and max bounds",
+                  "[runtime_ui][layout][containers][flex][bounds]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto outOfFlow = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.kind = UiLayoutContainerKind::Flex;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            UiLayoutStyle firstStyle;
+            firstStyle.width = UiLength::Dip(200);
+            firstStyle.height = UiLength::Dip(20);
+            firstStyle.minimumWidth = UiLength::Dip(150);
+            firstStyle.flex.shrink = 1;
+            UiLayoutStyle secondStyle = firstStyle;
+            secondStyle.minimumWidth = UiLength::Dip(0);
+            UiLayoutStyle outOfFlowStyle;
+            outOfFlowStyle.positioning = UiLayoutPositioning::Absolute;
+            const std::array shrinkDescriptors{Descriptor(root, rootStyle), Descriptor(first, firstStyle), Descriptor(second, secondStyle),
+                                               Descriptor(outOfFlow, outOfFlowStyle)};
+            auto shrinkEvaluator = UiDeclarativeLayoutEvaluator::Create(shrinkDescriptors);
+            REQUIRE(shrinkEvaluator.HasValue());
+            auto shrinkRequest = Request(shrinkEvaluator.Value());
+            shrinkRequest.rootConstraints.maximum = {250, 100};
+            shrinkRequest.rootContent.extent = {250, 100};
+            auto shrinkSnapshot = Engine().Update(tree, shrinkRequest);
+            REQUIRE(shrinkSnapshot.HasValue());
+            REQUIRE(shrinkSnapshot.Value().Get(first).Value().arrangement.contentBox == UiLogicalRect{{0, 0}, {150, 20}});
+            REQUIRE(shrinkSnapshot.Value().Get(second).Value().arrangement.contentBox == UiLogicalRect{{150, 0}, {100, 20}});
+
+            firstStyle.width = UiLength::Dip(100);
+            firstStyle.minimumWidth = UiLength::Dip(0);
+            firstStyle.maximumWidth = UiLength::Dip(120);
+            firstStyle.flex.grow = 1;
+            secondStyle = firstStyle;
+            secondStyle.maximumWidth = UiLength::Auto();
+            const std::array growDescriptors{Descriptor(root, rootStyle), Descriptor(first, firstStyle), Descriptor(second, secondStyle),
+                                             Descriptor(outOfFlow, outOfFlowStyle)};
+            auto growEvaluator = UiDeclarativeLayoutEvaluator::Create(growDescriptors);
+            REQUIRE(growEvaluator.HasValue());
+            auto growRequest = Request(growEvaluator.Value());
+            growRequest.rootConstraints.maximum = {500, 100};
+            growRequest.rootContent.extent = {500, 100};
+            auto growSnapshot = Engine().Update(tree, growRequest);
+            REQUIRE(growSnapshot.HasValue());
+            REQUIRE(growSnapshot.Value().Get(first).Value().arrangement.contentBox == UiLogicalRect{{0, 0}, {120, 20}});
+            REQUIRE(growSnapshot.Value().Get(second).Value().arrangement.contentBox == UiLogicalRect{{120, 0}, {380, 20}});
+        }
+
+        TEST_CASE("Declarative flex safely redistributes extreme weighted shrink", "[runtime_ui][layout][containers][flex][bounds]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto outOfFlow = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.kind = UiLayoutContainerKind::Flex;
+            rootStyle.container.orientation = UiLayoutOrientation::Horizontal;
+            UiLayoutStyle firstStyle;
+            firstStyle.width = UiLength::Dip(200'000'000);
+            firstStyle.height = UiLength::Dip(20);
+            firstStyle.flex.shrink = MaximumUiFlexFactor;
+            UiLayoutStyle secondStyle = firstStyle;
+            UiLayoutStyle outOfFlowStyle;
+            outOfFlowStyle.positioning = UiLayoutPositioning::Absolute;
+            const std::array descriptors{Descriptor(root, rootStyle), Descriptor(first, firstStyle), Descriptor(second, secondStyle),
+                                         Descriptor(outOfFlow, outOfFlowStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            auto request = Request(evaluator.Value());
+            request.rootConstraints.maximum = {100'000'000, 100};
+            request.rootContent.extent = {100'000'000, 100};
+            auto snapshot = Engine().Update(tree, request);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox == UiLogicalRect{{0, 0}, {50'000'000, 20}});
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox == UiLogicalRect{{50'000'000, 0}, {50'000'000, 20}});
+        }
+
+        TEST_CASE("Declarative grid resolves fractional columns, auto rows, gaps and authored placement",
+                  "[runtime_ui][layout][containers][grid]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+
+            UiLayoutStyle rootStyle;
+            rootStyle.container.kind = UiLayoutContainerKind::Grid;
+            rootStyle.container.gap = 10;
+            rootStyle.container.columnCount = 2;
+            rootStyle.container.columns[0] = UiGridTrack::Fraction(1);
+            rootStyle.container.columns[1] = UiGridTrack::Fraction(1);
+            UiLayoutStyle itemStyle;
+            itemStyle.width = UiLength::Dip(40);
+            itemStyle.height = UiLength::Dip(20);
+            const std::array descriptors{Descriptor(root, rootStyle), Descriptor(first, itemStyle), Descriptor(second, itemStyle),
+                                         Descriptor(third, itemStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            auto request = Request(evaluator.Value());
+            request.rootConstraints.maximum = {210, 200};
+            request.rootContent.extent = {210, 200};
+            auto snapshot = Engine().Update(tree, request);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Get(first).Value().arrangement.contentBox == UiLogicalRect{{0, 0}, {40, 20}});
+            REQUIRE(snapshot.Value().Get(second).Value().arrangement.contentBox == UiLogicalRect{{110, 0}, {40, 20}});
+            REQUIRE(snapshot.Value().Get(third).Value().arrangement.contentBox == UiLogicalRect{{0, 30}, {40, 20}});
+        }
     }  // namespace
 }  // namespace Horo::Runtime::Ui

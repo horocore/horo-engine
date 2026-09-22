@@ -3,8 +3,8 @@
 #include "UiLayoutSemanticsInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
-#include <limits>
 #include <memory>
 
 namespace Horo::Runtime::Ui::UiErrors {
@@ -124,13 +124,6 @@ namespace Horo::Runtime::Ui {
             return found != descriptors.end() && found->element == element ? std::to_address(found) : nullptr;
         }
 
-        [[nodiscard]] Result<std::int64_t> CheckedAdd(const std::int64_t left, const std::int64_t right) {
-            if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
-                (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right))
-                return Failure<std::int64_t>(UiErrors::LayoutInvalid);
-            return Result<std::int64_t>::Success(left + right);
-        }
-
         [[nodiscard]] Result<UiLogicalExtent> FinalIntrinsicExtent(const std::int64_t width, const std::int64_t height) {
             const auto checkedWidth = CheckedCast(width);
             const auto checkedHeight = CheckedCast(std::max<std::int64_t>(0, height));
@@ -139,40 +132,200 @@ namespace Horo::Runtime::Ui {
             return Result<UiLogicalExtent>::Success({checkedWidth.Value(), checkedHeight.Value()});
         }
 
-        [[nodiscard]] Result<IntrinsicState> AggregateIntrinsic(const std::span<const UiLayoutElementDescriptor> descriptors,
-                                                                const std::span<const UiLayoutChildMeasurement> children) {
-            if (children.empty())
-                return Result<IntrinsicState>::Success({{}, false});
-            std::int64_t width{};
-            std::int64_t height{};
+        struct GridIntrinsicState final {
+            std::array<std::int64_t, MaximumUiGridTracks> columns{};
+            std::array<std::int64_t, MaximumUiGridTracks> rows{};
+            std::uint16_t columnCount{};
+            std::uint16_t rowCount{};
+            std::size_t flowIndex{};
             bool available{};
             bool dependsOnParentWidth{};
             bool dependsOnParentHeight{};
+        };
+
+        [[nodiscard]] Result<GridIntrinsicState> InitializeGridIntrinsicState(const UiLayoutContainerStyle &container,
+                                                                              const UiLayoutConstraints &constraints,
+                                                                              const std::size_t childCount) {
+            GridIntrinsicState state{};
+            state.columnCount = std::max<std::uint16_t>(1, container.columnCount);
+            state.rowCount = container.rowCount;
+            if (state.rowCount == 0)
+                state.rowCount = static_cast<std::uint16_t>(
+                    std::min<std::size_t>(MaximumUiGridTracks, (childCount + state.columnCount - 1) / state.columnCount));
+            if (state.columnCount > MaximumUiGridTracks || state.rowCount > MaximumUiGridTracks)
+                return Failure<GridIntrinsicState>(UiErrors::LayoutInvalid);
+            for (std::uint16_t index = 0; index < state.columnCount; ++index) {
+                const auto &track = container.columns[index];
+                if (track.kind == UiGridTrackKind::Dip)
+                    state.columns[index] = track.value;
+                else if (track.kind == UiGridTrackKind::Percent) {
+                    const auto resolved =
+                        MultiplyRatio(constraints.maximum.width, static_cast<std::uint32_t>(track.value), UiScalarUnitsPerDip);
+                    if (resolved.HasError())
+                        return Result<GridIntrinsicState>::Failure(resolved.ErrorValue());
+                    state.columns[index] = resolved.Value();
+                }
+            }
+            for (std::uint16_t index = 0; index < state.rowCount; ++index) {
+                const auto &track = container.rows[index];
+                if (track.kind == UiGridTrackKind::Dip)
+                    state.rows[index] = track.value;
+                else if (track.kind == UiGridTrackKind::Percent) {
+                    const auto resolved =
+                        MultiplyRatio(constraints.maximum.height, static_cast<std::uint32_t>(track.value), UiScalarUnitsPerDip);
+                    if (resolved.HasError())
+                        return Result<GridIntrinsicState>::Failure(resolved.ErrorValue());
+                    state.rows[index] = resolved.Value();
+                }
+            }
+            return Result<GridIntrinsicState>::Success(state);
+        }
+
+        [[nodiscard]] Result<void> AccumulateGridIntrinsicChild(const UiLayoutChildMeasurement &child,
+                                                                const UiLayoutElementDescriptor &descriptor, GridIntrinsicState &state) {
+            const auto placement = descriptor.style.grid;
+            const auto column = placement.column == 0 ? static_cast<std::uint16_t>(state.flowIndex % state.columnCount)
+                                                      : static_cast<std::uint16_t>(placement.column - 1);
+            const auto row = placement.row == 0 ? static_cast<std::uint16_t>(state.flowIndex / state.columnCount)
+                                                : static_cast<std::uint16_t>(placement.row - 1);
+            if (column >= state.columnCount || row >= state.rowCount || placement.columnSpan > state.columnCount - column ||
+                placement.rowSpan > state.rowCount - row)
+                return Failure(UiErrors::LayoutConstraintConflict);
+            const auto &margin = descriptor.style.margin;
+            const auto outerWidth =
+                std::max<std::int64_t>(0, static_cast<std::int64_t>(child.measurement.desired.width) + margin.left + margin.right);
+            const auto outerHeight =
+                std::max<std::int64_t>(0, static_cast<std::int64_t>(child.measurement.desired.height) + margin.top + margin.bottom);
+            if (placement.columnSpan == 1)
+                state.columns[column] = std::max(state.columns[column], outerWidth);
+            if (placement.rowSpan == 1)
+                state.rows[row] = std::max(state.rows[row], outerHeight);
+            ++state.flowIndex;
+            state.available = true;
+            state.dependsOnParentWidth = state.dependsOnParentWidth || child.measurement.dependsOnParentWidth;
+            state.dependsOnParentHeight = state.dependsOnParentHeight || child.measurement.dependsOnParentHeight;
+            return Result<void>::Success();
+        }
+
+        struct FlowIntrinsicState final {
+            std::int64_t availableMain{};
+            std::int64_t gap{};
+            std::int64_t totalMain{};
+            std::int64_t totalCross{};
+            std::int64_t lineMain{};
+            std::int64_t lineCross{};
+            std::uint32_t lineItems{};
+            bool horizontal{};
+            bool wrapping{};
+            bool available{};
+            bool dependsOnParentWidth{};
+            bool dependsOnParentHeight{};
+        };
+
+        [[nodiscard]] Result<void> AccumulateFlowIntrinsicChild(const UiLayoutChildMeasurement &child,
+                                                                const UiLayoutElementDescriptor &descriptor, FlowIntrinsicState &state) {
+            const auto &margin = descriptor.style.margin;
+            const auto outerWidth =
+                std::max<std::int64_t>(0, static_cast<std::int64_t>(child.measurement.desired.width) + margin.left + margin.right);
+            const auto outerHeight =
+                std::max<std::int64_t>(0, static_cast<std::int64_t>(child.measurement.desired.height) + margin.top + margin.bottom);
+            const auto outerMain = state.horizontal ? outerWidth : outerHeight;
+            const auto outerCross = state.horizontal ? outerHeight : outerWidth;
+            if (const auto withGap = state.lineItems == 0 ? outerMain : state.lineMain + state.gap + outerMain;
+                state.wrapping && state.lineItems > 0 && state.availableMain > 0 && withGap > state.availableMain) {
+                state.totalMain = std::max(state.totalMain, state.lineMain);
+                if (state.totalCross > 0)
+                    state.totalCross += state.gap;
+                state.totalCross += state.lineCross;
+                state.lineMain = outerMain;
+                state.lineCross = outerCross;
+                state.lineItems = 1;
+            } else {
+                state.lineMain = withGap;
+                state.lineCross = std::max(state.lineCross, outerCross);
+                ++state.lineItems;
+            }
+            state.available = true;
+            state.dependsOnParentWidth = state.dependsOnParentWidth || child.measurement.dependsOnParentWidth;
+            state.dependsOnParentHeight = state.dependsOnParentHeight || child.measurement.dependsOnParentHeight;
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<IntrinsicState> AggregateGridIntrinsic(const std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                    const UiLayoutStyle &parentStyle,
+                                                                    const UiLayoutConstraints &constraints,
+                                                                    const std::span<const UiLayoutChildMeasurement> children) {
+            const auto &container = parentStyle.container;
+            auto grid = InitializeGridIntrinsicState(container, constraints, children.size());
+            if (grid.HasError())
+                return Result<IntrinsicState>::Failure(grid.ErrorValue());
+            auto state = std::move(grid).Value();
             for (const auto &child : children) {
                 const auto *descriptor = FindDescriptor(descriptors, child.element);
                 if (descriptor == nullptr)
                     return Failure<IntrinsicState>(UiErrors::LayoutSourceStale);
                 if (IsOutOfFlow(descriptor->style))
                     continue;
-
-                const auto &margin = descriptor->style.margin;
-                const auto outerWidth =
-                    std::max<std::int64_t>(0, static_cast<std::int64_t>(child.measurement.desired.width) + margin.left + margin.right);
-                const auto outerHeight = static_cast<std::int64_t>(child.measurement.desired.height) + margin.top + margin.bottom;
-                const auto nextHeight = CheckedAdd(height, outerHeight);
-                if (nextHeight.HasError())
-                    return Result<IntrinsicState>::Failure(nextHeight.ErrorValue());
-                available = true;
-                dependsOnParentWidth = dependsOnParentWidth || child.measurement.dependsOnParentWidth;
-                dependsOnParentHeight = dependsOnParentHeight || child.measurement.dependsOnParentHeight;
-                width = std::max(width, outerWidth);
-                height = nextHeight.Value();
+                const auto result = AccumulateGridIntrinsicChild(child, *descriptor, state);
+                if (result.HasError())
+                    return Result<IntrinsicState>::Failure(result.ErrorValue());
             }
+            std::int64_t width{};
+            std::int64_t height{};
+            for (std::uint16_t index = 0; index < state.columnCount; ++index)
+                width += state.columns[index];
+            for (std::uint16_t index = 0; index < state.rowCount; ++index)
+                height += state.rows[index];
+            if (state.columnCount > 1)
+                width += static_cast<std::int64_t>(state.columnCount - 1) * container.gap;
+            if (state.rowCount > 1)
+                height += static_cast<std::int64_t>(state.rowCount - 1) * container.gap;
             const auto extent = FinalIntrinsicExtent(width, height);
             if (extent.HasError())
                 return Result<IntrinsicState>::Failure(extent.ErrorValue());
             return Result<IntrinsicState>::Success(
-                {{extent.Value(), NoUiBaseline, dependsOnParentWidth, dependsOnParentHeight}, available});
+                {{extent.Value(), NoUiBaseline, state.dependsOnParentWidth, state.dependsOnParentHeight}, state.available});
+        }
+
+        [[nodiscard]] Result<IntrinsicState> AggregateStackOrFlexIntrinsic(const std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                           const UiLayoutStyle &parentStyle,
+                                                                           const UiLayoutConstraints &constraints,
+                                                                           const std::span<const UiLayoutChildMeasurement> children) {
+            const bool horizontal = parentStyle.container.orientation == UiLayoutOrientation::Horizontal;
+            FlowIntrinsicState state{.availableMain = horizontal ? constraints.maximum.width : constraints.maximum.height,
+                                     .gap = parentStyle.container.gap,
+                                     .horizontal = horizontal,
+                                     .wrapping = parentStyle.container.wrap == UiLayoutWrapMode::Wrap};
+            for (const auto &child : children) {
+                const auto *descriptor = FindDescriptor(descriptors, child.element);
+                if (descriptor == nullptr)
+                    return Failure<IntrinsicState>(UiErrors::LayoutSourceStale);
+                if (IsOutOfFlow(descriptor->style))
+                    continue;
+                const auto result = AccumulateFlowIntrinsicChild(child, *descriptor, state);
+                if (result.HasError())
+                    return Result<IntrinsicState>::Failure(result.ErrorValue());
+            }
+            if (state.lineItems > 0) {
+                state.totalMain = std::max(state.totalMain, state.lineMain);
+                state.totalCross += state.lineCross;
+            }
+            const auto extent = horizontal ? FinalIntrinsicExtent(state.totalMain, state.totalCross)
+                                           : FinalIntrinsicExtent(state.totalCross, state.totalMain);
+            if (extent.HasError())
+                return Result<IntrinsicState>::Failure(extent.ErrorValue());
+            return Result<IntrinsicState>::Success(
+                {{extent.Value(), NoUiBaseline, state.dependsOnParentWidth, state.dependsOnParentHeight}, state.available});
+        }
+
+        [[nodiscard]] Result<IntrinsicState> AggregateIntrinsic(const std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                const UiLayoutStyle &parentStyle, const UiLayoutConstraints &constraints,
+                                                                const std::span<const UiLayoutChildMeasurement> children) {
+            if (children.empty())
+                return Result<IntrinsicState>::Success({{}, false});
+            return parentStyle.container.kind == UiLayoutContainerKind::Grid
+                       ? AggregateGridIntrinsic(descriptors, parentStyle, constraints, children)
+                       : AggregateStackOrFlexIntrinsic(descriptors, parentStyle, constraints, children);
         }
 
         [[nodiscard]] Result<IntrinsicState> ResolveIntrinsic(const std::span<const UiLayoutElementDescriptor> descriptors,
@@ -181,7 +334,7 @@ namespace Horo::Runtime::Ui {
                                                               const std::span<const UiLayoutChildMeasurement> children,
                                                               const UiLayoutIntrinsicProvider *provider, const UiElementHandle element) {
             if (source.kind == UiLayoutIntrinsicKind::None)
-                return AggregateIntrinsic(descriptors, children);
+                return AggregateIntrinsic(descriptors, style, constraints, children);
             const UiLayoutIntrinsicRequest request{element, constraints.maximum, IsExplicit(style.width), IsExplicit(style.height)};
             auto provided = QueryIntrinsic(source, request, provider);
             if (provided.HasError()) {
@@ -362,6 +515,6 @@ namespace Horo::Runtime::Ui {
         const auto *descriptor = Find(request.element);
         if (descriptor == nullptr)
             return Failure<UiLayoutArrangement>(UiErrors::LayoutSourceStale);
-        return LayoutInternal::Arrange(descriptors_, *descriptor, request, childContent);
+        return LayoutInternal::Arrange(descriptors_, *descriptor, request, childContent, request.childScratch, request.lineScratch);
     }
 }  // namespace Horo::Runtime::Ui

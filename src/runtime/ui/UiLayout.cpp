@@ -69,6 +69,8 @@ namespace Horo::Runtime::Ui {
         std::vector<UiLayoutConstraints> constraintScratch;
         std::vector<UiLayoutChildMeasurement> measurementScratch;
         std::vector<UiLogicalRect> rectangleScratch;
+        std::vector<UiLayoutChildPlacement> placementScratch;
+        std::vector<UiLayoutLine> lineScratch;
         std::vector<UiLayoutInvalidation> invalidations;
         std::vector<std::shared_ptr<UiLayoutSnapshot::Storage>> slots;
         std::shared_ptr<UiLayoutSnapshot::Storage> current;
@@ -87,6 +89,8 @@ namespace Horo::Runtime::Ui {
             constraintScratch.reserve(source.elementCapacity);
             measurementScratch.reserve(source.elementCapacity);
             rectangleScratch.reserve(source.elementCapacity);
+            placementScratch.reserve(source.elementCapacity);
+            lineScratch.reserve(source.elementCapacity);
             invalidations.reserve(source.invalidationCapacity);
             slots.reserve(source.concurrentSnapshots);
             for (std::uint32_t index = 0; index < source.concurrentSnapshots; ++index)
@@ -263,8 +267,15 @@ namespace Horo::Runtime::Ui {
                 if (!node.arrangeDirty)
                     continue;
                 rectangleScratch.resize(node.childCount);
-                const UiLayoutArrangeRequest arrangeRequest{node.element, node.assignedContent, node.measurement, ChildMeasurements(node),
-                                                            remeasure};
+                placementScratch.resize(node.childCount);
+                lineScratch.resize(node.childCount);
+                const UiLayoutArrangeRequest arrangeRequest{node.element,
+                                                            node.assignedContent,
+                                                            node.measurement,
+                                                            ChildMeasurements(node),
+                                                            remeasure,
+                                                            std::span{placementScratch},
+                                                            std::span{lineScratch}};
                 const auto arranged = request.evaluator->Arrange(arrangeRequest, rectangleScratch);
                 if (arranged.HasError())
                     return Result<bool>::Failure(arranged.ErrorValue());

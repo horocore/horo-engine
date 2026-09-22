@@ -29,6 +29,41 @@ namespace Horo::Runtime::Ui {
             return positioning == Flow || positioning == Absolute;
         }
 
+        [[nodiscard]] bool IsContainerKind(const UiLayoutContainerKind kind) noexcept {
+            using enum UiLayoutContainerKind;
+            return kind == Stack || kind == Flex || kind == Grid;
+        }
+
+        [[nodiscard]] bool IsOrientation(const UiLayoutOrientation orientation) noexcept {
+            using enum UiLayoutOrientation;
+            return orientation == Horizontal || orientation == Vertical;
+        }
+
+        [[nodiscard]] bool IsWrapMode(const UiLayoutWrapMode wrap) noexcept {
+            using enum UiLayoutWrapMode;
+            return wrap == NoWrap || wrap == Wrap;
+        }
+
+        [[nodiscard]] bool IsDistribution(const UiLayoutDistribution distribution) noexcept {
+            using enum UiLayoutDistribution;
+            return distribution == Start || distribution == Center || distribution == End || distribution == SpaceBetween ||
+                   distribution == SpaceAround || distribution == SpaceEvenly;
+        }
+
+        [[nodiscard]] bool IsGridTrackKind(const UiGridTrackKind kind) noexcept {
+            using enum UiGridTrackKind;
+            return kind == Auto || kind == Dip || kind == Percent || kind == Fraction;
+        }
+
+        [[nodiscard]] bool IsValidGridTracks(const std::array<UiGridTrack, MaximumUiGridTracks> &tracks,
+                                             const std::uint16_t count) noexcept {
+            for (std::uint16_t index = 0; index < count; ++index) {
+                if (!tracks[index].IsValid())
+                    return false;
+            }
+            return true;
+        }
+
         [[nodiscard]] bool IsIntrinsicKind(const UiLayoutIntrinsicKind kind) noexcept {
             using enum UiLayoutIntrinsicKind;
             return kind == None || kind == Text || kind == Image;
@@ -251,7 +286,45 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiLayoutStyle::IsValid */
     bool UiLayoutStyle::IsValid() const noexcept {
-        return IsValidSizeConstraints(*this) && IsValidBoxModel(*this) && IsValidPlacement(*this);
+        return IsValidSizeConstraints(*this) && IsValidBoxModel(*this) && IsValidPlacement(*this) && container.IsValid() &&
+               flex.IsValid() && grid.IsValid();
+    }
+
+    /** @copydoc UiGridTrack::IsValid */
+    bool UiGridTrack::IsValid() const noexcept {
+        if (!IsGridTrackKind(kind) || !IsMinimumLength(minimum) || !IsMaximumLength(maximum))
+            return false;
+        using enum UiGridTrackKind;
+        switch (kind) {
+            case Auto:
+                return value == 0;
+            case Dip:
+                return value >= 0;
+            case Percent:
+                return value >= 0 && value <= UiScalarUnitsPerDip;
+            case Fraction:
+                return value > 0;
+        }
+        return false;
+    }
+
+    /** @copydoc UiLayoutFlex::IsValid */
+    bool UiLayoutFlex::IsValid() const noexcept {
+        return grow <= MaximumUiFlexFactor && shrink <= MaximumUiFlexFactor;
+    }
+
+    /** @copydoc UiLayoutGridPlacement::IsValid */
+    bool UiLayoutGridPlacement::IsValid() const noexcept {
+        return column <= MaximumUiGridTracks && row <= MaximumUiGridTracks && columnSpan > 0 && columnSpan <= MaximumUiGridTracks &&
+               rowSpan > 0 && rowSpan <= MaximumUiGridTracks;
+    }
+
+    /** @copydoc UiLayoutContainerStyle::IsValid */
+    bool UiLayoutContainerStyle::IsValid() const noexcept {
+        if (!IsContainerKind(kind) || !IsOrientation(orientation) || !IsWrapMode(wrap) || !IsDistribution(mainAlignment) ||
+            !IsAlignment(crossAlignment) || gap < 0 || columnCount > MaximumUiGridTracks || rowCount > MaximumUiGridTracks)
+            return false;
+        return IsValidGridTracks(columns, columnCount) && IsValidGridTracks(rows, rowCount);
     }
 
     /** @copydoc UiLayoutIntrinsicSource::IsValid */
