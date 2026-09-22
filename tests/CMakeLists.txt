@@ -1566,6 +1566,13 @@ add_executable(HoroRuntimeUiLayoutTests
 )
 target_compile_features(HoroRuntimeUiLayoutTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiLayoutClippingTests
+        unit/runtime/ui/UiLayoutClippingTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiLayoutClippingTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiLayoutClippingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiLayoutClippingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiTextLayoutTests
         unit/runtime/ui/UiTextLayoutTests.cpp
         support/AllocationProbe.cpp
@@ -2355,6 +2362,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiRenderSnapshotTests
         HoroRuntimeUiRenderGeometryTests
         HoroRuntimeUiLayoutTests
+        HoroRuntimeUiLayoutClippingTests
         HoroRuntimeUiTextLayoutTests
         HoroRuntimeUiGlyphAtlasTests
         HoroRuntimeUiStyleTests

@@ -106,6 +106,14 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor LayoutSnapshotStorageExhausted;
     /** @brief The layout engine is retiring or stopped and rejects new work. */
     extern const ErrorCodeDescriptor LayoutLifecycleUnavailable;
+    /** @brief A clip policy, clip chain, scroll extent, or reveal calculation is malformed. */
+    extern const ErrorCodeDescriptor LayoutClipInvalid;
+    /** @brief A clip/scroll request belongs to another layout owner or generation. */
+    extern const ErrorCodeDescriptor LayoutClipSourceStale;
+    /** @brief Every preallocated immutable clip/scroll snapshot slot remains leased. */
+    extern const ErrorCodeDescriptor LayoutClipSnapshotStorageExhausted;
+    /** @brief The clip/scroll projector is retiring or stopped and rejects new work. */
+    extern const ErrorCodeDescriptor LayoutClipLifecycleUnavailable;
     /** @brief A shaped text view, layout policy, or positioned result is malformed. */
     extern const ErrorCodeDescriptor TextLayoutInputInvalid;
     /** @brief Text layout source identity or revision evidence is stale or foreign. */

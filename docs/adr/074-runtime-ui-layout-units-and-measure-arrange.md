@@ -34,8 +34,10 @@ This decision defines that subset. RUI-002.2 owns canvas reference-resolution an
 scale-profile selection. RUI-002.7 owns the typed safe-area, DPI, UI/font-scale,
 and downstream pixel-snap presentation inputs that produce the logical viewport
 consumed here. RUI-002.3 owns the incremental engine and cache implementation.
-Later tickets may add container features, clipping/scrolling, and RTL, but they
-must preserve this precedence and snapshot model or explicitly revise this ADR.
+RUI-002.6 specializes the post-arrange overflow projection for clipping, bounded
+scrolling and focus-driven bring-into-view requests. Later tickets may add
+container features and RTL, but they must preserve this precedence and snapshot
+model or explicitly revise this ADR.
 
 ## Decision
 
@@ -196,10 +198,13 @@ intrinsic dependency, the engine may perform one bounded remeasure of the affect
 subtree. A second change is a diagnosed non-convergent layout failure. Unbounded
 fixed-point iteration is forbidden.
 
-The published snapshot contains the complete tree's boxes, baselines, overflow,
-clip chain, paint order and hit-test geometry plus every source revision. A failed
-candidate publishes nothing and ADR-073 retains the previous active/last-good
-generation according to required/optional policy.
+The published layout snapshot contains the complete tree's boxes, baselines,
+overflow and hit-test geometry plus every source revision. A correlated
+`UiLayoutClipSnapshot` derives the immutable clip chain, scroll extents and
+bring-into-view projection from that exact layout generation; render and input
+consume it without recomputing layout. A failed candidate publishes nothing and
+ADR-073 retains the previous active/last-good generation according to
+required/optional policy.
 
 ### 7. Flow, flex and grid share the same size precedence
 

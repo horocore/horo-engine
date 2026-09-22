@@ -316,6 +316,29 @@ generation according to ADR-073. Gameplay code does not mutate boxes or render
 quads directly. Physical pixel snapping is downstream derived render data and
 cannot feed back into logical layout, scroll extent or serialized state.
 
+### Clipping, Scroll Content And Bring-Into-View
+
+Runtime UI derives clipping and scrolling from the exact immutable layout
+generation through `UiLayoutClipEngine`. Each arranged element supplies one typed
+overflow policy: `Visible` contributes no clip, `Clip` establishes a descendant
+clip, and `Scroll` establishes both a clip and a bounded scroll record. Scroll
+content is the checked union of the arranged content box and descendant overflow;
+signed offsets are clamped to the resulting leading/trailing bounds before they
+are projected into canvas-space translations.
+
+The published projection stores ancestor-ordered clip nodes, source-aligned
+element records and immutable scroll records. Nested scroll translations are
+accumulated in tree order, and a focus graph's generation-fenced
+`UiFocusBringIntoViewRequest` is resolved from the innermost scroll ancestor
+outward. Each intermediate offset is clamped before the next ancestor is
+evaluated, so a failed or stale request cannot partially publish nested state.
+The focus graph emits the request but never calls layout or scroll code.
+
+Projection publication uses bounded preallocated snapshot slots and retains the
+last-good immutable generation when source, capacity or lifecycle validation
+fails. Input and rendering consume the published projection; neither recomputes
+clip chains, scroll extents or reveal offsets.
+
 ## Panel And Frame Contract
 
 `Panel` and `Frame` are core UI building blocks.

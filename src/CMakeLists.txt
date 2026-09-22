@@ -315,6 +315,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiControlStateMachine.cpp
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
+        runtime/ui/UiLayoutClipping.cpp
+        runtime/ui/UiLayoutClippingEngine.cpp
         runtime/ui/UiLayoutSemantics.cpp
         runtime/ui/UiLayoutArrangement.cpp
         runtime/ui/UiLayoutTypes.cpp
