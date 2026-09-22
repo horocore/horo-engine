@@ -192,7 +192,7 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Runtime UI localized asset resolution rejects malformed fallback evidence", "[runtime_ui][localization][asset]") {
             const auto reference = LocalizedAsset();
-            const std::array emptyChain<UiLocaleTag, 0>{};
+            const std::array<UiLocaleTag, 0> emptyChain{};
             REQUIRE(reference.Resolve(emptyChain).HasError());
 
             const std::array duplicateChain{Locale("en-US"), Locale("en-US")};
