@@ -150,9 +150,9 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + glyphAtlas.size() + pointerCapture.size() + actions.size() +
-                                                        bindings.size() + controls.size() + focus.size() + renderGeometry.size() +
-                                                        accessibility.size()>
+            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + glyphAtlas.size() + pointerCapture.size() +
+                                                        actions.size() + bindings.size() + controls.size() + focus.size() +
+                                                        renderGeometry.size() + accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
             output = std::ranges::copy(textLayout, output).out;
