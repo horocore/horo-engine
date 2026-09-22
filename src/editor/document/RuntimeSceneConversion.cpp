@@ -297,8 +297,7 @@ namespace Horo::Editor {
                 auto parsed = ParsePrefabNavigationAgent(payload);
                 if (parsed.HasError())
                     return Result<void>::Failure(parsed.ErrorValue());
-                auto component = std::move(parsed).Value();
-                if (component.enabled)
+                if (auto component = std::move(parsed).Value(); component.enabled)
                     components.navigationAgent = std::move(component);
                 return Result<void>::Success();
             }
@@ -308,8 +307,7 @@ namespace Horo::Editor {
                 auto parsed = ParsePrefabAiAgent(payload);
                 if (parsed.HasError())
                     return Result<void>::Failure(parsed.ErrorValue());
-                auto component = std::move(parsed).Value();
-                if (component.enabled) {
+                if (auto component = std::move(parsed).Value(); component.enabled) {
                     const auto remapped = AI::AgentId::Create(sceneObject.value);
                     if (remapped.HasError())
                         return Result<void>::Failure(remapped.ErrorValue());
@@ -324,8 +322,7 @@ namespace Horo::Editor {
                 auto parsed = ParsePrefabAiController(payload);
                 if (parsed.HasError())
                     return Result<void>::Failure(parsed.ErrorValue());
-                auto component = std::move(parsed).Value();
-                if (component.enabled)
+                if (auto component = std::move(parsed).Value(); component.enabled)
                     components.aiController = std::move(component);
                 return Result<void>::Success();
             }
