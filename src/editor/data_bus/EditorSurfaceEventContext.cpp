@@ -116,8 +116,8 @@ namespace Horo::Editor {
         }
 
         template <typename EventT>
-        [[nodiscard]] bool AddTyped(const EditorEventKind kind, const std::shared_ptr<Slot> &slot,
-                                     const std::weak_ptr<State> &weakState, const EditorSurfaceEventHandler &handler) {
+        [[nodiscard]] bool AddTyped(const EditorEventKind kind, const std::shared_ptr<Slot> &slot, const std::weak_ptr<State> &weakState,
+                                    const EditorSurfaceEventHandler &handler) {
             slot->busSubscription = editorEvents.Subscribe<EventT>([weakState, kind, handler](const EventT &event) {
                 if (const auto state = weakState.lock())
                     state->Deliver(kind, EditorSurfaceEventPayload{event}, handler);

@@ -170,8 +170,7 @@ namespace Horo {
         }
 
         const auto policy = [&] {
-            if (const auto it = m_state->config.eventBackpressurePolicies.find(type);
-                it != m_state->config.eventBackpressurePolicies.end())
+            if (const auto it = m_state->config.eventBackpressurePolicies.find(type); it != m_state->config.eventBackpressurePolicies.end())
                 return it->second;
             return m_state->config.defaultBackpressurePolicy;
         }();
@@ -186,7 +185,8 @@ namespace Horo {
                     LOG_TRACE(m_state->config.logCategory, "async drop event=%s reason=queue_full policy=drop_oldest", name.data());
                     break;
                 case BackpressurePolicy::Merge: {
-                    const auto existing = std::ranges::find_if(m_state->queued.rbegin(), m_state->queued.rend(), [type](const State::Queued &queued) {
+                    const auto existing =
+                        std::ranges::find_if(m_state->queued.rbegin(), m_state->queued.rend(), [type](const State::Queued &queued) {
                         return queued.type == type;
                     });
                     if (existing == m_state->queued.rend()) {

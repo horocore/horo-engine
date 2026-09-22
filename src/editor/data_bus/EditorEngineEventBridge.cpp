@@ -182,9 +182,9 @@ namespace Horo::Editor {
         });
         m_state->subscriptions[4] =
             m_state->engineEvents.Subscribe<Horo::OperationStoreRevisionChangedEvent>([weakState](const auto &event) {
-                if (const auto state = weakState.lock())
-                    state->Forward(event);
-            });
+            if (const auto state = weakState.lock())
+                state->Forward(event);
+        });
         m_state->subscriptions[5] = m_state->engineEvents.Subscribe<Horo::ConsoleLogEvent>([weakState](const auto &event) {
             if (const auto state = weakState.lock())
                 state->Forward(event);

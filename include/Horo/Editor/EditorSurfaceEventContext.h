@@ -17,8 +17,8 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <variant>
 #include <utility>
+#include <variant>
 
 namespace Horo::Editor {
     /** @brief Copied activation identity used to attribute a surface's subscriptions. */
@@ -68,35 +68,41 @@ namespace Horo::Editor {
         template <> struct EditorSurfaceEventTraits<EditorProjectOpenedEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::ProjectOpened;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorProjectClosedEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::ProjectClosed;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorAssetImportedEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::AssetImported;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorAssetReloadedEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::AssetReloaded;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorOperationStoreRevisionChangedEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::OperationStoreRevisionChanged;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorConsoleLogEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::ConsoleLog;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorMetricsChangedEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::MetricsChanged;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorProfilerCaptureStateEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::ProfilerCaptureState;
         };
+
         template <> struct EditorSurfaceEventTraits<EditorMcpToolInvocationEvent> {
             static constexpr EditorEventKind Kind = EditorEventKind::McpToolInvocation;
         };
 
         template <typename EventT>
-        concept EditorSurfaceEventType = requires {
-            EditorSurfaceEventTraits<EventT>::Kind;
-        };
+        concept EditorSurfaceEventType = requires { EditorSurfaceEventTraits<EventT>::Kind; };
     }  // namespace detail
 
     /**
@@ -115,8 +121,7 @@ namespace Horo::Editor {
          * @param limits Bounded subscription policy.
          */
         EditorSurfaceEventContext(EditorDataBus &editorEvents, EditorSurfaceProviderOwnership provider,
-                                  std::span<const EditorEventKind> allowedEvents,
-                                  EditorSurfaceEventContextLimits limits = {});
+                                  std::span<const EditorEventKind> allowedEvents, EditorSurfaceEventContextLimits limits = {});
         /** @brief Revokes all subscriptions before the provider context is released. */
         ~EditorSurfaceEventContext();
         EditorSurfaceEventContext(const EditorSurfaceEventContext &) = delete;
@@ -141,14 +146,13 @@ namespace Horo::Editor {
          * @param handler Typed callback.
          * @return A revocable token or a typed admission failure.
          */
-        template <detail::EditorSurfaceEventType EventT, typename Handler>
-        [[nodiscard]] Result<Subscription> Subscribe(Handler &&handler) {
+        template <detail::EditorSurfaceEventType EventT, typename Handler> [[nodiscard]] Result<Subscription> Subscribe(Handler &&handler) {
             auto callback = std::forward<Handler>(handler);
             return Subscribe(detail::EditorSurfaceEventTraits<EventT>::Kind,
                              [callback = std::move(callback)](const EditorSurfaceEvent &event) mutable {
-                                 if (const auto *payload = std::get_if<EventT>(&event.payload))
-                                     callback(*payload);
-                             });
+                if (const auto *payload = std::get_if<EventT>(&event.payload))
+                    callback(*payload);
+            });
         }
 
         /** @brief Revokes all provider subscriptions and makes this context permanently closed. */

@@ -1,5 +1,5 @@
-#include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/EditorSurfaceEventContext.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/ProcessEvents.h"
@@ -135,7 +135,8 @@ namespace {
         auto first = bus.Subscribe<EnginePingEvent>([&handled](const EnginePingEvent &) {
             ++handled;
         });
-        auto second = bus.Subscribe<EditorSelectionInvalidatedEvent>([](const EditorSelectionInvalidatedEvent &) {});
+        auto second = bus.Subscribe<EditorSelectionInvalidatedEvent>([](const EditorSelectionInvalidatedEvent &) {
+        });
 
         REQUIRE(static_cast<bool>(first));
         CHECK_FALSE(static_cast<bool>(second));
@@ -246,10 +247,12 @@ namespace {
         auto token = std::move(tokenResult).Value();
         CHECK(context.Stats().activeSubscriptions == 1);
 
-        const auto overCapacity = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([](const auto &) {});
+        const auto overCapacity = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([](const auto &) {
+        });
         REQUIRE(overCapacity.HasError());
         CHECK(overCapacity.ErrorValue().code.Value() == "surface_event_subscription_limit");
-        const auto notAllowed = context.Subscribe<Horo::Editor::EditorProjectOpenedEvent>([](const auto &) {});
+        const auto notAllowed = context.Subscribe<Horo::Editor::EditorProjectOpenedEvent>([](const auto &) {
+        });
         REQUIRE(notAllowed.HasError());
         CHECK(notAllowed.ErrorValue().code.Value() == "surface_event_not_allowed");
 
@@ -262,7 +265,8 @@ namespace {
         CHECK(delivered == 1);
         token.Reset();
 
-        const auto afterClose = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([](const auto &) {});
+        const auto afterClose = context.Subscribe<Horo::Editor::EditorAssetImportedEvent>([](const auto &) {
+        });
         REQUIRE(afterClose.HasError());
         CHECK(afterClose.ErrorValue().code.Value() == "surface_event_context_closed");
     }
