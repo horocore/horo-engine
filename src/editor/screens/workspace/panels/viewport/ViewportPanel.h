@@ -11,9 +11,7 @@
 namespace Horo::Editor {
     class ViewportPanel final : public IWorkspacePanel {
     public:
-        [[nodiscard]] std::string GetId() const override {
-            return "horo.viewport";
-        }
+        [[nodiscard]] std::string GetId() const override;
 
         [[nodiscard]] std::string GetDisplayName() const override;
         [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override;
