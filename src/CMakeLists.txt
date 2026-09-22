@@ -666,6 +666,7 @@ target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics Hor
 
 add_library(HoroAI STATIC
         runtime/ai/api/AIErrors.cpp
+        runtime/ai/api/AISceneComponents.cpp
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/BehaviorTree.cpp
@@ -679,6 +680,14 @@ add_library(HoroAI STATIC
 add_library(HoroEngine::AI ALIAS HoroAI)
 target_compile_features(HoroAI PUBLIC cxx_std_20)
 target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
+
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
+
+add_library(HoroAISceneIntegration STATIC
+        runtime/ai/integration/AISceneActivation.cpp)
+add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
+target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
 
 add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationCompression.cpp
@@ -1199,6 +1208,7 @@ target_include_directories(HoroEditorModel
 target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::AI
         HoroEngine::Prefab
         HoroEngine::PrefabAuthoring
         HoroEngine::SceneModel

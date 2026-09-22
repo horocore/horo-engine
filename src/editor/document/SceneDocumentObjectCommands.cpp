@@ -229,6 +229,17 @@ namespace Horo::Editor {
 
         const SceneObjectId id{m_document.m_nextObjectId};
         SceneObjectComponentSet duplicatedComponents = source->components;
+        std::optional<std::uint64_t> duplicatedAiAgentId;
+        if (duplicatedComponents.aiAgent) {
+            if (m_document.m_nextAiAgentId == 0)
+                return Result<SceneCommandResult>::Failure(
+                    MakeError(AI::AIErrors::AgentCapacityExceeded, "AI agent identities are exhausted for this document session."));
+            const auto duplicateAgent = AI::AgentId::Create(m_document.m_nextAiAgentId);
+            if (duplicateAgent.HasError())
+                return Result<SceneCommandResult>::Failure(duplicateAgent.ErrorValue());
+            duplicatedComponents.aiAgent->agent = duplicateAgent.Value();
+            duplicatedAiAgentId = m_document.m_nextAiAgentId;
+        }
         if (Result<void> regenerated =
                 RegenerateDuplicatedNavigationIdentities(duplicatedComponents, m_document.m_nextNavigationSurfaceId,
                                                          m_document.m_nextNavigationRegionId, m_document.m_nextNavigationModifierId,
@@ -239,6 +250,10 @@ namespace Horo::Editor {
             navigation.HasError()) {
             return Result<SceneCommandResult>::Failure(navigation.ErrorValue());
         }
+        if (Result<void> ai = ValidateSceneAiComponents(m_document.m_objects, std::nullopt, &duplicatedComponents); ai.HasError())
+            return Result<SceneCommandResult>::Failure(ai.ErrorValue());
+        if (duplicatedAiAgentId.has_value())
+            m_document.m_nextAiAgentId = *duplicatedAiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicatedAiAgentId + 1;
         for (Gameplay::BehaviorComponent &behavior : duplicatedComponents.behaviors)
             behavior.instanceId = Gameplay::BehaviorInstanceId{m_document.m_nextBehaviorInstanceId++};
         ObserveNavigationComponentIds(duplicatedComponents, m_document.m_nextNavigationSurfaceId, m_document.m_nextNavigationRegionId,

@@ -344,6 +344,7 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AIErrors.h
+    Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h
     Horo/AI/AITaskLifecycle.h
     Horo/AI/BehaviorTree.h
@@ -352,6 +353,9 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
+)
+horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
+    Horo/AI/AISceneActivation.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h

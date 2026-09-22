@@ -32,6 +32,7 @@ horo_allow_target_dependencies(TARGET HoroPhysicsModel DEPENDENCIES HoroFoundati
 horo_allow_target_dependencies(TARGET HoroPhysics DEPENDENCIES HoroFoundation HoroAssets HoroPhysicsModel)
 horo_allow_target_dependencies(TARGET HoroPhysicsSceneIntegration DEPENDENCIES HoroPhysics HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroAI DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroAISceneIntegration DEPENDENCIES HoroAI HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroAnimationApi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroPCG DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroVfxApi DEPENDENCIES HoroFoundation HoroAssets)
@@ -53,7 +54,7 @@ horo_allow_target_dependencies(TARGET HoroInputSdl DEPENDENCIES HoroInput)
 
 horo_allow_target_dependencies(TARGET HoroGameplayApi DEPENDENCIES HoroFoundation HoroNetworkApi)
 horo_allow_target_dependencies(TARGET HoroRuntimeScene
-    DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroGameplayApi HoroNavigationApi HoroPhysicsModel HoroSceneModel HoroRuntimeUi)
+    DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroGameplayApi HoroNavigationApi HoroPhysicsModel HoroSceneModel HoroRuntimeUi HoroAI)
 horo_allow_target_dependencies(TARGET HoroGameplayRuntime
     DEPENDENCIES HoroGameplayApi HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroGameplayModuleHost
@@ -74,7 +75,7 @@ horo_allow_target_dependencies(TARGET HoroRenderMetal)
 horo_allow_target_dependencies(TARGET HoroRenderVulkan)
 
 horo_allow_target_dependencies(TARGET HoroEditorModel
-    DEPENDENCIES HoroFoundation HoroPrefab HoroPrefabAuthoring HoroSceneModel HoroRuntimeScene)
+    DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroSceneModel HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroEditorViewportScene DEPENDENCIES HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroEditorViewportResources
     DEPENDENCIES HoroEditorViewportScene HoroRenderFrontend)

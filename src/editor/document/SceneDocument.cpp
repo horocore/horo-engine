@@ -215,15 +215,19 @@ namespace Horo::Editor {
         std::uint64_t nextNavigationRegionId = 1;
         std::uint64_t nextNavigationModifierId = 1;
         std::uint64_t nextNavigationLinkId = 1;
+        std::uint64_t maximumAiAgentId = 0;
         for (const SceneObjectSnapshot &object : objects) {
             if (Result<void> valid = ValidateLoadedObject(object, objectIds, behaviorIds, maximumObjectId, maximumBehaviorId);
                 valid.HasError())
                 return valid;
             ObserveNavigationComponentIds(object.components, nextNavigationSurfaceId, nextNavigationRegionId, nextNavigationModifierId,
                                           nextNavigationLinkId);
+            if (object.components.aiAgent)
+                maximumAiAgentId = std::max(maximumAiAgentId, object.components.aiAgent->agent.Value());
         }
         if (maximumObjectId == std::numeric_limits<std::uint64_t>::max() ||
-            maximumBehaviorId == std::numeric_limits<std::uint64_t>::max()) {
+            maximumBehaviorId == std::numeric_limits<std::uint64_t>::max() ||
+            maximumAiAgentId == std::numeric_limits<std::uint64_t>::max()) {
             return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::ObjectNotFound,
                                                            "Loaded scene object IDs must leave space for future authored objects."));
         }
@@ -232,6 +236,8 @@ namespace Horo::Editor {
             return validHierarchy;
         if (Result<void> navigation = ValidateSceneNavigationComponents(objects); navigation.HasError())
             return navigation;
+        if (Result<void> ai = ValidateSceneAiComponents(objects); ai.HasError())
+            return ai;
         auto maximumPrefabInstanceId = ValidateLoadedPrefabInstances(prefabInstances, objectIds);
         if (maximumPrefabInstanceId.HasError())
             return Result<void>::Failure(maximumPrefabInstanceId.ErrorValue());
@@ -247,6 +253,7 @@ namespace Horo::Editor {
         m_nextNavigationRegionId = nextNavigationRegionId;
         m_nextNavigationModifierId = nextNavigationModifierId;
         m_nextNavigationLinkId = nextNavigationLinkId;
+        m_nextAiAgentId = maximumAiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : maximumAiAgentId + 1;
         m_nextObjectId = maximumObjectId + 1;
         m_nextBehaviorInstanceId = maximumBehaviorId + 1;
         m_nextPrefabInstanceId = maximumPrefabInstanceId.Value() + 1;

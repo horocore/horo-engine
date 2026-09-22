@@ -5,6 +5,7 @@
  * @brief Private shared implementation types for the scene document command units.
  */
 
+#include "Horo/AI/AIErrors.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
@@ -255,6 +256,10 @@ namespace Horo::Editor::SceneDocumentDetail {
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
         if (components.navigationAgent && Runtime::ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::AgentDescriptorInvalid));
+        if (components.aiAgent && AI::ValidateAiAgentComponent(*components.aiAgent).HasError())
+            return Result<void>::Failure(MakeError(AI::AIErrors::SceneComponentInvalid));
+        if (components.aiController && AI::ValidateAiControllerComponent(*components.aiController).HasError())
+            return Result<void>::Failure(MakeError(AI::AIErrors::SceneComponentInvalid));
         if (components.camera.has_value()) {
             const Runtime::CameraComponent &camera = *components.camera;
             if (!IsValidCameraComponent(camera)) {
@@ -307,6 +312,31 @@ namespace Horo::Editor::SceneDocumentDetail {
         if (appended != nullptr)
             collect(*appended);
         return Runtime::ValidateNavigationSceneComponentViews(views);
+    }
+
+    [[nodiscard]] inline Result<void> ValidateSceneAiComponents(
+        const std::span<const SceneObjectSnapshot> objects,
+        const std::optional<std::pair<SceneObjectId, const SceneObjectComponentSet *>> replacement = std::nullopt,
+        const SceneObjectComponentSet *appended = nullptr) {
+        std::vector<AI::AiSceneComponentView> views;
+        views.reserve(objects.size() + (appended != nullptr ? 1U : 0U));
+        const auto collect = [&](const SceneObjectComponentSet &components) {
+            views.push_back({.agent = components.aiAgent ? &*components.aiAgent : nullptr,
+                             .controller = components.aiController ? &*components.aiController : nullptr});
+        };
+        for (const SceneObjectSnapshot &object : objects)
+            collect(replacement && replacement->first == object.id ? *replacement->second : object.components);
+        if (appended != nullptr)
+            collect(*appended);
+        return AI::ValidateAiSceneComponents(views);
+    }
+
+    inline void ObserveAiAgentId(const SceneObjectComponentSet &components, std::uint64_t &nextAgentId) noexcept {
+        if (!components.aiAgent)
+            return;
+        if (nextAgentId != 0 && components.aiAgent->agent.Value() >= nextAgentId)
+            nextAgentId =
+                components.aiAgent->agent.Value() == std::numeric_limits<std::uint64_t>::max() ? 0 : components.aiAgent->agent.Value() + 1;
     }
 
     inline void ObserveNavigationComponentIds(const SceneObjectComponentSet &components, std::uint64_t &nextSurfaceId,
