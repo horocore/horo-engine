@@ -82,6 +82,18 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor LayoutSnapshotStorageExhausted;
     /** @brief The layout engine is retiring or stopped and rejects new work. */
     extern const ErrorCodeDescriptor LayoutLifecycleUnavailable;
+    /** @brief A shaped text view, layout policy, or positioned result is malformed. */
+    extern const ErrorCodeDescriptor TextLayoutInputInvalid;
+    /** @brief Text layout source identity or revision evidence is stale or foreign. */
+    extern const ErrorCodeDescriptor TextLayoutSourceStale;
+    /** @brief Text layout output exceeds its preallocated source, line, glyph, or run bound. */
+    extern const ErrorCodeDescriptor TextLayoutCapacityExceeded;
+    /** @brief A required pre-shaped ellipsis view is absent or malformed. */
+    extern const ErrorCodeDescriptor TextLayoutEllipsisInvalid;
+    /** @brief Every preallocated immutable text-layout result slot remains leased. */
+    extern const ErrorCodeDescriptor TextLayoutStorageExhausted;
+    /** @brief The text-layout engine is closed and rejects new layout work. */
+    extern const ErrorCodeDescriptor TextLayoutLifecycleUnavailable;
     /** @brief A style schema, value, or resolver request is malformed. */
     extern const ErrorCodeDescriptor StyleInvalid;
     /** @brief A style asset, class, token, or property repeats a stable identity. */

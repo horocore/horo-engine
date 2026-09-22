@@ -310,6 +310,12 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutTypes.cpp
+        runtime/ui/UiTextLayoutErrors.cpp
+        runtime/ui/UiTextLayout.cpp
+        runtime/ui/UiTextLayoutOutput.cpp
+        runtime/ui/UiTextLayoutPlanning.cpp
+        runtime/ui/UiTextLayoutPublication.cpp
+        runtime/ui/UiTextLayoutTypes.cpp
         runtime/ui/UiStyle.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp

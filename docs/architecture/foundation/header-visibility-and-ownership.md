@@ -128,6 +128,17 @@ actual owning target. White-box tests that need implementation details must use 
 narrow test-private include path or an explicit internal interface rather than
 depending on production transitivity.
 
+## RUI-003.5 Migration Notes
+
+`HoroEngine::RuntimeUi` now owns the backend-neutral
+`Horo/Runtime/Ui/UiTextLayout.h` contract. Text-layout callers must link
+`HoroEngine::RuntimeUi`; the new owner-thread engine consumes borrowed shaped
+cluster evidence and publishes immutable positioned results without retaining
+source text, renderer handles, or platform state. There are no existing text
+layout callers to migrate. The generated `HoroRuntimeUiPublicHeaderConsumer`
+and focused Runtime UI text-layout tests cover the public boundary and its
+bounded wrapping, overflow, lease, and shutdown behavior.
+
 ## RUI-009.1 Migration Notes
 
 `HoroEngine::EditorServices` owns the new `Horo/Editor/UiCanvasDocument.h`
