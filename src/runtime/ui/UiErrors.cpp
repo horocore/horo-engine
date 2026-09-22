@@ -317,6 +317,42 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                          "Create a new engine for the active runtime canvas before submitting layout work.",
                                                          false,
                                                          false};
+    /** @copydoc LayoutClipInvalid */
+    const ErrorCodeDescriptor
+        LayoutClipInvalid{UiDomain,
+                          ErrorCode{"runtime_ui.layout_clip.invalid"},
+                          ErrorSeverity::Error,
+                          "The Runtime UI clipping or scrolling projection is invalid.",
+                          "Provide source-aligned overflow policies, finite arranged geometry, and bounded scroll state.",
+                          false,
+                          true};
+    /** @copydoc LayoutClipSourceStale */
+    const ErrorCodeDescriptor
+        LayoutClipSourceStale{UiDomain,
+                              ErrorCode{"runtime_ui.layout_clip.source_stale"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI clipping or scrolling source belongs to another owner or generation.",
+                              "Rebuild the projection from the exact active tree and last published layout generation.",
+                              true,
+                              true};
+    /** @copydoc LayoutClipSnapshotStorageExhausted */
+    const ErrorCodeDescriptor LayoutClipSnapshotStorageExhausted{UiDomain,
+                                                                 ErrorCode{"runtime_ui.layout_clip_snapshot.storage_exhausted"},
+                                                                 ErrorSeverity::Error,
+                                                                 "Every bounded Runtime UI clip and scroll snapshot slot is still leased.",
+                                                                 "Retire an in-flight clip projection before retrying; never overwrite or "
+                                                                 "allocate fallback storage.",
+                                                                 true,
+                                                                 true};
+    /** @copydoc LayoutClipLifecycleUnavailable */
+    const ErrorCodeDescriptor
+        LayoutClipLifecycleUnavailable{UiDomain,
+                                       ErrorCode{"runtime_ui.layout_clip.lifecycle_unavailable"},
+                                       ErrorSeverity::Error,
+                                       "The Runtime UI clipping and scrolling projector is closed.",
+                                       "Create a new projector for the active runtime canvas before submitting clip work.",
+                                       false,
+                                       true};
     /** @copydoc StyleInvalid */
     const ErrorCodeDescriptor StyleInvalid{UiDomain,
                                            ErrorCode{"runtime_ui.style.invalid"},
