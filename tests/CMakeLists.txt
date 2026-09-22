@@ -1510,6 +1510,11 @@ add_executable(HoroRuntimeUiIdentityTests
 )
 target_compile_features(HoroRuntimeUiIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiIdentityTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiImageResourceTests
+        unit/runtime/ui/UiImageResourceTests.cpp
+)
+target_compile_features(HoroRuntimeUiImageResourceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiImageResourceTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiBindingTests
         unit/runtime/ui/UiBindingTests.cpp
 )
@@ -2334,6 +2339,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveCaptureSnapshotTests
         HoroRuntimeSaveRestoreTransactionTests
         HoroRuntimeUiIdentityTests
+        HoroRuntimeUiImageResourceTests
         HoroRuntimeUiBindingTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiLocalizationTests
