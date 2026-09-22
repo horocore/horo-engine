@@ -68,8 +68,14 @@ namespace Horo::Editor {
                 .column = result.column,
             });
         }
-        if (!navigated)
+        if (!navigated) {
+            // SourceFileOpenService opens an identity before dispatching the validated
+            // result. A rejected navigation must not leave an unpresented identity in
+            // the workspace registry.
+            if (result.document.has_value() && result.document->disposition == DocumentOpenDisposition::Opened)
+                static_cast<void>(m_documentRegistry.Close(result.document->identity.instance));
             m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+        }
     }
 
     void EditorWorkspaceController::OpenDiagnosticSource(const DiagnosticSourceRequest &source) {

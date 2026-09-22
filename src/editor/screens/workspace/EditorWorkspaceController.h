@@ -3,6 +3,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -48,6 +50,7 @@ namespace Horo::Editor {
         Application::GameplayBuildService *gameplayBuilds{};
         Application::GameplayBuildEnvironment gameplayBuildEnvironment{};
         const ILocalizationService *localization{};
+        EngineDataBus *engineEvents{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -166,6 +169,7 @@ namespace Horo::Editor {
         EditorWorkspaceViewModel m_viewModel;
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
+        std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         SceneDocument m_document;
         EditorHistory m_history;
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
