@@ -280,14 +280,17 @@ target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiErrors.cpp
+        runtime/ui/UiAssetErrors.cpp
         runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
+        runtime/ui/UiRuntimeInstance.cpp
         runtime/ui/UiDocumentCook.cpp
         runtime/ui/UiAssetLoading.cpp
+        runtime/ui/UiAssetLoadingService.cpp
         runtime/ui/UiDocumentSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp

@@ -367,10 +367,20 @@ namespace Horo::Runtime::Ui {
 
     private:
         /** @brief Adopts validated cooked state into one Prepared instance. */
-        UiRuntimeInstance(UiDocumentSchemaVersion schemaVersion, UiDocumentId document, UiDocumentRevision revision,
-                          std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                          std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
-                          std::vector<std::uint8_t> payload, std::vector<UiRuntimeAsset> assets, RuntimeUiInstanceId instance) noexcept;
+        struct InitialState final {
+            UiDocumentSchemaVersion schemaVersion;
+            UiDocumentId document;
+            UiDocumentRevision revision;
+            std::vector<UiCanvasDescriptor> canvases;
+            std::vector<UiDocumentElement> elements;
+            std::vector<UiAssetDependency> dependencies;
+            std::vector<UiRouteMetadata> routes;
+            std::vector<std::uint8_t> payload;
+            std::vector<UiRuntimeAsset> assets;
+            RuntimeUiInstanceId instance;
+        };
+
+        explicit UiRuntimeInstance(InitialState initialState) noexcept;
         UiDocumentSchemaVersion schemaVersion_;                          /**< Source schema represented by this instance. */
         UiDocumentId document_;                                          /**< Stable source document identity. */
         UiDocumentRevision revision_;                                    /**< Exact cooked source revision. */

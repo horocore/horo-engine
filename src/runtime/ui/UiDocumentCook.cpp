@@ -1,8 +1,8 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
-#include <cstring>
 #include <limits>
 #include <new>
 #include <span>
@@ -15,7 +15,7 @@ namespace Horo::Runtime::Ui {
     namespace {
         constexpr std::array<std::uint8_t, 8> CookedMagic{'H', 'O', 'R', 'O', 'U', 'I', 'C', '\0'};
 
-        template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
+        template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
@@ -113,76 +113,94 @@ namespace Horo::Runtime::Ui {
             return written;
         }
 
-        [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeDocument(const UiDocument &document, const UiDocumentCookLimits &limits) {
+        [[nodiscard]] Result<void> ValidateEncodeLimits(const UiDocument &document, const UiDocumentCookLimits &limits) {
             if (!limits.IsValid() || !IsSupportedSchema(document.SchemaVersion()) || document.Canvases().size() > limits.maximumCanvases ||
                 document.Elements().size() > limits.maximumElements || document.Dependencies().size() > limits.maximumDependencies ||
                 document.Routes().size() > limits.maximumRoutes)
-                return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-
-            for (const UiDocumentElement &element : document.Elements()) {
-                if (element.properties.size() > limits.maximumPropertiesPerElement ||
-                    element.references.size() > limits.maximumReferencesPerElement)
-                    return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-                for (const UiTypedProperty &property : element.properties) {
-                    if (property.key.size() > limits.maximumTextBytes)
-                        return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-                    if (const auto *text = std::get_if<std::string>(&property.value);
-                        text != nullptr && text->size() > limits.maximumTextBytes)
-                        return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-                    if (const auto *reference = std::get_if<UiReference>(&property.value);
-                        reference != nullptr && reference->expectedAssetType.Value().size() > limits.maximumTextBytes)
-                        return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-                }
-            }
-
+                return Failure(UiErrors::CapacityExceeded);
             if (document.Canvases().size() > std::numeric_limits<std::uint32_t>::max() ||
                 document.Elements().size() > std::numeric_limits<std::uint32_t>::max() ||
                 document.Dependencies().size() > std::numeric_limits<std::uint32_t>::max() ||
                 document.Routes().size() > std::numeric_limits<std::uint32_t>::max())
-                return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
+                return Failure(UiErrors::CapacityExceeded);
+            for (const UiDocumentElement &element : document.Elements()) {
+                if (element.properties.size() > limits.maximumPropertiesPerElement ||
+                    element.references.size() > limits.maximumReferencesPerElement)
+                    return Failure(UiErrors::CapacityExceeded);
+                for (const UiTypedProperty &property : element.properties) {
+                    if (property.key.size() > limits.maximumTextBytes)
+                        return Failure(UiErrors::CapacityExceeded);
+                    if (const auto *text = std::get_if<std::string>(&property.value);
+                        text != nullptr && text->size() > limits.maximumTextBytes)
+                        return Failure(UiErrors::CapacityExceeded);
+                    if (const auto *reference = std::get_if<UiReference>(&property.value);
+                        reference != nullptr && reference->expectedAssetType.Value().size() > limits.maximumTextBytes)
+                        return Failure(UiErrors::CapacityExceeded);
+                }
+            }
+            return Result<void>::Success();
+        }
 
-            CookedWriter writer{limits.maximumPayloadBytes};
-            if (!writer.Bytes(CookedMagic) || !writer.U32(CurrentCookedUiDocumentFormatVersion) ||
-                !writer.U16(document.SchemaVersion().major) || !writer.U16(document.SchemaVersion().minor) ||
-                !WriteId(writer, document.Id()) || !writer.U64(document.Revision().Value()) ||
-                !writer.U32(static_cast<std::uint32_t>(document.Canvases().size())) ||
-                !writer.U32(static_cast<std::uint32_t>(document.Elements().size())) ||
-                !writer.U32(static_cast<std::uint32_t>(document.Dependencies().size())) ||
-                !writer.U32(static_cast<std::uint32_t>(document.Routes().size())))
-                return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
+        [[nodiscard]] bool WriteDocumentHeader(CookedWriter &writer, const UiDocument &document) {
+            return writer.Bytes(CookedMagic) && writer.U32(CurrentCookedUiDocumentFormatVersion) &&
+                   writer.U16(document.SchemaVersion().major) && writer.U16(document.SchemaVersion().minor) &&
+                   WriteId(writer, document.Id()) && writer.U64(document.Revision().Value()) &&
+                   writer.U32(static_cast<std::uint32_t>(document.Canvases().size())) &&
+                   writer.U32(static_cast<std::uint32_t>(document.Elements().size())) &&
+                   writer.U32(static_cast<std::uint32_t>(document.Dependencies().size())) &&
+                   writer.U32(static_cast<std::uint32_t>(document.Routes().size()));
+        }
 
-            for (const UiCanvasDescriptor &canvas : document.Canvases()) {
+        [[nodiscard]] bool WriteCanvases(CookedWriter &writer, const UiDocument &document) {
+            for (const UiCanvasDescriptor &canvas : document.Canvases())
                 if (!WriteId(writer, canvas.id) || !WriteId(writer, canvas.rootElement) ||
                     !writer.Byte(static_cast<std::uint8_t>(canvas.renderMode)) || !writer.U32(canvas.referenceResolution.width) ||
                     !writer.U32(canvas.referenceResolution.height) || !writer.Byte(static_cast<std::uint8_t>(canvas.scaleMode)))
-                    return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-            }
+                    return false;
+            return true;
+        }
 
+        [[nodiscard]] bool WriteElements(CookedWriter &writer, const UiDocument &document, const std::size_t maximumTextBytes) {
             for (const UiDocumentElement &element : document.Elements()) {
                 if (!WriteId(writer, element.id) || !WriteId(writer, element.parent) ||
-                    !WriteType(writer, element.type, limits.maximumTextBytes) ||
+                    !WriteType(writer, element.type, maximumTextBytes) ||
                     !writer.U32(static_cast<std::uint32_t>(element.properties.size())) ||
                     !writer.U32(static_cast<std::uint32_t>(element.references.size())))
-                    return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
+                    return false;
                 for (const UiTypedProperty &property : element.properties)
-                    if (!WriteProperty(writer, property, limits.maximumTextBytes))
-                        return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
+                    if (!WriteProperty(writer, property, maximumTextBytes))
+                        return false;
                 for (const UiReference &reference : element.references)
-                    if (!WriteReference(writer, reference, limits.maximumTextBytes))
-                        return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
+                    if (!WriteReference(writer, reference, maximumTextBytes))
+                        return false;
             }
+            return true;
+        }
 
-            for (const UiAssetDependency &dependency : document.Dependencies()) {
-                if (!WriteId(writer, dependency.asset) || !WriteType(writer, dependency.expectedType, limits.maximumTextBytes) ||
+        [[nodiscard]] bool WriteDependencies(CookedWriter &writer, const UiDocument &document, const std::size_t maximumTextBytes) {
+            for (const UiAssetDependency &dependency : document.Dependencies())
+                if (!WriteId(writer, dependency.asset) || !WriteType(writer, dependency.expectedType, maximumTextBytes) ||
                     !writer.Byte(dependency.required ? 1 : 0))
-                    return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-            }
+                    return false;
+            return true;
+        }
 
-            for (const UiRouteMetadata &route : document.Routes()) {
+        [[nodiscard]] bool WriteRoutes(CookedWriter &writer, const UiDocument &document) {
+            for (const UiRouteMetadata &route : document.Routes())
                 if (!WriteId(writer, route.id) || !writer.Byte(static_cast<std::uint8_t>(route.band)) || !writer.U32(route.order) ||
                     !writer.Byte(route.modal ? 1 : 0))
-                    return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
-            }
+                    return false;
+            return true;
+        }
+
+        [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeDocument(const UiDocument &document, const UiDocumentCookLimits &limits) {
+            if (const auto valid = ValidateEncodeLimits(document, limits); valid.HasError())
+                return Result<std::vector<std::uint8_t>>::Failure(valid.ErrorValue());
+            CookedWriter writer{limits.maximumPayloadBytes};
+            if (!WriteDocumentHeader(writer, document) || !WriteCanvases(writer, document) ||
+                !WriteElements(writer, document, limits.maximumTextBytes) ||
+                !WriteDependencies(writer, document, limits.maximumTextBytes) || !WriteRoutes(writer, document))
+                return Failure<std::vector<std::uint8_t>>(UiErrors::CapacityExceeded);
             return Result<std::vector<std::uint8_t>>::Success(std::move(writer).Take());
         }
 
@@ -193,7 +211,7 @@ namespace Horo::Runtime::Ui {
             [[nodiscard]] bool Bytes(std::span<std::uint8_t> output) {
                 if (!CanRead(output.size()))
                     return false;
-                std::memcpy(output.data(), bytes_.data() + offset_, output.size());
+                std::copy_n(bytes_.data() + offset_, output.size(), output.begin());
                 offset_ += output.size();
                 return true;
             }
@@ -331,106 +349,141 @@ namespace Horo::Runtime::Ui {
             }
         }
 
-        [[nodiscard]] Result<UiDocument> DecodeDocument(const std::span<const std::uint8_t> payload, const UiDocumentCookLimits &limits) {
+        struct CookedDocumentHeader final {
+            UiDocumentSchemaVersion schemaVersion;
+            UiDocumentId document;
+            UiDocumentRevision revision;
+            std::uint32_t canvasCount{};
+            std::uint32_t elementCount{};
+            std::uint32_t dependencyCount{};
+            std::uint32_t routeCount{};
+        };
+
+        [[nodiscard]] Result<CookedDocumentHeader> ReadDocumentHeader(CookedReader &reader, const std::span<const std::uint8_t> payload,
+                                                                      const UiDocumentCookLimits &limits) {
             if (!limits.IsValid())
-                return Failure<UiDocument>(UiErrors::CapacityExceeded);
+                return Failure<CookedDocumentHeader>(UiErrors::CapacityExceeded);
             if (payload.empty())
-                return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
+                return Failure<CookedDocumentHeader>(UiErrors::CookedPayloadMalformed);
             if (payload.size() > limits.maximumPayloadBytes)
-                return Failure<UiDocument>(UiErrors::CapacityExceeded);
-            CookedReader reader{payload};
+                return Failure<CookedDocumentHeader>(UiErrors::CapacityExceeded);
             std::array<std::uint8_t, CookedMagic.size()> magic{};
             std::uint32_t formatVersion{};
             std::uint16_t schemaMajor{}, schemaMinor{};
             SerializedUiId documentBytes{};
             std::uint64_t revisionValue{};
-            std::uint32_t canvasCount{}, elementCount{}, dependencyCount{}, routeCount{};
-            if (!reader.Bytes(magic) || magic != CookedMagic)
-                return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            if (!reader.U32(formatVersion))
-                return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
+            CookedDocumentHeader header;
+            if (!reader.Bytes(magic) || magic != CookedMagic || !reader.U32(formatVersion))
+                return Failure<CookedDocumentHeader>(UiErrors::CookedPayloadMalformed);
             if (formatVersion != CurrentCookedUiDocumentFormatVersion)
-                return Failure<UiDocument>(UiErrors::CookedFormatUnsupported);
+                return Failure<CookedDocumentHeader>(UiErrors::CookedFormatUnsupported);
             if (!reader.U16(schemaMajor) || !reader.U16(schemaMinor) || !reader.Bytes(documentBytes) || !reader.U64(revisionValue) ||
-                !reader.U32(canvasCount) || !reader.U32(elementCount) || !reader.U32(dependencyCount) || !reader.U32(routeCount))
-                return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            const UiDocumentSchemaVersion schemaVersion{schemaMajor, schemaMinor};
-            if (!IsSupportedSchema(schemaVersion))
-                return Failure<UiDocument>(UiErrors::DocumentSchemaUnsupported);
-            if (documentBytes == SerializedUiId{} || revisionValue == 0)
-                return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-            if (canvasCount > limits.maximumCanvases || elementCount > limits.maximumElements ||
-                dependencyCount > limits.maximumDependencies || routeCount > limits.maximumRoutes)
-                return Failure<UiDocument>(UiErrors::CapacityExceeded);
-            auto documentId = UiDocumentId::Create(documentBytes);
-            auto revision = UiDocumentRevision::Create(revisionValue);
-            if (documentId.HasError() || revision.HasError())
-                return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
+                !reader.U32(header.canvasCount) || !reader.U32(header.elementCount) || !reader.U32(header.dependencyCount) ||
+                !reader.U32(header.routeCount))
+                return Failure<CookedDocumentHeader>(UiErrors::CookedPayloadMalformed);
+            header.schemaVersion = {schemaMajor, schemaMinor};
+            if (!IsSupportedSchema(header.schemaVersion))
+                return Failure<CookedDocumentHeader>(UiErrors::DocumentSchemaUnsupported);
+            if (documentBytes == SerializedUiId{} || revisionValue == 0 || header.canvasCount > limits.maximumCanvases ||
+                header.elementCount > limits.maximumElements || header.dependencyCount > limits.maximumDependencies ||
+                header.routeCount > limits.maximumRoutes)
+                return Failure<CookedDocumentHeader>(documentBytes == SerializedUiId{} || revisionValue == 0
+                                                         ? UiErrors::CookedPayloadMalformed
+                                                         : UiErrors::CapacityExceeded);
+            const auto document = UiDocumentId::Create(documentBytes);
+            const auto revision = UiDocumentRevision::Create(revisionValue);
+            if (document.HasError() || revision.HasError())
+                return Failure<CookedDocumentHeader>(UiErrors::CookedPayloadMalformed);
+            header.document = document.Value();
+            header.revision = revision.Value();
+            return Result<CookedDocumentHeader>::Success(std::move(header));
+        }
 
-            UiDocumentBuilder builder{documentId.Value(), revision.Value(), schemaVersion};
-            for (std::uint32_t index = 0; index < canvasCount; ++index) {
-                auto id = ReadId<UiCanvasId>(reader, false);
-                auto root = ReadId<UiElementId>(reader, false);
-                std::uint8_t renderMode{}, scaleMode{};
-                std::uint32_t width{}, height{};
-                if (id.HasError() || root.HasError() || !reader.Byte(renderMode) || !reader.U32(width) || !reader.U32(height) ||
-                    !reader.Byte(scaleMode))
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                if (builder
-                        .AddCanvas({id.Value(),
-                                    root.Value(),
-                                    static_cast<UiRenderMode>(renderMode),
-                                    {width, height},
-                                    static_cast<UiScaleMode>(scaleMode)})
-                        .HasError())
+        [[nodiscard]] Result<UiCanvasDescriptor> ReadCanvas(CookedReader &reader) {
+            auto id = ReadId<UiCanvasId>(reader, false);
+            auto root = ReadId<UiElementId>(reader, false);
+            std::uint8_t renderMode{}, scaleMode{};
+            std::uint32_t width{}, height{};
+            if (id.HasError() || root.HasError() || !reader.Byte(renderMode) || !reader.U32(width) || !reader.U32(height) ||
+                !reader.Byte(scaleMode))
+                return Failure<UiCanvasDescriptor>(UiErrors::CookedPayloadMalformed);
+            return Result<UiCanvasDescriptor>::Success(
+                {id.Value(), root.Value(), static_cast<UiRenderMode>(renderMode), {width, height}, static_cast<UiScaleMode>(scaleMode)});
+        }
+
+        [[nodiscard]] Result<UiDocumentElement> ReadElement(CookedReader &reader, const UiDocumentCookLimits &limits) {
+            auto id = ReadId<UiElementId>(reader, false);
+            auto parent = ReadId<UiElementId>(reader);
+            auto type = ReadType(reader, limits);
+            std::uint32_t propertyCount{}, referenceCount{};
+            if (id.HasError() || parent.HasError() || type.HasError() || !reader.U32(propertyCount) || !reader.U32(referenceCount) ||
+                propertyCount > limits.maximumPropertiesPerElement || referenceCount > limits.maximumReferencesPerElement)
+                return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
+            UiDocumentElement element{id.Value(), parent.Value(), type.Value(), {}, {}};
+            element.properties.reserve(propertyCount);
+            element.references.reserve(referenceCount);
+            for (std::uint32_t index = 0; index < propertyCount; ++index) {
+                auto key = reader.Text(limits.maximumTextBytes);
+                auto value = ReadPropertyValue(reader, limits);
+                if (key.HasError() || value.HasError())
+                    return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
+                element.properties.push_back({std::move(key).Value(), std::move(value).Value()});
+            }
+            for (std::uint32_t index = 0; index < referenceCount; ++index) {
+                auto reference = ReadReference(reader, limits);
+                if (reference.HasError())
+                    return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
+                element.references.push_back(std::move(reference).Value());
+            }
+            return Result<UiDocumentElement>::Success(std::move(element));
+        }
+
+        [[nodiscard]] Result<UiAssetDependency> ReadDependency(CookedReader &reader, const UiDocumentCookLimits &limits) {
+            auto asset = ReadId<Assets::AssetId>(reader, false);
+            auto expectedType = ReadType(reader, limits);
+            std::uint8_t required{};
+            if (asset.HasError() || expectedType.HasError() || !reader.Byte(required) || required > 1)
+                return Failure<UiAssetDependency>(UiErrors::CookedPayloadMalformed);
+            return Result<UiAssetDependency>::Success({asset.Value(), expectedType.Value(), required != 0});
+        }
+
+        [[nodiscard]] Result<UiRouteMetadata> ReadRoute(CookedReader &reader) {
+            auto id = ReadId<UiRouteId>(reader, false);
+            std::uint8_t band{}, modal{};
+            std::uint32_t order{};
+            if (id.HasError() || !reader.Byte(band) || !reader.U32(order) || !reader.Byte(modal) || modal > 1)
+                return Failure<UiRouteMetadata>(UiErrors::CookedPayloadMalformed);
+            return Result<UiRouteMetadata>::Success({id.Value(), static_cast<UiPresentationBand>(band), order, modal != 0});
+        }
+
+        [[nodiscard]] Result<UiDocument> DecodeDocument(const std::span<const std::uint8_t> payload, const UiDocumentCookLimits &limits) {
+            CookedReader reader{payload};
+            const auto header = ReadDocumentHeader(reader, payload, limits);
+            if (header.HasError())
+                return Result<UiDocument>::Failure(header.ErrorValue());
+            const auto &headerValue = header.Value();
+            UiDocumentBuilder builder{headerValue.document, headerValue.revision, headerValue.schemaVersion};
+            for (std::uint32_t index = 0; index < headerValue.canvasCount; ++index) {
+                const auto canvas = ReadCanvas(reader);
+                if (canvas.HasError() || builder.AddCanvas(canvas.Value()).HasError())
                     return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
             }
 
-            for (std::uint32_t index = 0; index < elementCount; ++index) {
-                auto id = ReadId<UiElementId>(reader, false);
-                auto parent = ReadId<UiElementId>(reader);
-                auto type = ReadType(reader, limits);
-                std::uint32_t propertyCount{}, referenceCount{};
-                if (id.HasError() || parent.HasError() || type.HasError() || !reader.U32(propertyCount) || !reader.U32(referenceCount) ||
-                    propertyCount > limits.maximumPropertiesPerElement || referenceCount > limits.maximumReferencesPerElement)
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                UiDocumentElement element{id.Value(), parent.Value(), type.Value(), {}, {}};
-                element.properties.reserve(propertyCount);
-                element.references.reserve(referenceCount);
-                for (std::uint32_t propertyIndex = 0; propertyIndex < propertyCount; ++propertyIndex) {
-                    auto key = reader.Text(limits.maximumTextBytes);
-                    auto value = ReadPropertyValue(reader, limits);
-                    if (key.HasError() || value.HasError())
-                        return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                    element.properties.push_back({std::move(key).Value(), std::move(value).Value()});
-                }
-                for (std::uint32_t referenceIndex = 0; referenceIndex < referenceCount; ++referenceIndex) {
-                    auto reference = ReadReference(reader, limits);
-                    if (reference.HasError())
-                        return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                    element.references.push_back(std::move(reference).Value());
-                }
-                if (builder.AddElement(std::move(element)).HasError())
+            for (std::uint32_t index = 0; index < headerValue.elementCount; ++index) {
+                auto element = ReadElement(reader, limits);
+                if (element.HasError() || builder.AddElement(std::move(element).Value()).HasError())
                     return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
             }
 
-            for (std::uint32_t index = 0; index < dependencyCount; ++index) {
-                auto asset = ReadId<Assets::AssetId>(reader, false);
-                auto expectedType = ReadType(reader, limits);
-                std::uint8_t required{};
-                if (asset.HasError() || expectedType.HasError() || !reader.Byte(required) || required > 1)
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                if (builder.RequireAsset({asset.Value(), expectedType.Value(), required != 0}).HasError())
+            for (std::uint32_t index = 0; index < headerValue.dependencyCount; ++index) {
+                auto dependency = ReadDependency(reader, limits);
+                if (dependency.HasError() || builder.RequireAsset(std::move(dependency).Value()).HasError())
                     return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
             }
 
-            for (std::uint32_t index = 0; index < routeCount; ++index) {
-                auto id = ReadId<UiRouteId>(reader, false);
-                std::uint8_t band{}, modal{};
-                std::uint32_t order{};
-                if (id.HasError() || !reader.Byte(band) || !reader.U32(order) || !reader.Byte(modal) || modal > 1)
-                    return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                if (builder.AddRoute({id.Value(), static_cast<UiPresentationBand>(band), order, modal != 0}).HasError())
+            for (std::uint32_t index = 0; index < headerValue.routeCount; ++index) {
+                auto route = ReadRoute(reader);
+                if (route.HasError() || builder.AddRoute(std::move(route).Value()).HasError())
                     return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
             }
             if (!reader.AtEnd())
