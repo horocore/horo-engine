@@ -76,6 +76,13 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::ActionLifecycleUnavailable,
             &UiErrors::NavigationInvalid,
         };
+        const std::array bindings{
+            &UiErrors::BindingDescriptorInvalid,  &UiErrors::BindingSchemaInvalid,   &UiErrors::BindingSchemaIncompatible,
+            &UiErrors::BindingProviderUnknown,    &UiErrors::BindingPropertyUnknown, &UiErrors::BindingPropertySignatureMismatch,
+            &UiErrors::BindingDescriptorConflict, &UiErrors::BindingAccessInvalid,   &UiErrors::BindingTypeMismatch,
+            &UiErrors::BindingConverterInvalid,   &UiErrors::BindingFallbackInvalid, &UiErrors::BindingUpdatePolicyInvalid,
+            &UiErrors::BindingCapacityExceeded,
+        };
         const std::array pointerCapture{
             &UiErrors::PointerCaptureInvalid, &UiErrors::PointerCaptureSourceStale,      &UiErrors::PointerCaptureInteractionStale,
             &UiErrors::PointerCaptureBusy,    &UiErrors::PointerCaptureCapacityExceeded, &UiErrors::PointerCaptureLifecycleUnavailable,
@@ -115,12 +122,14 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
         };
         const auto descriptors = [] {
             std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + pointerCapture.size() + actions.size() +
-                                                        controls.size() + focus.size() + renderGeometry.size() + accessibility.size()>
+                                                        bindings.size() + controls.size() + focus.size() + renderGeometry.size() +
+                                                        accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
             output = std::ranges::copy(textLayout, output).out;
             output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;
+            output = std::ranges::copy(bindings, output).out;
             output = std::ranges::copy(controls, output).out;
             output = std::ranges::copy(focus, output).out;
             output = std::ranges::copy(renderGeometry, output).out;
