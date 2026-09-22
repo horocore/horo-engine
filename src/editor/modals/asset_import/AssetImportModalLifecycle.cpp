@@ -265,6 +265,11 @@ namespace Horo::Editor {
         return *m_catalog;
     }
 
+    /** @copydoc AssetImportModal::ProjectRoot */
+    const std::filesystem::path &AssetImportModal::ProjectRoot() const noexcept {
+        return m_projectRoot;
+    }
+
     /** @copydoc AssetImportModal::ImportHistory */
     std::span<const OperationRecord> AssetImportModal::ImportHistory() const noexcept {
         return m_importHistory;

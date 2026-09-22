@@ -94,9 +94,7 @@ namespace Horo::Editor {
         void SetDefaultDestination(const std::filesystem::path &absoluteDirectory) noexcept;
 
         /** @brief Returns the stored project root (empty if not set). */
-        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
-            return m_projectRoot;
-        }
+        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept;
 
         /** @brief Initiates an import operation with the given source files. */
         [[nodiscard]] Result<void> BeginImport(const std::vector<std::filesystem::path> &sourceFiles,

@@ -15,17 +15,9 @@ namespace Horo::Editor {
             return "horo.viewport";
         }
 
-        [[nodiscard]] std::string GetDisplayName() const override {
-            return "horo.panel.viewport.title";
-        }
-
-        [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override {
-            return WorkspaceDockArea::Document;
-        }
-
-        [[nodiscard]] std::vector<std::string> GetObservedEventTypes() const override {
-            return {"SceneDocumentChangedEvent", "SelectionChangedEvent"};
-        }
+        [[nodiscard]] std::string GetDisplayName() const override;
+        [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override;
+        [[nodiscard]] std::vector<std::string> GetObservedEventTypes() const override;
 
         void OnAttach(PanelContext &ctx) override;
         void OnDetach() override;
