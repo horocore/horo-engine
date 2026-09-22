@@ -1145,6 +1145,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroTransformGizmoMathTests
             unit/editor/TransformGizmoMathTests.cpp
+            unit/editor/TransformGizmoGeometryTests.cpp
     )
     target_compile_features(HoroTransformGizmoMathTests PRIVATE cxx_std_20)
     target_link_libraries(HoroTransformGizmoMathTests
