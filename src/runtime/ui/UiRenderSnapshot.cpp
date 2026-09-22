@@ -29,15 +29,15 @@ namespace Horo::Runtime::Ui {
         bool ValidImageReference(const UiRenderResourceReference &resource) noexcept {
             if (resource.role != UiRenderResourceRole::Image)
                 return true;
+            using enum UiImageResidencyState;
             const bool validColorSpace =
                 static_cast<std::uint8_t>(resource.colorSpace) <= static_cast<std::uint8_t>(UiImageColorSpace::Srgb);
             const bool validFallback =
                 static_cast<std::uint8_t>(resource.fallback) <= static_cast<std::uint8_t>(UiImageFallbackPolicy::Checkerboard);
             const bool validResidency =
                 static_cast<std::uint8_t>(resource.residency) <= static_cast<std::uint8_t>(UiImageResidencyState::Failed);
-            const bool drawable =
-                resource.residency == UiImageResidencyState::Resident ||
-                (resource.residency == UiImageResidencyState::MissingFallback && resource.fallback != UiImageFallbackPolicy::Reject);
+            const bool drawable = resource.residency == Resident ||
+                                  (resource.residency == MissingFallback && resource.fallback != UiImageFallbackPolicy::Reject);
             return validColorSpace && resource.sampling.IsValid() && validFallback && validResidency && drawable;
         }
 

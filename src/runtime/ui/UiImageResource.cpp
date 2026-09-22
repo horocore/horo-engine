@@ -7,6 +7,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <new>
 #include <ranges>
 #include <utility>
@@ -185,7 +186,7 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || id == NoUiImageRegion)
             return nullptr;
         const auto found = std::ranges::lower_bound(storage_->regions, id, {}, &UiSpriteRegion::id);
-        return found != storage_->regions.end() && found->id == id ? &*found : nullptr;
+        return found != storage_->regions.end() && found->id == id ? std::to_address(found) : nullptr;
     }
 
     /** @copydoc UiImageResource::ResolveRegion */
@@ -268,9 +269,9 @@ namespace Horo::Runtime::Ui {
     void UiImageResourceSnapshot::Retain() const noexcept {
         if (!tracker_)
             return;
-        auto current = tracker_->leases.load(std::memory_order_acquire);
+        auto current = tracker_->leases.load();
         while (current != std::numeric_limits<std::uint64_t>::max()) {
-            if (tracker_->leases.compare_exchange_weak(current, current + 1, std::memory_order_acq_rel))
+            if (tracker_->leases.compare_exchange_weak(current, current + 1))
                 return;
         }
         std::terminate();
@@ -280,7 +281,7 @@ namespace Horo::Runtime::Ui {
     void UiImageResourceSnapshot::Release() noexcept {
         if (!tracker_)
             return;
-        tracker_->leases.fetch_sub(1, std::memory_order_acq_rel);
+        tracker_->leases.fetch_sub(1);
         generation_.reset();
         tracker_.reset();
     }
@@ -329,12 +330,11 @@ namespace Horo::Runtime::Ui {
         UiImageResourceRegistryDescriptor descriptor;
         UiImageResourceRegistryState lifecycle{UiImageResourceRegistryState::Active};
         std::vector<Slot> slots;
-        std::shared_ptr<UiImageResourceSnapshot::LeaseTracker> tracker;
+        std::shared_ptr<UiImageResourceSnapshot::LeaseTracker> tracker{std::make_shared<UiImageResourceSnapshot::LeaseTracker>()};
         std::size_t nextSlot{1};
 
         explicit Storage(const UiImageResourceRegistryDescriptor &source)
-            : descriptor(source), slots(static_cast<std::size_t>(source.maximumResources) + 1U),
-              tracker(std::make_shared<UiImageResourceSnapshot::LeaseTracker>()) {}
+            : descriptor(source), slots(static_cast<std::size_t>(source.maximumResources) + 1U) {}
 
         [[nodiscard]] UiImageResourceHandle Handle(const std::uint32_t slot) const noexcept {
             return {descriptor.owner, slot, slots[slot].generation};
@@ -413,8 +413,7 @@ namespace Horo::Runtime::Ui {
                                                                   const UiImageResidencyState residency) {
         if (!storage_ || storage_->lifecycle != UiImageResourceRegistryState::Active)
             return Failure<UiImageResourceHandle>(UiErrors::ImageResourceLifecycleUnavailable);
-        const auto owner = ValidateUiHandleOwner(current, storage_->descriptor.owner);
-        if (owner.HasError())
+        if (const auto owner = ValidateUiHandleOwner(current, storage_->descriptor.owner); owner.HasError())
             return Result<UiImageResourceHandle>::Failure(owner.ErrorValue());
         if (current.slot >= storage_->slots.size())
             return Failure<UiImageResourceHandle>(UiErrors::HandleStale);
@@ -448,8 +447,7 @@ namespace Horo::Runtime::Ui {
     Result<UiImageResourceSnapshot> UiImageResourceRegistry::Acquire(const UiImageResourceHandle &handle) const {
         if (!storage_ || storage_->lifecycle != UiImageResourceRegistryState::Active)
             return Failure<UiImageResourceSnapshot>(UiErrors::ImageResourceLifecycleUnavailable);
-        const auto owner = ValidateUiHandleOwner(handle, storage_->descriptor.owner);
-        if (owner.HasError())
+        if (const auto owner = ValidateUiHandleOwner(handle, storage_->descriptor.owner); owner.HasError())
             return Result<UiImageResourceSnapshot>::Failure(owner.ErrorValue());
         const auto generation = storage_->TryFind(handle);
         if (!generation)
@@ -461,8 +459,7 @@ namespace Horo::Runtime::Ui {
     Result<void> UiImageResourceRegistry::Retire(const UiImageResourceHandle &handle) {
         if (!storage_ || storage_->lifecycle != UiImageResourceRegistryState::Active)
             return Failure(UiErrors::ImageResourceLifecycleUnavailable);
-        const auto owner = ValidateUiHandleOwner(handle, storage_->descriptor.owner);
-        if (owner.HasError())
+        if (const auto owner = ValidateUiHandleOwner(handle, storage_->descriptor.owner); owner.HasError())
             return owner;
         if (handle.slot >= storage_->slots.size())
             return Failure(UiErrors::HandleStale);
@@ -484,7 +481,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiImageResourceRegistry::IsDrained */
     bool UiImageResourceRegistry::IsDrained() const noexcept {
-        return !storage_ || storage_->tracker->leases.load(std::memory_order_acquire) == 0;
+        return !storage_ || storage_->tracker->leases.load() == 0;
     }
 
     /** @copydoc UiImageResourceRegistry::State */

@@ -43,59 +43,72 @@ namespace Horo::Runtime::Ui {
             return result;
         }
 
+        /** @brief Assigns the batch key fields for one draw payload. */
+        template <typename Draw>
+        [[nodiscard]] Result<void> AssignBatchKey(UiRenderGeometryBatchKey &key, const UiRenderSnapshot &snapshot, const Draw &draw) {
+            using DrawType = std::decay_t<Draw>;
+            if constexpr (std::is_same_v<DrawType, UiSolidDraw>)
+                key.primitive = UiRenderGeometryPrimitive::SolidRectangle;
+            else if constexpr (std::is_same_v<DrawType, UiBorderDraw>)
+                key.primitive = UiRenderGeometryPrimitive::BorderRectangle;
+            else if constexpr (std::is_same_v<DrawType, UiImageDraw>) {
+                key.primitive = UiRenderGeometryPrimitive::ImageRectangle;
+                key.resource = draw.resource;
+            } else if constexpr (std::is_same_v<DrawType, UiSpriteDraw>) {
+                key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
+                key.resource = draw.resource;
+            } else if constexpr (std::is_same_v<DrawType, UiNineSliceDraw>) {
+                key.primitive = UiRenderGeometryPrimitive::NineSliceRectangle;
+                key.resource = draw.resource;
+            } else if constexpr (std::is_same_v<DrawType, UiTextDraw>) {
+                if (draw.run >= snapshot.TextRuns().size())
+                    return Failure(UiErrors::RenderGeometryInvalid);
+                key.primitive = UiRenderGeometryPrimitive::TextGlyphs;
+                key.resource = snapshot.TextRuns()[draw.run].fontResource;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Computes the vertex and index requirement for one draw payload. */
+        template <typename Draw>
+        [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometryForDraw(const UiRenderSnapshot &snapshot,
+                                                                                 const UiDrawCommand &command, const Draw &draw) {
+            using DrawType = std::decay_t<Draw>;
+            if constexpr (std::is_same_v<DrawType, UiSolidDraw> || std::is_same_v<DrawType, UiImageDraw> ||
+                          std::is_same_v<DrawType, UiSpriteDraw>) {
+                return Result<std::array<std::size_t, 2>>::Success({4, 6});
+            } else if constexpr (std::is_same_v<DrawType, UiNineSliceDraw>) {
+                return Result<std::array<std::size_t, 2>>::Success({36, 54});
+            } else if constexpr (std::is_same_v<DrawType, UiBorderDraw>) {
+                const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
+                return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
+                                                                           : std::array<std::size_t, 2>{0, 0});
+            } else {
+                if (draw.run >= snapshot.TextRuns().size())
+                    return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
+                const auto &run = snapshot.TextRuns()[draw.run];
+                if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
+                    return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
+                return Result<std::array<std::size_t, 2>>::Success(
+                    {static_cast<std::size_t>(run.glyphCount) * 4U, static_cast<std::size_t>(run.glyphCount) * 6U});
+            }
+        }
+
         [[nodiscard]] Result<UiRenderGeometryBatchKey> MakeBatchKey(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
             UiRenderGeometryBatchKey key{.resource = NoUiRenderIndex,
                                          .transform = command.transform,
                                          .clip = command.clip,
                                          .mask = command.mask};
-            const auto result = std::visit([&key, &snapshot](const auto &draw) -> Result<void> {
-                using Draw = std::decay_t<decltype(draw)>;
-                if constexpr (std::is_same_v<Draw, UiSolidDraw>)
-                    key.primitive = UiRenderGeometryPrimitive::SolidRectangle;
-                else if constexpr (std::is_same_v<Draw, UiBorderDraw>)
-                    key.primitive = UiRenderGeometryPrimitive::BorderRectangle;
-                else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
-                    key.primitive = UiRenderGeometryPrimitive::ImageRectangle;
-                    key.resource = draw.resource;
-                } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
-                    key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
-                    key.resource = draw.resource;
-                } else if constexpr (std::is_same_v<Draw, UiNineSliceDraw>) {
-                    key.primitive = UiRenderGeometryPrimitive::NineSliceRectangle;
-                    key.resource = draw.resource;
-                } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
-                    if (draw.run >= snapshot.TextRuns().size())
-                        return Failure(UiErrors::RenderGeometryInvalid);
-                    key.primitive = UiRenderGeometryPrimitive::TextGlyphs;
-                    key.resource = snapshot.TextRuns()[draw.run].fontResource;
-                }
-                return Result<void>::Success();
+            const auto result = std::visit([&key, &snapshot](const auto &draw) {
+                return AssignBatchKey(key, snapshot, draw);
             }, command.payload);
             return result.HasError() ? Result<UiRenderGeometryBatchKey>::Failure(result.ErrorValue())
                                      : Result<UiRenderGeometryBatchKey>::Success(key);
         }
 
         [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometry(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
-            return std::visit([&snapshot, &command](const auto &draw) -> Result<std::array<std::size_t, 2>> {
-                using Draw = std::decay_t<decltype(draw)>;
-                if constexpr (std::is_same_v<Draw, UiSolidDraw> || std::is_same_v<Draw, UiImageDraw> ||
-                              std::is_same_v<Draw, UiSpriteDraw>) {
-                    return Result<std::array<std::size_t, 2>>::Success({4, 6});
-                } else if constexpr (std::is_same_v<Draw, UiNineSliceDraw>) {
-                    return Result<std::array<std::size_t, 2>>::Success({36, 54});
-                } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
-                    const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
-                    return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
-                                                                               : std::array<std::size_t, 2>{0, 0});
-                } else {
-                    if (draw.run >= snapshot.TextRuns().size())
-                        return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
-                    const auto &run = snapshot.TextRuns()[draw.run];
-                    if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
-                        return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
-                    return Result<std::array<std::size_t, 2>>::Success(
-                        {static_cast<std::size_t>(run.glyphCount) * 4U, static_cast<std::size_t>(run.glyphCount) * 6U});
-                }
+            return std::visit([&snapshot, &command](const auto &draw) {
+                return RequiredGeometryForDraw(snapshot, command, draw);
             }, command.payload);
         }
 
