@@ -147,6 +147,50 @@ namespace Horo::Editor {
         drawList.AddText({hintMin.x + 6.0F, hintMin.y + 4.0F}, Theme::U32(Theme::Text()), hint.c_str());
     }
 
+    bool ViewportPanel::HandleAcceptedAssetDrop(const ImGuiPayload *accepted, ImDrawList &drawList, const ViewportSurfaceLayout &layout,
+                                                const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                                const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
+        const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted);
+        if (!payload.has_value()) {
+            CancelAssetPlacementPreview(command);
+            return false;
+        }
+
+        const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
+        drawList.AddRect(layout.origin, {layout.origin.x + layout.width, layout.origin.y + layout.height},
+                         Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err()), 3.0F, 0, 2.0F);
+        if (!policy.canInstantiate) {
+            CancelAssetPlacementPreview(command);
+            return true;
+        }
+
+        const ImVec2 pointer = ImGui::GetMousePos();
+        const AssetSceneDropRequest request{
+            .assetId = payload->assetId.data(),
+            .assetType = payload->assetType.data(),
+            .absoluteAssetPath = payload->absolutePath.data(),
+            .parent = std::nullopt,
+            .target = AssetSceneDropTarget::Viewport,
+            .normalizedX = std::clamp((pointer.x - layout.origin.x) / layout.width, 0.0F, 1.0F),
+            .normalizedY = std::clamp((pointer.y - layout.origin.y) / layout.height, 0.0F, 1.0F),
+            .aspect = layout.width / layout.height,
+            .depthRange = depthRange,
+            .documentRevision = viewModel.documentRevision,
+        };
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            CancelAssetPlacementPreview(command);
+            assetPlacementCancelled_ = true;
+        } else if (!assetPlacementCancelled_) {
+            command = {};
+            command.command =
+                accepted->IsDelivery() ? EditorWorkspaceViewCommand::InstantiateAsset : EditorWorkspaceViewCommand::PreviewAssetPlacement;
+            command.assetSceneDrop = request;
+            assetPlacementPreviewActive_ = !accepted->IsDelivery();
+            DrawAssetPlacementHint(drawList, layout, pointer, context);
+        }
+        return true;
+    }
+
     bool ViewportPanel::AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
@@ -156,46 +200,10 @@ namespace Horo::Editor {
             CancelAssetPlacementPreview(command);
             return false;
         }
-        bool active = false;
         const ImGuiPayload *accepted =
             ImGui::AcceptDragDropPayload(AssetSceneDragPayloadType,
                                          ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
-        if (const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted); payload.has_value()) {
-            active = true;
-            const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
-            drawList.AddRect(layout.origin, {layout.origin.x + layout.width, layout.origin.y + layout.height},
-                             Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err()), 3.0F, 0, 2.0F);
-            if (policy.canInstantiate) {
-                const ImVec2 pointer = ImGui::GetMousePos();
-                const AssetSceneDropRequest request{
-                    .assetId = payload->assetId.data(),
-                    .assetType = payload->assetType.data(),
-                    .absoluteAssetPath = payload->absolutePath.data(),
-                    .parent = std::nullopt,
-                    .target = AssetSceneDropTarget::Viewport,
-                    .normalizedX = std::clamp((pointer.x - layout.origin.x) / layout.width, 0.0F, 1.0F),
-                    .normalizedY = std::clamp((pointer.y - layout.origin.y) / layout.height, 0.0F, 1.0F),
-                    .aspect = layout.width / layout.height,
-                    .depthRange = depthRange,
-                    .documentRevision = viewModel.documentRevision,
-                };
-                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-                    CancelAssetPlacementPreview(command);
-                    assetPlacementCancelled_ = true;
-                } else if (!assetPlacementCancelled_) {
-                    command = {};
-                    command.command = accepted->IsDelivery() ? EditorWorkspaceViewCommand::InstantiateAsset
-                                                             : EditorWorkspaceViewCommand::PreviewAssetPlacement;
-                    command.assetSceneDrop = request;
-                    assetPlacementPreviewActive_ = !accepted->IsDelivery();
-                    DrawAssetPlacementHint(drawList, layout, pointer, context);
-                }
-            } else {
-                CancelAssetPlacementPreview(command);
-            }
-        } else {
-            CancelAssetPlacementPreview(command);
-        }
+        const bool active = HandleAcceptedAssetDrop(accepted, drawList, layout, viewModel, command, context, depthRange);
         ImGui::EndDragDropTarget();
         return active;
     }
