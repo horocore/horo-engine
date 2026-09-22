@@ -1,5 +1,6 @@
 #include "UiTextLayoutInternal.h"
 
+#include <algorithm>
 #include <exception>
 #include <new>
 #include <ranges>
