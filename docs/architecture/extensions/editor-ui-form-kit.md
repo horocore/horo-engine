@@ -50,14 +50,18 @@ generation.
 
 ## Theme, DPI, and adapters
 
-`EditorUiThemeFrame` is immutable evidence for one host frame. It carries a
-theme revision, UI scale, host-resolved geometry metrics, and supported
-semantic-token roles. It carries no raw color constants. Unsupported semantic
-roles are resolved through a safe semantic fallback.
+`EditorUiThemeFrame` is a compatibility alias for the complete
+[`EditorThemeFrame`](./editor-theme-token-contract.md) contract. It is
+immutable evidence for one host frame and carries the revision, UI scale,
+resolved colors, typography, spacing, sizes, radii, interaction, motion, font,
+icon, and accessibility tokens. It carries no raw theme-file access or editor
+handles. Unsupported semantic roles are resolved through the shared typed
+fallback policy.
 
 `BuildEditorUiRenderSnapshot` projects the same validated form into an
 adapter-neutral snapshot containing stable IDs, node kinds, focus order,
-responsive geometry, scale-adjusted metrics, and semantic token references.
+responsive geometry, scale-adjusted metrics, semantic token references, and the
+complete resolved theme frame used for that projection.
 The Dear ImGui/editor adapter and non-GUI inspection/test adapters consume this
 same projection. A theme or UI-scale change publishes a new frame and therefore
 rebuilds every node's geometry and semantic roles without extension-owned
@@ -65,6 +69,9 @@ reconstruction or restart.
 
 The snapshot is not a renderer ABI. It contains no ImGui types, SDL events,
 native handles, draw commands, arbitrary property maps, or extension callbacks.
+
+The full role/version/fallback/accessibility contract is documented in the
+[Extension Theme Token Contract](./editor-theme-token-contract.md).
 
 ## Reference fixture
 

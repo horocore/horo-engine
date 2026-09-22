@@ -2,7 +2,6 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <new>
 #include <optional>
@@ -43,64 +42,10 @@ namespace Horo::Extensions {
             return EditorUiNodeBaseOf(node);
         }
 
-        [[nodiscard]] bool IsValidMetric(const float value) noexcept {
-            return std::isfinite(value) && value > 0.0F;
-        }
-
         [[nodiscard]] Result<void> ValidateTheme(const EditorUiThemeFrame &theme) {
-            if (const std::uint32_t knownTokenMask =
-                    EditorUiThemeTokenBit(EditorUiThemeToken::Critical) | (EditorUiThemeTokenBit(EditorUiThemeToken::Critical) - 1U);
-                theme.schemaVersion != EditorUiFormSchemaVersion || theme.revision == 0 || !std::isfinite(theme.uiScale) ||
-                theme.uiScale <= 0.0F || theme.uiScale > 8.0F || (theme.supportedTokenMask & ~knownTokenMask) != 0U ||
-                !IsValidMetric(theme.metrics.smallControlHeight) || !IsValidMetric(theme.metrics.mediumControlHeight) ||
-                !IsValidMetric(theme.metrics.largeControlHeight) || !IsValidMetric(theme.metrics.textLineHeight) ||
-                !IsValidMetric(theme.metrics.rowGap) || !IsValidMetric(theme.metrics.defaultWidth))
-                return ThemeInvalid("Editor UI theme frame has an unsupported schema, scale, token set, or metric.");
-            if (theme.metrics.smallControlHeight > theme.metrics.mediumControlHeight ||
-                theme.metrics.mediumControlHeight > theme.metrics.largeControlHeight)
-                return ThemeInvalid("Editor UI theme control heights must be ordered from small to large.");
+            if (Result<void> validation = ValidateEditorThemeFrame(theme); validation.HasError())
+                return ThemeInvalid("Editor UI theme frame is invalid.");
             return Result<void>::Success();
-        }
-
-        [[nodiscard]] std::array<EditorUiThemeToken, 2> FallbackTokens(const EditorUiThemeToken requested) noexcept {
-            using enum EditorUiThemeToken;
-            switch (requested) {
-                case SurfaceSubtle:
-                    return {Surface, None};
-                case TextDisabled:
-                    return {TextSecondary, TextPrimary};
-                case Border:
-                case Focus:
-                    return {Accent, TextSecondary};
-                case Positive:
-                case Warning:
-                case Critical:
-                case Accent:
-                    return {Accent, TextPrimary};
-                case TextSecondary:
-                    return {TextPrimary, None};
-                case Surface:
-                case TextPrimary:
-                case None:
-                    return {None, None};
-                default:
-                    return {None, None};
-            }
-        }
-
-        [[nodiscard]] EditorUiThemeToken ResolveToken(const EditorUiThemeToken requested, const EditorUiThemeFrame &frame) noexcept {
-            using enum EditorUiThemeToken;
-            if (requested == None)
-                return None;
-            if ((frame.supportedTokenMask & EditorUiThemeTokenBit(requested)) != 0U)
-                return requested;
-
-            const auto fallbacks = FallbackTokens(requested);
-            for (const auto fallback : fallbacks) {
-                if (fallback != None && (frame.supportedTokenMask & EditorUiThemeTokenBit(fallback)) != 0U)
-                    return fallback;
-            }
-            return None;
         }
 
         [[nodiscard]] EditorUiThemeToken ToneToken(const EditorUiSemanticTone tone) noexcept {
@@ -218,9 +163,9 @@ namespace Horo::Extensions {
                 style.foreground = TextDisabled;
                 style.background = SurfaceSubtle;
             }
-            style.foreground = ResolveToken(style.foreground, theme);
-            style.background = ResolveToken(style.background, theme);
-            style.border = ResolveToken(style.border, theme);
+            style.foreground = ResolveEditorThemeColorRole(style.foreground, theme);
+            style.background = ResolveEditorThemeColorRole(style.background, theme);
+            style.border = ResolveEditorThemeColorRole(style.border, theme);
             return style;
         }
 
@@ -456,7 +401,8 @@ namespace Horo::Extensions {
                                             .form = form.id,
                                             .themeRevision = theme.revision,
                                             .uiScale = theme.uiScale,
-                                            .availableWidth = logicalWidth * theme.uiScale};
+                                            .availableWidth = logicalWidth * theme.uiScale,
+                                            .theme = theme};
             try {
                 snapshot.nodes.reserve(form.nodes.size());
             } catch (const std::bad_alloc &) {
@@ -498,7 +444,7 @@ namespace Horo::Extensions {
 
     /** @copydoc ResolveEditorUiThemeToken */
     EditorUiThemeToken ResolveEditorUiThemeToken(const EditorUiThemeToken requested, const EditorUiThemeFrame &frame) noexcept {
-        return ResolveToken(requested, frame);
+        return ResolveEditorThemeColorRole(requested, frame);
     }
 
     /** @copydoc BuildEditorUiRenderSnapshot */

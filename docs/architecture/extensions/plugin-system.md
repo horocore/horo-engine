@@ -1003,6 +1003,14 @@ remain unavailable even when the surface descriptor declares that capability.
 The contract exposes no `EditorLayer`, ImGui, renderer, native platform handle,
 service locator, or callback ownership across the extension boundary.
 
+Host-rendered GUI contributions consume the versioned
+[`EditorThemeFrame`](./editor-theme-token-contract.md) at the frame boundary.
+The frame carries semantic roles and accessibility/DPI evidence; it does not
+expose the active theme file or host-owned font/icon resources. Theme, project,
+accessibility, and scale changes publish a new revision to the next projection
+pass, so extensions do not keep presentation caches or restart to follow a live
+theme update.
+
 ### Data Bus Participation
 
 Host-owned surface sessions are normal `EditorDataBus` subscribers. They may

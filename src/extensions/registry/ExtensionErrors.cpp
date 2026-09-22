@@ -83,6 +83,26 @@ namespace Horo::Extensions::ExtensionErrors {
         .userActionable = false,
     };
 
+    const ErrorCodeDescriptor EditorThemeTokenInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"editor_theme_token_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The extension theme token frame is malformed.",
+        .remediationHint = "Provide finite resolved values, known role masks, accessibility settings, and a non-zero revision.",
+        .retryable = false,
+        .userActionable = false,
+    };
+
+    const ErrorCodeDescriptor EditorThemeTokenVersionUnsupported{
+        .domain = Domain,
+        .code = ErrorCode{"editor_theme_token_version_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The extension theme token schema is outside the host compatibility range.",
+        .remediationHint = "Use a theme token schema supported by the active host or negotiate a compatible adapter.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
     const ErrorCodeDescriptor InvocationFailed{
         .domain = Domain,
         .code = ErrorCode{"invocation_failed"},

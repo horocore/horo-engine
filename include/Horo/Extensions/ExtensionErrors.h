@@ -25,6 +25,10 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor EditorUiFormCapacityExceeded;
     /** @brief A host theme frame supplied to an editor form adapter is malformed. */
     extern const ErrorCodeDescriptor EditorUiThemeInvalid;
+    /** @brief A versioned extension theme token frame is malformed. */
+    extern const ErrorCodeDescriptor EditorThemeTokenInvalid;
+    /** @brief A versioned extension theme token frame is outside the host compatibility range. */
+    extern const ErrorCodeDescriptor EditorThemeTokenVersionUnsupported;
     /** @brief A language-neutral script export descriptor is malformed or violates its host contract. */
     extern const ErrorCodeDescriptor ScriptExportDescriptorInvalid;
     /** @brief Script export identities conflict within one immutable descriptor generation. */
