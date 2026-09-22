@@ -4,6 +4,7 @@
 
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Sha256.h"
@@ -153,8 +154,10 @@ namespace Horo::Editor {
 
     AssetImportModal::AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs,
                                        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
-                                       Assets::AssetRegistry *assetRegistry, OperationStore *operationStore) noexcept
-        : m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(assetRegistry), m_operationStore(operationStore) {}
+                                       Assets::AssetRegistry *assetRegistry, OperationStore *operationStore,
+                                       const ILocalizationService *localization) noexcept
+        : m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(assetRegistry), m_operationStore(operationStore),
+          m_localization(localization) {}
 
     /** @copydoc AssetImportModal::~AssetImportModal */
     AssetImportModal::~AssetImportModal() = default;
@@ -187,6 +190,9 @@ namespace Horo::Editor {
         m_itemCompleted.clear();
         m_visibleOperationId.reset();
         m_operationCancellation.reset();
+        m_historyRevision = 0;
+        m_importHistory.clear();
+        RefreshImportHistory();
 
         m_logCtx = std::make_unique<Log::LogContext>("modal", "asset_import", "modal_id", std::to_string(kModalId));
         LOG_INFO("editor.asset_import", "AssetImportModal opened.");
@@ -253,6 +259,33 @@ namespace Horo::Editor {
 
     const Assets::AssetImporterCatalogSnapshot &AssetImportModal::Catalog() const noexcept {
         return *m_catalog;
+    }
+
+    /** @copydoc AssetImportModal::ImportHistory */
+    std::span<const OperationRecord> AssetImportModal::ImportHistory() const noexcept {
+        return m_importHistory;
+    }
+
+    /** @copydoc AssetImportModal::Localized */
+    std::string_view AssetImportModal::Localized(const std::string_view key, const std::string_view fallback) const {
+        return m_localization != nullptr ? std::string_view{m_localization->Get("editor", key)} : fallback;
+    }
+
+    /** @copydoc AssetImportModal::RefreshImportHistory */
+    void AssetImportModal::RefreshImportHistory() {
+        if (m_operationStore == nullptr)
+            return;
+        const auto snapshot = m_operationStore->SnapshotIfChanged(m_historyRevision);
+        if (!snapshot.has_value())
+            return;
+        m_historyRevision = snapshot->revision;
+        m_importHistory.clear();
+        for (auto operation = snapshot->operations.rbegin(); operation != snapshot->operations.rend(); ++operation) {
+            const bool terminal = operation->state == OperationState::Succeeded || operation->state == OperationState::Failed ||
+                                  operation->state == OperationState::Cancelled;
+            if (operation->kind == OperationKind::Import && terminal)
+                m_importHistory.push_back(*operation);
+        }
     }
 
     void AssetImportModal::SetProjectRoot(const std::filesystem::path &root) noexcept {
@@ -429,10 +462,13 @@ namespace Horo::Editor {
             m_defaultPresetValues.push_back(CapturePresetValues(item, *m_catalog, "Default"));
         LOG_INFO("editor.asset_import", "Import started: %zu files.", m_snapshot.items.size());
         if (m_operationStore != nullptr) {
+            std::string historyTitle = m_snapshot.items.front().displayName;
+            if (m_snapshot.items.size() > 1)
+                historyTitle += std::format(" +{}", m_snapshot.items.size() - 1);
             const std::weak_ptr weakCancellation = m_operationCancellation;
             m_visibleOperationId = m_operationStore->Begin(OperationDescriptor{
                 .kind = OperationKind::Import,
-                .title = "Import assets",
+                .title = historyTitle,
                 .phase = "prepare",
                 .message = std::format("{} files", m_snapshot.items.size()),
                 .progress = 0.0F,

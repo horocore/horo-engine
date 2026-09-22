@@ -48,6 +48,7 @@ namespace Horo::Editor {
             return true;
         }
 
+        std::optional<ImVec2> rotationCenter;
         if (transformTool && selectedObject != viewModel.objects.end() && !selectedObject->effectivelyLocked &&
             viewModel.primarySelectionWorldTransform.has_value() && viewModel.primarySelectionParentWorldTransform.has_value()) {
             const Math::Mat4 &worldTransform = viewModel.primarySelectionPreviewWorldTransform.has_value()
@@ -83,6 +84,7 @@ namespace Horo::Editor {
                 return false;
             }
             geometryFailureReported_ = false;
+            rotationCenter = geometry.Value().center;
             const Result<void> begun = TryBeginDrag(geometry.Value(), worldTransform, *selectedObject, context, capture);
             if (begun.HasError()) {
                 LOG_ERROR("editor.viewport_gizmo", "Gizmo drag rejected: %s", begun.ErrorValue().message.c_str());
@@ -92,6 +94,12 @@ namespace Horo::Editor {
         if (!drag_.has_value())
             return false;
         AdvanceDrag(context, capture);
+        if (drag_.has_value() && drag_->tool == EditorTransformTool::Rotate && rotationCenter.has_value()) {
+            const Result<void> pin = DrawTransformGizmoRotationPin(drawList, viewModel.viewportCamera, *rotationCenter,
+                                                                   drag_->currentRotationVector, drag_->axis);
+            if (pin.HasError())
+                LOG_ERROR("editor.viewport_gizmo", "Gizmo rotation pin failed: %s", pin.ErrorValue().message.c_str());
+        }
         return true;
     }
 
@@ -153,6 +161,7 @@ namespace Horo::Editor {
             .draftTransform = selectedObject.localTransform,
             .math = std::move(math).Value(),
             .currentWorldPosition = geometry.worldPosition,
+            .currentRotationVector = startRotationVector.value_or(Math::Vec3{}),
             .startMouse = pointer,
             .screenDirection = direction,
         };
@@ -221,6 +230,8 @@ namespace Horo::Editor {
         }
 
         drag_->currentWorldPosition = outcome.Value().worldPosition;
+        if (currentRotationVector.has_value())
+            drag_->currentRotationVector = *currentRotationVector;
         if (outcome.Value().localTransform != drag_->draftTransform) {
             drag_->draftTransform = outcome.Value().localTransform;
             context.command.command = EditorWorkspaceViewCommand::PreviewObjectTransform;

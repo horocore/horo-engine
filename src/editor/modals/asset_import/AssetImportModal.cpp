@@ -9,6 +9,7 @@
 
 namespace Horo::Editor {
     ModalFrameResult AssetImportModal::Draw() {
+        RefreshImportHistory();
         return DrawAssetImportModalPresentation(*this, m_fonts);
     }
 }  // namespace Horo::Editor

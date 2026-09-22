@@ -75,6 +75,9 @@ namespace Horo::Editor {
                 if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&
                     entry->activeImporterVersion == pending.providerVersion)
                     entry->previewImage = std::move(completed).Value().image;
+            } else {
+                LOG_WARN("editor.asset_preview", "Preview generation failed for '%s': %s", pending.absolutePath.c_str(),
+                         completed.ErrorValue().code.Value().c_str());
             }
             return true;
         });

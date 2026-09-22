@@ -7,7 +7,9 @@
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <imgui.h>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -138,6 +140,23 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
         ImGui::Render();
     };
 
+    const auto rotationPinCenter = [&]() -> std::optional<ImVec2> {
+        const ImU32 highlight = ImGui::GetColorU32(ImVec4{1.0F, 1.0F, 1.0F, 0.9F});
+        ImVec2 total{};
+        int count = 0;
+        const ImDrawData *drawData = ImGui::GetDrawData();
+        for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex)
+            for (const ImDrawVert &vertex : drawData->CmdLists[listIndex]->VtxBuffer)
+                if (vertex.col == highlight) {
+                    total.x += vertex.pos.x;
+                    total.y += vertex.pos.y;
+                    ++count;
+                }
+        if (count == 0)
+            return std::nullopt;
+        return ImVec2{total.x / count, total.y / count};
+    };
+
     io.AddFocusEvent(true);
     io.AddMousePosEvent(80.0F, 54.0F);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
@@ -235,20 +254,26 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
 
     viewModel.activeTransformTool = EditorTransformTool::Rotate;
     command = {};
-    io.AddMousePosEvent(242.0F, 128.0F);
+    io.AddMousePosEvent(278.0F, 94.0F);
     drawFrame();
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     drawFrame();
+    const std::optional<ImVec2> pinAtStart = rotationPinCenter();
+    REQUIRE(pinAtStart.has_value());
     command = {};
     io.AddMousePosEvent(242.0F, 196.0F);
     drawFrame();
+    const std::optional<ImVec2> pinAfterRotation = rotationPinCenter();
+    REQUIRE(pinAfterRotation.has_value());
+    REQUIRE(std::hypot(pinAfterRotation->x - pinAtStart->x, pinAfterRotation->y - pinAtStart->y) > 10.0F);
     REQUIRE((command.command == EditorWorkspaceViewCommand::PreviewObjectTransform));
     REQUIRE((command.transformPayload.has_value()));
     REQUIRE((command.transformPayload->rotation != Math::Quaternion::Identity()));
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     drawFrame();
+    REQUIRE_FALSE(rotationPinCenter().has_value());
     REQUIRE((command.command == EditorWorkspaceViewCommand::CommitObjectTransform));
 
     viewModel.activeTransformSpace = EditorTransformSpace::World;
@@ -258,7 +283,7 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     viewModel.primarySelectionWorldTransform =
         Math::Multiply(parentTransform.ToMatrix(), viewModel.objects.front().localTransform.ToMatrix());
     command = {};
-    io.AddMousePosEvent(242.0F, 128.0F);
+    io.AddMousePosEvent(278.0F, 94.0F);
     drawFrame();
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);

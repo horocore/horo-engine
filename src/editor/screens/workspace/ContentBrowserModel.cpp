@@ -354,7 +354,9 @@ namespace Horo::Editor {
 
             entry.previewFallback = InferFallback(entry.assetType);
             PopulateAssetImporterContribution(entry, importerCatalog, legacySourceExtension);
-            if (!entry.previewImage.IsValid() && entry.assetType == "core.mesh" && importerCatalog == nullptr)
+            // Keep a bounded, synchronous projection available while the richer
+            // provider preview is queued or if texture upload is unavailable.
+            if (!entry.previewImage.IsValid() && entry.assetType == "core.mesh")
                 entry.meshPreviewPoints = ReadMeshPreview(absoluteEntry);
             return entry;
         }

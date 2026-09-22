@@ -236,6 +236,8 @@ the modal and does not change the application route.
 Modal bounds:
 
 - are constrained to the editor client area
+- may be repositioned by dragging any non-action area of the modal header after their initial centered placement
+- remain fully inside the editor work area while being repositioned
 - preserve a visible workspace margin at normal desktop sizes
 - become scrollable or use the `Workspace` policy on small viewports
 - never place footer actions outside the visible area

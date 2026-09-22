@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <imgui.h>
+#include <string>
 
 namespace Horo::Editor {
     struct GuiContentRegion;
@@ -71,6 +72,7 @@ namespace Horo::Editor {
         mutable WorkspaceSplitterInteraction m_splitterInteraction;
         mutable Input::InputContextToken m_panelDragContext;
         mutable Input::PointerCaptureToken m_panelDragCapture;
+        std::string m_panelDragCandidateId;
 
         [[nodiscard]] bool EnsurePanelDragCapture();
         [[nodiscard]] bool PanelDragEligible() const noexcept;

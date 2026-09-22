@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <string>
 
 namespace {
@@ -328,6 +329,63 @@ TEST_CASE("Workspace popup rows keep the design-system menu geometry", "[unit][e
     REQUIRE(popupWidth < 224.0F);
 }
 
+TEST_CASE("Hovering a sibling context submenu switches its children without clicking", "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{640.0F, 480.0F}};
+    ImVec2 firstRowCenter{};
+    ImVec2 secondRowCenter{};
+    bool firstOpen = false;
+    bool secondOpen = false;
+    bool openRoot = true;
+
+    const auto drawFrame = [&] {
+        ImGui::SetNextWindowPos({20.0F, 20.0F});
+        ImGui::SetNextWindowSize({240.0F, 200.0F});
+        ImGui::Begin("SubmenuHoverTest");
+        if (openRoot) {
+            ImGui::OpenPopup("##root");
+            openRoot = false;
+        }
+        if (BeginMenuPopup("##root")) {
+            firstOpen = BeginContextSubmenu("Cameras###cameras", imgui.fonts);
+            if (firstOpen) {
+                static_cast<void>(ContextMenuItem("Perspective", nullptr, imgui.fonts));
+                EndContextSubmenu();
+            }
+            if (!firstOpen) {
+                const ImVec2 firstMin = ImGui::GetItemRectMin();
+                const ImVec2 firstMax = ImGui::GetItemRectMax();
+                firstRowCenter = {(firstMin.x + firstMax.x) * 0.5F, (firstMin.y + firstMax.y) * 0.5F};
+            }
+            secondOpen = BeginContextSubmenu("Lights###lights", imgui.fonts);
+            if (secondOpen) {
+                static_cast<void>(ContextMenuItem("Point Light", nullptr, imgui.fonts));
+                EndContextSubmenu();
+            }
+            if (!secondOpen) {
+                const ImVec2 secondMin = ImGui::GetItemRectMin();
+                const ImVec2 secondMax = ImGui::GetItemRectMax();
+                secondRowCenter = {(secondMin.x + secondMax.x) * 0.5F, (secondMin.y + secondMax.y) * 0.5F};
+            }
+            EndMenuPopup();
+        }
+        ImGui::End();
+    };
+
+    RenderImGuiFrame(drawFrame);
+    imgui.io->AddMousePosEvent(firstRowCenter.x, firstRowCenter.y);
+    RenderImGuiFrame(drawFrame);
+    RenderImGuiFrame(drawFrame);
+    REQUIRE(firstOpen);
+
+    imgui.io->AddMousePosEvent(secondRowCenter.x, secondRowCenter.y);
+    RenderImGuiFrame(drawFrame);
+    REQUIRE(secondOpen);
+    RenderImGuiFrame(drawFrame);
+    REQUIRE_FALSE(firstOpen);
+}
+
 TEST_CASE("Menu-bar dropdowns reuse workspace popup rows", "[unit][editor][gui][design-system]") {
     using namespace Horo::Editor;
     using namespace Horo::Editor::Ui;
@@ -502,6 +560,59 @@ TEST_CASE("Shared modal shell composes badge split panes and fixed footer", "[un
     REQUIRE(drewLeading);
     REQUIRE(drewContent);
     REQUIRE(preservedContentSpacing);
+}
+
+TEST_CASE("Shared modal shell supports full-header dragging and remains inside the work area", "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{1280.0F, 720.0F}};
+    const auto drawModal = [&] {
+        ScopedModalShell modal(
+            {
+                .id = "MovableModalShellTest",
+                .title = "Movable Modal",
+                .requestedSize = {640.0F, 480.0F},
+                .headerHeight = 48.0F,
+            },
+            imgui.fonts);
+    };
+
+    RenderImGuiFrame(drawModal);
+    const ImGuiWindow *window = ImGui::FindWindowByName("MovableModalShellTest");
+    REQUIRE(window != nullptr);
+    const ImVec2 initialPosition = window->Pos;
+
+    ImGuiIO &io = *imgui.io;
+    // Begin over the visible title text rather than the empty middle of the header.
+    io.AddMousePosEvent(initialPosition.x + 28.0F, initialPosition.y + 24.0F);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    RenderImGuiFrame(drawModal);
+    io.AddMousePosEvent(-400.0F, -300.0F);
+    RenderImGuiFrame(drawModal);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    RenderImGuiFrame(drawModal);
+
+    window = ImGui::FindWindowByName("MovableModalShellTest");
+    REQUIRE(window != nullptr);
+    REQUIRE(window->Pos.x == Catch::Approx(ImGui::GetMainViewport()->WorkPos.x));
+    REQUIRE(window->Pos.y == Catch::Approx(ImGui::GetMainViewport()->WorkPos.y));
+
+    // The right side of the header remains draggable outside the close action.
+    io.AddMousePosEvent(window->Pos.x + window->Size.x - 80.0F, window->Pos.y + 24.0F);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    RenderImGuiFrame(drawModal);
+    io.AddMousePosEvent(2000.0F, 1400.0F);
+    RenderImGuiFrame(drawModal);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    RenderImGuiFrame(drawModal);
+
+    window = ImGui::FindWindowByName("MovableModalShellTest");
+    REQUIRE(window != nullptr);
+    const ImVec2 workMaximum{ImGui::GetMainViewport()->WorkPos.x + ImGui::GetMainViewport()->WorkSize.x - window->Size.x,
+                             ImGui::GetMainViewport()->WorkPos.y + ImGui::GetMainViewport()->WorkSize.y - window->Size.y};
+    REQUIRE(window->Pos.x == Catch::Approx(workMaximum.x));
+    REQUIRE(window->Pos.y == Catch::Approx(workMaximum.y));
 }
 
 TEST_CASE("Selectable text block copies a selection spanning multiple lines", "[unit][editor][gui][design-system]") {

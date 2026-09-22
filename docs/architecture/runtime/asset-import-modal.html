@@ -600,7 +600,7 @@ aside.horo-drawer.drawer-closed > * { opacity:0; pointer-events:none; }
     </div>
 
     <div class="tabs" id="page-tabs">
-      <div class="tab active" data-tab="queue" onclick="switchPageTab('queue')">Queue</div>
+      <div class="tab active" data-tab="queue" onclick="switchPageTab('queue')">Overview</div>
       <div class="tab" data-tab="diagnostics" onclick="switchPageTab('diagnostics')">Diagnostics</div>
       <div class="tab" data-tab="settings" onclick="switchPageTab('importer-settings')">Importer Settings</div>
       <div class="tab" data-tab="destination" onclick="switchPageTab('destination')">Destination</div>
@@ -616,7 +616,7 @@ aside.horo-drawer.drawer-closed > * { opacity:0; pointer-events:none; }
           <span class="sub">or click to browse</span>
         </div>
 
-        <div class="section-label">Queue</div>
+        <div class="section-label">Current Import</div>
         <div class="file-list">
           <div class="file-item done"><span class="status-icon">✓</span><span class="file-name">hero mesh.fbx</span><span class="file-size">2.4 MB</span></div>
           <div class="file-item done"><span class="status-icon">✓</span><span class="file-name">desert rock.png</span><span class="file-size">1.1 MB</span></div>
@@ -627,7 +627,7 @@ aside.horo-drawer.drawer-closed > * { opacity:0; pointer-events:none; }
       </aside>
 
       <section class="panel-content">
-        <!-- Queue -->
+        <!-- Current import; when no import is active this sidebar projects retained Import OperationStore history. -->
         <div id="tab-queue" class="tab-pane">
           <div class="section-label">Import Preset</div>
           <div class="chip-grid" style="margin-bottom:18px;">
