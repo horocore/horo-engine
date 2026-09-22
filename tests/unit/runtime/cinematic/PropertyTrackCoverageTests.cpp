@@ -134,6 +134,12 @@ namespace Horo::Cinematic {
             Gameplay::ComponentTypeId componentType{ComponentType()};
             PropertyBindingId scaleBinding{Binding(20)};
             PropertyBindingId colorBinding{Binding(21)};
+            std::array<ScalarCurveKey, 2> x{ScalarCurveKey{0, 0.0F}, ScalarCurveKey{10, 10.0F}};
+            std::array<ScalarCurveKey, 2> y{ScalarCurveKey{0, 2.0F}, ScalarCurveKey{10, 8.0F}};
+            std::array<ScalarCurveKey, 2> r{ScalarCurveKey{0, 1.0F}, ScalarCurveKey{10, 3.0F}};
+            std::array<ScalarCurveKey, 2> g{ScalarCurveKey{0, 2.0F}, ScalarCurveKey{10, 4.0F}};
+            std::array<ScalarCurveKey, 2> b{ScalarCurveKey{0, 3.0F}, ScalarCurveKey{10, 5.0F}};
+            std::array<ScalarCurveKey, 2> a{ScalarCurveKey{0, 4.0F}, ScalarCurveKey{10, 6.0F}};
             std::array<PropertyBindingTargetSnapshot, 2> targets{};
             std::array<PropertyTrackDescriptor, 2> tracks{};
 
@@ -157,12 +163,6 @@ namespace Horo::Cinematic {
                                        .range = {.minimum = 0.0F, .maximum = 10.0F}})
                             .HasValue());
                 REQUIRE(registry.Freeze().HasValue());
-                const std::array x{ScalarCurveKey{0, 0.0F}, ScalarCurveKey{10, 10.0F}};
-                const std::array y{ScalarCurveKey{0, 2.0F}, ScalarCurveKey{10, 8.0F}};
-                const std::array r{ScalarCurveKey{0, 1.0F}, ScalarCurveKey{10, 3.0F}};
-                const std::array g{ScalarCurveKey{0, 2.0F}, ScalarCurveKey{10, 4.0F}};
-                const std::array b{ScalarCurveKey{0, 3.0F}, ScalarCurveKey{10, 5.0F}};
-                const std::array a{ScalarCurveKey{0, 4.0F}, ScalarCurveKey{10, 6.0F}};
                 PropertyCurveSet scaleCurves{.type = Runtime::PropertyBindingType::Vec2};
                 scaleCurves.channels[0] = Curve(x);
                 scaleCurves.channels[1] = Curve(y);
