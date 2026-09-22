@@ -21,6 +21,43 @@
 namespace Horo::Editor {
     using namespace SceneDocumentDetail;
 
+    namespace {
+        struct LoadedSceneMetadata final {
+            std::unordered_set<std::uint64_t> objectIds;
+            std::uint64_t maximumObjectId{};
+            std::uint64_t maximumBehaviorId{};
+            std::uint64_t nextNavigationSurfaceId{1};
+            std::uint64_t nextNavigationRegionId{1};
+            std::uint64_t nextNavigationModifierId{1};
+            std::uint64_t nextNavigationLinkId{1};
+            std::uint64_t maximumAiAgentId{};
+        };
+
+        /** @brief Validates loaded object identities and observes all monotonic component allocators. */
+        [[nodiscard]] Result<LoadedSceneMetadata> CollectLoadedSceneMetadata(const std::vector<SceneObjectSnapshot> &objects) {
+            LoadedSceneMetadata metadata;
+            std::unordered_set<std::uint64_t> behaviorIds;
+            metadata.objectIds.reserve(objects.size());
+            for (const SceneObjectSnapshot &object : objects) {
+                if (Result<void> valid =
+                        ValidateLoadedObject(object, metadata.objectIds, behaviorIds, metadata.maximumObjectId, metadata.maximumBehaviorId);
+                    valid.HasError())
+                    return Result<LoadedSceneMetadata>::Failure(valid.ErrorValue());
+                ObserveNavigationComponentIds(object.components, metadata.nextNavigationSurfaceId, metadata.nextNavigationRegionId,
+                                              metadata.nextNavigationModifierId, metadata.nextNavigationLinkId);
+                if (object.components.aiAgent)
+                    metadata.maximumAiAgentId = std::max(metadata.maximumAiAgentId, object.components.aiAgent->agent.Value());
+            }
+            if (metadata.maximumObjectId == std::numeric_limits<std::uint64_t>::max() ||
+                metadata.maximumBehaviorId == std::numeric_limits<std::uint64_t>::max() ||
+                metadata.maximumAiAgentId == std::numeric_limits<std::uint64_t>::max())
+                return Result<LoadedSceneMetadata>::Failure(
+                    MakeDocumentError(SceneDocumentErrors::ObjectNotFound,
+                                      "Loaded scene object IDs must leave space for future authored objects."));
+            return Result<LoadedSceneMetadata>::Success(std::move(metadata));
+        }
+    }  // namespace
+
     /** @copydoc IsValidSceneObjectName */
     bool IsValidSceneObjectName(const std::string_view name) noexcept {
         return !name.empty() && name.size() <= MaximumSceneObjectNameBytes;
@@ -206,39 +243,18 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocument::LoadSaved */
     Result<void> SceneDocument::LoadSaved(std::vector<SceneObjectSnapshot> objects, std::vector<ScenePrefabInstance> prefabInstances) {
-        std::unordered_set<std::uint64_t> objectIds;
-        std::unordered_set<std::uint64_t> behaviorIds;
-        objectIds.reserve(objects.size());
-        std::uint64_t maximumObjectId = 0;
-        std::uint64_t maximumBehaviorId = 0;
-        std::uint64_t nextNavigationSurfaceId = 1;
-        std::uint64_t nextNavigationRegionId = 1;
-        std::uint64_t nextNavigationModifierId = 1;
-        std::uint64_t nextNavigationLinkId = 1;
-        std::uint64_t maximumAiAgentId = 0;
-        for (const SceneObjectSnapshot &object : objects) {
-            if (Result<void> valid = ValidateLoadedObject(object, objectIds, behaviorIds, maximumObjectId, maximumBehaviorId);
-                valid.HasError())
-                return valid;
-            ObserveNavigationComponentIds(object.components, nextNavigationSurfaceId, nextNavigationRegionId, nextNavigationModifierId,
-                                          nextNavigationLinkId);
-            if (object.components.aiAgent)
-                maximumAiAgentId = std::max(maximumAiAgentId, object.components.aiAgent->agent.Value());
-        }
-        if (maximumObjectId == std::numeric_limits<std::uint64_t>::max() ||
-            maximumBehaviorId == std::numeric_limits<std::uint64_t>::max() ||
-            maximumAiAgentId == std::numeric_limits<std::uint64_t>::max()) {
-            return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::ObjectNotFound,
-                                                           "Loaded scene object IDs must leave space for future authored objects."));
-        }
+        auto metadata = CollectLoadedSceneMetadata(objects);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        LoadedSceneMetadata loaded = std::move(metadata).Value();
 
-        if (Result<void> validHierarchy = ValidateLoadedHierarchy(objects, objectIds); validHierarchy.HasError())
+        if (Result<void> validHierarchy = ValidateLoadedHierarchy(objects, loaded.objectIds); validHierarchy.HasError())
             return validHierarchy;
         if (Result<void> navigation = ValidateSceneNavigationComponents(objects); navigation.HasError())
             return navigation;
         if (Result<void> ai = ValidateSceneAiComponents(objects); ai.HasError())
             return ai;
-        auto maximumPrefabInstanceId = ValidateLoadedPrefabInstances(prefabInstances, objectIds);
+        auto maximumPrefabInstanceId = ValidateLoadedPrefabInstances(prefabInstances, loaded.objectIds);
         if (maximumPrefabInstanceId.HasError())
             return Result<void>::Failure(maximumPrefabInstanceId.ErrorValue());
 
@@ -249,13 +265,13 @@ namespace Horo::Editor {
         m_state = DocumentStateId{1};
         m_savedState = m_state;
         m_nextStateId = 2;
-        m_nextNavigationSurfaceId = nextNavigationSurfaceId;
-        m_nextNavigationRegionId = nextNavigationRegionId;
-        m_nextNavigationModifierId = nextNavigationModifierId;
-        m_nextNavigationLinkId = nextNavigationLinkId;
-        m_nextAiAgentId = maximumAiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : maximumAiAgentId + 1;
-        m_nextObjectId = maximumObjectId + 1;
-        m_nextBehaviorInstanceId = maximumBehaviorId + 1;
+        m_nextNavigationSurfaceId = loaded.nextNavigationSurfaceId;
+        m_nextNavigationRegionId = loaded.nextNavigationRegionId;
+        m_nextNavigationModifierId = loaded.nextNavigationModifierId;
+        m_nextNavigationLinkId = loaded.nextNavigationLinkId;
+        m_nextAiAgentId = loaded.maximumAiAgentId + 1;
+        m_nextObjectId = loaded.maximumObjectId + 1;
+        m_nextBehaviorInstanceId = loaded.maximumBehaviorId + 1;
         m_nextPrefabInstanceId = maximumPrefabInstanceId.Value() + 1;
         return Result<void>::Success();
     }

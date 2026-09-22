@@ -161,6 +161,29 @@ namespace Horo::AI {
             ExpectError(runtime.StartTaskAtSafePoint(handle, MakeIdentity<TaskId>(72)), AIErrors::HandleInvalid);
         }
 
+        TEST_CASE("Non-scene AI startup policies retain a disabled generation-fenced agent slot", "[unit][ai][scene][activation]") {
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto fixture = MakeFixture(75, 85, 30, 0);
+            fixture.agent.agent.startupPolicy = AiStartupPolicy::Manual;
+            fixture.agent.controller->startupPolicy = AiStartupPolicy::Manual;
+
+            auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, std::array{fixture.descriptor});
+            REQUIRE(prepared.HasValue());
+            auto candidate = std::move(prepared).Value();
+            REQUIRE(candidate->ValidatePublication().HasValue());
+            candidate->Publish();
+
+            const auto snapshot = runtime.Snapshot();
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Agents().size() == 1);
+            const auto &record = snapshot.Value().Agents().front();
+            CHECK(record.handle.IsValid());
+            CHECK(record.state == AiAgentActivationState::Disabled);
+            CHECK_FALSE(record.hasBlackboard);
+            CHECK_FALSE(record.hasRunningTask);
+            CHECK(record.stagedCapabilities.bits == 0);
+        }
+
         TEST_CASE("Entity destruction and scene replacement fence AI handles and release old work", "[unit][ai][scene][activation]") {
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto first = MakeFixture(81, 91, 37, 0);

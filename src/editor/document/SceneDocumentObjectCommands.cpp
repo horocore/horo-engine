@@ -89,6 +89,40 @@ namespace Horo::Editor {
             return Result<std::optional<SceneCommandDelta>>::Success(
                 SceneCommandDelta{GameplayComponentsChangedDelta{object.id, object.components.gameplayComponents, std::move(after)}});
         }
+
+        struct PreparedDuplicatedComponents final {
+            SceneObjectComponentSet components;
+            std::optional<std::uint64_t> aiAgentId;
+        };
+
+        /** @brief Copies, regenerates, and validates component identities for one duplicated scene object. */
+        [[nodiscard]] Result<PreparedDuplicatedComponents> PrepareDuplicatedComponents(
+            const std::span<const SceneObjectSnapshot> objects, const SceneObjectSnapshot &source, const std::uint64_t nextAiAgentId,
+            const std::uint64_t nextNavigationSurfaceId, const std::uint64_t nextNavigationRegionId,
+            const std::uint64_t nextNavigationModifierId, const std::uint64_t nextNavigationLinkId) {
+            PreparedDuplicatedComponents prepared{.components = source.components};
+            if (prepared.components.aiAgent) {
+                if (nextAiAgentId == 0)
+                    return Result<PreparedDuplicatedComponents>::Failure(
+                        MakeError(AI::AIErrors::AgentCapacityExceeded, "AI agent identities are exhausted for this document session."));
+                const auto duplicateAgent = AI::AgentId::Create(nextAiAgentId);
+                if (duplicateAgent.HasError())
+                    return Result<PreparedDuplicatedComponents>::Failure(duplicateAgent.ErrorValue());
+                prepared.components.aiAgent->agent = duplicateAgent.Value();
+                prepared.aiAgentId = nextAiAgentId;
+            }
+            if (Result<void> regenerated =
+                    RegenerateDuplicatedNavigationIdentities(prepared.components, nextNavigationSurfaceId, nextNavigationRegionId,
+                                                             nextNavigationModifierId, nextNavigationLinkId);
+                regenerated.HasError())
+                return Result<PreparedDuplicatedComponents>::Failure(regenerated.ErrorValue());
+            if (Result<void> navigation = ValidateSceneNavigationComponents(objects, std::nullopt, &prepared.components);
+                navigation.HasError())
+                return Result<PreparedDuplicatedComponents>::Failure(navigation.ErrorValue());
+            if (Result<void> ai = ValidateSceneAiComponents(objects, std::nullopt, &prepared.components); ai.HasError())
+                return Result<PreparedDuplicatedComponents>::Failure(ai.ErrorValue());
+            return Result<PreparedDuplicatedComponents>::Success(std::move(prepared));
+        }
     }  // namespace
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectEditorStateCommand&) */
@@ -228,32 +262,15 @@ namespace Horo::Editor {
             return Result<SceneCommandResult>::Failure(LockedObjectError());
 
         const SceneObjectId id{m_document.m_nextObjectId};
-        SceneObjectComponentSet duplicatedComponents = source->components;
-        std::optional<std::uint64_t> duplicatedAiAgentId;
-        if (duplicatedComponents.aiAgent) {
-            if (m_document.m_nextAiAgentId == 0)
-                return Result<SceneCommandResult>::Failure(
-                    MakeError(AI::AIErrors::AgentCapacityExceeded, "AI agent identities are exhausted for this document session."));
-            const auto duplicateAgent = AI::AgentId::Create(m_document.m_nextAiAgentId);
-            if (duplicateAgent.HasError())
-                return Result<SceneCommandResult>::Failure(duplicateAgent.ErrorValue());
-            duplicatedComponents.aiAgent->agent = duplicateAgent.Value();
-            duplicatedAiAgentId = m_document.m_nextAiAgentId;
-        }
-        if (Result<void> regenerated =
-                RegenerateDuplicatedNavigationIdentities(duplicatedComponents, m_document.m_nextNavigationSurfaceId,
-                                                         m_document.m_nextNavigationRegionId, m_document.m_nextNavigationModifierId,
-                                                         m_document.m_nextNavigationLinkId);
-            regenerated.HasError())
-            return Result<SceneCommandResult>::Failure(regenerated.ErrorValue());
-        if (Result<void> navigation = ValidateSceneNavigationComponents(m_document.m_objects, std::nullopt, &duplicatedComponents);
-            navigation.HasError()) {
-            return Result<SceneCommandResult>::Failure(navigation.ErrorValue());
-        }
-        if (Result<void> ai = ValidateSceneAiComponents(m_document.m_objects, std::nullopt, &duplicatedComponents); ai.HasError())
-            return Result<SceneCommandResult>::Failure(ai.ErrorValue());
-        if (duplicatedAiAgentId.has_value())
-            m_document.m_nextAiAgentId = *duplicatedAiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicatedAiAgentId + 1;
+        auto prepared = PrepareDuplicatedComponents(m_document.m_objects, *source, m_document.m_nextAiAgentId,
+                                                    m_document.m_nextNavigationSurfaceId, m_document.m_nextNavigationRegionId,
+                                                    m_document.m_nextNavigationModifierId, m_document.m_nextNavigationLinkId);
+        if (prepared.HasError())
+            return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
+        PreparedDuplicatedComponents duplicated = std::move(prepared).Value();
+        SceneObjectComponentSet duplicatedComponents = std::move(duplicated.components);
+        if (duplicated.aiAgentId.has_value())
+            m_document.m_nextAiAgentId = *duplicated.aiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicated.aiAgentId + 1;
         for (Gameplay::BehaviorComponent &behavior : duplicatedComponents.behaviors)
             behavior.instanceId = Gameplay::BehaviorInstanceId{m_document.m_nextBehaviorInstanceId++};
         ObserveNavigationComponentIds(duplicatedComponents, m_document.m_nextNavigationSurfaceId, m_document.m_nextNavigationRegionId,

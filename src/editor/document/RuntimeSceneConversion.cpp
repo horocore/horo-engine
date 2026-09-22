@@ -163,10 +163,7 @@ namespace Horo::Editor {
                 return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
 
             try {
-                std::string bytes;
-                bytes.reserve(payload.component.payload.size());
-                for (const std::byte byte : payload.component.payload)
-                    bytes.push_back(static_cast<char>(byte));
+                const std::string bytes{reinterpret_cast<const char *>(payload.component.payload.data()), payload.component.payload.size()};
                 const Json value = Json::parse(bytes);
                 auto parsed = Detail::ParseNavigationAgentJson(value);
                 if (parsed.HasError())
@@ -183,10 +180,7 @@ namespace Horo::Editor {
                 payload.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson || payload.component.schemaVersion != 1)
                 return Result<Json>::Failure(MakeError(PrefabComponentProjectionUnsupported));
             try {
-                std::string bytes;
-                bytes.reserve(payload.component.payload.size());
-                for (const std::byte byte : payload.component.payload)
-                    bytes.push_back(static_cast<char>(byte));
+                const std::string bytes{reinterpret_cast<const char *>(payload.component.payload.data()), payload.component.payload.size()};
                 return Result<Json>::Success(Json::parse(bytes));
             } catch (const nlohmann::json::exception &) {
                 return Result<Json>::Failure(MakeError(PrefabComponentProjectionUnsupported));

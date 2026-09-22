@@ -3,10 +3,12 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <new>
 #include <ranges>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -26,6 +28,17 @@ namespace Horo::AI {
             std::unique_ptr<AiTaskLifecycle> task;
             CancellationSource cancellation;
             bool retired{};
+        };
+
+        struct EntityRefHash final {
+            [[nodiscard]] std::size_t operator()(const Runtime::EntityRef &entity) const noexcept {
+                std::size_t result = std::hash<std::uint64_t>{}(entity.runtime.value);
+                result ^= std::hash<std::uint32_t>{}(entity.entity.index) + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) +
+                          (result >> 2U);
+                result ^= std::hash<std::uint32_t>{}(entity.entity.generation) + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) +
+                          (result >> 2U);
+                return result;
+            }
         };
 
         [[nodiscard]] AgentRuntimeState *FindAgent(Detail::AiSceneRuntimeState &state, const AgentHandle handle) noexcept;
@@ -77,6 +90,7 @@ namespace Horo::AI {
         struct AiSceneRuntimeState final {
             AiSceneActivationBinding binding;
             std::vector<AgentRuntimeState> agents;
+            std::unordered_multimap<Runtime::EntityRef, std::size_t, EntityRefHash> agentsByOwner; /**< Stable owner-to-slot lookup. */
             std::uint32_t nextTaskSlot{};
         };
     }  // namespace Detail
@@ -104,6 +118,7 @@ namespace Horo::AI {
             for (AgentRuntimeState &agent : state.agents)
                 CancelOwnedWork(agent);
             state.agents.clear();
+            state.agentsByOwner.clear();
         }
 
         [[nodiscard]] Result<void> ValidateSceneInputs(const std::span<const AiSceneAgentDescriptor> agents,
@@ -124,15 +139,13 @@ namespace Horo::AI {
                     }
                 }
                 {
-                    std::vector<Runtime::EntityRef> owners;
+                    std::unordered_set<Runtime::EntityRef, EntityRefHash> owners;
                     owners.reserve(agents.size());
                     for (const AiSceneAgentDescriptor &agent : agents) {
                         views.push_back({.agent = &agent.agent, .controller = agent.controller ? &*agent.controller : nullptr});
-                        if (!agent.owner.IsValid() || agent.owner.runtime != binding.scene ||
-                            std::ranges::find(owners, agent.owner) != owners.end())
+                        if (!agent.owner.IsValid() || agent.owner.runtime != binding.scene || !owners.insert(agent.owner).second)
                             return Failure(AIErrors::SceneActivationInvalid,
                                            "AI scene agents must reference unique live entity generations.");
-                        owners.push_back(agent.owner);
                     }
                 }
                 return ValidateAiSceneComponents(views);
@@ -149,8 +162,15 @@ namespace Horo::AI {
             const bool sceneStartup = input.agent.enabled && input.agent.startupPolicy == AiStartupPolicy::OnSceneActivation;
             const bool controllerStartup =
                 input.controller && input.controller->enabled && input.controller->startupPolicy == AiStartupPolicy::OnSceneActivation;
-            if (!sceneStartup || !controllerStartup)
+            const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, 1}};
+            if (!sceneStartup || !controllerStartup) {
+                prepared.emplace(AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
+                                                                                  .owner = input.owner,
+                                                                                  .agent = input.agent,
+                                                                                  .controller = input.controller,
+                                                                                  .state = AiAgentActivationState::Disabled}});
                 return Result<void>::Success();
+            }
 
             const AiControllerDescriptor *descriptor = FindDescriptor(descriptors, input.controller->controller);
             if (descriptor == nullptr)
@@ -161,7 +181,6 @@ namespace Horo::AI {
             if (!HasCapabilities(availableCapabilities, input.controller->requiredCapabilities))
                 return Failure(AIErrors::CapabilityUnavailable, "An enabled AI controller requires an unavailable host capability.");
 
-            const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, 1}};
             const auto schema = descriptor->blackboardSchema;
             const BlackboardInstanceBinding blackboardBinding{.agent = handle,
                                                               .schema = schema->Identity(),
@@ -194,16 +213,20 @@ namespace Horo::AI {
                 state = std::make_unique<Detail::AiSceneRuntimeState>();
                 state->binding = binding;
                 state->agents.reserve(agents.size());
+                state->agentsByOwner.reserve(agents.size());
                 for (const AiSceneAgentDescriptor &input : agents) {
                     std::optional<AgentRuntimeState> prepared;
+                    const std::size_t slotIndex = state->agents.size();
                     const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, availableCapabilities,
-                                                                        static_cast<std::uint32_t>(state->agents.size()), prepared);
+                                                                        static_cast<std::uint32_t>(slotIndex), prepared);
                     if (ready.HasError()) {
                         ShutdownStateContents(*state);
                         return Result<std::unique_ptr<Detail::AiSceneRuntimeState>>::Failure(ready.ErrorValue());
                     }
-                    if (prepared)
+                    if (prepared) {
                         state->agents.push_back(std::move(*prepared));
+                        state->agentsByOwner.emplace(input.owner, slotIndex);
+                    }
                 }
             } catch (const std::bad_alloc &) {
                 if (state != nullptr)
@@ -220,10 +243,12 @@ namespace Horo::AI {
     Result<AiAgentRuntimeRecord> AiSceneSnapshot::Find(const AgentHandle handle) const {
         if (const Result<void> valid = ValidateAiRuntimeHandle(handle, binding_.incarnation); valid.HasError())
             return Result<AiAgentRuntimeRecord>::Failure(valid.ErrorValue());
-        const auto found = std::ranges::find(agents_, handle, &AiAgentRuntimeRecord::handle);
-        if (found == agents_.end())
+        if (handle.slot.index >= slotLookup_.size() || !slotLookup_[handle.slot.index])
             return Failure<AiAgentRuntimeRecord>(AIErrors::HandleInvalid, "The AI agent handle is not resident in this scene publication.");
-        return Result<AiAgentRuntimeRecord>::Success(*found);
+        const AiAgentRuntimeRecord &found = agents_[*slotLookup_[handle.slot.index]];
+        if (found.handle != handle)
+            return Failure<AiAgentRuntimeRecord>(AIErrors::HandleInvalid, "The AI agent handle is not resident in this scene publication.");
+        return Result<AiAgentRuntimeRecord>::Success(found);
     }
 
     AiSceneActivationCandidate::AiSceneActivationCandidate(AiSceneRuntime &runtime, const AiSceneActivationBinding binding,
@@ -377,7 +402,9 @@ namespace Horo::AI {
         if (!owner.IsValid() || owner.runtime != active_->binding.scene)
             return Failure<std::size_t>(AIErrors::HandleInvalid, "The AI entity owner is stale or belongs to another scene.");
         std::size_t retired = 0;
-        for (AgentRuntimeState &slot : active_->agents) {
+        const auto owners = active_->agentsByOwner.equal_range(owner);
+        for (auto ownerIt = owners.first; ownerIt != owners.second; ++ownerIt) {
+            AgentRuntimeState &slot = active_->agents[ownerIt->second];
             if (slot.retired || slot.record.owner != owner)
                 continue;
             CancelOwnedWork(slot);
@@ -395,10 +422,14 @@ namespace Horo::AI {
         AiSceneSnapshot snapshot;
         snapshot.binding_ = active_->binding;
         try {
+            snapshot.slotLookup_.resize(active_->agents.size());
             snapshot.agents_.reserve(active_->agents.size());
-            for (const AgentRuntimeState &slot : active_->agents) {
-                if (!slot.retired)
-                    snapshot.agents_.push_back(slot.record);
+            for (std::size_t slotIndex = 0; slotIndex < active_->agents.size(); ++slotIndex) {
+                const AgentRuntimeState &slot = active_->agents[slotIndex];
+                if (slot.retired)
+                    continue;
+                snapshot.slotLookup_[slotIndex] = snapshot.agents_.size();
+                snapshot.agents_.push_back(slot.record);
             }
         } catch (const std::bad_alloc &) {
             return Failure<AiSceneSnapshot>(AIErrors::AgentCapacityExceeded, "AI scene snapshot storage exceeded its bounded capacity.");

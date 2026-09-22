@@ -89,6 +89,7 @@ namespace Horo::AI {
         friend class AiSceneRuntime;
         AiSceneActivationBinding binding_;
         std::vector<AiAgentRuntimeRecord> agents_;
+        std::vector<std::optional<std::size_t>> slotLookup_; /**< Snapshot slot index to compact record index. */
     };
 
     namespace Detail {
