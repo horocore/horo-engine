@@ -193,35 +193,12 @@ namespace Horo::Editor {
         if (!allowCommands || m_baselines.empty())
             return {};
 
-        if (edit.resetRequested) {
-            m_draft.position = {};
-            m_draft.rotationDegrees = {};
-            m_draft.scale = {1.0F, 1.0F, 1.0F};
-            m_draft.mixed = {};
-            m_editedAxes = {
-                .position = {true, true, true},
-                .rotation = {true, true, true},
-                .scale = {true, true, true},
-            };
-            m_relativeAxes = {};
-            const bool hadPreview = m_hasTransformPreview;
-            const std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
-            EditorWorkspaceViewCommandData command;
-            m_hasTransformPreview = false;
-            m_editedAxes = {};
-            m_relativeAxes = {};
-            if (!updates.has_value() || updates->empty()) {
-                return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object)
-                                  : EditorWorkspaceViewCommandData{};
-            }
-            command.command = EditorWorkspaceViewCommand::CommitObjectTransform;
-            command.transformUpdates = std::move(*updates);
-            return command;
-        }
+        if (edit.resetRequested)
+            return ResetTransformToIdentity();
 
         if (edit.cancelRequested && m_hasTransformPreview) {
             ResetTransformDraft();
-            m_hasTransformPreview = false;
+            ClearTransformInteraction();
             return MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object);
         }
 
@@ -238,48 +215,69 @@ namespace Horo::Editor {
         }
 
         if (!IsTransformValid()) {
-            if (edit.committed && m_hasTransformPreview) {
-                ResetTransformDraft();
-                m_hasTransformPreview = false;
-                return MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object);
-            }
-            return {};
+            return RejectInvalidTransform(edit.committed);
         }
 
-        if (edit.committed) {
-            if (!m_editedAxes.Any()) {
-                m_hasTransformPreview = false;
-                return {};
-            }
-            const bool hadPreview = m_hasTransformPreview;
-            const std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
-            EditorWorkspaceViewCommandData command;
-            m_hasTransformPreview = false;
-            m_editedAxes = {};
-            m_relativeAxes = {};
-            if (!updates.has_value() || updates->empty()) {
-                ResetTransformDraft();
-                return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object)
-                                  : EditorWorkspaceViewCommandData{};
-            }
-            command.command = EditorWorkspaceViewCommand::CommitObjectTransform;
-            command.transformUpdates = std::move(*updates);
-            return command;
-        }
+        if (edit.committed)
+            return CommitTransformDraft();
         if (!edit.changed || !m_editedAxes.Any())
             return {};
 
+        return PreviewTransformDraft();
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::ResetTransformToIdentity() {
+        m_draft.position = {};
+        m_draft.rotationDegrees = {};
+        m_draft.scale = {1.0F, 1.0F, 1.0F};
+        m_draft.mixed = {};
+        m_editedAxes = {
+            .position = {true, true, true},
+            .rotation = {true, true, true},
+            .scale = {true, true, true},
+        };
+        m_relativeAxes = {};
+        return CommitTransformDraft();
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::RejectInvalidTransform(const bool committed) {
+        if (!committed || !m_hasTransformPreview)
+            return {};
+        ResetTransformDraft();
+        ClearTransformInteraction();
+        return MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object);
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::CommitTransformDraft() {
+        if (!m_editedAxes.Any()) {
+            ClearTransformInteraction();
+            return {};
+        }
+
+        const bool hadPreview = m_hasTransformPreview;
         const std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
+        ClearTransformInteraction();
         if (!updates.has_value() || updates->empty()) {
-            const bool hadPreview = m_hasTransformPreview;
             ResetTransformDraft();
-            m_hasTransformPreview = false;
-            m_editedAxes = {};
-            m_relativeAxes = {};
             return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object)
                               : EditorWorkspaceViewCommandData{};
         }
 
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CommitObjectTransform;
+        command.transformUpdates = std::move(*updates);
+        return command;
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::PreviewTransformDraft() {
+        const std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
+        if (!updates.has_value() || updates->empty()) {
+            const bool hadPreview = m_hasTransformPreview;
+            ResetTransformDraft();
+            ClearTransformInteraction();
+            return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object)
+                              : EditorWorkspaceViewCommandData{};
+        }
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::PreviewObjectTransform;
         command.transformUpdates = std::move(*updates);
@@ -448,6 +446,12 @@ namespace Horo::Editor {
 
     void InspectorEditSession::ResetAudioSourceDraft(const SceneObject &object) {
         m_draft.audioSource = object.components.audioSource;
+    }
+
+    void InspectorEditSession::ClearTransformInteraction() noexcept {
+        m_hasTransformPreview = false;
+        m_editedAxes = {};
+        m_relativeAxes = {};
     }
 
     void InspectorEditSession::SynchronizeDraft(const std::span<const SceneObject> objects,

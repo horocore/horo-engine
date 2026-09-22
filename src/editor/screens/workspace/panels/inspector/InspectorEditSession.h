@@ -192,6 +192,11 @@ namespace Horo::Editor {
         void ResetLightDraft(const SceneObject &object);
         void ResetTriggerVolumeDraft(const SceneObject &object);
         void ResetAudioSourceDraft(const SceneObject &object);
+        void ClearTransformInteraction() noexcept;
+        [[nodiscard]] EditorWorkspaceViewCommandData RejectInvalidTransform(bool committed);
+        [[nodiscard]] EditorWorkspaceViewCommandData ResetTransformToIdentity();
+        [[nodiscard]] EditorWorkspaceViewCommandData CommitTransformDraft();
+        [[nodiscard]] EditorWorkspaceViewCommandData PreviewTransformDraft();
         [[nodiscard]] std::optional<std::vector<SceneObjectTransformUpdate>> BuildTransformUpdates() const;
 
         InspectorObjectDraft m_draft;
