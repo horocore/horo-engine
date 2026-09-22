@@ -123,6 +123,31 @@ namespace Horo::Runtime::Ui {
                 return Failure<std::int32_t>(UiErrors::CanvasSpaceOverflow);
             return Result<std::int32_t>::Success(static_cast<std::int32_t>(rounded));
         }
+
+        /** @brief Resolves both logical axes from one already validated physical content rectangle and device scale. */
+        [[nodiscard]] Result<UiCanvasLogicalExtent> ResolveLogicalExtent(const UiCanvasPixelRect content, const UiCanvasDeviceScale scale) {
+            auto width = ResolveAxis(content.width, scale);
+            if (width.HasError())
+                return Result<UiCanvasLogicalExtent>::Failure(width.ErrorValue());
+            auto height = ResolveAxis(content.height, scale);
+            if (height.HasError())
+                return Result<UiCanvasLogicalExtent>::Failure(height.ErrorValue());
+            return Result<UiCanvasLogicalExtent>::Success({std::move(width).Value(), std::move(height).Value()});
+        }
+
+        /** @brief Packs resolved logical, physical, DPI, and presentation evidence into the screen canvas result. */
+        [[nodiscard]] UiResolvedScreenCanvas MakeResolvedScreenCanvas(const UiCanvasDescriptor &canvas,
+                                                                      const UiCanvasViewportEvidence &evidence,
+                                                                      const UiCanvasDeviceScale scale, const UiCanvasPixelRect content,
+                                                                      const UiCanvasLogicalExtent logicalExtent) noexcept {
+            const auto dpiScale = evidence.dpiScale.IsValid() ? ReducedScale(evidence.dpiScale.pixelUnits, evidence.dpiScale.logicalDips)
+                                                              : UiCanvasDeviceScale{};
+            const auto safeInsets = canvas.presentation.safeArea == UiSafeAreaMode::Inset ? evidence.safeAreaInsets : UiCanvasPixelInsets{};
+            const auto uiScale = ReducedFactor(canvas.presentation.uiScale.numerator, canvas.presentation.uiScale.denominator);
+            const auto fontScale = ReducedFactor(canvas.presentation.fontScale.numerator, canvas.presentation.fontScale.denominator);
+            return {logicalExtent, evidence.pixelExtent,         scale, content, safeInsets, dpiScale, uiScale,
+                    fontScale,     canvas.presentation.pixelSnap};
+        }
     }  // namespace
 
     /** @copydoc UiCanvasReferenceResolution::IsValid */
@@ -220,26 +245,11 @@ namespace Horo::Runtime::Ui {
                                      ? UiCanvasPixelRect{0, 0, evidence.pixelExtent.width, evidence.pixelExtent.height}
                                      : content.Value();
 
-        auto width = ResolveAxis(contentRect.width, scale.Value());
-        if (width.HasError())
-            return Result<UiResolvedScreenCanvas>::Failure(width.ErrorValue());
-        auto height = ResolveAxis(contentRect.height, scale.Value());
-        if (height.HasError())
-            return Result<UiResolvedScreenCanvas>::Failure(height.ErrorValue());
-        const auto dpiScale =
-            evidence.dpiScale.IsValid() ? ReducedScale(evidence.dpiScale.pixelUnits, evidence.dpiScale.logicalDips) : UiCanvasDeviceScale{};
-        const auto safeInsets = canvas.presentation.safeArea == UiSafeAreaMode::Inset ? evidence.safeAreaInsets : UiCanvasPixelInsets{};
-        const auto uiScale = ReducedFactor(canvas.presentation.uiScale.numerator, canvas.presentation.uiScale.denominator);
-        const auto fontScale = ReducedFactor(canvas.presentation.fontScale.numerator, canvas.presentation.fontScale.denominator);
-        return Result<UiResolvedScreenCanvas>::Success({{std::move(width).Value(), std::move(height).Value()},
-                                                        evidence.pixelExtent,
-                                                        scale.Value(),
-                                                        content.Value(),
-                                                        safeInsets,
-                                                        dpiScale,
-                                                        uiScale,
-                                                        fontScale,
-                                                        canvas.presentation.pixelSnap});
+        const auto logicalExtent = ResolveLogicalExtent(contentRect, scale.Value());
+        if (logicalExtent.HasError())
+            return Result<UiResolvedScreenCanvas>::Failure(logicalExtent.ErrorValue());
+        return Result<UiResolvedScreenCanvas>::Success(
+            MakeResolvedScreenCanvas(canvas, evidence, scale.Value(), content.Value(), logicalExtent.Value()));
     }
 
     /** @copydoc ResolveUiWorldCanvas */

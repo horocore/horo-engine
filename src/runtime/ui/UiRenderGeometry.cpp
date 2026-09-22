@@ -41,6 +41,21 @@ namespace Horo::Runtime::Ui {
             return std::fmod(std::abs(lower), 2.0) == 0.0 ? lower : lower + 1.0;
         }
 
+        /** @brief Snaps one finite logical point using a precomputed physical-pixel ratio. */
+        [[nodiscard]] Result<UiPixelSnappedPoint> SnapPointToPixels(const UiCanvasPixelRect content, const double unitsPerPixel,
+                                                                    const float x, const float y) {
+            if (!std::isfinite(x) || !std::isfinite(y))
+                return Failure<UiPixelSnappedPoint>(UiErrors::CanvasSpaceInvalid);
+            const double physicalX = static_cast<double>(content.x) + static_cast<double>(x) / unitsPerPixel;
+            const double physicalY = static_cast<double>(content.y) + static_cast<double>(y) / unitsPerPixel;
+            const double snappedX = (RoundTiesToEven(physicalX) - content.x) * unitsPerPixel;
+            const double snappedY = (RoundTiesToEven(physicalY) - content.y) * unitsPerPixel;
+            if (!std::isfinite(snappedX) || !std::isfinite(snappedY) || std::abs(snappedX) > std::numeric_limits<float>::max() ||
+                std::abs(snappedY) > std::numeric_limits<float>::max())
+                return Failure<UiPixelSnappedPoint>(UiErrors::CanvasSpaceOverflow);
+            return Result<UiPixelSnappedPoint>::Success({static_cast<float>(snappedX), static_cast<float>(snappedY)});
+        }
+
         [[nodiscard]] UiLinearColor WithOpacity(const UiLinearColor color, const float opacity) noexcept {
             UiLinearColor result = color;
             result.alpha *= opacity;
@@ -199,14 +214,7 @@ namespace Horo::Runtime::Ui {
 
         const auto content = canvas.ContentPixelRect();
         const double unitsPerPixel = static_cast<double>(canvas.pixelsPerDip.logicalDips) * 64.0 / canvas.pixelsPerDip.pixelUnits;
-        const double physicalX = static_cast<double>(content.x) + static_cast<double>(x) / unitsPerPixel;
-        const double physicalY = static_cast<double>(content.y) + static_cast<double>(y) / unitsPerPixel;
-        const double snappedX = (RoundTiesToEven(physicalX) - content.x) * unitsPerPixel;
-        const double snappedY = (RoundTiesToEven(physicalY) - content.y) * unitsPerPixel;
-        if (!std::isfinite(snappedX) || !std::isfinite(snappedY) || std::abs(snappedX) > std::numeric_limits<float>::max() ||
-            std::abs(snappedY) > std::numeric_limits<float>::max())
-            return Failure<UiPixelSnappedPoint>(UiErrors::CanvasSpaceOverflow);
-        return Result<UiPixelSnappedPoint>::Success({static_cast<float>(snappedX), static_cast<float>(snappedY)});
+        return SnapPointToPixels(content, unitsPerPixel, x, y);
     }
 
     /** @copydoc UiRenderVertex::IsValid */
@@ -340,10 +348,21 @@ namespace Horo::Runtime::Ui {
             }, command.payload);
         }
 
-        [[nodiscard]] Result<void> SnapVertices(const UiResolvedScreenCanvas &canvas,
-                                                const std::span<UiRenderVertex> targetVertices) const {
+        [[nodiscard]] Result<void> ApplyPixelSnapping(const UiResolvedScreenCanvas &canvas,
+                                                      const std::span<UiRenderVertex> targetVertices) const {
+            if (!canvas.IsValid())
+                return Failure(UiErrors::CanvasSpaceInvalid);
+            if (canvas.pixelSnap == UiPixelSnapMode::Disabled) {
+                if (!std::ranges::all_of(targetVertices, [](const UiRenderVertex &vertex) {
+                    return std::isfinite(vertex.x) && std::isfinite(vertex.y);
+                }))
+                    return Failure(UiErrors::CanvasSpaceInvalid);
+                return Result<void>::Success();
+            }
+            const auto content = canvas.ContentPixelRect();
+            const double unitsPerPixel = static_cast<double>(canvas.pixelsPerDip.logicalDips) * 64.0 / canvas.pixelsPerDip.pixelUnits;
             for (auto &vertex : targetVertices) {
-                const auto snapped = SnapUiPointToPixels(canvas, vertex.x, vertex.y);
+                const auto snapped = SnapPointToPixels(content, unitsPerPixel, vertex.x, vertex.y);
                 if (snapped.HasError())
                     return Result<void>::Failure(snapped.ErrorValue());
                 vertex.x = snapped.Value().x;
@@ -387,7 +406,7 @@ namespace Horo::Runtime::Ui {
             }
 
             if (canvas != nullptr) {
-                const auto snapped = SnapVertices(*canvas, vertices);
+                const auto snapped = ApplyPixelSnapping(*canvas, vertices);
                 if (snapped.HasError())
                     return snapped;
             }
