@@ -186,10 +186,10 @@ namespace Horo::Runtime::Ui {
             REQUIRE(decoded.Value().LocalizedTexts().size() == 1);
             REQUIRE(decoded.Value().LocalizedTexts()[0].Arguments().size() == 8);
             REQUIRE(decoded.Value().LocalizedTexts()[0].FailurePolicy() == UiLocalizedTextFailurePolicy::UseSafePlaceholder);
-            REQUIRE(std::holds_alternative<UiLocalizedDateTime>(decoded.Value().LocalizedTexts()[0].Arguments()[3].value));
-            REQUIRE(std::holds_alternative<UiLocalizedDuration>(decoded.Value().LocalizedTexts()[0].Arguments()[4].value));
-            REQUIRE(std::holds_alternative<UiLocalizedStableEnum>(decoded.Value().LocalizedTexts()[0].Arguments()[5].value));
-            REQUIRE(std::holds_alternative<UiLocalizedShortcut>(decoded.Value().LocalizedTexts()[0].Arguments()[7].value));
+            REQUIRE(std::holds_alternative<UiLocalizedDateTime>(decoded.Value().LocalizedTexts()[0].Arguments()[1].value));
+            REQUIRE(std::holds_alternative<UiLocalizedDuration>(decoded.Value().LocalizedTexts()[0].Arguments()[2].value));
+            REQUIRE(std::holds_alternative<UiLocalizedStableEnum>(decoded.Value().LocalizedTexts()[0].Arguments()[3].value));
+            REQUIRE(std::holds_alternative<UiLocalizedShortcut>(decoded.Value().LocalizedTexts()[0].Arguments()[6].value));
             REQUIRE(decoded.Value().LocalizedAssets().size() == 2);
             REQUIRE(decoded.Value().LocalizedAssets()[0].FallbackPolicy() == UiLocalizedAssetFallbackPolicy::UseNeutral);
             REQUIRE(decoded.Value().LocalizedAssets()[0].NeutralAsset().has_value());
