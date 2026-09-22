@@ -93,6 +93,87 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                 "Provide one valid expected asset type for each stable asset identity.",
                                                 false,
                                                 true};
+    /** @copydoc LocaleInvalid */
+    const ErrorCodeDescriptor LocaleInvalid{UiDomain,
+                                            ErrorCode{"runtime_ui.locale.invalid"},
+                                            ErrorSeverity::Error,
+                                            "The Runtime UI locale evidence is malformed or not normalized.",
+                                            "Provide a bounded normalized BCP 47 locale tag from the Localization boundary.",
+                                            false,
+                                            true};
+    /** @copydoc LocaleFallbackChainInvalid */
+    const ErrorCodeDescriptor LocaleFallbackChainInvalid{UiDomain,
+                                                         ErrorCode{"runtime_ui.locale_fallback_chain.invalid"},
+                                                         ErrorSeverity::Error,
+                                                         "The Runtime UI locale fallback chain is malformed or exceeds its bound.",
+                                                         "Provide non-empty, normalized, unique locale evidence in precedence order.",
+                                                         false,
+                                                         true};
+    /** @copydoc LocalizedKeyInvalid */
+    const ErrorCodeDescriptor LocalizedKeyInvalid{UiDomain,
+                                                  ErrorCode{"runtime_ui.localized_key.invalid"},
+                                                  ErrorSeverity::Error,
+                                                  "The Runtime UI localized message key is invalid.",
+                                                  "Provide a stable owner namespace and semantic local key.",
+                                                  false,
+                                                  true};
+    /** @copydoc LocalizedMessageInvalid */
+    const ErrorCodeDescriptor LocalizedMessageInvalid{UiDomain,
+                                                      ErrorCode{"runtime_ui.localized_message.invalid"},
+                                                      ErrorSeverity::Error,
+                                                      "The Runtime UI localized message reference is invalid.",
+                                                      "Provide a valid key, bounded UTF-8 fallback, arguments, and failure policy.",
+                                                      false,
+                                                      true};
+    /** @copydoc LocalizedArgumentInvalid */
+    const ErrorCodeDescriptor LocalizedArgumentInvalid{UiDomain,
+                                                       ErrorCode{"runtime_ui.localized_argument.invalid"},
+                                                       ErrorSeverity::Error,
+                                                       "A Runtime UI localized argument is invalid.",
+                                                       "Use a declared bounded typed argument value.",
+                                                       false,
+                                                       true};
+    /** @copydoc LocalizedArgumentConflict */
+    const ErrorCodeDescriptor LocalizedArgumentConflict{UiDomain,
+                                                        ErrorCode{"runtime_ui.localized_argument.conflict"},
+                                                        ErrorSeverity::Error,
+                                                        "A Runtime UI localized message repeats an argument name.",
+                                                        "Use each named argument exactly once.",
+                                                        false,
+                                                        true};
+    /** @copydoc LocalizedArgumentCapacityExceeded */
+    const ErrorCodeDescriptor LocalizedArgumentCapacityExceeded{UiDomain,
+                                                                ErrorCode{"runtime_ui.localized_argument.capacity_exceeded"},
+                                                                ErrorSeverity::Error,
+                                                                "A Runtime UI localized message exceeds its argument bound.",
+                                                                "Reduce the number of named arguments in the message reference.",
+                                                                false,
+                                                                true};
+    /** @copydoc LocalizedAssetReferenceInvalid */
+    const ErrorCodeDescriptor
+        LocalizedAssetReferenceInvalid{UiDomain,
+                                       ErrorCode{"runtime_ui.localized_asset_reference.invalid"},
+                                       ErrorSeverity::Error,
+                                       "The Runtime UI localized asset reference is invalid.",
+                                       "Provide a valid asset type, finite variants, and an explicit fallback policy.",
+                                       false,
+                                       true};
+    /** @copydoc LocalizedAssetVariantConflict */
+    const ErrorCodeDescriptor LocalizedAssetVariantConflict{UiDomain,
+                                                            ErrorCode{"runtime_ui.localized_asset_variant.conflict"},
+                                                            ErrorSeverity::Error,
+                                                            "The Runtime UI localized asset variants conflict.",
+                                                            "Use each locale once and keep one expected type per asset identity.",
+                                                            false,
+                                                            true};
+    /** @copydoc LocalizedAssetUnavailable */
+    const ErrorCodeDescriptor LocalizedAssetUnavailable{UiDomain,
+                                                        ErrorCode{"runtime_ui.localized_asset.unavailable"},
+                                                        ErrorSeverity::Error,
+                                                        "No declared Runtime UI localized asset satisfies the fallback policy.",
+                                                        "Publish the required locale variant or declare neutral/omit fallback.",
+                                                        true,
+                                                        true};
     /** @copydoc CapacityExceeded */
     const ErrorCodeDescriptor CapacityExceeded{UiDomain,
                                                ErrorCode{"runtime_ui.capacity.exceeded"},

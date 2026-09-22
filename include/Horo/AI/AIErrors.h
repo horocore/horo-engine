@@ -120,4 +120,16 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor DecisionAssetStorageUnavailable;
     /** @brief An activation slot was offered a compilation without a clean immutable plan. */
     extern const ErrorCodeDescriptor DecisionAssetActivationInvalid;
+    /** @brief An authored AI scene component has an invalid identity, schema, capability, or startup policy. */
+    extern const ErrorCodeDescriptor SceneComponentInvalid;
+    /** @brief An enabled controller has no matching immutable activation descriptor. */
+    extern const ErrorCodeDescriptor ControllerDescriptorMissing;
+    /** @brief An authored controller and its immutable activation descriptor disagree. */
+    extern const ErrorCodeDescriptor ControllerDescriptorIncompatible;
+    /** @brief The host cannot stage every capability required by an enabled controller. */
+    extern const ErrorCodeDescriptor CapabilityUnavailable;
+    /** @brief A detached AI scene candidate cannot be admitted or published. */
+    extern const ErrorCodeDescriptor SceneActivationInvalid;
+    /** @brief The bounded AI scene-agent capacity has been exhausted. */
+    extern const ErrorCodeDescriptor AgentCapacityExceeded;
 }  // namespace Horo::AI::AIErrors

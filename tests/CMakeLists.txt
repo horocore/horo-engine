@@ -360,6 +360,8 @@ horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroAITests
         unit/runtime/ai/AIIdentityTests.cpp
+        unit/runtime/ai/AISceneActivationTests.cpp
+        unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
@@ -369,7 +371,7 @@ add_executable(HoroAITests
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
-target_link_libraries(HoroAITests PRIVATE HoroEngine::AI)
+target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 
 add_executable(HoroAnimationApiTests
@@ -1519,6 +1521,11 @@ add_executable(HoroRuntimeUiDocumentTests
 )
 target_compile_features(HoroRuntimeUiDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiLocalizationTests
+        unit/runtime/ui/UiLocalizationTests.cpp
+)
+target_compile_features(HoroRuntimeUiLocalizationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiLocalizationTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiCanvasSpaceTests
         unit/runtime/ui/UiCanvasSpaceTests.cpp
 )
@@ -1918,6 +1925,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
+        unit/extensions/EditorUiFormTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ScriptExportDescriptorTests.cpp
@@ -2333,6 +2341,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiIdentityTests
         HoroRuntimeUiBindingTests
         HoroRuntimeUiDocumentTests
+        HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests
         HoroRuntimeUiAccessibilityTests

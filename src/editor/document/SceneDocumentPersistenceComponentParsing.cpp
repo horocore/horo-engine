@@ -9,6 +9,86 @@
 #include <variant>
 
 namespace Horo::Editor::ScenePersistenceDetail {
+    namespace {
+        [[nodiscard]] Result<AI::AiStartupPolicy> ParseAiStartupPolicy(const Json &value) {
+            using enum AI::AiStartupPolicy;
+            if (!value.is_string())
+                return Result<AI::AiStartupPolicy>::Failure(PersistenceError(SceneInvalid, "AI startup policy is invalid."));
+            const std::string policy = value.get<std::string>();
+            if (policy == "scene_activation")
+                return Result<AI::AiStartupPolicy>::Success(OnSceneActivation);
+            if (policy == "on_enable")
+                return Result<AI::AiStartupPolicy>::Success(OnEnable);
+            if (policy == "manual")
+                return Result<AI::AiStartupPolicy>::Success(Manual);
+            return Result<AI::AiStartupPolicy>::Failure(PersistenceError(SceneInvalid, "AI startup policy is invalid."));
+        }
+
+        [[nodiscard]] Result<AI::DecisionPlanKind> ParseAiDecisionPlanKind(const Json &value) {
+            using enum AI::DecisionPlanKind;
+            if (!value.is_string())
+                return Result<AI::DecisionPlanKind>::Failure(PersistenceError(SceneInvalid, "AI decision plan kind is invalid."));
+            const std::string kind = value.get<std::string>();
+            if (kind == "behavior_tree")
+                return Result<AI::DecisionPlanKind>::Success(BehaviorTree);
+            if (kind == "state_machine")
+                return Result<AI::DecisionPlanKind>::Success(StateMachine);
+            if (kind == "utility")
+                return Result<AI::DecisionPlanKind>::Success(Utility);
+            return Result<AI::DecisionPlanKind>::Failure(PersistenceError(SceneInvalid, "AI decision plan kind is invalid."));
+        }
+    }  // namespace
+
+    /** @brief Parses one durable AI agent binding and preserves no runtime state. */
+    Result<AI::AiAgentComponent> ParseAiAgent(const Json &value) {
+        if (!value.is_object() || !value.contains("agent") || !value["agent"].is_number_unsigned() || !value.contains("schemaVersion") ||
+            !value["schemaVersion"].is_number_unsigned() || !value.contains("startupPolicy") || !value.contains("enabled") ||
+            !value["enabled"].is_boolean() || value["schemaVersion"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            return Result<AI::AiAgentComponent>::Failure(PersistenceError(SceneInvalid, "AI agent component is invalid."));
+        auto agent = AI::AgentId::Create(value["agent"].get<std::uint64_t>());
+        auto policy = ParseAiStartupPolicy(value["startupPolicy"]);
+        if (agent.HasError() || policy.HasError())
+            return Result<AI::AiAgentComponent>::Failure(
+                PersistenceError(SceneInvalid, "AI agent component identity or policy is invalid."));
+        AI::AiAgentComponent component{.agent = agent.Value(),
+                                       .schemaVersion = value["schemaVersion"].get<std::uint32_t>(),
+                                       .startupPolicy = policy.Value(),
+                                       .enabled = value["enabled"].get<bool>()};
+        if (const Result<void> valid = AI::ValidateAiAgentComponent(component); valid.HasError())
+            return Result<AI::AiAgentComponent>::Failure(PersistenceError(SceneInvalid, "AI agent component validation failed."));
+        return Result<AI::AiAgentComponent>::Success(std::move(component));
+    }
+
+    /** @brief Parses one durable AI controller binding and preserves missing descriptor references. */
+    Result<AI::AiControllerComponent> ParseAiController(const Json &value) {
+        if (!value.is_object() ||
+            !HasUnsignedFields(value, {"controller", "decisionAsset", "blackboardSchema", "requiredCapabilities", "schemaVersion"}) ||
+            !value.contains("decisionKind") || !value.contains("startupPolicy") || !value.contains("enabled") ||
+            !value["enabled"].is_boolean() ||
+            value["requiredCapabilities"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max() ||
+            value["schemaVersion"].get<std::uint64_t>() > std::numeric_limits<std::uint32_t>::max())
+            return Result<AI::AiControllerComponent>::Failure(PersistenceError(SceneInvalid, "AI controller component is invalid."));
+        auto controller = AI::ControllerTypeId::Create(value["controller"].get<std::uint64_t>());
+        auto decision = AI::DecisionGraphAssetId::Create(value["decisionAsset"].get<std::uint64_t>());
+        auto schema = AI::BlackboardSchemaId::Create(value["blackboardSchema"].get<std::uint64_t>());
+        auto kind = ParseAiDecisionPlanKind(value["decisionKind"]);
+        auto policy = ParseAiStartupPolicy(value["startupPolicy"]);
+        if (controller.HasError() || decision.HasError() || schema.HasError() || kind.HasError() || policy.HasError())
+            return Result<AI::AiControllerComponent>::Failure(
+                PersistenceError(SceneInvalid, "AI controller component identity or policy is invalid."));
+        AI::AiControllerComponent component{.controller = controller.Value(),
+                                            .decisionAsset = decision.Value(),
+                                            .blackboardSchema = schema.Value(),
+                                            .decisionKind = kind.Value(),
+                                            .requiredCapabilities = AI::AiCapabilitySet{value["requiredCapabilities"].get<std::uint32_t>()},
+                                            .schemaVersion = value["schemaVersion"].get<std::uint32_t>(),
+                                            .startupPolicy = policy.Value(),
+                                            .enabled = value["enabled"].get<bool>()};
+        if (const Result<void> valid = AI::ValidateAiControllerComponent(component); valid.HasError())
+            return Result<AI::AiControllerComponent>::Failure(PersistenceError(SceneInvalid, "AI controller component validation failed."));
+        return Result<AI::AiControllerComponent>::Success(std::move(component));
+    }
+
     [[nodiscard]] Result<Runtime::CameraComponent> ParseCameraComponent(const Json &camera) {
         if (!camera.is_object() || !camera.contains("projection") || !camera["projection"].is_string()) {
             return Result<Runtime::CameraComponent>::Failure(PersistenceError(SceneInvalid, "Camera is invalid."));
@@ -356,6 +436,10 @@ namespace Horo::Editor::ScenePersistenceDetail {
         if (auto parsed = parse("navigationLink", components.navigationLink, ParseNavigationLink); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("navigationAgent", components.navigationAgent, ParseNavigationAgent); parsed.HasError())
+            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
+        if (auto parsed = parse("aiAgent", components.aiAgent, ParseAiAgent); parsed.HasError())
+            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
+        if (auto parsed = parse("aiController", components.aiController, ParseAiController); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());

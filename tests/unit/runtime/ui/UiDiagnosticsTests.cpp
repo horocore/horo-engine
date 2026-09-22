@@ -38,7 +38,7 @@ namespace Horo::Runtime::Ui {
         }
 
         TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
-            REQUIRE(UiDiagnosticErrorDescriptors().size() == 144);
+            REQUIRE(UiDiagnosticErrorDescriptors().size() == 154);
             for (const ErrorCodeDescriptor *descriptor : UiDiagnosticErrorDescriptors()) {
                 CAPTURE(descriptor->code.Value());
                 const auto record = MakeUiDiagnosticRecord(UiDiagnosticCategory::Document, MakeError(*descriptor));

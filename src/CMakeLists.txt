@@ -279,6 +279,7 @@ target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
+        runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
         runtime/ui/UiFocusErrors.cpp
         runtime/ui/UiAccessibilityErrors.cpp
@@ -288,8 +289,11 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingFingerprint.cpp
         runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
+        runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
+        runtime/ui/UiCookedDocument.cpp
         runtime/ui/UiDocumentSerialization.cpp
+        runtime/ui/UiDocumentLocalizationSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
@@ -677,6 +681,8 @@ target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics Hor
 
 add_library(HoroAI STATIC
         runtime/ai/api/AIErrors.cpp
+        runtime/ai/api/AISceneComponents.cpp
+        runtime/ai/api/AISceneErrors.cpp
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/BehaviorTree.cpp
@@ -690,6 +696,14 @@ add_library(HoroAI STATIC
 add_library(HoroEngine::AI ALIAS HoroAI)
 target_compile_features(HoroAI PUBLIC cxx_std_20)
 target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
+
+target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
+
+add_library(HoroAISceneIntegration STATIC
+        runtime/ai/integration/AISceneActivation.cpp)
+add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
+target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
 
 add_library(HoroAnimationApi STATIC
         runtime/animation/api/AnimationCompression.cpp
@@ -1223,6 +1237,7 @@ target_include_directories(HoroEditorModel
 target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::AI
         HoroEngine::Prefab
         HoroEngine::PrefabAuthoring
         HoroEngine::SceneModel
@@ -1579,6 +1594,9 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
+    extensions/manifest/EditorUiForm.cpp
+    extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h
         extensions/manifest/ScriptExportDescriptorValidationSupport.cpp

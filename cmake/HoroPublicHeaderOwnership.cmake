@@ -151,6 +151,8 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiCanvasSpace.h
+    Horo/Runtime/Ui/UiAssetDependency.h
+    Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
     Horo/Runtime/Ui/UiDiagnostics.h
@@ -350,6 +352,7 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AIErrors.h
+    Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h
     Horo/AI/AITaskLifecycle.h
     Horo/AI/BehaviorTree.h
@@ -358,6 +361,9 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
+)
+horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
+    Horo/AI/AISceneActivation.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h
@@ -671,6 +677,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
     Horo/Extensions/EditorSurfaceDescriptor.h
+    Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h
