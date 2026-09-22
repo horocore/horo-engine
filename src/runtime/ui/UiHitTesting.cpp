@@ -256,22 +256,25 @@ namespace Horo::Runtime::Ui {
             return Failure<std::optional<UiHitTestResult>>(UiErrors::CanvasSpaceModeMismatch);
         if (const auto validation = ValidatePresentation(*storage_, query.view, query.canvas, presented); validation.HasError())
             return Result<std::optional<UiHitTestResult>>::Failure(validation.ErrorValue());
-        if (!query.canvasSpace.pixelExtent.IsValid() || !query.canvasSpace.pixelsPerDip.IsValid() ||
-            query.canvasSpace.logicalExtent != storage_->descriptor.logicalExtent || !std::isfinite(query.pixelX) ||
-            !std::isfinite(query.pixelY))
+        if (!query.canvasSpace.IsValid() || query.canvasSpace.logicalExtent != storage_->descriptor.logicalExtent ||
+            !std::isfinite(query.pixelX) || !std::isfinite(query.pixelY))
             return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestInvalid);
+        const auto content = query.canvasSpace.ContentPixelRect();
         const double unitsPerPixel =
             static_cast<double>(query.canvasSpace.pixelsPerDip.logicalDips) * 64.0 / query.canvasSpace.pixelsPerDip.pixelUnits;
-        const double resolvedWidth = query.canvasSpace.pixelExtent.width * unitsPerPixel;
-        if (const double resolvedHeight = query.canvasSpace.pixelExtent.height * unitsPerPixel;
+        const double resolvedWidth = content.width * unitsPerPixel;
+        if (const double resolvedHeight = content.height * unitsPerPixel;
             !std::isfinite(unitsPerPixel) || std::abs(resolvedWidth - query.canvasSpace.logicalExtent.width) > 0.5 ||
             std::abs(resolvedHeight - query.canvasSpace.logicalExtent.height) > 0.5)
             return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestInvalid);
         if (query.pixelX < 0.0F || query.pixelY < 0.0F || query.pixelX >= static_cast<float>(query.canvasSpace.pixelExtent.width) ||
             query.pixelY >= static_cast<float>(query.canvasSpace.pixelExtent.height))
             return Result<std::optional<UiHitTestResult>>::Success(std::nullopt);
-        const double logicalX = static_cast<double>(query.pixelX) * unitsPerPixel;
-        const double logicalY = static_cast<double>(query.pixelY) * unitsPerPixel;
+        if (query.pixelX < static_cast<float>(content.x) || query.pixelY < static_cast<float>(content.y) ||
+            query.pixelX >= static_cast<float>(content.x + content.width) || query.pixelY >= static_cast<float>(content.y + content.height))
+            return Result<std::optional<UiHitTestResult>>::Success(std::nullopt);
+        const double logicalX = (static_cast<double>(query.pixelX) - content.x) * unitsPerPixel;
+        const double logicalY = (static_cast<double>(query.pixelY) - content.y) * unitsPerPixel;
         return Result<std::optional<UiHitTestResult>>::Success(HitLogical(*storage_, logicalX, logicalY, 0.0F));
     }
 

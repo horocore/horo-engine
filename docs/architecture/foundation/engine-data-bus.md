@@ -208,8 +208,18 @@ struct EngineDataBusConfig {
         BackpressurePolicy::DropNewest;
     std::unordered_map<TypeId, BackpressurePolicy> eventBackpressurePolicies;
     std::size_t maxAsyncQueueSize = 1024;
+    std::size_t maxSubscriptions = 1024;
 };
 ```
+
+The implementation exposes `EngineDataBusQueueStats` for queue depth, retained
+entries, dispatches, drops, merges, and active subscriptions. A full queue uses
+the configured `BackpressurePolicy`: `DropNewest` preserves retained FIFO
+entries, `DropOldest` evicts the oldest entry before retaining the new one, and
+`Merge` replaces the newest existing entry of the same type without changing
+its queue position. If no same-type entry exists, `Merge` drops the new entry.
+These policies affect invalidation delivery only; authoritative stores remain
+the source of truth.
 
 ### EngineDataBus Interface
 

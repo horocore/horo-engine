@@ -210,6 +210,29 @@ namespace Horo::Runtime::Ui {
             REQUIRE(afterShutdown.Value()->element == secondProjection[1].element);
         }
 
+        TEST_CASE_METHOD(HitTestFixture, "Screen hit testing maps physical pointers through the resolved safe content rectangle",
+                         "[runtime_ui][hit_test][safe_area]") {
+            projection[2].transform.values[4] = 50.0F;
+            projection[2].transform.values[5] = 50.0F;
+            projection[2].clip = {{50, 50}, {50, 50}};
+            projection[2].hasClip = true;
+            auto store = HitStore();
+            auto snapshot = std::move(store.Publish(layout, projection)).Value();
+            auto presented = Presented(layout.Descriptor().canvas, layout.Descriptor().interaction);
+            const UiResolvedScreenCanvas safeCanvas{{200, 200}, {500, 450}, {128, 1}, {50, 25, 400, 400},       {50, 25, 50, 25},
+                                                    {},         {},         {},       UiPixelSnapMode::Disabled};
+
+            const auto hit = snapshot.HitTestScreen({View(), layout.Descriptor().canvas, safeCanvas, 170.0F, 145.0F}, presented);
+            REQUIRE(hit.HasValue());
+            REQUIRE(hit.Value().has_value());
+            REQUIRE(hit.Value()->element == projection[2].element);
+            REQUIRE(hit.Value()->logicalPosition == UiLogicalPoint{60, 60});
+
+            const auto outside = snapshot.HitTestScreen({View(), layout.Descriptor().canvas, safeCanvas, 20.0F, 145.0F}, presented);
+            REQUIRE(outside.HasValue());
+            REQUIRE_FALSE(outside.Value().has_value());
+        }
+
         TEST_CASE_METHOD(HitTestFixture, "World hit testing projects bounded rays without renderer state",
                          "[runtime_ui][hit_test][world]") {
             auto store = HitStore(UiRenderMode::WorldSpace);

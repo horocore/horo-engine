@@ -925,7 +925,7 @@ add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiCanvasDocumentTests.cpp
 )
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -1525,7 +1525,7 @@ add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiDocumentSerializationTests.cpp
 )
 target_compile_features(HoroRuntimeUiDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi)
+target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi nlohmann_json::nlohmann_json)
 add_executable(HoroRuntimeUiLocalizationTests
         unit/runtime/ui/UiLocalizationTests.cpp
 )
@@ -1566,6 +1566,13 @@ add_executable(HoroRuntimeUiLayoutTests
 )
 target_compile_features(HoroRuntimeUiLayoutTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiLayoutClippingTests
+        unit/runtime/ui/UiLayoutClippingTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiLayoutClippingTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiLayoutClippingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiLayoutClippingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiTextLayoutTests
         unit/runtime/ui/UiTextLayoutTests.cpp
         support/AllocationProbe.cpp
@@ -1573,6 +1580,11 @@ add_executable(HoroRuntimeUiTextLayoutTests
 target_compile_features(HoroRuntimeUiTextLayoutTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiTextLayoutTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiTextLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiGlyphAtlasTests
+        unit/runtime/ui/UiGlyphAtlasTests.cpp
+)
+target_compile_features(HoroRuntimeUiGlyphAtlasTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiGlyphAtlasTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiStyleTests
         unit/runtime/ui/UiStyleTests.cpp
 )
@@ -2351,7 +2363,9 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiRenderSnapshotTests
         HoroRuntimeUiRenderGeometryTests
         HoroRuntimeUiLayoutTests
+        HoroRuntimeUiLayoutClippingTests
         HoroRuntimeUiTextLayoutTests
+        HoroRuntimeUiGlyphAtlasTests
         HoroRuntimeUiStyleTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests

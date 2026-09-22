@@ -1,10 +1,16 @@
 #pragma once
 
+/**
+ * @file DataBus.h
+ * @brief Bounded typed process notification bus and revocable subscriptions.
+ */
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 
 namespace Horo {
@@ -48,6 +54,14 @@ namespace Horo {
         Subscription &operator=(Subscription &&other) noexcept;
         void Reset() noexcept;
 
+        /**
+         * @brief Adopts a revocation callback into a move-only subscription token.
+         * @param release Callback that revokes the owned registration; it is invoked at most once.
+         * @return A token that invokes `release` when reset or destroyed.
+         * @note This is for host-owned adapters that compose subscriptions from another typed surface.
+         */
+        [[nodiscard]] static Subscription Adopt(std::function<void()> release);
+
         [[nodiscard]] explicit operator bool() const noexcept {
             return static_cast<bool>(m_release);
         }
@@ -60,10 +74,31 @@ namespace Horo {
         std::function<void()> m_release;
     };
 
+    /** @brief Policy applied when an asynchronous event queue reaches its bound. */
+    enum class BackpressurePolicy : std::uint8_t {
+        DropNewest,
+        DropOldest,
+        Merge,
+    };
+
     struct EngineDataBusConfig {
         std::size_t maxAsyncQueueSize = 1024;
         bool traceDispatch = true;
         const char *logCategory = "engine.data_bus";
+        std::size_t maxSubscriptions = 1024;
+        BackpressurePolicy defaultBackpressurePolicy = BackpressurePolicy::DropNewest;
+        std::unordered_map<EventTypeId, BackpressurePolicy> eventBackpressurePolicies;
+    };
+
+    /** @brief Observable counters for the bounded asynchronous event queue. */
+    struct EngineDataBusQueueStats final {
+        std::size_t queued{};
+        std::size_t activeSubscriptions{};
+        std::uint64_t enqueued{};
+        std::uint64_t dispatched{};
+        std::uint64_t droppedNewest{};
+        std::uint64_t droppedOldest{};
+        std::uint64_t merged{};
     };
 
     /** @brief Process-scoped typed notification bus; commands and state ownership remain external. */
@@ -110,6 +145,8 @@ namespace Horo {
         void DispatchQueued();
         /** @brief Removes all handlers and queued notifications. */
         void Clear();
+        /** @brief Returns a race-safe snapshot of queue pressure and registration counts. */
+        [[nodiscard]] EngineDataBusQueueStats QueueStats() const;
 
     private:
         using Handler = std::function<void(const EventPayload *)>;

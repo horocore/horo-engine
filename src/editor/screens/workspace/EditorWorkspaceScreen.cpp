@@ -179,6 +179,7 @@ namespace Horo::Editor {
                                                                             ? *gameplayEnvironment
                                                                             : Application::GameplayBuildEnvironment{},
                                                                     .localization = &context_.localization,
+                                                                    .engineEvents = &context_.engineEvents,
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
@@ -205,6 +206,9 @@ namespace Horo::Editor {
                     .buildOutputQuery = panelServices_.buildOutputQuery,
                     .operationQuery = panelServices_.operationQuery,
                     .operationControl = panelServices_.operationControl,
+                    // Built-in panels have no extension activation identity; extension hosts inject
+                    // their own provider-owned context at the descriptor activation boundary.
+                    .surfaceEvents = nullptr,
                 };
                 registry_.AttachAll(panelContext);
                 UpdateStatusItems();

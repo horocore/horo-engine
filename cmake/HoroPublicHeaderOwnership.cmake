@@ -10,6 +10,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/CancellationToken.h
     Horo/Foundation/Configuration.h
     Horo/Foundation/DataBus.h
+    Horo/Foundation/EditorEventTypes.h
     Horo/Foundation/Diagnostics.h
     Horo/Foundation/Diagnostics/DiagnosticBundle.h
     Horo/Foundation/Diagnostics/OperationHistory.h
@@ -27,6 +28,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/ModuleDescriptor.h
     Horo/Foundation/ModuleHost.h
     Horo/Foundation/OperationStore.h
+    Horo/Foundation/ProcessEvents.h
     Horo/Foundation/PathUtils.h
     Horo/Foundation/Paths.h
     Horo/Foundation/Platform.h
@@ -166,7 +168,9 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiFocusGraph.h
     Horo/Runtime/Ui/UiControls.h
     Horo/Runtime/Ui/UiLayout.h
+    Horo/Runtime/Ui/UiLayoutClipping.h
     Horo/Runtime/Ui/UiTextLayout.h
+    Horo/Runtime/Ui/UiGlyphAtlas.h
     Horo/Runtime/Ui/UiStyle.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
@@ -611,6 +615,7 @@ horo_configure_target_header_boundary(HoroEditorRenderExtraction)
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ActivityBarLayout.h
     Horo/Editor/EditorConfiguration.h
+    Horo/Editor/EditorEngineEventBridge.h
     Horo/Editor/EditorMenuModel.h
     Horo/Editor/EditorModalHost.h
     Horo/Editor/EditorServiceRegistry.h
@@ -618,6 +623,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/EditorSettingsEvents.h
     Horo/Editor/EditorSettingsService.h
     Horo/Editor/EditorSettingsStore.h
+    Horo/Editor/EditorSurfaceEventContext.h
     Horo/Editor/EditorStatusBarModel.h
     Horo/Editor/EditorWorkspaceEvents.h
     Horo/Editor/GuiRoute.h

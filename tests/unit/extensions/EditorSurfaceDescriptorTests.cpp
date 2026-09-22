@@ -76,6 +76,31 @@ namespace Horo::Extensions::Tests {
         REQUIRE(ValidateEditorSurfaceDescriptor(descriptor, limits).HasValue());
     }
 
+    TEST_CASE("Editor surface descriptors validate separated event requests", "[Extensions][EditorSurface][DataBus]") {
+        auto descriptor = ValidDescriptor();
+        descriptor.requestedEditorEvents = {Horo::EditorEventKind::AssetImported, Horo::EditorEventKind::MetricsChanged};
+        descriptor.requestedProcessEvents = {Horo::EditorEventKind::ProjectOpened};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasValue());
+
+        descriptor.requestedEditorEvents.push_back(Horo::EditorEventKind::AssetImported);
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+
+        descriptor = ValidDescriptor();
+        descriptor.requestedEditorEvents = {Horo::EditorEventKind::AssetImported};
+        descriptor.requestedProcessEvents = {Horo::EditorEventKind::AssetImported};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+
+        descriptor = ValidDescriptor();
+        descriptor.requestedProcessEvents = {static_cast<Horo::EditorEventKind>(255)};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor).HasError());
+
+        descriptor = ValidDescriptor();
+        EditorSurfaceDescriptorLimits limits;
+        limits.maximumEditorEvents = 1;
+        descriptor.requestedEditorEvents = {Horo::EditorEventKind::AssetImported, Horo::EditorEventKind::MetricsChanged};
+        REQUIRE(ValidateEditorSurfaceDescriptor(descriptor, limits).HasError());
+    }
+
     TEST_CASE("Editor surface descriptors accept every typed placement mapping", "[Extensions][EditorSurface]") {
         struct PlacementCase final {
             EditorSurfaceKind kind;

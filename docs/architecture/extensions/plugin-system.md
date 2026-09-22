@@ -1013,10 +1013,19 @@ invalidation hints through its UI session or capability context.
 
 Rules:
 
-- Host UI sessions for extension tabs and panels subscribe through move-only RAII
-  tokens and release them during detach.
+- Host UI sessions for extension tabs and panels use a provider-owned
+  `EditorSurfaceEventContext`, subscribe through move-only RAII tokens, and
+  release them during detach. The context is bounded and revocable; it exposes
+  sanitized typed payloads, not `EditorDataBus&`.
 - An extension does not subscribe directly to `EngineDataBus` from a GUI surface;
   process events enter the editor through `EditorEngineEventBridge` allowlists.
+- Surface descriptors declare editor-session requests separately from
+  process-event bridge requests. The host may grant only the intersection of the
+  descriptor request, the fixed bridge allowlist, and the active capability and
+  permission policy.
+- Provider activation generation is copied into the context and is invalidated
+  on teardown. Closing a context revokes its subscriptions even if the provider
+  retained a token.
 - Extension event types use the extension's stable module ID as a prefix and are
   declared in the package descriptor before activation.
 - High-volume data such as logs, file-watch batches, profiler samples, compiler
@@ -1026,6 +1035,10 @@ Rules:
   goes through approved job or application capabilities.
 - Subscriber order is not part of the contract. Coordination that requires a
   result uses typed commands or use cases, not event ordering.
+- Process queue backpressure is host-owned and observable. The default is
+  `DropNewest`; hosts may use `DropOldest` or same-type `Merge` for bounded
+  invalidation traffic. Consumers must tolerate dropped intermediate revisions
+  and query the authoritative store.
 
 Host UI sessions use `EditorDataBus` rather than direct `EngineDataBus`
 subscriptions because their lifetime is tied to one editor session, not the

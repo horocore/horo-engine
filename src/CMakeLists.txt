@@ -315,6 +315,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiControlStateMachine.cpp
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
+        runtime/ui/UiLayoutClipping.cpp
+        runtime/ui/UiLayoutClippingEngine.cpp
+        runtime/ui/UiLayoutSemantics.cpp
+        runtime/ui/UiLayoutArrangement.cpp
         runtime/ui/UiLayoutTypes.cpp
         runtime/ui/UiTextLayoutErrors.cpp
         runtime/ui/UiTextLayout.cpp
@@ -322,6 +326,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextLayoutPlanning.cpp
         runtime/ui/UiTextLayoutPublication.cpp
         runtime/ui/UiTextLayoutTypes.cpp
+        runtime/ui/UiGlyphAtlas.cpp
+        runtime/ui/UiGlyphAtlasStorage.cpp
+        runtime/ui/UiGlyphAtlasValidation.cpp
         runtime/ui/UiStyle.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp
@@ -1332,6 +1339,8 @@ endif ()
 
 add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
+        editor/data_bus/EditorEngineEventBridge.cpp
+        editor/data_bus/EditorSurfaceEventContext.cpp
         editor/EditorSurfaceIdentity.cpp
         editor/SourceFileOpenService.cpp
         editor/UiCanvasDocument.cpp

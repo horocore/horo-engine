@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -291,7 +292,10 @@ namespace {
 
     TEST_CASE("Workspace source commands report an unavailable navigator", "[unit][editor][source]") {
         SourceProjectFixture project;
-        FocusedWorkspaceController controller{project.Root(), {}, [](const SourceOpenResult &) {
+        std::vector<DocumentOpenDisposition> dispositions;
+        FocusedWorkspaceController controller{project.Root(), {}, [&dispositions](const SourceOpenResult &result) {
+            if (result.document.has_value())
+                dispositions.push_back(result.document->disposition);
             return false;
         }};
         EditorWorkspaceViewCommandData command;
@@ -303,6 +307,11 @@ namespace {
         };
         controller.ProcessCommand(command);
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unavailable"));
+        REQUIRE((dispositions == std::vector<DocumentOpenDisposition>{DocumentOpenDisposition::Opened}));
+
+        controller.ProcessCommand(command);
+        REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.source_open.unavailable"));
+        REQUIRE((dispositions == std::vector<DocumentOpenDisposition>{DocumentOpenDisposition::Opened, DocumentOpenDisposition::Opened}));
     }
 
     TEST_CASE("Workspace content browser commands report unavailable and unsafe targets", "[unit][editor][content-browser]") {

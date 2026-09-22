@@ -18,10 +18,9 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(MakeError(descriptor, std::move(message)));
         }
 
-        [[nodiscard]] Result<void> AppendCanvases(UiDocumentBuilder &builder, const Internal::Json &encoded,
-                                                  const UiDocumentSerializationLimits &limits) {
+        [[nodiscard]] Result<void> AppendCanvases(UiDocumentBuilder &builder, const Internal::Json &encoded) {
             for (const auto &value : encoded) {
-                auto canvas = Internal::DecodeCanvas(value, limits);
+                auto canvas = Internal::DecodeCanvas(value);
                 if (canvas.HasError())
                     return Result<void>::Failure(canvas.ErrorValue());
                 if (auto added = builder.AddCanvas(std::move(canvas).Value()); added.HasError())
@@ -253,7 +252,7 @@ namespace Horo::Runtime::Ui {
                 return Result<UiDocument>::Failure(sections.ErrorValue());
             const auto &content = sections.Value();
             UiDocumentBuilder builder{content.id, content.revision, content.version};
-            if (auto result = AppendCanvases(builder, *content.canvases, limits); result.HasError())
+            if (auto result = AppendCanvases(builder, *content.canvases); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = AppendElements(builder, *content.elements, limits); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
