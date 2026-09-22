@@ -234,12 +234,12 @@ namespace Horo::Runtime::Ui {
         UiDocumentSchemaVersion schemaVersion_;                  /**< Candidate source schema. */
         UiDocumentId id_;                                        /**< Candidate authored identity. */
         UiDocumentRevision revision_;                            /**< Candidate authored revision. */
-        std::vector<UiCanvasDescriptor> canvases_;               /**< Bounded authored-order canvases. */
-        std::vector<UiDocumentElement> elements_;                /**< Candidate hierarchy and typed values. */
         std::vector<UiLocalizedText> localizedTexts_;            /**< Bounded authored message references. */
         std::vector<UiLocalizedAssetReference> localizedAssets_; /**< Bounded authored asset references. */
-        std::vector<UiAssetDependency> dependencies_;            /**< Bounded canonicalizable dependencies. */
+        std::vector<UiCanvasDescriptor> canvases_;               /**< Bounded authored-order canvases. */
+        std::vector<UiDocumentElement> elements_;                /**< Candidate hierarchy and typed values. */
         std::vector<UiRouteMetadata> routes_;                    /**< Candidate route definitions. */
+        std::vector<UiAssetDependency> dependencies_;            /**< Bounded canonicalizable dependencies. */
     };
 
     /** @brief Versioned cooked payload, separate from authoring state and mutable runtime state. */
@@ -277,12 +277,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiCanvasDescriptor> Canvases() const noexcept;
         /** @brief Returns immutable element descriptors retained for runtime preparation. @return Borrowed element data. */
         [[nodiscard]] std::span<const UiDocumentElement> Elements() const noexcept;
+        /** @brief Returns deterministic cooked bytes for runtime transfer. @return Borrowed immutable payload. */
+        [[nodiscard]] std::span<const std::uint8_t> Payload() const noexcept;
         /** @brief Returns the cooked dependency manifest. @return Borrowed immutable dependencies. */
         [[nodiscard]] std::span<const UiAssetDependency> Dependencies() const noexcept;
         /** @brief Returns immutable route descriptors retained for runtime preparation. @return Borrowed route data. */
         [[nodiscard]] std::span<const UiRouteMetadata> Routes() const noexcept;
-        /** @brief Returns deterministic cooked bytes. @return Borrowed immutable payload. */
-        [[nodiscard]] std::span<const std::uint8_t> Payload() const noexcept;
 
     private:
         friend class UiRuntimeInstance;
