@@ -296,8 +296,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiLayoutClipEngine::Storage::BuildClipProjection(const std::span<const UiLayoutRecord> records,
                                                                   const std::span<const UiLayoutClipDescriptor> descriptors,
                                                                   const std::uint32_t index) {
-        const auto overflow = descriptors[index].overflow;
-        if (overflow != UiLayoutOverflowPolicy::Clip && overflow != UiLayoutOverflowPolicy::Scroll)
+        if (const auto overflow = descriptors[index].overflow;
+            overflow != UiLayoutOverflowPolicy::Clip && overflow != UiLayoutOverflowPolicy::Scroll)
             return Result<void>::Success();
         if (candidateClips.size() == descriptor.clipCapacity)
             return Failure(UiErrors::CapacityExceeded);
@@ -309,8 +309,7 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    Result<void> UiLayoutClipEngine::Storage::BuildScrollProjection(const std::span<const UiLayoutRecord> records,
-                                                                    const std::uint32_t index) {
+    Result<void> UiLayoutClipEngine::Storage::BuildScrollProjection(const std::uint32_t index) {
         if (scrollIndexes[index] == NoIndex)
             return Result<void>::Success();
         auto &scroll = candidateScrolls[scrollIndexes[index]];
@@ -330,7 +329,7 @@ namespace Horo::Runtime::Ui {
             return parent;
         if (const auto clip = BuildClipProjection(records, descriptors, index); clip.HasError())
             return clip;
-        if (const auto scroll = BuildScrollProjection(records, index); scroll.HasError())
+        if (const auto scroll = BuildScrollProjection(index); scroll.HasError())
             return scroll;
         candidateRecords.emplace_back(records[index].element, translations[index], clipIndexes[index], ownClipIndexes[index],
                                       scrollIndexes[index]);

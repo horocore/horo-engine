@@ -99,7 +99,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> BuildParentProjection(std::uint32_t index);
         [[nodiscard]] Result<void> BuildClipProjection(std::span<const UiLayoutRecord> records,
                                                        std::span<const UiLayoutClipDescriptor> descriptors, std::uint32_t index);
-        [[nodiscard]] Result<void> BuildScrollProjection(std::span<const UiLayoutRecord> records, std::uint32_t index);
+        [[nodiscard]] Result<void> BuildScrollProjection(std::uint32_t index);
         [[nodiscard]] Result<void> BuildProjectionRecord(std::span<const UiLayoutRecord> records,
                                                          std::span<const UiLayoutClipDescriptor> descriptors, std::uint32_t index);
         [[nodiscard]] Result<void> BuildProjection(std::span<const UiLayoutRecord> records,
