@@ -216,10 +216,12 @@ namespace Horo::Editor {
         Ui::Float3PropertyEditResult rotation;
         Ui::Float3PropertyEditResult scale;
         ComponentTitleBarResult header;
+        bool cancelRequested{false};
         {
             Ui::Card card(Ui::CardProps{.id = "##TransformCard"});
             header = DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.transform").c_str(),
                                            {.enabled = true, .canReset = true, .canToggleEnabled = false, .canRemove = false}, context);
+            cancelRequested = m_editSession.HasTransformPreview() && IsInspectorCardEscapeRequested();
             if (card.BeginBody()) {
                 position = Ui::DrawFloat3PropRow(context.localization.Get("editor", "workspace.inspector.position").c_str(), "position",
                                                  draft.position, context.theme.fonts, 0.05F, draft.mixed.position);
@@ -233,7 +235,7 @@ namespace Horo::Editor {
         return {
             .changed = position.changed || rotation.changed || scale.changed,
             .committed = position.committed || rotation.committed || scale.committed,
-            .cancelRequested = m_editSession.HasTransformPreview() && ImGui::IsKeyPressed(ImGuiKey_Escape, false),
+            .cancelRequested = cancelRequested,
             .resetRequested = header.resetRequested,
             .changedAxes =
                 {

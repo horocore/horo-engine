@@ -71,12 +71,12 @@ namespace Horo::Editor {
     }
 
     std::optional<Math::Transform> InspectorEditSession::CalculateUpdatedTransform(
-        const Math::Transform &baselineTransform, const InspectorObjectDraft &draft, const std::array<float, 3> &referencePosition,
-        const std::array<float, 3> &referenceRotationDegrees, const std::array<float, 3> &referenceScale,
-        const InspectorTransformAxisMask &editedAxes, const InspectorTransformAxisMask &relativeAxes) {
+        const Math::Transform &baselineTransform, const std::array<float, 3> &baselineRotationDegrees, const InspectorObjectDraft &draft,
+        const std::array<float, 3> &referencePosition, const std::array<float, 3> &referenceRotationDegrees,
+        const std::array<float, 3> &referenceScale, const InspectorTransformAxisMask &editedAxes,
+        const InspectorTransformAxisMask &relativeAxes) {
         std::array position = ToArray(baselineTransform.translation);
-        const std::array baselineRotation = ToEulerDegrees(baselineTransform.rotation);
-        std::array rotation = baselineRotation;
+        std::array rotation = baselineRotationDegrees;
         std::array scale = ToArray(baselineTransform.scale);
         for (std::size_t axis = 0; axis < 3; ++axis) {
             if (editedAxes.position[axis])
@@ -92,7 +92,7 @@ namespace Horo::Editor {
         Math::Quaternion updatedRotation = baselineTransform.rotation;
         bool rotationChanged = false;
         for (std::size_t axis = 0; axis < editedAxes.rotation.size(); ++axis) {
-            rotationChanged = rotationChanged || (editedAxes.rotation[axis] && Differs(rotation[axis], baselineRotation[axis]));
+            rotationChanged = rotationChanged || (editedAxes.rotation[axis] && Differs(rotation[axis], baselineRotationDegrees[axis]));
         }
         if (rotationChanged) {
             const Math::Vec3 rotationRadians{rotation[0] * DegreesToRadians, rotation[1] * DegreesToRadians,
@@ -307,15 +307,19 @@ namespace Horo::Editor {
     /** @copydoc InspectorEditSession::ApplyLightEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyLightEdit(const InspectorLightEdit &edit, const SceneObject &object,
                                                                         const bool allowCommands) {
-        if (!allowCommands || m_baselines.size() != 1 || m_draft.object != object.id || !object.components.light.has_value() ||
-            !m_draft.light.has_value())
+        if (m_baselines.size() != 1 || m_draft.object != object.id || !object.components.light.has_value() || !m_draft.light.has_value())
             return {};
 
-        if (edit.cancelRequested && m_hasLightPreview) {
+        if (edit.cancelRequested) {
+            const bool hadPreview = m_hasLightPreview;
             ResetLightDraft(object);
             m_hasLightPreview = false;
-            return MakeObjectCommand(EditorWorkspaceViewCommand::CancelLightComponentPreview, object.id);
+            return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelLightComponentPreview, object.id)
+                              : EditorWorkspaceViewCommandData{};
         }
+
+        if (!allowCommands)
+            return {};
 
         if (!IsValidLightComponent(*m_draft.light)) {
             if (edit.committed && m_hasLightPreview) {
@@ -470,7 +474,7 @@ namespace Horo::Editor {
         for (const SceneObjectId selected : selectedObjects) {
             const auto object = std::ranges::find(objects, selected, &SceneObject::id);
             if (object != objects.end())
-                m_baselines.emplace_back(object->id, object->localTransform);
+                m_baselines.emplace_back(object->id, object->localTransform, ToEulerDegrees(object->localTransform.rotation));
         }
 
         m_editedAxes = {};
@@ -509,8 +513,10 @@ namespace Horo::Editor {
         const auto primary = std::ranges::find(m_baselines, targetId, &ObjectTransformBaseline::object);
         const Math::Transform &primaryTransform =
             primary != m_baselines.end() ? primary->localTransform : m_baselines.front().localTransform;
+        const std::array<float, 3> &primaryRotation =
+            primary != m_baselines.end() ? primary->rotationDegrees : m_baselines.front().rotationDegrees;
         m_draft.position = ToArray(primaryTransform.translation);
-        m_draft.rotationDegrees = ToEulerDegrees(primaryTransform.rotation);
+        m_draft.rotationDegrees = primaryRotation;
         m_draft.scale = ToArray(primaryTransform.scale);
         m_referencePosition = m_draft.position;
         m_referenceRotationDegrees = m_draft.rotationDegrees;
@@ -519,11 +525,11 @@ namespace Horo::Editor {
 
         for (const ObjectTransformBaseline &baseline : m_baselines) {
             const std::array position = ToArray(baseline.localTransform.translation);
-            const std::array rotation = ToEulerDegrees(baseline.localTransform.rotation);
             const std::array scale = ToArray(baseline.localTransform.scale);
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 m_draft.mixed.position[axis] = m_draft.mixed.position[axis] || Differs(position[axis], m_draft.position[axis]);
-                m_draft.mixed.rotation[axis] = m_draft.mixed.rotation[axis] || Differs(rotation[axis], m_draft.rotationDegrees[axis]);
+                m_draft.mixed.rotation[axis] =
+                    m_draft.mixed.rotation[axis] || Differs(baseline.rotationDegrees[axis], m_draft.rotationDegrees[axis]);
                 m_draft.mixed.scale[axis] = m_draft.mixed.scale[axis] || Differs(scale[axis], m_draft.scale[axis]);
             }
         }
@@ -535,7 +541,7 @@ namespace Horo::Editor {
         std::vector<SceneObjectTransformUpdate> updates;
         updates.reserve(m_baselines.size());
         for (const ObjectTransformBaseline &baseline : m_baselines) {
-            const auto updated = CalculateUpdatedTransform(baseline.localTransform, m_draft, m_referencePosition,
+            const auto updated = CalculateUpdatedTransform(baseline.localTransform, baseline.rotationDegrees, m_draft, m_referencePosition,
                                                            m_referenceRotationDegrees, m_referenceScale, m_editedAxes, m_relativeAxes);
             if (!updated.has_value())
                 return std::nullopt;

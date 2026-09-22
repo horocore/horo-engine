@@ -154,6 +154,12 @@ TEST_CASE("Inspector Light preview cancels and restores its authored draft", "[u
     const SceneObject second = MakeLightObject(SceneObjectId{38});
     static_cast<void>(session.BeginObject(first, DocumentRevision{1}));
 
+    session.Draft().light->intensity = 9.0F;
+    const EditorWorkspaceViewCommandData cancelledWithoutPreview =
+        session.ApplyLightEdit(InspectorLightEdit{.cancelRequested = true}, first, false);
+    REQUIRE((cancelledWithoutPreview.command == EditorWorkspaceViewCommand::None));
+    REQUIRE((session.Draft().light == first.components.light));
+
     session.Draft().light->intensity = 8.0F;
     REQUIRE((session.ApplyLightEdit(InspectorLightEdit{.changed = true}, first, true).command ==
              EditorWorkspaceViewCommand::PreviewLightComponent));

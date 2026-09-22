@@ -178,7 +178,7 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.camera->enabled = !draft.camera->enabled;
-        const bool cancelRequested = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+        const bool cancelRequested = IsInspectorCardEscapeRequested();
         if (!card.BeginBody())
             return {.cancelRequested = cancelRequested,
                     .committed = header.resetRequested || header.toggleEnabledRequested,
@@ -210,8 +210,11 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.light->enabled = !draft.light->enabled;
+        const bool cancelRequested = IsInspectorCardEscapeRequested();
         if (!card.BeginBody())
-            return {.committed = header.resetRequested || header.toggleEnabledRequested, .removeRequested = header.removeRequested};
+            return {.committed = header.resetRequested || header.toggleEnabledRequested,
+                    .cancelRequested = cancelRequested,
+                    .removeRequested = header.removeRequested};
         ImGui::BeginDisabled(!draft.light->enabled);
         const LightWidgetEdits base = DrawLightBaseProperties(draft, context);
         const LightWidgetEdits range = DrawLightRangeProperties(draft, context);
@@ -224,7 +227,7 @@ namespace Horo::Editor {
         return {
             .changed = changed,
             .committed = committed,
-            .cancelRequested = m_editSession.HasLightPreview() && ImGui::IsKeyPressed(ImGuiKey_Escape, false),
+            .cancelRequested = cancelRequested,
             .removeRequested = header.removeRequested,
         };
     }
@@ -245,7 +248,7 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.triggerVolume->enabled = !draft.triggerVolume->enabled;
-        const bool cancelRequested = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+        const bool cancelRequested = IsInspectorCardEscapeRequested();
         if (!card.BeginBody())
             return {.cancelRequested = cancelRequested,
                     .committed = header.resetRequested || header.toggleEnabledRequested,
@@ -288,7 +291,7 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.audioSource->enabled = !draft.audioSource->enabled;
-        const bool cancelRequested = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+        const bool cancelRequested = IsInspectorCardEscapeRequested();
         if (!card.BeginBody())
             return {.cancelRequested = cancelRequested,
                     .committed = header.resetRequested || header.toggleEnabledRequested,

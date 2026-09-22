@@ -175,13 +175,15 @@ namespace Horo::Editor {
         struct ObjectTransformBaseline {
             SceneObjectId object;
             Math::Transform localTransform;
+            std::array<float, 3> rotationDegrees{};
         };
 
         [[nodiscard]] static SceneObjectId ResolvePrimaryId(std::span<const ObjectTransformBaseline> baselines,
                                                             std::optional<SceneObjectId> primary) noexcept;
 
         [[nodiscard]] static std::optional<Math::Transform> CalculateUpdatedTransform(
-            const Math::Transform &baselineTransform, const InspectorObjectDraft &draft, const std::array<float, 3> &referencePosition,
+            const Math::Transform &baselineTransform, const std::array<float, 3> &baselineRotationDegrees,
+            const InspectorObjectDraft &draft, const std::array<float, 3> &referencePosition,
             const std::array<float, 3> &referenceRotationDegrees, const std::array<float, 3> &referenceScale,
             const InspectorTransformAxisMask &editedAxes, const InspectorTransformAxisMask &relativeAxes);
 
