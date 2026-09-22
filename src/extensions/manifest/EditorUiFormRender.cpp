@@ -264,7 +264,7 @@ namespace Horo::Extensions {
             }
 
             [[nodiscard]] std::size_t ChildCount(const EditorUiId &parent) const noexcept {
-                return static_cast<std::size_t>(std::ranges::count_if(nodes_, [this, &parent](const EditorUiNode &node) {
+                return static_cast<std::size_t>(std::ranges::count_if(nodes_, [&parent](const EditorUiNode &node) {
                     return BaseOf(node).parent == parent;
                 }));
             }
