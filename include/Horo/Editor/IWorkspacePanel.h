@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/EditorSurfaceEventContext.h"
 #include "Horo/Editor/WorkspaceDockArea.h"
 #include "Horo/Runtime/Input.h"
 
@@ -39,6 +40,7 @@ namespace Horo::Editor {
         const IBuildOutputQuery *buildOutputQuery{nullptr};
         const IOperationQuery *operationQuery{nullptr};
         IOperationControl *operationControl{nullptr};
+        EditorSurfaceEventContext *surfaceEvents{nullptr};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

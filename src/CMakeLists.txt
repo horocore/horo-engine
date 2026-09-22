@@ -1337,6 +1337,8 @@ endif ()
 
 add_library(HoroEditorServices STATIC
         editor/EditorServiceErrors.cpp
+        editor/data_bus/EditorEngineEventBridge.cpp
+        editor/data_bus/EditorSurfaceEventContext.cpp
         editor/EditorSurfaceIdentity.cpp
         editor/SourceFileOpenService.cpp
         editor/UiCanvasDocument.cpp

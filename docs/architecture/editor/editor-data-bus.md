@@ -164,6 +164,39 @@ There is no default outbound bridge. If an editor action invokes an application
 use case, that use case publishes its own process-level lifecycle event after it
 commits. The editor does not mirror its local notification as a second event.
 
+The shipped bridge has a fixed nine-event allowlist. Its editor payloads are
+deliberately smaller than the process payloads:
+
+| Process event | Editor payload | Fields omitted at the boundary |
+| --- | --- | --- |
+| `ProjectOpenedEvent` / `ProjectClosedEvent` | revision | project ID and root path |
+| `AssetImportedEvent` / `AssetReloadedEvent` | revision and validated asset ID | source path |
+| `OperationStoreRevisionChangedEvent` | revision, optional operation ID, state | operation text and error details |
+| `ConsoleLogEvent` | revision and appended count | category and message text |
+| `MetricsChangedEvent` | revision and changed-group mask | metric samples |
+| `ProfilerCaptureStateEvent` | capture ID and lifecycle state | capture data and failure text |
+| `McpToolInvocationEvent` | operation state and history revision | tool name, request ID, and arguments |
+
+An asset identity is accepted only when it is a bounded, path-free canonical
+identity. Invalid identities and invalid enum values are counted as filtered
+notifications and are not published to the session bus. The bridge exposes
+forwarded, filtered, and wrong-thread-drop counters for host diagnostics.
+
+## Restricted Surface Contract
+
+Extension-owned editor surfaces do not receive `EditorDataBus&`. The host creates
+an `EditorSurfaceEventContext` from the validated descriptor, copies the exact
+provider activation identity, and grants only the requested event kinds that
+passed host admission. The context exposes typed callbacks or a sanitized event
+variant, but no publish operation and no process bus. Its subscription bound is
+per provider context; `Close()` revokes every underlying registration, including
+tokens retained by a provider after deactivation.
+
+`EditorSurfaceDescriptor` keeps editor-session event requests separate from
+process-event bridge requests. A process request does not bypass the bridge
+allowlist: it becomes eligible only after the host approves the event, safe
+payload shape, capability/permission coverage, and provider teardown path.
+
 ## State Authorities
 
 The authoritative editor-session models are:
@@ -385,6 +418,13 @@ Background workers publish process-level events through
 main thread; `EditorEngineEventBridge` then publishes the editor-facing
 notification synchronously.
 
+The engine queue is bounded. Its configured policy is `DropNewest` by default,
+with optional `DropOldest` or same-type `Merge`; queue counters make drops and
+coalescing observable. Queue order is FIFO for retained entries, and a merged
+entry keeps its original position. The bridge never adds another worker queue,
+so the ordering visible to the editor is the engine dispatch order followed by
+the synchronous editor publication order.
+
 High-frequency editor interactions such as gizmo drags do not enqueue one event
 per pointer movement. The owning model may coalesce notifications at frame or
 transaction boundaries while keeping its current state immediately queryable.
@@ -427,6 +467,7 @@ preview state.
 
 - Dispatch is synchronous and depth-first on the editor thread.
 - Handler invocation order is unspecified.
+- Queue retention order is FIFO, but handler order is not a coordination contract.
 - Subscribers may publish another event type immediately. Recursive publication
   of the event type currently being dispatched is queued and delivered after the
   current dispatch completes.
