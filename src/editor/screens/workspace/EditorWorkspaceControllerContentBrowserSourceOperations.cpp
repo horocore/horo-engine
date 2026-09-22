@@ -3,8 +3,37 @@
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Editor {
+
+    /** @copydoc EditorWorkspaceController::OpenEmbeddedUiCanvasSource */
+    void EditorWorkspaceController::OpenEmbeddedUiCanvasSource(const SourceOpenResult &result) {
+        const DocumentOpenResult &document = *result.document;
+        const bool hasSession = std::ranges::any_of(m_uiCanvasDocuments, [&](const UiCanvasDocument &session) {
+            return session.Identity().instance == document.identity.instance;
+        });
+        bool addedSession = false;
+        if (!hasSession) {
+            Result<UiCanvasDocument> loaded = UiCanvasDocument::Open(document.identity, result.location.absolutePath);
+            if (loaded.HasError()) {
+                if (document.disposition == DocumentOpenDisposition::Opened)
+                    static_cast<void>(m_documentRegistry.Close(document.identity.instance));
+                m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+                return;
+            }
+            m_uiCanvasDocuments.push_back(std::move(loaded).Value());
+            addedSession = true;
+        }
+        const Result<DocumentOpenResult> workspaceDocument = m_viewModel.workspacePanelHost.OpenDocument(document.identity.key);
+        if (workspaceDocument.HasError()) {
+            if (document.disposition == DocumentOpenDisposition::Opened)
+                static_cast<void>(m_documentRegistry.Close(document.identity.instance));
+            if (addedSession)
+                m_uiCanvasDocuments.pop_back();
+            m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+        }
+    }
 
     void EditorWorkspaceController::OpenSourceFile(const SourceOpenRequest &request) {
         m_viewModel.contentBrowserOperationError.clear();
@@ -24,6 +53,11 @@ namespace Horo::Editor {
         }
 
         const SourceOpenResult &result = opened.Value();
+        if (result.classification.kind == SourceFileKind::UiCanvas && result.document.has_value() &&
+            result.route == SourceOpenRoute::EmbeddedWorkspace) {
+            OpenEmbeddedUiCanvasSource(result);
+            return;
+        }
         bool navigated = false;
         if (m_sourceOpenNavigator) {
             navigated = m_sourceOpenNavigator(result);
@@ -34,8 +68,14 @@ namespace Horo::Editor {
                 .column = result.column,
             });
         }
-        if (!navigated)
+        if (!navigated) {
+            // SourceFileOpenService opens an identity before dispatching the validated
+            // result. A rejected navigation must not leave an unpresented identity in
+            // the workspace registry.
+            if (result.document.has_value() && result.document->disposition == DocumentOpenDisposition::Opened)
+                static_cast<void>(m_documentRegistry.Close(result.document->identity.instance));
             m_viewModel.contentBrowserOperationError = "workspace.source_open.unavailable";
+        }
     }
 
     void EditorWorkspaceController::OpenDiagnosticSource(const DiagnosticSourceRequest &source) {

@@ -6,8 +6,10 @@
 #include <DetourAlloc.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshQuery.h>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -29,6 +31,22 @@ namespace Horo::Navigation {
     using NavMeshPtr = std::unique_ptr<dtNavMesh, NavMeshDeleter>;
     using QueryPtr = std::unique_ptr<dtNavMeshQuery, QueryDeleter>;
 
+    inline constexpr std::uint32_t InvalidNavigationPolygonIndex = NavigationPathNoPolygon;
+
+    struct NavigationPolygonAdjacency final {
+        std::array<std::uint32_t, 6> neighbors{};
+        std::uint8_t count{};
+    };
+
+    struct NavigationAStarNode final {
+        std::uint32_t polygon{InvalidNavigationPolygonIndex};
+        std::uint32_t parent{InvalidNavigationPolygonIndex};
+        float cost{std::numeric_limits<float>::infinity()};
+        float estimatedTotalCost{std::numeric_limits<float>::infinity()};
+        bool open{};
+        bool closed{};
+    };
+
     struct QuerySlot final {
         QuerySlot() = default;
 
@@ -42,7 +60,9 @@ namespace Horo::Navigation {
         QuerySlot(QuerySlot &&other) noexcept
             : query(std::move(other.query)), polygonPath(std::move(other.polygonPath)), straightPoints(std::move(other.straightPoints)),
               straightFlags(std::move(other.straightFlags)), straightPolygons(std::move(other.straightPolygons)),
-              leased(other.leased.load()) {
+              searchNodes(std::move(other.searchNodes)), openNodes(std::move(other.openNodes)),
+              polygonPathIndices(std::move(other.polygonPathIndices)), portals(std::move(other.portals)),
+              waypoints(std::move(other.waypoints)), leased(other.leased.load()) {
             other.leased.store(false);
         }
 
@@ -53,7 +73,23 @@ namespace Horo::Navigation {
         std::vector<float> straightPoints;
         std::vector<unsigned char> straightFlags;
         std::vector<dtPolyRef> straightPolygons;
+        std::vector<NavigationAStarNode> searchNodes;
+        std::vector<std::uint32_t> openNodes;
+        std::vector<std::uint32_t> polygonPathIndices;
+        std::vector<NavigationPathPortal> portals;
+        std::vector<NavigationPathWaypoint> waypoints;
         std::atomic<bool> leased{false};
+    };
+
+    struct RecastDetourQueryBackendData final {
+        NavMeshPtr mesh;
+        std::vector<QuerySlot> slots;
+        std::vector<Math::Vec3> vertices;
+        std::vector<GroundedNavigationPolygon> polygons;
+        std::vector<NavigationPolygonAdjacency> adjacency;
+        std::vector<Math::Vec3> polygonCenters;
+        std::vector<dtPolyRef> polygonReferences;
+        NavigationAreaRegistry areaRegistry;
     };
 
     class QueryLease final {
@@ -149,6 +185,5 @@ namespace Horo::Navigation {
                                                                                            std::uint32_t maximumResultPoints);
 
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> MakeRecastDetourNavigationQueryBackend(
-        const RecastDetourProviderCreateInfo &info, NavMeshPtr mesh, std::vector<QuerySlot> slots, std::vector<Math::Vec3> vertices,
-        std::vector<GroundedNavigationPolygon> polygons);
+        const RecastDetourProviderCreateInfo &info, RecastDetourQueryBackendData data);
 }  // namespace Horo::Navigation

@@ -1,111 +1,15 @@
 #include "Horo/Runtime/Ui/UiDiagnostics.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiDiagnosticDescriptors.h"
 
 #include <algorithm>
-#include <array>
 #include <limits>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
     namespace {
         constexpr std::string_view UiErrorDomain = "horo.runtime_ui";
-
-        const std::array baseDiagnosticDescriptors{
-            &UiErrors::IdentityInvalid,
-            &UiErrors::OwnershipGenerationInvalid,
-            &UiErrors::HandleMalformed,
-            &UiErrors::HandleOwnerMismatch,
-            &UiErrors::HandleStale,
-            &UiErrors::RevisionInvalid,
-            &UiErrors::RevisionStale,
-            &UiErrors::GenerationExhausted,
-            &UiErrors::DocumentInvalid,
-            &UiErrors::DocumentDuplicateIdentity,
-            &UiErrors::DependencyInvalid,
-            &UiErrors::CapacityExceeded,
-            &UiErrors::PayloadInvalid,
-            &UiErrors::CanvasReferenceInvalid,
-            &UiErrors::CanvasSpaceInvalid,
-            &UiErrors::CanvasSpaceModeMismatch,
-            &UiErrors::CanvasSpaceOverflow,
-            &UiErrors::InstanceStateInvalid,
-            &UiErrors::ElementTreeInvalid,
-            &UiErrors::ElementTreeIdentityConflict,
-            &UiErrors::StructuralCommandInvalid,
-            &UiErrors::StructuralCommandConflict,
-            &UiErrors::ElementTreeLifecycleUnavailable,
-            &UiErrors::LayoutInvalid,
-            &UiErrors::LayoutSourceStale,
-            &UiErrors::LayoutNonConvergent,
-            &UiErrors::LayoutSnapshotStorageExhausted,
-            &UiErrors::LayoutLifecycleUnavailable,
-        };
-
-        const std::array renderDiagnosticDescriptors{
-            &UiErrors::HitTestInvalid,
-            &UiErrors::HitTestSourceStale,
-            &UiErrors::HitTestNotPresented,
-            &UiErrors::HitTestSnapshotStorageExhausted,
-            &UiErrors::HitTestLifecycleUnavailable,
-            &UiErrors::RenderSnapshotInvalid,
-            &UiErrors::RenderCommandInvalid,
-            &UiErrors::RenderResourceReferenceInvalid,
-            &UiErrors::RenderSnapshotStorageExhausted,
-            &UiErrors::RenderSnapshotLifecycleUnavailable,
-            &UiErrors::RenderCompositionCapacityExceeded,
-            &UiErrors::RenderCompositionInvalid,
-            &UiErrors::RenderPresentationInvalid,
-            &UiErrors::RenderPresentationStale,
-        };
-
-        const std::array interactionDiagnosticDescriptors{
-            &UiErrors::EventDispatchInvalid,
-            &UiErrors::EventDispatchSourceStale,
-            &UiErrors::EventDispatchModalBoundaryViolation,
-            &UiErrors::EventDispatchCapacityExceeded,
-            &UiErrors::EventDispatchRouteInvalidated,
-            &UiErrors::EventDispatchReentrant,
-            &UiErrors::EventDispatchHandlerFailed,
-            &UiErrors::EventDispatchLifecycleUnavailable,
-            &UiErrors::PointerCaptureInvalid,
-            &UiErrors::PointerCaptureSourceStale,
-            &UiErrors::PointerCaptureInteractionStale,
-            &UiErrors::PointerCaptureBusy,
-            &UiErrors::PointerCaptureCapacityExceeded,
-            &UiErrors::PointerCaptureLifecycleUnavailable,
-            &UiErrors::ActionInvalid,
-            &UiErrors::ActionPayloadInvalid,
-            &UiErrors::ActionPayloadCapacityExceeded,
-            &UiErrors::ActionCommandInvalid,
-            &UiErrors::ActionQueueCapacityExceeded,
-            &UiErrors::ActionSourceStale,
-            &UiErrors::ActionResultInvalid,
-            &UiErrors::ActionResultStale,
-            &UiErrors::ActionHandlerFailed,
-            &UiErrors::ActionLifecycleUnavailable,
-        };
-
-        const std::array textDiagnosticDescriptors{
-            &UiErrors::NavigationInvalid, &UiErrors::TextInputInvalid,          &UiErrors::TextFeatureInvalid,
-            &UiErrors::TextFontInvalid,   &UiErrors::TextFallbackInvalid,       &UiErrors::TextMissingCoverage,
-            &UiErrors::TextShapeInvalid,  &UiErrors::TextShapeStorageExhausted, &UiErrors::TextLifecycleUnavailable,
-            &UiErrors::DiagnosticInvalid, &UiErrors::DiagnosticUnsupported,
-        };
-
-        /** @brief Owns the one canonical descriptor table used by implementation and contract tests. */
-        const auto &DiagnosticDescriptors() noexcept {
-            static const auto descriptors = [] {
-                std::array<const ErrorCodeDescriptor *, 77> result{};
-                auto output = result.begin();
-                output = std::copy(baseDiagnosticDescriptors.begin(), baseDiagnosticDescriptors.end(), output);
-                output = std::copy(renderDiagnosticDescriptors.begin(), renderDiagnosticDescriptors.end(), output);
-                output = std::copy(interactionDiagnosticDescriptors.begin(), interactionDiagnosticDescriptors.end(), output);
-                std::copy(textDiagnosticDescriptors.begin(), textDiagnosticDescriptors.end(), output);
-                return result;
-            }();
-            return descriptors;
-        }
 
         /** @brief Checks that a correlation value contains one valid identity of the requested Runtime UI domain. */
         template <typename Identity> bool HasValidIdentity(const UiDiagnosticCorrelationValue &value) noexcept {
@@ -184,7 +88,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiDiagnosticErrorDescriptors */
     std::span<const ErrorCodeDescriptor *const> UiDiagnosticErrorDescriptors() noexcept {
-        return DiagnosticDescriptors();
+        return DiagnosticsInternal::ErrorDescriptors();
     }
 
     /** @copydoc MakeUiDiagnosticRecord */

@@ -3,8 +3,10 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/ProjectMutation.h"
+#include "Horo/Editor/UiCanvasDocument.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -20,6 +22,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -47,6 +50,7 @@ namespace Horo::Editor {
         Application::GameplayBuildService *gameplayBuilds{};
         Application::GameplayBuildEnvironment gameplayBuildEnvironment{};
         const ILocalizationService *localization{};
+        EngineDataBus *engineEvents{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -141,6 +145,7 @@ namespace Horo::Editor {
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
         Assets::AssetRegistrySnapshot m_assetRegistry;
+        DocumentIdentityRegistry m_documentRegistry;
         SourceFileOpenService m_sourceOpenService;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         ProjectMutationCoordinator *m_mutations{};
@@ -164,6 +169,7 @@ namespace Horo::Editor {
         EditorWorkspaceViewModel m_viewModel;
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
+        std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         SceneDocument m_document;
         EditorHistory m_history;
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
@@ -194,6 +200,7 @@ namespace Horo::Editor {
         };
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
+        std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_autosaveElapsedSeconds{0.0F};
         float m_autosaveRetryDelaySeconds{0.0F};
         float m_sceneFileWatchElapsedSeconds{0.0F};
@@ -378,6 +385,8 @@ namespace Horo::Editor {
         void DegradeNativeGameplayReload(NativeGameplayReloadTransaction &transaction, Error error);
         void ReimportContentBrowserAsset(const std::filesystem::path &absolutePath);
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
+        /** @brief Loads and focuses one validated embedded UI Canvas source result. */
+        void OpenEmbeddedUiCanvasSource(const SourceOpenResult &result);
         void OpenSourceFile(const SourceOpenRequest &request);
         void OpenDiagnosticSource(const DiagnosticSourceRequest &source);
         [[nodiscard]] bool CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,

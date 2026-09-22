@@ -132,7 +132,7 @@ namespace Horo::Physics::Detail {
     }
 
     /** @brief Emits one optional synchronous phase observation on the owner thread. */
-    void ObservePhase(const PhysicsFixedTickInput &input, const PhysicsTickPhase phase) noexcept {
+    inline void ObservePhase(const PhysicsFixedTickInput &input, const PhysicsTickPhase phase) noexcept {
         if (input.observer.phase)
             input.observer.phase(input.observer.context, phase, input.simulationTick);
     }
@@ -154,7 +154,7 @@ namespace Horo::Physics::Detail {
     }
 
     /** @brief Validates one solver-neutral batch before any tick phase is observed. */
-    [[nodiscard]] Result<void> ValidateSolverJobs(const JobSystem *jobs, const PhysicsSolverJobBatch &batch) {
+    [[nodiscard]] inline Result<void> ValidateSolverJobs(const JobSystem *jobs, const PhysicsSolverJobBatch &batch) {
         if (batch.jobCount == 0)
             return Result<void>::Success();
         if (jobs == nullptr)
@@ -172,12 +172,12 @@ namespace Horo::Physics::Detail {
     }
 
     /** @brief Reports whether two errors preserve the same stable domain/code identity. */
-    [[nodiscard]] bool SameErrorCode(const Error &left, const Error &right) noexcept {
+    [[nodiscard]] inline bool SameErrorCode(const Error &left, const Error &right) noexcept {
         return left.domain.Value() == right.domain.Value() && left.code.Value() == right.code.Value();
     }
 
     /** @brief Dispatches one validated solver-neutral batch and drains it before the tick may continue. */
-    [[nodiscard]] Result<void> RunSolverJobs(JobSystem &jobs, const PhysicsSolverJobBatch &batch) {
+    [[nodiscard]] inline Result<void> RunSolverJobs(JobSystem &jobs, const PhysicsSolverJobBatch &batch) {
         TaskGroup group(jobs, TaskGroupFailurePolicy::CollectAll);
         for (std::uint32_t index = 0; index < batch.jobCount; ++index) {
             const PhysicsSolverJob job = batch.jobs[index];

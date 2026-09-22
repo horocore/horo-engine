@@ -44,8 +44,8 @@ namespace {
     }
 
     TEST_CASE("Document kinds have stable serialized names", "[unit][editor][surface]") {
-        for (const DocumentKind kind : {DocumentKind::Scene, DocumentKind::Source, DocumentKind::Shader, DocumentKind::Asset,
-                                        DocumentKind::Project, DocumentKind::Custom}) {
+        for (const DocumentKind kind : {DocumentKind::Scene, DocumentKind::Source, DocumentKind::UiCanvas, DocumentKind::Shader,
+                                        DocumentKind::Asset, DocumentKind::Project, DocumentKind::Custom}) {
             const std::string_view serialized = ToString(kind);
             REQUIRE(!serialized.empty());
             const auto parsed = ParseDocumentKind(serialized);

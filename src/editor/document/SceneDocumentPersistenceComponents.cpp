@@ -196,6 +196,60 @@ namespace Horo::Editor::ScenePersistenceDetail {
             AppendNavigationAgent(value, *components.navigationAgent);
     }
 
+    [[nodiscard]] const char *AiStartupPolicyName(const AI::AiStartupPolicy policy) {
+        using enum AI::AiStartupPolicy;
+        switch (policy) {
+            case OnSceneActivation:
+                return "scene_activation";
+            case OnEnable:
+                return "on_enable";
+            case Manual:
+                return "manual";
+            case Count:
+                break;
+        }
+        return "scene_activation";
+    }
+
+    [[nodiscard]] const char *AiDecisionPlanKindName(const AI::DecisionPlanKind kind) {
+        using enum AI::DecisionPlanKind;
+        switch (kind) {
+            case BehaviorTree:
+                return "behavior_tree";
+            case StateMachine:
+                return "state_machine";
+            case Utility:
+                return "utility";
+            case Count:
+                break;
+        }
+        return "behavior_tree";
+    }
+
+    /** @brief Appends durable AI component values without runtime handles or descriptor state. */
+    void AppendAiComponents(Json &value, const SceneObjectComponentSet &components) {
+        if (components.aiAgent) {
+            value["aiAgent"] = {
+                {"agent", components.aiAgent->agent.Value()},
+                {"schemaVersion", components.aiAgent->schemaVersion},
+                {"startupPolicy", AiStartupPolicyName(components.aiAgent->startupPolicy)},
+                {"enabled", components.aiAgent->enabled},
+            };
+        }
+        if (components.aiController) {
+            value["aiController"] = {
+                {"controller", components.aiController->controller.Value()},
+                {"decisionAsset", components.aiController->decisionAsset.Value()},
+                {"blackboardSchema", components.aiController->blackboardSchema.Value()},
+                {"decisionKind", AiDecisionPlanKindName(components.aiController->decisionKind)},
+                {"requiredCapabilities", components.aiController->requiredCapabilities.bits},
+                {"schemaVersion", components.aiController->schemaVersion},
+                {"startupPolicy", AiStartupPolicyName(components.aiController->startupPolicy)},
+                {"enabled", components.aiController->enabled},
+            };
+        }
+    }
+
     [[nodiscard]] const char *AudioSoundReferenceKindName(const Audio::AudioSoundReferenceKind kind) {
         using enum Audio::AudioSoundReferenceKind;
         switch (kind) {
@@ -456,6 +510,7 @@ namespace Horo::Editor::ScenePersistenceDetail {
         if (components.audioSource)
             AppendAudioSourceJson(value, *components.audioSource);
         AppendNavigationComponents(value, components);
+        AppendAiComponents(value, components);
         AppendPhysicsComponents(value, components);
         AppendBehaviorsJson(value, components.behaviors);
         AppendGameplayComponentsJson(value, components.gameplayComponents);

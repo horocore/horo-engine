@@ -47,7 +47,8 @@ namespace Horo::Navigation {
                                                           const CancellationToken &cancellation) const override {
                 if (const auto validated = ValidateNullRequest(request, NavigationQueryKind::Path,
                                                                [](const auto &value) {
-                    return Math::IsFinite(value.start) && Math::IsFinite(value.destination);
+                    return Math::IsFinite(value.start) && Math::IsFinite(value.destination) && value.filter.IsValid() &&
+                           value.coveragePolicy < NavigationPathCoveragePolicy::Count && value.requirement.limits.maximumResultPoints >= 2U;
                 });
                     validated.HasError())
                     return Result<NavigationPath>::Failure(validated.ErrorValue());
