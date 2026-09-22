@@ -455,7 +455,7 @@ namespace Horo::Runtime::Ui::SerializationInternal {
                            {"presentation", EncodePresentation(canvas.presentation)}};
     }
 
-    [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value, const UiDocumentSerializationLimits &limits) {
+    [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value) {
         if (!Horo::Foundation::HasAllowedFields(value, {"id", "rootElement", "renderMode", "referenceResolution", "scaleMode"},
                                                 {"presentation"}))
             return Failed<UiCanvasDescriptor>(UiErrors::DocumentSerializationInvalid, "Runtime UI canvas fields are not canonical.");

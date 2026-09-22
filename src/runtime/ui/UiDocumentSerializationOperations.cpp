@@ -21,7 +21,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> AppendCanvases(UiDocumentBuilder &builder, const Internal::Json &encoded,
                                                   const UiDocumentSerializationLimits &limits) {
             for (const auto &value : encoded) {
-                auto canvas = Internal::DecodeCanvas(value, limits);
+                auto canvas = Internal::DecodeCanvas(value);
                 if (canvas.HasError())
                     return Result<void>::Failure(canvas.ErrorValue());
                 if (auto added = builder.AddCanvas(std::move(canvas).Value()); added.HasError())
