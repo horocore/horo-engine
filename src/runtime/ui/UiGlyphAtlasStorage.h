@@ -23,7 +23,7 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
-        [[nodiscard]] inline constexpr bool IsKnown(const UiGlyphAtlasResetReason value) noexcept {
+        [[nodiscard]] constexpr bool IsKnown(const UiGlyphAtlasResetReason value) noexcept {
             return value < UiGlyphAtlasResetReason::Count;
         }
 
