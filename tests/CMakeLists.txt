@@ -2008,6 +2008,15 @@ add_executable(HoroBackendOperationRegistryTests
 target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
 add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
+
+add_executable(HoroScriptInvocationTests
+        unit/extensions/ScriptValueTests.cpp
+        unit/extensions/ScriptInvocationTests.cpp
+)
+target_compile_features(HoroScriptInvocationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroScriptInvocationTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroScriptInvocationTests COMMAND HoroScriptInvocationTests)
+
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests

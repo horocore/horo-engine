@@ -1563,9 +1563,19 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ScriptExportDescriptorFunctionValidation.cpp
         extensions/manifest/ScriptExportDescriptorCanonical.cpp
         extensions/manifest/ScriptExportDescriptorCompatibility.cpp
+        extensions/script/ScriptValue.cpp
+        extensions/script/ScriptValueValidation.cpp
+        extensions/script/ScriptValueCodec.cpp
+        extensions/script/ScriptValueCodecInternal.h
+        extensions/script/ScriptValueWire.cpp
+        extensions/script/ScriptInvocationInternal.cpp
+        extensions/script/ScriptInvocationInternal.h
+        extensions/script/ScriptInvocationRegistration.cpp
+        extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
+        extensions/registry/ScriptInvocationErrors.cpp
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
