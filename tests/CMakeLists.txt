@@ -925,7 +925,7 @@ add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiCanvasDocumentTests.cpp
 )
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -1525,7 +1525,7 @@ add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiDocumentSerializationTests.cpp
 )
 target_compile_features(HoroRuntimeUiDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi)
+target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi nlohmann_json::nlohmann_json)
 add_executable(HoroRuntimeUiLocalizationTests
         unit/runtime/ui/UiLocalizationTests.cpp
 )

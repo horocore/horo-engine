@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -62,6 +63,8 @@ namespace {
             .renderMode = UiRenderMode::ScreenSpaceOverlay,
             .referenceResolution = {.width = 1920, .height = 1080},
             .scaleMode = UiScaleMode::ScaleWithScreenSize,
+            .presentation =
+                {.safeArea = UiSafeAreaMode::Inset, .uiScale = {5, 4}, .fontScale = {3, 2}, .pixelSnap = UiPixelSnapMode::Edges},
         }));
         return std::move(builder).Build().Value();
     }
@@ -246,4 +249,28 @@ TEST_CASE("UI Canvas loading rejects missing malformed and future-version input"
     const auto relative = LoadUiCanvasDocument("assets/ui/Hud.uicanvas");
     REQUIRE(relative.HasError());
     REQUIRE(ErrorCodeText(relative.ErrorValue()) == "editor.ui_canvas_document.path_invalid");
+}
+
+TEST_CASE("UI Canvas loading rejects malformed presentation policy", "[unit][editor][ui_canvas][presentation]") {
+    TemporaryProject project;
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    SaveInitialDocument(project, MakeDocument(1), mutations, files);
+
+    std::ifstream input(project.DocumentPath(), std::ios::binary);
+    REQUIRE(static_cast<bool>(input));
+    auto serialized = nlohmann::json::parse(std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{}));
+    auto legacy = serialized;
+    legacy["canvases"][0].erase("presentation");
+    project.Write(legacy.dump(2) + '\n');
+    const auto loadedLegacy = LoadUiCanvasDocument(project.DocumentPath());
+    REQUIRE(loadedLegacy.HasValue());
+    REQUIRE(loadedLegacy.Value().document.Canvases().front().presentation == UiCanvasPresentationPolicy{});
+
+    serialized["canvases"][0]["presentation"]["fontScale"]["denominator"] = 0;
+    project.Write(serialized.dump(2) + '\n');
+
+    const auto loaded = LoadUiCanvasDocument(project.DocumentPath());
+    REQUIRE(loaded.HasError());
+    REQUIRE(ErrorCodeText(loaded.ErrorValue()) == "editor.ui_canvas_document.malformed");
 }

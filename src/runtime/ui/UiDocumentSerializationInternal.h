@@ -29,7 +29,7 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     [[nodiscard]] OrderedJson EncodeDependency(const UiAssetDependency &dependency);
     [[nodiscard]] OrderedJson EncodeRoute(const UiRouteMetadata &route);
 
-    [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value, const UiDocumentSerializationLimits &limits);
+    [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value);
     [[nodiscard]] Result<UiDocumentElement> DecodeElement(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<UiLocalizedText> DecodeLocalizedText(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<UiLocalizedAssetReference> DecodeLocalizedAsset(const Json &value, const UiDocumentSerializationLimits &limits);

@@ -44,6 +44,14 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(UiScaleMode::ConstantPhysicalSize);
     }
 
+    [[nodiscard]] bool IsValidSafeAreaMode(const UiSafeAreaMode mode) noexcept {
+        return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(UiSafeAreaMode::Inset);
+    }
+
+    [[nodiscard]] bool IsValidPixelSnapMode(const UiPixelSnapMode mode) noexcept {
+        return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(UiPixelSnapMode::Edges);
+    }
+
     [[nodiscard]] bool IsValidReferenceKind(const UiReferenceKind kind) noexcept {
         return static_cast<std::uint8_t>(kind) < static_cast<std::uint8_t>(UiReferenceKind::Count);
     }
@@ -170,6 +178,96 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         if (name == "physicalSize")
             return Result<UiScaleMode>::Success(ConstantPhysicalSize);
         return Failed<UiScaleMode>(UiErrors::DocumentSerializationInvalid, "Runtime UI scale mode is unsupported.");
+    }
+
+    [[nodiscard]] const char *SafeAreaModeName(const UiSafeAreaMode mode) noexcept {
+        switch (mode) {
+            case UiSafeAreaMode::Ignore:
+                return "ignore";
+            case UiSafeAreaMode::Inset:
+                return "inset";
+        }
+        return "";
+    }
+
+    [[nodiscard]] Result<UiSafeAreaMode> ParseSafeAreaMode(const Json &value) {
+        if (!value.is_string())
+            return Failed<UiSafeAreaMode>(UiErrors::DocumentSerializationInvalid, "Runtime UI safe-area mode is not text.");
+        const auto name = value.get<std::string>();
+        if (name == "ignore")
+            return Result<UiSafeAreaMode>::Success(UiSafeAreaMode::Ignore);
+        if (name == "inset")
+            return Result<UiSafeAreaMode>::Success(UiSafeAreaMode::Inset);
+        return Failed<UiSafeAreaMode>(UiErrors::DocumentSerializationInvalid, "Runtime UI safe-area mode is unsupported.");
+    }
+
+    [[nodiscard]] const char *PixelSnapModeName(const UiPixelSnapMode mode) noexcept {
+        switch (mode) {
+            case UiPixelSnapMode::Disabled:
+                return "disabled";
+            case UiPixelSnapMode::Edges:
+                return "edges";
+        }
+        return "";
+    }
+
+    [[nodiscard]] Result<UiPixelSnapMode> ParsePixelSnapMode(const Json &value) {
+        if (!value.is_string())
+            return Failed<UiPixelSnapMode>(UiErrors::DocumentSerializationInvalid, "Runtime UI pixel-snap mode is not text.");
+        const auto name = value.get<std::string>();
+        if (name == "disabled")
+            return Result<UiPixelSnapMode>::Success(UiPixelSnapMode::Disabled);
+        if (name == "edges")
+            return Result<UiPixelSnapMode>::Success(UiPixelSnapMode::Edges);
+        return Failed<UiPixelSnapMode>(UiErrors::DocumentSerializationInvalid, "Runtime UI pixel-snap mode is unsupported.");
+    }
+
+    [[nodiscard]] OrderedJson EncodeScaleFactor(const UiCanvasScaleFactor &factor) {
+        return OrderedJson{{"numerator", factor.numerator}, {"denominator", factor.denominator}};
+    }
+
+    [[nodiscard]] Result<UiCanvasScaleFactor> DecodeScaleFactor(const Json &value) {
+        if (!value.is_object() || !Horo::Foundation::HasAllowedFields(value, {"numerator", "denominator"}))
+            return Failed<UiCanvasScaleFactor>(UiErrors::DocumentSerializationInvalid, "Runtime UI scale factor fields are not canonical.");
+        auto numerator = ReadUnsigned<std::uint32_t>(value.at("numerator"));
+        auto denominator = ReadUnsigned<std::uint32_t>(value.at("denominator"));
+        if (numerator.HasError())
+            return Result<UiCanvasScaleFactor>::Failure(numerator.ErrorValue());
+        if (denominator.HasError())
+            return Result<UiCanvasScaleFactor>::Failure(denominator.ErrorValue());
+        UiCanvasScaleFactor factor{numerator.Value(), denominator.Value()};
+        if (!factor.IsValid())
+            return Failed<UiCanvasScaleFactor>(UiErrors::DocumentSerializationInvalid, "Runtime UI scale factor is invalid.");
+        return Result<UiCanvasScaleFactor>::Success(factor);
+    }
+
+    [[nodiscard]] OrderedJson EncodePresentation(const UiCanvasPresentationPolicy &presentation) {
+        return OrderedJson{{"safeArea", SafeAreaModeName(presentation.safeArea)},
+                           {"uiScale", EncodeScaleFactor(presentation.uiScale)},
+                           {"fontScale", EncodeScaleFactor(presentation.fontScale)},
+                           {"pixelSnap", PixelSnapModeName(presentation.pixelSnap)}};
+    }
+
+    [[nodiscard]] Result<UiCanvasPresentationPolicy> DecodePresentation(const Json &value) {
+        if (!value.is_object() || !Horo::Foundation::HasAllowedFields(value, {"safeArea", "uiScale", "fontScale", "pixelSnap"}))
+            return Failed<UiCanvasPresentationPolicy>(UiErrors::DocumentSerializationInvalid,
+                                                      "Runtime UI presentation policy fields are not canonical.");
+        auto safeArea = ParseSafeAreaMode(value.at("safeArea"));
+        auto uiScale = DecodeScaleFactor(value.at("uiScale"));
+        auto fontScale = DecodeScaleFactor(value.at("fontScale"));
+        auto pixelSnap = ParsePixelSnapMode(value.at("pixelSnap"));
+        if (safeArea.HasError())
+            return Result<UiCanvasPresentationPolicy>::Failure(safeArea.ErrorValue());
+        if (uiScale.HasError())
+            return Result<UiCanvasPresentationPolicy>::Failure(uiScale.ErrorValue());
+        if (fontScale.HasError())
+            return Result<UiCanvasPresentationPolicy>::Failure(fontScale.ErrorValue());
+        if (pixelSnap.HasError())
+            return Result<UiCanvasPresentationPolicy>::Failure(pixelSnap.ErrorValue());
+        UiCanvasPresentationPolicy presentation{safeArea.Value(), uiScale.Value(), fontScale.Value(), pixelSnap.Value()};
+        if (!presentation.IsValid() || !IsValidSafeAreaMode(presentation.safeArea) || !IsValidPixelSnapMode(presentation.pixelSnap))
+            return Failed<UiCanvasPresentationPolicy>(UiErrors::DocumentSerializationInvalid, "Runtime UI presentation policy is invalid.");
+        return Result<UiCanvasPresentationPolicy>::Success(presentation);
     }
 
     [[nodiscard]] const char *BandName(const UiPresentationBand band) noexcept {
@@ -353,11 +451,13 @@ namespace Horo::Runtime::Ui::SerializationInternal {
                            {"renderMode", RenderModeName(canvas.renderMode)},
                            {"referenceResolution",
                             OrderedJson{{"width", canvas.referenceResolution.width}, {"height", canvas.referenceResolution.height}}},
-                           {"scaleMode", ScaleModeName(canvas.scaleMode)}};
+                           {"scaleMode", ScaleModeName(canvas.scaleMode)},
+                           {"presentation", EncodePresentation(canvas.presentation)}};
     }
 
-    [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value, const UiDocumentSerializationLimits &) {
-        if (!Horo::Foundation::HasAllowedFields(value, {"id", "rootElement", "renderMode", "referenceResolution", "scaleMode"}))
+    [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value) {
+        if (!Horo::Foundation::HasAllowedFields(value, {"id", "rootElement", "renderMode", "referenceResolution", "scaleMode"},
+                                                {"presentation"}))
             return Failed<UiCanvasDescriptor>(UiErrors::DocumentSerializationInvalid, "Runtime UI canvas fields are not canonical.");
         auto id = DecodeUiId<UiCanvasId>(value.at("id"));
         auto root = DecodeUiId<UiElementId>(value.at("rootElement"));
@@ -380,8 +480,19 @@ namespace Horo::Runtime::Ui::SerializationInternal {
             return Result<UiCanvasDescriptor>::Failure(width.ErrorValue());
         if (height.HasError())
             return Result<UiCanvasDescriptor>::Failure(height.ErrorValue());
-        return Result<UiCanvasDescriptor>::Success(
-            {id.Value(), root.Value(), renderMode.Value(), {width.Value(), height.Value()}, scaleMode.Value()});
+        UiCanvasPresentationPolicy presentation{};
+        if (value.contains("presentation")) {
+            auto parsedPresentation = DecodePresentation(value.at("presentation"));
+            if (parsedPresentation.HasError())
+                return Result<UiCanvasDescriptor>::Failure(parsedPresentation.ErrorValue());
+            presentation = parsedPresentation.Value();
+        }
+        return Result<UiCanvasDescriptor>::Success({.id = id.Value(),
+                                                    .rootElement = root.Value(),
+                                                    .renderMode = renderMode.Value(),
+                                                    .referenceResolution = {width.Value(), height.Value()},
+                                                    .scaleMode = scaleMode.Value(),
+                                                    .presentation = presentation});
     }
 
     [[nodiscard]] OrderedJson EncodeElement(const UiDocumentElement &element) {

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace Horo::Runtime::Ui {
@@ -32,6 +33,26 @@ namespace Horo::Runtime::Ui {
         TextGlyphs,
         NineSliceRectangle,
     };
+
+    /** @brief One finite logical point after optional downstream physical-pixel snapping. */
+    struct UiPixelSnappedPoint final {
+        float x{}; /**< Logical horizontal coordinate in 1/64-DIP units. */
+        float y{}; /**< Logical vertical coordinate in 1/64-DIP units. */
+
+        /** @brief Checks finite snapped coordinates. @return Whether the point is representable. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiPixelSnappedPoint &) const noexcept = default;
+    };
+
+    /**
+     * @brief Projects one logical render point onto the resolved physical-pixel grid.
+     * @details Snapping is derived render data. It never changes layout, hit-test geometry, safe-area extents, or serialized state.
+     * @param canvas Exact resolved screen-space presentation evidence.
+     * @param x Logical horizontal coordinate in 1/64-DIP units.
+     * @param y Logical vertical coordinate in 1/64-DIP units.
+     * @return Unchanged or ties-to-even pixel-snapped coordinates, or a typed malformed/overflow failure.
+     */
+    [[nodiscard]] Result<UiPixelSnappedPoint> SnapUiPointToPixels(const UiResolvedScreenCanvas &canvas, float x, float y);
 
     /** @brief One logical vertex in 1/64-DIP coordinates and normalized source coordinates. */
     struct UiRenderVertex final {
@@ -97,12 +118,13 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Exact immutable source and generated-count evidence for one geometry plan. */
     struct UiRenderGeometryPlanDescriptor final {
-        UiRenderViewId view;                       /**< Exact view that owns the plan. */
-        UiRenderSnapshotRevision snapshotRevision; /**< Exact source snapshot generation. */
-        std::uint32_t commandCount{};              /**< Authored draw-command count represented by the plan. */
-        std::uint32_t vertexCount{};               /**< Generated vertex count. */
-        std::uint32_t indexCount{};                /**< Generated index count. */
-        std::uint32_t batchCount{};                /**< Generated contiguous batch count. */
+        UiRenderViewId view;                                /**< Exact view that owns the plan. */
+        UiRenderSnapshotRevision snapshotRevision;          /**< Exact source snapshot generation. */
+        std::uint32_t commandCount{};                       /**< Authored draw-command count represented by the plan. */
+        std::uint32_t vertexCount{};                        /**< Generated vertex count. */
+        std::uint32_t indexCount{};                         /**< Generated index count. */
+        std::uint32_t batchCount{};                         /**< Generated contiguous batch count. */
+        std::optional<UiResolvedScreenCanvas> presentation; /**< Exact optional output evidence used for derived snapping. */
     };
 
     /** @brief Allocation-free geometry capacity and pressure evidence for one arena. */
@@ -204,6 +226,13 @@ namespace Horo::Runtime::Ui {
          * @pre Calls for one arena are serialized on its owner thread.
          */
         [[nodiscard]] Result<UiRenderGeometryPlan> Build(const UiRenderSnapshot &snapshot);
+        /**
+         * @brief Generates geometry using one exact resolved screen presentation policy.
+         * @param snapshot Exact per-view source snapshot; the returned plan retains its own immutable lease.
+         * @param canvas Resolved output evidence and downstream pixel-snap policy.
+         * @return Complete plan or a typed presentation, geometry, capacity, or slot-exhaustion failure.
+         */
+        [[nodiscard]] Result<UiRenderGeometryPlan> Build(const UiRenderSnapshot &snapshot, const UiResolvedScreenCanvas &canvas);
         /** @brief Stops new plans without invalidating existing plan or source-snapshot leases. */
         void Close() noexcept;
         /** @brief Returns whether every geometry plan slot and retained source lease has drained. @return True when drained. */
@@ -219,6 +248,8 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
+        /** @brief Performs one bounded build after public overloads normalize optional presentation evidence. */
+        [[nodiscard]] Result<UiRenderGeometryPlan> BuildInternal(const UiRenderSnapshot &snapshot, const UiResolvedScreenCanvas *canvas);
         explicit UiRenderGeometryArena(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
     };

@@ -3,6 +3,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <nlohmann/json.hpp>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -43,7 +44,16 @@ namespace Horo::Runtime::Ui {
             const auto texture = Asset(6);
             const auto textureType = Type("core.texture");
             UiDocumentBuilder builder{documentId, Revision(7), version};
-            REQUIRE(builder.AddCanvas({canvasId, root, UiRenderMode::ScreenSpaceOverlay, {1920, 1080}, UiScaleMode::ScaleWithScreenSize})
+            REQUIRE(builder
+                        .AddCanvas(UiCanvasDescriptor{.id = canvasId,
+                                                      .rootElement = root,
+                                                      .renderMode = UiRenderMode::ScreenSpaceOverlay,
+                                                      .referenceResolution = {1920, 1080},
+                                                      .scaleMode = UiScaleMode::ScaleWithScreenSize,
+                                                      .presentation = {.safeArea = UiSafeAreaMode::Inset,
+                                                                       .uiScale = {5, 4},
+                                                                       .fontScale = {3, 2},
+                                                                       .pixelSnap = UiPixelSnapMode::Edges}})
                         .HasValue());
             REQUIRE(builder.AddElement({root, {}, Type("core.panel"), {{"enabled", true}, {"opacity", 1.0}}, {}}).HasValue());
             UiReference elementReference{.kind = UiReferenceKind::Element, .element = root};
@@ -172,6 +182,26 @@ namespace Horo::Runtime::Ui {
             REQUIRE(std::ranges::equal(decoded.Value().Dependencies(), document.Dependencies()));
             REQUIRE(std::ranges::equal(decoded.Value().Routes(), document.Routes()));
             REQUIRE(SerializeUiDocument(decoded.Value()).Value() == encoded.Value());
+        }
+
+        TEST_CASE("Runtime UI document serialization preserves presentation policy and accepts legacy canvases",
+                  "[runtime_ui][document][serialization][presentation]") {
+            const auto document = MakeDocument();
+            const auto encoded = SerializeUiDocument(document);
+            REQUIRE(encoded.HasValue());
+            const auto decoded = DeserializeUiDocument(encoded.Value());
+            REQUIRE(decoded.HasValue());
+            REQUIRE(decoded.Value().Canvases().front().presentation == document.Canvases().front().presentation);
+
+            auto legacyJson = nlohmann::json::parse(encoded.Value());
+            legacyJson["canvases"][0].erase("presentation");
+            const auto legacy = DeserializeUiDocument(legacyJson.dump());
+            REQUIRE(legacy.HasValue());
+            REQUIRE(legacy.Value().Canvases().front().presentation == UiCanvasPresentationPolicy{});
+
+            auto malformedJson = nlohmann::json::parse(encoded.Value());
+            malformedJson["canvases"][0]["presentation"]["fontScale"]["denominator"] = 0;
+            REQUIRE(DeserializeUiDocument(malformedJson.dump()).HasError());
         }
 
         TEST_CASE("Runtime UI document serialization round trips every closed typed value and reference kind",
