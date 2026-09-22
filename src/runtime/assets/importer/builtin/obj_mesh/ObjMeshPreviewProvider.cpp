@@ -18,6 +18,7 @@ namespace Horo::Assets {
         constexpr std::uint32_t kMaximumVertices = 1'000'000;
         constexpr std::uint32_t kMaximumTriangleIndices = 6'000'000;
         constexpr std::uint32_t kMaximumRasterizedTriangles = 100'000;
+        constexpr std::size_t kMaximumPointSamples = 2048;
 
         struct PreviewVertex {
             float x{};
@@ -149,6 +150,21 @@ namespace Horo::Assets {
             }
         }
 
+        void RasterizePoint(AssetPreviewImage &image, const ProjectedVertex &point, const std::uint8_t shade) {
+            const int centerX = std::clamp(static_cast<int>(std::lround(point.x)), 0, static_cast<int>(image.width) - 1);
+            const int centerY = std::clamp(static_cast<int>(std::lround(point.y)), 0, static_cast<int>(image.height) - 1);
+            for (int y = std::max(0, centerY - 1); y <= std::min(static_cast<int>(image.height) - 1, centerY + 1); ++y) {
+                for (int x = std::max(0, centerX - 1); x <= std::min(static_cast<int>(image.width) - 1, centerX + 1); ++x) {
+                    const std::size_t pixel = static_cast<std::size_t>(y) * image.width + static_cast<std::size_t>(x);
+                    const std::size_t color = pixel * 4U;
+                    image.pixels[color] = shade;
+                    image.pixels[color + 1U] = static_cast<std::uint8_t>(std::min<unsigned>(shade + 5U, 255U));
+                    image.pixels[color + 2U] = static_cast<std::uint8_t>(std::min<unsigned>(shade + 2U, 255U));
+                    image.pixels[color + 3U] = 255U;
+                }
+            }
+        }
+
         class BuiltinMeshPreviewProvider final : public IAssetPreviewProvider {
         public:
             explicit BuiltinMeshPreviewProvider(const BuiltinMeshPreviewView view) : view_(view) {}
@@ -196,8 +212,25 @@ namespace Horo::Assets {
                 };
                 const std::size_t indexHeader = kHeaderBytes + static_cast<std::size_t>(positionBytes) + texcoordBytes + normalBytes;
                 std::uint32_t indexCount = 0;
-                if (!ReadU32(input.editorPayload, indexHeader, indexCount) || indexCount == 0 || indexCount % 3U != 0 ||
-                    indexCount > kMaximumTriangleIndices ||
+                const bool hasIndexCount = ReadU32(input.editorPayload, indexHeader, indexCount);
+                if (!hasIndexCount && indexHeader != input.editorPayload.size()) {
+                    return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
+                }
+
+                if (!hasIndexCount || indexCount == 0) {
+                    const std::size_t sampleCount = std::min(vertices.size(), kMaximumPointSamples);
+                    std::vector<PreviewVertex> samples;
+                    samples.reserve(sampleCount);
+                    for (std::size_t sample = 0; sample < sampleCount; ++sample) {
+                        const std::size_t vertexIndex = sampleCount == vertices.size() ? sample : (sample * vertices.size()) / sampleCount;
+                        samples.push_back(vertices[vertexIndex]);
+                    }
+                    const std::vector<ProjectedVertex> projected = ProjectVertices(samples, input.width, input.height, view_);
+                    for (const ProjectedVertex &point : projected)
+                        RasterizePoint(image, point, 198);
+                    return Result<AssetPreviewImage>::Success(std::move(image));
+                }
+                if (indexCount % 3U != 0 || indexCount > kMaximumTriangleIndices ||
                     indexHeader + 4U + static_cast<std::uint64_t>(indexCount) * 4U > input.editorPayload.size()) {
                     return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
                 }

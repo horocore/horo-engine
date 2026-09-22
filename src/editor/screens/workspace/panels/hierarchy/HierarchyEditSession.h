@@ -87,6 +87,9 @@ namespace Horo::Editor {
         [[nodiscard]] static bool IsDeleteShortcut(Input::Key key, const Input::ModifierState &modifiers) noexcept;
 
     private:
+        /** @brief Expands projected ancestors for a new controller reveal request. */
+        void RevealObjectAncestors(const EditorWorkspaceViewModel &viewModel);
+
         HierarchyModel m_model;
         std::vector<HierarchyNodeInput> m_inputs;
         std::unordered_map<HierarchyNodeId, std::optional<HierarchyNodeId>> m_parentByNode;

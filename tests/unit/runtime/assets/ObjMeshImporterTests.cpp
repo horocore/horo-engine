@@ -4,6 +4,7 @@
 #include "ObjMeshImporter.h"
 
 #include <algorithm>
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <memory>
@@ -52,6 +53,15 @@ namespace {
     std::uint32_t ReadLE32(std::span<const std::uint8_t> bytes, std::size_t offset) {
         return static_cast<std::uint32_t>(bytes[offset]) | (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
                (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) | (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+    }
+
+    void AppendLE32(std::vector<std::uint8_t> &bytes, const std::uint32_t value) {
+        for (unsigned shift = 0; shift < 32; shift += 8)
+            bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffU));
+    }
+
+    void AppendFloat(std::vector<std::uint8_t> &bytes, const float value) {
+        AppendLE32(bytes, std::bit_cast<std::uint32_t>(value));
     }
 
 }  // namespace
@@ -159,6 +169,42 @@ f 1 2 3
     REQUIRE(preview.HasValue());
     REQUIRE(preview.Value().IsValid());
     REQUIRE((std::ranges::any_of(preview.Value().pixels, [](const std::uint8_t value) {
+        return value != 0;
+    })));
+}
+
+TEST_CASE("OBJ preview provider renders topology-free legacy payloads", "[native]") {
+    std::vector<std::uint8_t> payload;
+    AppendLE32(payload, MeshEditorPayloadSchemaVersion);
+    AppendLE32(payload, 2);
+    AppendLE32(payload, 1);
+    for (const float bound : {-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F})
+        AppendFloat(payload, bound);
+    AppendLE32(payload, 24);
+    AppendLE32(payload, 0);
+    AppendLE32(payload, 0);
+    for (const float component : {-1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F})
+        AppendFloat(payload, component);
+
+    AssetImporterCatalog catalog;
+    REQUIRE((RegisterObjMeshImporter(catalog).HasValue()));
+    const auto snapshot = catalog.Publish();
+    REQUIRE(snapshot.HasValue());
+    const AssetImporterContribution *contribution = snapshot.Value()->FindPreviewContribution(Type("core.mesh"));
+    REQUIRE(contribution != nullptr);
+    REQUIRE(contribution->previewProvider != nullptr);
+
+    const auto preview = contribution->previewProvider->GeneratePreview(
+        AssetPreviewInput{
+            .editorPayload = payload,
+            .absoluteAssetPath = "/tmp/legacy.horoasset",
+            .assetType = Type("core.mesh"),
+            .width = 64,
+            .height = 64,
+        },
+        CancellationToken{});
+    REQUIRE(preview.HasValue());
+    CHECK((std::ranges::any_of(preview.Value().pixels, [](const std::uint8_t value) {
         return value != 0;
     })));
 }
