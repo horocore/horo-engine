@@ -110,6 +110,24 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor LayoutSnapshotStorageExhausted;
     /** @brief The layout engine is retiring or stopped and rejects new work. */
     extern const ErrorCodeDescriptor LayoutLifecycleUnavailable;
+    /** @brief A style schema, value, or resolver request is malformed. */
+    extern const ErrorCodeDescriptor StyleInvalid;
+    /** @brief A style asset, class, token, or property repeats a stable identity. */
+    extern const ErrorCodeDescriptor StyleIdentityConflict;
+    /** @brief A style reference names a missing or foreign asset, class, token, or property. */
+    extern const ErrorCodeDescriptor StyleReferenceInvalid;
+    /** @brief A style assignment crosses a closed value category or declared range. */
+    extern const ErrorCodeDescriptor StyleTypeMismatch;
+    /** @brief A style asset, class, or token graph contains a cycle or excessive inheritance depth. */
+    extern const ErrorCodeDescriptor StyleCycle;
+    /** @brief A visual-state selector or layer is malformed or uses unknown state evidence. */
+    extern const ErrorCodeDescriptor StyleStateInvalid;
+    /** @brief Style source identity or revision evidence does not match the active tree/registry. */
+    extern const ErrorCodeDescriptor StyleSourceStale;
+    /** @brief Every preallocated immutable computed-style snapshot slot remains leased. */
+    extern const ErrorCodeDescriptor StyleSnapshotStorageExhausted;
+    /** @brief The style registry or resolver is retiring or stopped and rejects new work. */
+    extern const ErrorCodeDescriptor StyleLifecycleUnavailable;
     /** @brief Hit-test projection, geometry, pointer, ray, or canvas evidence is malformed. */
     extern const ErrorCodeDescriptor HitTestInvalid;
     /** @brief Hit-test ownership, tree, canvas, or interaction evidence is stale or mismatched. */
@@ -170,6 +188,18 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief A route-stack descriptor or operation request is malformed. */
+    extern const ErrorCodeDescriptor RouteStackInvalid;
+    /** @brief A route operation has invalid fields or targets an unsupported route. */
+    extern const ErrorCodeDescriptor RouteOperationInvalid;
+    /** @brief A route operation guard no longer matches the committed stack generation. */
+    extern const ErrorCodeDescriptor RouteOperationStale;
+    /** @brief A route operation was attempted while another transaction is preparing or committing. */
+    extern const ErrorCodeDescriptor RouteOperationReentrant;
+    /** @brief A route transaction was used after its terminal result was produced. */
+    extern const ErrorCodeDescriptor RouteOperationAlreadyCompleted;
+    /** @brief The route stack is retiring, stopped, or cannot admit another operation. */
+    extern const ErrorCodeDescriptor RouteOperationLifecycleUnavailable;
     /** @brief A typed interactive-control descriptor is malformed or incompatible with its control kind. */
     extern const ErrorCodeDescriptor ControlDescriptorInvalid;
     /** @brief A normalized control input has invalid kind, source, sequence, tick, or payload evidence. */
@@ -186,6 +216,24 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ControlSequenceInvalid;
     /** @brief The interactive-control state machine is retiring, stopped, or changing lifecycle during input. */
     extern const ErrorCodeDescriptor ControlLifecycleUnavailable;
+    /** @brief A Runtime UI focus graph, node, scope, or transition is malformed. */
+    extern const ErrorCodeDescriptor FocusInvalid;
+    /** @brief Focus owner, tree, interaction, or handle evidence belongs to another generation. */
+    extern const ErrorCodeDescriptor FocusSourceStale;
+    /** @brief A requested focus target is absent, disabled, hidden, or otherwise unavailable. */
+    extern const ErrorCodeDescriptor FocusTargetUnavailable;
+    /** @brief A focus transition would escape the active inclusive modal boundary. */
+    extern const ErrorCodeDescriptor FocusModalBoundaryViolation;
+    /** @brief The bounded focus graph node capacity was exceeded or could not be allocated. */
+    extern const ErrorCodeDescriptor FocusCapacityExceeded;
+    /** @brief The bounded modal or restoration stack cannot admit another scope. */
+    extern const ErrorCodeDescriptor FocusModalCapacityExceeded;
+    /** @brief A modal close identity is stale or is not the current top modal. */
+    extern const ErrorCodeDescriptor FocusModalStale;
+    /** @brief A reload attempted to change the player, presentation layer, or owner scope. */
+    extern const ErrorCodeDescriptor FocusScopeMismatch;
+    /** @brief The focus graph is retiring or stopped and rejects the request. */
+    extern const ErrorCodeDescriptor FocusLifecycleUnavailable;
     /** @brief Immutable Runtime UI render snapshot evidence or table topology is malformed. */
     extern const ErrorCodeDescriptor RenderSnapshotInvalid;
     /** @brief A Runtime UI draw command contains invalid geometry, paint, or table references. */
