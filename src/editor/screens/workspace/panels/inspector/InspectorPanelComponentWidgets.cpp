@@ -178,15 +178,18 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.camera->enabled = !draft.camera->enabled;
+        const bool cancelRequested = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
         if (!card.BeginBody())
-            return {.committed = header.resetRequested || header.toggleEnabledRequested, .removeRequested = header.removeRequested};
+            return {.cancelRequested = cancelRequested,
+                    .committed = header.resetRequested || header.toggleEnabledRequested,
+                    .removeRequested = header.removeRequested};
         ImGui::BeginDisabled(!draft.camera->enabled);
         bool committed = DrawCameraProjectionProperties(draft, context);
         committed = committed || DrawCameraClipProperties(draft, context);
         committed = committed || header.resetRequested || header.toggleEnabledRequested;
         ImGui::EndDisabled();
         card.Finish();
-        return {.committed = committed, .removeRequested = header.removeRequested};
+        return {.cancelRequested = cancelRequested, .committed = committed, .removeRequested = header.removeRequested};
     }
 
     InspectorLightEdit InspectorPanel::DrawLightWidgets(const EditorGuiContext &context) {
@@ -242,8 +245,11 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.triggerVolume->enabled = !draft.triggerVolume->enabled;
+        const bool cancelRequested = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
         if (!card.BeginBody())
-            return {.committed = header.resetRequested || header.toggleEnabledRequested, .removeRequested = header.removeRequested};
+            return {.cancelRequested = cancelRequested,
+                    .committed = header.resetRequested || header.toggleEnabledRequested,
+                    .removeRequested = header.removeRequested};
         ImGui::BeginDisabled(!draft.triggerVolume->enabled);
 
         const std::array<const char *, 4> shapeEntries{
@@ -261,7 +267,8 @@ namespace Horo::Editor {
 
         ImGui::EndDisabled();
         card.Finish();
-        return {.committed = shapeChanged || header.resetRequested || header.toggleEnabledRequested,
+        return {.cancelRequested = cancelRequested,
+                .committed = shapeChanged || header.resetRequested || header.toggleEnabledRequested,
                 .removeRequested = header.removeRequested};
     }
 
@@ -281,8 +288,11 @@ namespace Horo::Editor {
         }
         if (header.toggleEnabledRequested)
             draft.audioSource->enabled = !draft.audioSource->enabled;
+        const bool cancelRequested = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
         if (!card.BeginBody())
-            return {.committed = header.resetRequested || header.toggleEnabledRequested, .removeRequested = header.removeRequested};
+            return {.cancelRequested = cancelRequested,
+                    .committed = header.resetRequested || header.toggleEnabledRequested,
+                    .removeRequested = header.removeRequested};
         ImGui::BeginDisabled(!draft.audioSource->enabled);
 
         const bool gainValid = std::isfinite(draft.audioSource->playback.gain) && draft.audioSource->playback.gain >= 0.0F;
@@ -313,6 +323,6 @@ namespace Horo::Editor {
             gainEdit.committed || pitchEdit.committed || spatialChanged || header.resetRequested || header.toggleEnabledRequested;
         ImGui::EndDisabled();
         card.Finish();
-        return {.committed = committed, .removeRequested = header.removeRequested};
+        return {.cancelRequested = cancelRequested, .committed = committed, .removeRequested = header.removeRequested};
     }
 }  // namespace Horo::Editor

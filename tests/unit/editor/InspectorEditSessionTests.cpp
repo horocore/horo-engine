@@ -77,9 +77,7 @@ TEST_CASE("Inspector edit session owns transform preview lifecycle", "[unit][edi
     REQUIRE((committed.transformUpdates->front().localTransform.translation.y == 6.0F));
 
     const EditorWorkspaceViewCommandData reset = session.ApplyTransformEdit(InspectorTransformEdit{.resetRequested = true}, true);
-    REQUIRE((reset.command == EditorWorkspaceViewCommand::CommitObjectTransform));
-    REQUIRE((reset.transformUpdates->front().localTransform.translation == Horo::Math::Vec3{}));
-    REQUIRE((reset.transformUpdates->front().localTransform.scale == Horo::Math::Vec3{1.0F, 1.0F, 1.0F}));
+    REQUIRE((reset.command == EditorWorkspaceViewCommand::None));
 }
 
 TEST_CASE("Inspector edit session validates Camera edits and selection reconciliation", "[unit][editor]") {
@@ -285,9 +283,66 @@ TEST_CASE("Inspector no-op transform commit does not leak edited axes into the n
         true));
     session.Draft().position[0] = object.localTransform.translation.x;
     const EditorWorkspaceViewCommandData noOpCommit = session.ApplyTransformEdit(InspectorTransformEdit{.committed = true}, true);
-    REQUIRE((noOpCommit.command == EditorWorkspaceViewCommand::CommitObjectTransform));
+    REQUIRE((noOpCommit.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview));
+    REQUIRE((!session.HasTransformPreview()));
 
     REQUIRE((session.ApplyTransformEdit(InspectorTransformEdit{.committed = true}, true).command == EditorWorkspaceViewCommand::None));
+}
+
+TEST_CASE("Inspector transform edits preserve untouched rotations and drop unchanged batch entries", "[unit][editor]") {
+    using namespace Horo::Editor;
+    SceneObject object = MakeCameraObject(SceneObjectId{75});
+    object.localTransform.rotation = Horo::Math::Quaternion::FromEulerRadians({0.31F, -0.47F, 0.83F});
+    InspectorEditSession session;
+    static_cast<void>(session.BeginObject(object, DocumentRevision{1}));
+
+    session.Draft().position[0] = 3.0F;
+    const EditorWorkspaceViewCommandData preview = session.ApplyTransformEdit(
+        InspectorTransformEdit{
+            .changed = true,
+            .changedAxes = {.position = {true, false, false}},
+        },
+        true);
+    REQUIRE((preview.command == EditorWorkspaceViewCommand::PreviewObjectTransform));
+    REQUIRE((preview.transformUpdates->size() == 1));
+    REQUIRE((preview.transformUpdates->front().localTransform.rotation == object.localTransform.rotation));
+
+    session.Draft().position[0] = object.localTransform.translation.x;
+    const EditorWorkspaceViewCommandData cancelled = session.ApplyTransformEdit(
+        InspectorTransformEdit{
+            .changed = true,
+            .changedAxes = {.position = {true, false, false}},
+        },
+        true);
+    REQUIRE((cancelled.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview));
+    REQUIRE((!session.HasTransformPreview()));
+}
+
+TEST_CASE("Inspector component drafts restore on Escape without emitting a command", "[unit][editor]") {
+    using namespace Horo::Editor;
+    SceneObject object = MakeCameraObject(SceneObjectId{76});
+    object.components.triggerVolume = Horo::Runtime::TriggerVolumeComponent{};
+    object.components.audioSource = Horo::Runtime::AudioSourceComponent{};
+    InspectorEditSession session;
+    static_cast<void>(session.BeginObject(object, DocumentRevision{1}));
+
+    const float originalNearPlane = session.Draft().camera->nearPlane;
+    session.Draft().camera->nearPlane = 0.5F;
+    REQUIRE(
+        (session.ApplyCameraEdit(InspectorCameraEdit{.cancelRequested = true}, object, true).command == EditorWorkspaceViewCommand::None));
+    REQUIRE((session.Draft().camera->nearPlane == originalNearPlane));
+
+    const auto originalShape = session.Draft().triggerVolume->shape;
+    session.Draft().triggerVolume->shape = Horo::Runtime::ColliderShapeType::Sphere;
+    REQUIRE((session.ApplyTriggerVolumeEdit(InspectorTriggerVolumeEdit{.cancelRequested = true}, object, true).command ==
+             EditorWorkspaceViewCommand::None));
+    REQUIRE((session.Draft().triggerVolume->shape == originalShape));
+
+    const float originalGain = session.Draft().audioSource->playback.gain;
+    session.Draft().audioSource->playback.gain = 2.0F;
+    REQUIRE((session.ApplyAudioSourceEdit(InspectorAudioSourceEdit{.cancelRequested = true}, object, true).command ==
+             EditorWorkspaceViewCommand::None));
+    REQUIRE((session.Draft().audioSource->playback.gain == originalGain));
 }
 
 TEST_CASE("Inspector edit session validates typed TriggerVolume and AudioSource edits", "[unit][editor]") {

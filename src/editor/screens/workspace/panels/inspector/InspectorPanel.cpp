@@ -253,7 +253,7 @@ namespace Horo::Editor {
     }
 
     void InspectorPanel::ApplyCameraEdit(const InspectorCameraEdit &edit, const SceneObject &object,
-                                         EditorWorkspaceViewCommandData &command) const {
+                                         EditorWorkspaceViewCommandData &command) {
         if (TryAdoptComponentRemoval(edit, object, command, ComponentType::Camera))
             return;
         AdoptCommand(command, m_editSession.ApplyCameraEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
@@ -267,14 +267,14 @@ namespace Horo::Editor {
     }
 
     void InspectorPanel::ApplyTriggerVolumeEdit(const InspectorTriggerVolumeEdit &edit, const SceneObject &object,
-                                                EditorWorkspaceViewCommandData &command) const {
+                                                EditorWorkspaceViewCommandData &command) {
         if (TryAdoptComponentRemoval(edit, object, command, ComponentType::TriggerVolume))
             return;
         AdoptCommand(command, m_editSession.ApplyTriggerVolumeEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
     }
 
     void InspectorPanel::ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object,
-                                              EditorWorkspaceViewCommandData &command) const {
+                                              EditorWorkspaceViewCommandData &command) {
         if (TryAdoptComponentRemoval(edit, object, command, ComponentType::AudioSource))
             return;
         AdoptCommand(command, m_editSession.ApplyAudioSourceEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));

@@ -62,6 +62,7 @@ namespace Horo::Editor {
 
     /** @brief Semantic Camera-widget events consumed without an ImGui dependency. */
     struct InspectorCameraEdit {
+        bool cancelRequested{false};
         bool committed{false};
         bool removeRequested{false};
     };
@@ -76,12 +77,14 @@ namespace Horo::Editor {
 
     /** @brief Semantic TriggerVolume-widget events consumed without an ImGui dependency. */
     struct InspectorTriggerVolumeEdit {
+        bool cancelRequested{false};
         bool committed{false};
         bool removeRequested{false};
     };
 
     /** @brief Semantic AudioSource-widget events consumed without an ImGui dependency. */
     struct InspectorAudioSourceEdit {
+        bool cancelRequested{false};
         bool committed{false};
         bool removeRequested{false};
     };
@@ -133,7 +136,7 @@ namespace Horo::Editor {
 
         /** @brief Reduces one Camera edit into a typed component command. */
         [[nodiscard]] EditorWorkspaceViewCommandData ApplyCameraEdit(const InspectorCameraEdit &edit, const SceneObject &object,
-                                                                     bool allowCommands) const;
+                                                                     bool allowCommands);
 
         /** @brief Reduces one Light edit into a typed component command. */
         [[nodiscard]] EditorWorkspaceViewCommandData ApplyLightEdit(const InspectorLightEdit &edit, const SceneObject &object,
@@ -141,11 +144,11 @@ namespace Horo::Editor {
 
         /** @brief Reduces one TriggerVolume edit into a typed component command. */
         [[nodiscard]] EditorWorkspaceViewCommandData ApplyTriggerVolumeEdit(const InspectorTriggerVolumeEdit &edit,
-                                                                            const SceneObject &object, bool allowCommands) const;
+                                                                            const SceneObject &object, bool allowCommands);
 
         /** @brief Reduces one AudioSource edit into a typed component command. */
         [[nodiscard]] EditorWorkspaceViewCommandData ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object,
-                                                                          bool allowCommands) const;
+                                                                          bool allowCommands);
 
         /** @brief Reports whether the current transform draft is valid. */
         [[nodiscard]] bool IsTransformValid() const noexcept;
@@ -185,8 +188,11 @@ namespace Horo::Editor {
         void SynchronizeDraft(std::span<const SceneObject> objects, std::span<const SceneObjectId> selectedObjects,
                               std::optional<SceneObjectId> primary, DocumentRevision revision);
         void ResetTransformDraft();
+        void ResetCameraDraft(const SceneObject &object);
         void ResetLightDraft(const SceneObject &object);
-        [[nodiscard]] std::vector<SceneObjectTransformUpdate> BuildTransformUpdates() const;
+        void ResetTriggerVolumeDraft(const SceneObject &object);
+        void ResetAudioSourceDraft(const SceneObject &object);
+        [[nodiscard]] std::optional<std::vector<SceneObjectTransformUpdate>> BuildTransformUpdates() const;
 
         InspectorObjectDraft m_draft;
         std::vector<ObjectTransformBaseline> m_baselines;
