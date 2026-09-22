@@ -60,6 +60,16 @@ namespace Horo::Runtime::Ui {
                     UiPositionedGlyph{18, 1, {352, 0}, {32, 16}, {0.5F, 0.0F, 1.0F, 1.0F}}};
         }
 
+        UiDrawCommand MakeNineSliceCommand(const UiElementHandle child) {
+            return UiDrawCommand{child,
+                                 {{400, 0}, {128, 96}},
+                                 0,
+                                 NoUiRenderIndex,
+                                 NoUiRenderIndex,
+                                 1.0F,
+                                 UiNineSliceDraw{0, {0.0F, 0.0F, 1.0F, 1.0F}, {64, 64}, {8, 8, 8, 8}, {1.0F, 1.0F, 1.0F, 1.0F}}};
+        }
+
         std::vector<UiDrawCommand> MakeCommands(const UiElementHandle root, const UiElementHandle child, const std::int32_t borderWidth,
                                                 const bool includeNineSlice = false) {
             std::vector<UiDrawCommand> commands{
@@ -102,14 +112,7 @@ namespace Horo::Runtime::Ui {
                 UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}},
             };
             if (includeNineSlice)
-                commands.push_back(
-                    UiDrawCommand{child,
-                                  {{400, 0}, {128, 96}},
-                                  0,
-                                  NoUiRenderIndex,
-                                  NoUiRenderIndex,
-                                  1.0F,
-                                  UiNineSliceDraw{0, {0.0F, 0.0F, 1.0F, 1.0F}, {64, 64}, {8, 8, 8, 8}, {1.0F, 1.0F, 1.0F, 1.0F}}});
+                commands.push_back(MakeNineSliceCommand(child));
             return commands;
         }
 
