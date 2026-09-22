@@ -10,6 +10,8 @@ workflows.
 - [Extension Module Development](./extension-module-development.md): build an
   add-on package that contributes editor tabs, Settings pages, MCP tools,
   commands, and data-bus observers through the extension ABI/API.
+- [Extension-Scoped Surface Context Migration](./extension-surface-context-migration.md):
+  bind restricted editor-surface access to an exact activation and explicit teardown.
 - [Local C/C++ Analysis with SonarQube MCP and VS Code](./sonarqube-mcp-local-analysis.md):
   configure the IDE bridge, analyze local changes, and diagnose partial results.
 - [Terrain Descriptor Migration](./terrain-descriptor-migration.md): adopt revisioned

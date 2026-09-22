@@ -57,6 +57,9 @@ namespace Horo::Extensions {
     };
 
     class ExtensionCapabilityAdmission;
+    class ExtensionActivationLease;
+    class ExtensionCapabilityUseLease;
+    class ExtensionCapabilityHandle;
     struct ExtensionCapabilityAdmissionState;
 
     /** @brief Immutable identity of one admitted extension-module activation. */
@@ -73,12 +76,47 @@ namespace Horo::Extensions {
 
     private:
         friend struct ExtensionCapabilityAdmissionState;
+        friend class ExtensionActivationLease;
+        friend class ExtensionCapabilityUseLease;
+        friend class ExtensionCapabilityHandle;
 
         ExtensionActivationIdentity(std::string extensionId, std::string moduleId, std::uint64_t generation) noexcept;
 
         std::string extensionId_;
         std::string moduleId_;
         std::uint64_t generation_{};
+    };
+
+    /**
+     * @brief Copyable proof that one extension activation remains live.
+     *
+     * The lease exposes activation metadata only. Revoking or destroying the
+     * owning admission makes every retained lease unusable, which lets host
+     * contexts bind their lifetime to the provider activation without exposing
+     * the admission's internal state.
+     */
+    class ExtensionActivationLease final {
+    public:
+        ExtensionActivationLease(const ExtensionActivationLease &) = default;
+        ExtensionActivationLease &operator=(const ExtensionActivationLease &) = default;
+        ExtensionActivationLease(ExtensionActivationLease &&) noexcept = default;
+        ExtensionActivationLease &operator=(ExtensionActivationLease &&) noexcept = default;
+
+        /**
+         * @brief Returns the exact extension-module activation named by this lease.
+         * @return Activation evidence, or an empty identity for a moved-from lease.
+         */
+        [[nodiscard]] const ExtensionActivationIdentity &Activation() const noexcept;
+
+        /** @brief Returns whether the owning admission still accepts activation-scoped work. */
+        [[nodiscard]] bool IsUsable() const noexcept;
+
+    private:
+        friend class ExtensionCapabilityAdmission;
+
+        explicit ExtensionActivationLease(std::shared_ptr<const ExtensionCapabilityAdmissionState> state);
+
+        std::shared_ptr<const ExtensionCapabilityAdmissionState> state_;
     };
 
     /**
@@ -97,7 +135,10 @@ namespace Horo::Extensions {
         /** @brief Returns the exact capability admitted for this callback. */
         [[nodiscard]] const ExtensionCapabilityId &Capability() const noexcept;
 
-        /** @brief Returns the exact extension-module activation that owns this use lease. */
+        /**
+         * @brief Returns the exact extension-module activation that owns this use lease.
+         * @return Activation evidence, or an empty identity for a moved-from lease.
+         */
         [[nodiscard]] const ExtensionActivationIdentity &Activation() const noexcept;
 
         /** @brief Returns whether the owning admission still accepts callback dispatch. */
@@ -124,7 +165,10 @@ namespace Horo::Extensions {
         /** @brief Returns the exact admitted capability identity. */
         [[nodiscard]] const ExtensionCapabilityId &Capability() const noexcept;
 
-        /** @brief Returns the exact extension-module activation that owns this handle. */
+        /**
+         * @brief Returns the exact extension-module activation that owns this handle.
+         * @return Activation evidence, or an empty identity for an inert handle.
+         */
         [[nodiscard]] const ExtensionActivationIdentity &Activation() const noexcept;
 
         /**
@@ -186,6 +230,12 @@ namespace Horo::Extensions {
 
         /** @brief Returns the immutable policy revision that produced this admission. */
         [[nodiscard]] std::uint64_t PolicyRevision() const noexcept;
+
+        /**
+         * @brief Returns a copyable lease tied to this exact activation generation.
+         * @return Activation lease; admission revocation makes it unusable.
+         */
+        [[nodiscard]] ExtensionActivationLease ActivationLease() const;
 
         /** @brief Returns admitted capabilities in deterministic identity order. */
         [[nodiscard]] std::span<const ExtensionCapabilityId> Capabilities() const noexcept;

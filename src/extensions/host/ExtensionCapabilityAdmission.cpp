@@ -117,6 +117,20 @@ namespace Horo::Extensions {
         return generation_;
     }
 
+    ExtensionActivationLease::ExtensionActivationLease(std::shared_ptr<const ExtensionCapabilityAdmissionState> state)
+        : state_(std::move(state)) {}
+
+    /** @copydoc ExtensionActivationLease::Activation */
+    const ExtensionActivationIdentity &ExtensionActivationLease::Activation() const noexcept {
+        static const ExtensionActivationIdentity empty{"", "", 0};
+        return state_ == nullptr ? empty : state_->activation;
+    }
+
+    /** @copydoc ExtensionActivationLease::IsUsable */
+    bool ExtensionActivationLease::IsUsable() const noexcept {
+        return state_ != nullptr && state_->active.load(std::memory_order_acquire);
+    }
+
     ExtensionCapabilityUseLease::ExtensionCapabilityUseLease(std::shared_ptr<const ExtensionCapabilityAdmissionState> state,
                                                              ExtensionCapabilityId capability)
         : state_(std::move(state)), capability_(std::move(capability)) {}
@@ -128,7 +142,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionCapabilityUseLease::Activation */
     const ExtensionActivationIdentity &ExtensionCapabilityUseLease::Activation() const noexcept {
-        return state_->activation;
+        static const ExtensionActivationIdentity empty{"", "", 0};
+        return state_ == nullptr ? empty : state_->activation;
     }
 
     /** @copydoc ExtensionCapabilityUseLease::IsUsable */
@@ -147,7 +162,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionCapabilityHandle::Activation */
     const ExtensionActivationIdentity &ExtensionCapabilityHandle::Activation() const noexcept {
-        return state_->activation;
+        static const ExtensionActivationIdentity empty{"", "", 0};
+        return state_ == nullptr ? empty : state_->activation;
     }
 
     /** @copydoc ExtensionCapabilityHandle::AcquireUse */
@@ -238,6 +254,11 @@ namespace Horo::Extensions {
     /** @copydoc ExtensionCapabilityAdmission::PolicyRevision */
     std::uint64_t ExtensionCapabilityAdmission::PolicyRevision() const noexcept {
         return state_ == nullptr ? 0 : state_->policyRevision;
+    }
+
+    /** @copydoc ExtensionCapabilityAdmission::ActivationLease */
+    ExtensionActivationLease ExtensionCapabilityAdmission::ActivationLease() const {
+        return ExtensionActivationLease{state_};
     }
 
     /** @copydoc ExtensionCapabilityAdmission::Capabilities */
