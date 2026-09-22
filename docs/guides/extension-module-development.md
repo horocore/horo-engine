@@ -66,7 +66,31 @@ permission checks, result storage, and teardown.
 9. Observe changes through `EditorDataBus` or approved process-event imports.
 10. Store only bounded presentation state under the contribution ID.
 11. Test registration, permission denial, event handling, workspace persistence,
-   and teardown.
+    and teardown.
+
+### Declarative extension forms
+
+Settings pages and other host-rendered surfaces compose their content with
+`Horo/Extensions/EditorUiForm.h`. The extension owns the copied schema and
+current projection values, while the host owns pixels, localization, keyboard
+focus, accessibility, theme tokens, DPI, and action routing:
+
+```cpp
+auto builder = Horo::Extensions::EditorUiFormBuilder::Create(
+    {"com.vendor.shader-tools.settings"},
+    {Horo::Extensions::EditorUiTextKind::LocalizationKey,
+     "shader_tools.settings.title"});
+// Add EditorUiTextFieldNode, EditorUiChoiceNode, EditorUiActionNode, and
+// layout/validation nodes through the builder's typed public methods.
+auto form = std::move(builder).Value().Build();
+```
+
+Use `EditorUiBindingId` for fields and `EditorUiActionId` for actions. Do not
+store callbacks, raw colors, ImGui objects, renderer handles, or persistence
+logic in the form. `BuildEditorUiRenderSnapshot` is the shared deterministic
+projection consumed by GUI and headless adapters. See the
+[Extension Declarative Form Kit](../architecture/extensions/editor-ui-form-kit.md)
+and the copyable `examples/extensions/gui-form-basic` fixture.
 
 ### Backend operation lifecycle
 

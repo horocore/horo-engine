@@ -1,6 +1,7 @@
 #pragma once
 
-/** @file UiAssetDependency.h
+/**
+ * @file UiAssetDependency.h
  * @brief Backend-neutral typed asset requirements used by Runtime UI documents and resources.
  */
 
@@ -12,8 +13,9 @@ namespace Horo::Runtime::Ui {
     /**
      * @brief One stable asset required or optionally consumed by a Runtime UI document or image resource.
      *
-     * The identity is path-independent and the expected type is captured at the authoring/cook boundary. Runtime UI never
-     * resolves paths or chooses a provider; Assets owns that work.
+     * The identity is path-independent and the expected type is captured at the
+     * authoring/cook boundary. Runtime UI never resolves paths or chooses a
+     * provider; Assets owns that work.
      */
     struct UiAssetDependency final {
         Assets::AssetId asset;            /**< Stable referenced asset identity. */

@@ -279,6 +279,7 @@ target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 add_library(HoroRuntimeUi STATIC
+        runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
         runtime/ui/UiImageResourceErrors.cpp
         runtime/ui/UiImageResource.cpp
@@ -290,8 +291,11 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingFingerprint.cpp
         runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
+        runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
+        runtime/ui/UiCookedDocument.cpp
         runtime/ui/UiDocumentSerialization.cpp
+        runtime/ui/UiDocumentLocalizationSerialization.cpp
         runtime/ui/UiDocumentSerializationOperations.cpp
         runtime/ui/UiDocumentSerializationErrors.cpp
         runtime/ui/UiDiagnostics.cpp
@@ -312,6 +316,12 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutTypes.cpp
+        runtime/ui/UiTextLayoutErrors.cpp
+        runtime/ui/UiTextLayout.cpp
+        runtime/ui/UiTextLayoutOutput.cpp
+        runtime/ui/UiTextLayoutPlanning.cpp
+        runtime/ui/UiTextLayoutPublication.cpp
+        runtime/ui/UiTextLayoutTypes.cpp
         runtime/ui/UiStyle.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp
@@ -1575,6 +1585,9 @@ add_library(HoroExtensions STATIC
         extensions/manifest/ExtensionManifestParser.cpp
         extensions/manifest/ExtensionManifestJson.cpp
         extensions/manifest/EditorSurfaceDescriptor.cpp
+    extensions/manifest/EditorUiForm.cpp
+    extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h
         extensions/manifest/ScriptExportDescriptorValidationSupport.cpp

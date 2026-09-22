@@ -53,6 +53,36 @@ namespace Horo::Extensions::ExtensionErrors {
         .userActionable = true,
     };
 
+    const ErrorCodeDescriptor EditorUiFormInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"editor_ui_form_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The declarative editor form or standard component is malformed.",
+        .remediationHint = "Use stable identities, localized text, typed values, and a valid parent layout tree.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorUiFormCapacityExceeded{
+        .domain = Domain,
+        .code = ErrorCode{"editor_ui_form_capacity_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The declarative editor form exceeded a finite host bound.",
+        .remediationHint = "Reduce the form's nodes, nesting, choices, text, or validation messages.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorUiThemeInvalid{
+        .domain = Domain,
+        .code = ErrorCode{"editor_ui_theme_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The editor UI theme frame is malformed.",
+        .remediationHint = "Provide a supported schema, positive finite metrics, a valid scale, and a non-zero revision.",
+        .retryable = false,
+        .userActionable = false,
+    };
+
     const ErrorCodeDescriptor InvocationFailed{
         .domain = Domain,
         .code = ErrorCode{"invocation_failed"},
