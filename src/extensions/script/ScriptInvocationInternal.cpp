@@ -110,6 +110,8 @@ namespace Horo::Extensions {
                 ++state.revision;
         }
 
+        // Callers hold both lifecycle mutexes. This helper deliberately performs no lock acquisition so a
+        // cancellation observed while holding the pair cannot recurse into either mutex.
         void ApplyTerminalLocked(ScriptInvocationState &state, ScriptInvocationStateKind stateKind, ScriptCallResult result,
                                  ScriptInvocationCancellationReason cancellationReason) {
             if (state.terminalResult.has_value())
@@ -165,6 +167,7 @@ namespace Horo::Extensions {
                 if (!state->terminalResult.has_value())
                     reason = PendingCancellationLocked(*state);
             }
+            // The probe lock is released before terminalization acquires the pair again.
             if (reason != ScriptInvocationCancellationReason::None)
                 ApplyCancellation(state, reason);
             return reason;

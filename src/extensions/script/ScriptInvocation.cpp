@@ -13,8 +13,7 @@ namespace Horo::Extensions {
     Result<ScriptInvocationProgressDisposition> ScriptInvocationController::PublishProgress(ScriptInvocationProgress progress) const {
         if (state_ == nullptr)
             return InvocationFailure<ScriptInvocationProgressDisposition>(ScriptInvocationInvalid, "Moved-from invocation controller.");
-        auto valid = ValidateProgress(progress, state_->valueLimits);
-        if (valid.HasError())
+        if (auto valid = ValidateProgress(progress, state_->valueLimits); valid.HasError())
             return Result<ScriptInvocationProgressDisposition>::Failure(valid.ErrorValue());
 
         ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
@@ -30,9 +29,9 @@ namespace Horo::Extensions {
                 state_->progress = std::move(progress);
                 state_->state = ScriptInvocationStateKind::Running;
                 IncrementRevision(*state_);
-                const bool canPublish = HasUnreservedEventSlot(*state_->context) &&
-                                        state_->progressEventsPublished < state_->context->maximumProgressEventsPerInvocation;
-                if (canPublish) {
+                if (const bool canPublish = HasUnreservedEventSlot(*state_->context) &&
+                                            state_->progressEventsPublished < state_->context->maximumProgressEventsPerInvocation;
+                    canPublish) {
                     ++state_->progressEventsPublished;
                     state_->context->events.push_back(ScriptInvocationEvent{
                         .kind = ScriptInvocationEventKind::Progress,
@@ -71,8 +70,7 @@ namespace Horo::Extensions {
         if (result.IsFailure())
             return InvocationFailure<ScriptInvocationTransitionResult>(ScriptCallResultInvalid,
                                                                        "A successful completion cannot carry a failure result.");
-        auto valid = ValidateTerminalResult(*state_, result);
-        if (valid.HasError())
+        if (auto valid = ValidateTerminalResult(*state_, result); valid.HasError())
             return Result<ScriptInvocationTransitionResult>::Failure(valid.ErrorValue());
         ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
         {
@@ -92,22 +90,21 @@ namespace Horo::Extensions {
 
     /** @copydoc ScriptInvocationController::Fail */
     Result<ScriptInvocationTransitionResult> ScriptInvocationController::Fail(ScriptError error) const {
+        using enum ScriptInvocationCancellationReason;
         if (state_ == nullptr)
             return InvocationFailure<ScriptInvocationTransitionResult>(ScriptInvocationInvalid, "Moved-from invocation controller.");
-        auto valid = ValidateScriptError(error, state_->valueLimits);
-        if (valid.HasError())
+        if (auto valid = ValidateScriptError(error, state_->valueLimits); valid.HasError())
             return Result<ScriptInvocationTransitionResult>::Failure(valid.ErrorValue());
         const bool errorCancelled = error.cancelled;
-        ScriptInvocationCancellationReason reason = ScriptInvocationCancellationReason::None;
+        ScriptInvocationCancellationReason reason = None;
         {
             std::scoped_lock lock(state_->provider->Mutex(), state_->context->Mutex());
             if (state_->terminalResult.has_value())
                 return Result<ScriptInvocationTransitionResult>::Success(ScriptInvocationTransitionResult::AlreadyTerminal);
             reason = PendingCancellationLocked(*state_);
-            if (reason == ScriptInvocationCancellationReason::None) {
+            if (reason == None) {
                 const auto stateKind = errorCancelled ? ScriptInvocationStateKind::Cancelled : ScriptInvocationStateKind::Failed;
-                ApplyTerminalLocked(*state_, stateKind, ScriptCallResult::Failure(std::move(error)),
-                                    errorCancelled ? ScriptInvocationCancellationReason::Caller : ScriptInvocationCancellationReason::None);
+                ApplyTerminalLocked(*state_, stateKind, ScriptCallResult::Failure(std::move(error)), errorCancelled ? Caller : None);
                 return Result<ScriptInvocationTransitionResult>::Success(ScriptInvocationTransitionResult::Applied);
             }
         }
@@ -176,7 +173,7 @@ namespace Horo::Extensions {
         provider->registry = state_;
         provider->generation = descriptor.generation;
         provider->maximumInvocations = descriptor.maximumInvocations;
-        state_->providers.emplace(descriptor.generation, provider);
+        state_->providers.try_emplace(descriptor.generation, provider);
         return Result<ScriptInvocationProviderRegistration>::Success(ScriptInvocationProviderRegistration{state_, std::move(provider)});
     }
 
@@ -204,7 +201,7 @@ namespace Horo::Extensions {
             std::make_shared<ScriptInvocationContextState>(state_, id, descriptor, std::this_thread::get_id(),
                                                            state_->limits.maximumQueuedEvents,
                                                            state_->limits.maximumProgressEventsPerInvocation, state_->limits.value);
-        state_->contexts.emplace(id.value, context);
+        state_->contexts.try_emplace(id.value, context);
         return Result<ScriptInvocationContextRegistration>::Success(ScriptInvocationContextRegistration{state_, std::move(context)});
     }
 
@@ -238,8 +235,7 @@ namespace Horo::Extensions {
         }
 
         const ScriptExportFunctionDescriptor *function = nullptr;
-        auto requestValidation = ValidateRequest(request, state_->limits.value, function);
-        if (requestValidation.HasError())
+        if (auto requestValidation = ValidateRequest(request, state_->limits.value, function); requestValidation.HasError())
             return Result<ScriptInvocationController>::Failure(requestValidation.ErrorValue());
         if (request.timeout.has_value() &&
             (*request.timeout < std::chrono::milliseconds::zero() || *request.timeout > state_->limits.maximumTimeout))
@@ -364,7 +360,7 @@ namespace Horo::Extensions {
         std::scoped_lock lock(provider->Mutex(), context->Mutex());
         if (!provider->active || !context->active)
             return InvocationFailure<void>(ScriptHandleRevoked);
-        const auto found = std::find(context->handles.begin(), context->handles.end(), handle);
+        const auto found = std::ranges::find(context->handles, handle);
         if (found == context->handles.end())
             return InvocationFailure<void>(ScriptHandleRevoked);
         context->handles.erase(found);
@@ -391,9 +387,8 @@ namespace Horo::Extensions {
         std::scoped_lock lock(provider->Mutex(), context->Mutex());
         if (!provider->active || !context->active)
             return InvocationFailure<void>(ScriptHandleRevoked);
-        return std::find(context->handles.begin(), context->handles.end(), handle) == context->handles.end()
-                   ? InvocationFailure<void>(ScriptHandleRevoked)
-                   : Result<void>::Success();
+        return std::ranges::find(context->handles, handle) == context->handles.end() ? InvocationFailure<void>(ScriptHandleRevoked)
+                                                                                     : Result<void>::Success();
     }
 
     void ScriptInvocationRegistry::ResetProviderState(const std::shared_ptr<ScriptInvocationRegistryState> &registry,

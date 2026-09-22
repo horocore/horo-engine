@@ -29,7 +29,6 @@ namespace Horo::Extensions {
             return mutex;
         }
 
-    private:
         mutable std::mutex mutex;
     };
 
@@ -59,7 +58,6 @@ namespace Horo::Extensions {
                                      const ScriptInvocationContextDescriptor &descriptor, std::thread::id owner, std::size_t maximumQueued,
                                      std::size_t maximumProgress, ScriptValueLimits valueLimitsIn);
 
-    private:
         mutable std::mutex mutex;
     };
 
@@ -114,7 +112,6 @@ namespace Horo::Extensions {
             return mutex;
         }
 
-    private:
         mutable std::mutex mutex;
     };
 

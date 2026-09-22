@@ -1918,6 +1918,7 @@ target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Exte
 add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
 
 add_executable(HoroScriptInvocationTests
+        unit/extensions/ScriptValueTests.cpp
         unit/extensions/ScriptInvocationTests.cpp
 )
 target_compile_features(HoroScriptInvocationTests PRIVATE cxx_std_20)
