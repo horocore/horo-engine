@@ -10,6 +10,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,6 +34,31 @@ namespace Horo::Runtime::Ui {
     inline constexpr std::size_t MaximumUiDocumentTextBytes = 4096;
     /** @brief Maximum byte count admitted by one cooked document payload. */
     inline constexpr std::size_t MaximumCookedUiDocumentBytes = 64ULL * 1024ULL * 1024ULL;
+
+    /** @brief Version of the backend-neutral binary Runtime UI cooked payload. */
+    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 1;
+
+    /** @brief Bounded limits applied while producing or decoding one cooked Runtime UI document. */
+    struct UiDocumentCookLimits final {
+        std::size_t maximumPayloadBytes{MaximumCookedUiDocumentBytes};
+        std::size_t maximumCanvases{MaximumUiDocumentCanvases};
+        std::size_t maximumElements{MaximumUiDocumentElements};
+        std::size_t maximumDependencies{MaximumUiDocumentDependencies};
+        std::size_t maximumPropertiesPerElement{MaximumUiDocumentProperties};
+        std::size_t maximumReferencesPerElement{MaximumUiDocumentReferences};
+        std::size_t maximumRoutes{MaximumUiDocumentRoutes};
+        std::size_t maximumTextBytes{MaximumUiDocumentTextBytes};
+
+        /** @brief Checks that caller limits are positive and cannot weaken compiled safety ceilings. @return Whether usable. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return maximumPayloadBytes > 0 && maximumPayloadBytes <= MaximumCookedUiDocumentBytes && maximumCanvases > 0 &&
+                   maximumCanvases <= MaximumUiDocumentCanvases && maximumElements <= MaximumUiDocumentElements &&
+                   maximumDependencies <= MaximumUiDocumentDependencies && maximumPropertiesPerElement > 0 &&
+                   maximumPropertiesPerElement <= MaximumUiDocumentProperties && maximumReferencesPerElement > 0 &&
+                   maximumReferencesPerElement <= MaximumUiDocumentReferences && maximumRoutes <= MaximumUiDocumentRoutes &&
+                   maximumTextBytes > 0 && maximumTextBytes <= MaximumUiDocumentTextBytes;
+        }
+    };
 
     /** @brief Version of the durable Runtime UI document source schema. */
     struct UiDocumentSchemaVersion final {
@@ -119,6 +145,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] auto operator<=>(const UiAssetDependency &) const noexcept = default;
     };
 
+    /** @brief One immutable cooked dependency payload retained by a prepared runtime UI instance. */
+    struct UiRuntimeAsset final {
+        UiAssetDependency dependency;                             /**< Stable dependency identity and expected type. */
+        std::shared_ptr<const std::vector<std::uint8_t>> payload; /**< Owned immutable cooked payload lease. */
+
+        /** @brief Compares dependency identity only; payload ownership is intentionally not semantic data. */
+        [[nodiscard]] bool operator==(const UiRuntimeAsset &other) const noexcept {
+            return dependency == other.dependency;
+        }
+    };
+
     /** @brief Immutable validated authoring model stored by a `.uicanvas` document owner. */
     class UiDocument final {
     public:
@@ -192,6 +229,23 @@ namespace Horo::Runtime::Ui {
     /** @brief Versioned cooked payload, separate from authoring state and mutable runtime state. */
     class CookedUiDocument final {
     public:
+        /**
+         * @brief Cooks one validated authored document into deterministic runtime-oriented bytes.
+         * @param document Validated immutable authored document.
+         * @param limits Bounded output and content limits.
+         * @return Owned cooked representation or a typed validation/capacity failure.
+         */
+        [[nodiscard]] static Result<CookedUiDocument> Cook(const UiDocument &document, const UiDocumentCookLimits &limits = {});
+
+        /**
+         * @brief Decodes one bounded deterministic Runtime UI cooked payload.
+         * @param payload Untrusted cooked bytes; the input remains borrowed and unchanged.
+         * @param limits Bounded decoder and content limits.
+         * @return Owned validated cooked representation or a typed malformed/version/capacity failure.
+         */
+        [[nodiscard]] static Result<CookedUiDocument> Decode(std::span<const std::uint8_t> payload,
+                                                             const UiDocumentCookLimits &limits = {});
+
         /** @brief Creates cooked state from one validated authored revision. @param document Source document.
          * @param payload Non-empty deterministic cooked bytes within the public bound.
          * @return Owned cooked document or typed payload error.
@@ -201,19 +255,33 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiDocumentId Id() const noexcept;
         /** @brief Returns the authored revision used for cooking. @return Source revision. */
         [[nodiscard]] UiDocumentRevision SourceRevision() const noexcept;
+        /** @brief Returns the source schema represented by the cooked payload. @return Durable schema version. */
+        [[nodiscard]] UiDocumentSchemaVersion SchemaVersion() const noexcept;
+        /** @brief Returns immutable canvas descriptors retained for runtime preparation. @return Borrowed canvas data. */
+        [[nodiscard]] std::span<const UiCanvasDescriptor> Canvases() const noexcept;
+        /** @brief Returns immutable element descriptors retained for runtime preparation. @return Borrowed element data. */
+        [[nodiscard]] std::span<const UiDocumentElement> Elements() const noexcept;
         /** @brief Returns the cooked dependency manifest. @return Borrowed immutable dependencies. */
         [[nodiscard]] std::span<const UiAssetDependency> Dependencies() const noexcept;
+        /** @brief Returns immutable route descriptors retained for runtime preparation. @return Borrowed route data. */
+        [[nodiscard]] std::span<const UiRouteMetadata> Routes() const noexcept;
         /** @brief Returns deterministic cooked bytes. @return Borrowed immutable payload. */
         [[nodiscard]] std::span<const std::uint8_t> Payload() const noexcept;
 
     private:
         friend class UiRuntimeInstance;
         /** @brief Adopts validated cooked state. */
-        CookedUiDocument(UiDocumentId id, UiDocumentRevision revision, std::vector<UiAssetDependency> dependencies,
+        CookedUiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
+                         std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
+                         std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
                          std::vector<std::uint8_t> payload) noexcept;
+        UiDocumentSchemaVersion schemaVersion_;       /**< Source schema represented by this cooked snapshot. */
         UiDocumentId id_;                             /**< Stable authored identity. */
         UiDocumentRevision revision_;                 /**< Source authored revision. */
+        std::vector<UiCanvasDescriptor> canvases_;    /**< Runtime-ready immutable canvas descriptors. */
+        std::vector<UiDocumentElement> elements_;     /**< Runtime-ready immutable element descriptors. */
         std::vector<UiAssetDependency> dependencies_; /**< Canonical cooked dependency manifest. */
+        std::vector<UiRouteMetadata> routes_;         /**< Runtime-ready immutable route descriptors. */
         std::vector<std::uint8_t> payload_;           /**< Deterministic owned cooked bytes. */
     };
 
@@ -249,6 +317,15 @@ namespace Horo::Runtime::Ui {
          * @return Prepared instance or typed invalid-payload failure.
          */
         [[nodiscard]] static Result<UiRuntimeInstance> Create(CookedUiDocument document, RuntimeUiInstanceId instance);
+        /**
+         * @brief Creates a prepared instance while transferring validated dependency payload leases.
+         * @param document Owned cooked document transferred into runtime storage.
+         * @param instance Valid transient identity issued by the owning service.
+         * @param assets Owned immutable dependency leases; optional dependencies may be omitted.
+         * @return Prepared instance or a typed dependency/payload failure.
+         */
+        [[nodiscard]] static Result<UiRuntimeInstance> Create(CookedUiDocument document, RuntimeUiInstanceId instance,
+                                                              std::vector<UiRuntimeAsset> assets);
         /** @brief Runtime instances have unique mutable ownership. */
         UiRuntimeInstance(const UiRuntimeInstance &) = delete;
         /** @brief Runtime instances cannot share mutable ownership. */
@@ -263,10 +340,22 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiDocumentId DocumentId() const noexcept;
         /** @brief Returns the exact cooked source revision. @return Authored source revision. */
         [[nodiscard]] UiDocumentRevision DocumentRevision() const noexcept;
+        /** @brief Returns immutable cooked canvas descriptors. @return Borrowed canvas data. */
+        [[nodiscard]] std::span<const UiCanvasDescriptor> Canvases() const noexcept;
+        /** @brief Returns immutable cooked element descriptors. @return Borrowed element data. */
+        [[nodiscard]] std::span<const UiDocumentElement> Elements() const noexcept;
         /** @brief Returns the explicit lifecycle state. @return Current owner-thread state. */
         [[nodiscard]] UiRuntimeInstanceState State() const noexcept;
         /** @brief Returns dependencies retained until shutdown. @return Borrowed immutable dependencies. */
         [[nodiscard]] std::span<const UiAssetDependency> Dependencies() const noexcept;
+        /** @brief Returns loaded immutable dependency leases. @return Borrowed runtime asset payloads. */
+        [[nodiscard]] std::span<const UiRuntimeAsset> ResolvedAssets() const noexcept;
+        /** @brief Resolves one loaded dependency without allocating. @param id Stable dependency identity.
+         * @return Borrowed payload lease, or null when absent.
+         */
+        [[nodiscard]] const UiRuntimeAsset *FindAsset(Assets::AssetId id) const noexcept;
+        /** @brief Returns immutable cooked route descriptors. @return Borrowed route data. */
+        [[nodiscard]] std::span<const UiRouteMetadata> Routes() const noexcept;
         /** @brief Returns cooked bytes retained until shutdown. @return Borrowed immutable payload. */
         [[nodiscard]] std::span<const std::uint8_t> Payload() const noexcept;
         /** @brief Admits runtime work from Prepared. @return Success or UiErrors::InstanceStateInvalid. */
@@ -278,12 +367,19 @@ namespace Horo::Runtime::Ui {
 
     private:
         /** @brief Adopts validated cooked state into one Prepared instance. */
-        UiRuntimeInstance(UiDocumentId document, UiDocumentRevision revision, std::vector<UiAssetDependency> dependencies,
-                          std::vector<std::uint8_t> payload, RuntimeUiInstanceId instance) noexcept;
+        UiRuntimeInstance(UiDocumentSchemaVersion schemaVersion, UiDocumentId document, UiDocumentRevision revision,
+                          std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
+                          std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
+                          std::vector<std::uint8_t> payload, std::vector<UiRuntimeAsset> assets, RuntimeUiInstanceId instance) noexcept;
+        UiDocumentSchemaVersion schemaVersion_;                          /**< Source schema represented by this instance. */
         UiDocumentId document_;                                          /**< Stable source document identity. */
         UiDocumentRevision revision_;                                    /**< Exact cooked source revision. */
+        std::vector<UiCanvasDescriptor> canvases_;                       /**< Runtime-ready immutable canvases. */
+        std::vector<UiDocumentElement> elements_;                        /**< Runtime-ready immutable elements. */
         std::vector<UiAssetDependency> dependencies_;                    /**< Retained dependency manifest. */
+        std::vector<UiRouteMetadata> routes_;                            /**< Runtime-ready immutable routes. */
         std::vector<std::uint8_t> payload_;                              /**< Retained cooked representation. */
+        std::vector<UiRuntimeAsset> assets_;                             /**< Retained dependency payload leases. */
         RuntimeUiInstanceId instance_;                                   /**< Owner-issued transient identity. */
         UiRuntimeInstanceState state_{UiRuntimeInstanceState::Prepared}; /**< Owner-thread lifecycle state. */
     };
