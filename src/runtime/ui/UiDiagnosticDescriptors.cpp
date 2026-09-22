@@ -81,6 +81,17 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::ControlDefaultPending,    &UiErrors::ControlDefaultInvalid,       &UiErrors::ControlCapacityExceeded,
             &UiErrors::ControlSequenceInvalid,   &UiErrors::ControlLifecycleUnavailable,
         };
+        const std::array focus{
+            &UiErrors::FocusInvalid,
+            &UiErrors::FocusSourceStale,
+            &UiErrors::FocusTargetUnavailable,
+            &UiErrors::FocusModalBoundaryViolation,
+            &UiErrors::FocusCapacityExceeded,
+            &UiErrors::FocusModalCapacityExceeded,
+            &UiErrors::FocusModalStale,
+            &UiErrors::FocusScopeMismatch,
+            &UiErrors::FocusLifecycleUnavailable,
+        };
         const std::array renderGeometry{
             &UiErrors::RenderGeometryInvalid,
             &UiErrors::RenderGeometryCapacityExceeded,
@@ -99,13 +110,14 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + pointerCapture.size() + actions.size() + controls.size() +
+            std::array<const ErrorCodeDescriptor *, core.size() + pointerCapture.size() + actions.size() + controls.size() + focus.size() +
                                                         renderGeometry.size() + accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
             output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;
             output = std::ranges::copy(controls, output).out;
+            output = std::ranges::copy(focus, output).out;
             output = std::ranges::copy(renderGeometry, output).out;
             std::ranges::copy(accessibility, output);
             return combined;
