@@ -236,6 +236,32 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DiagnosticInvalid;
     /** @brief A Runtime UI diagnostic category or source error is not part of the declared contract. */
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
+    /** @brief A binding identity, endpoint, policy, or descriptor shape is malformed. */
+    extern const ErrorCodeDescriptor BindingDescriptorInvalid;
+    /** @brief A provider schema or property declaration is malformed. */
+    extern const ErrorCodeDescriptor BindingSchemaInvalid;
+    /** @brief A binding schema requirement is not satisfied by the active provider schema. */
+    extern const ErrorCodeDescriptor BindingSchemaIncompatible;
+    /** @brief A binding provider type is not the provider schema being validated. */
+    extern const ErrorCodeDescriptor BindingProviderUnknown;
+    /** @brief A binding property is not present in the provider schema. */
+    extern const ErrorCodeDescriptor BindingPropertyUnknown;
+    /** @brief A cooked property signature no longer matches the active schema. */
+    extern const ErrorCodeDescriptor BindingPropertySignatureMismatch;
+    /** @brief Two binding descriptors claim the same stable or UI target identity. */
+    extern const ErrorCodeDescriptor BindingDescriptorConflict;
+    /** @brief A binding direction is not allowed by the provider property access policy. */
+    extern const ErrorCodeDescriptor BindingAccessInvalid;
+    /** @brief A source and target value type are incompatible without an admitted converter. */
+    extern const ErrorCodeDescriptor BindingTypeMismatch;
+    /** @brief A binding converter descriptor is malformed or has incompatible endpoint types. */
+    extern const ErrorCodeDescriptor BindingConverterInvalid;
+    /** @brief A binding fallback is absent, malformed, or has the wrong target type. */
+    extern const ErrorCodeDescriptor BindingFallbackInvalid;
+    /** @brief A binding update policy cannot be satisfied by the provider property. */
+    extern const ErrorCodeDescriptor BindingUpdatePolicyInvalid;
+    /** @brief A binding descriptor or provider schema exceeds its finite construction bounds. */
+    extern const ErrorCodeDescriptor BindingCapacityExceeded;
     /** @brief An accessibility semantic schema value is malformed or unsupported. */
     extern const ErrorCodeDescriptor AccessibilitySchemaInvalid;
     /** @brief An accessibility node role is unknown or incompatible with its control data. */

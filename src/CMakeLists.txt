@@ -284,6 +284,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAccessibilityErrors.cpp
         runtime/ui/UiControlErrors.cpp
         runtime/ui/UiIdentity.cpp
+        runtime/ui/UiBinding.cpp
+        runtime/ui/UiBindingFingerprint.cpp
+        runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiDocumentSerialization.cpp
