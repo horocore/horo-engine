@@ -34,6 +34,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/Result.h
     Horo/Foundation/Sha256.h
     Horo/Foundation/StableHash.h
+    Horo/Foundation/StableIdentity.h
     Horo/Foundation/StrongId.h
     Horo/Foundation/String.h
     Horo/Foundation/Telemetry/Operation.h
@@ -150,6 +151,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiImageResource.h
     Horo/Runtime/Ui/UiAccessibility.h
     Horo/Runtime/Ui/UiIdentity.h
+    Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiCanvasSpace.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
@@ -399,6 +401,7 @@ horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h
     Horo/Cinematic/CinematicErrors.h
     Horo/Cinematic/CinematicIdentity.h
+    Horo/Cinematic/PropertyTrack.h
     Horo/Cinematic/SequenceAsset.h
     Horo/Cinematic/TransformTrack.h
 )
@@ -407,6 +410,8 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequenceEvaluationErrors.h
     Horo/Cinematic/SequencePlayer.h
     Horo/Cinematic/SequencePlayerErrors.h
+    Horo/Cinematic/SequencePlaybackRuntime.h
+    Horo/Cinematic/SequencePlaybackRuntimeErrors.h
 )
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavMeshData.h
@@ -577,6 +582,8 @@ horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/UiRenderComposition.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS
+    Horo/Runtime/Scene/PropertyBindingErrors.h
+    Horo/Runtime/Scene/PropertyBindingRegistry.h
     Horo/Runtime/Scene/PrimitiveCatalog.h
     Horo/Runtime/Scene/PrimitiveMesh.h
     Horo/Runtime/Scene/PrimitiveMeshDescriptor.h
@@ -675,6 +682,8 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/PipelineStepRegistry.h
     Horo/Extensions/ProjectValidatorRegistry.h
     Horo/Extensions/ScriptExportDescriptor.h
+    Horo/Extensions/ScriptInvocation.h
+    Horo/Extensions/ScriptValue.h
     Horo/Extensions/ToolchainProviderRegistry.h
 )
 

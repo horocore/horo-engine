@@ -123,6 +123,7 @@ namespace Horo::Cinematic {
         std::span<SequenceSampledValue> values;
         std::span<SequenceFrameEventOccurrence> events;
         std::span<SequenceFrameCameraCutRequest> cameraCuts;
+        std::size_t maximumBoundaryOccurrences{}; /**< Optional aggregate event/camera ceiling; zero leaves only span capacities active. */
     };
 
     /** @brief Session-owned event cursor and exact rational remainder for one player. */
@@ -146,6 +147,7 @@ namespace Horo::Cinematic {
         std::size_t sampledValues{};
         std::size_t firedEvents{};
         std::size_t cameraCuts{};
+        bool reachedEnd{}; /**< True when an Once player reached its directional terminal boundary. */
         constexpr auto operator<=>(const SequenceFrameEvaluationResult &) const noexcept = default;
     };
 
@@ -213,6 +215,16 @@ namespace Horo::Cinematic {
 
         /** @brief Returns immutable track count. @return Number of compiled tracks. */
         [[nodiscard]] std::size_t TrackCount() const noexcept;
+        /** @brief Returns the inclusive compiled duration. @return Positive sequence duration. */
+        [[nodiscard]] SequenceTime Duration() const noexcept;
+        /** @brief Returns immutable event-key count. @return Number of compiled event keys. */
+        [[nodiscard]] std::size_t EventCount() const noexcept;
+        /** @brief Returns immutable camera-cut count. @return Number of compiled camera keys. */
+        [[nodiscard]] std::size_t CameraCutCount() const noexcept;
+        /** @brief Returns the activation loop policy. @return Once, Loop, or PingPong. */
+        [[nodiscard]] SequenceLoopMode LoopMode() const noexcept;
+        /** @brief Returns the per-player crossing ceiling captured at activation. @return Maximum crossings per evaluation. */
+        [[nodiscard]] std::size_t MaximumLoopCrossings() const noexcept;
 
     private:
         SequenceFrameEvaluationPlan(SequenceTime duration, SequenceLoopMode loopMode, std::size_t maximumLoopCrossings,

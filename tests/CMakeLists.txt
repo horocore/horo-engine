@@ -431,6 +431,8 @@ add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CurveSamplingTests.cpp
         unit/runtime/cinematic/CinematicIdentityTests.cpp
+        unit/runtime/cinematic/PropertyTrackCoverageTests.cpp
+        unit/runtime/cinematic/PropertyTrackTests.cpp
         unit/runtime/cinematic/SequenceAssetTests.cpp
         unit/runtime/cinematic/TransformTrackTests.cpp
 )
@@ -442,6 +444,8 @@ add_executable(HoroCinematicRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/SequenceEvaluationTests.cpp
         unit/runtime/cinematic/SequencePlayerTests.cpp
+        unit/runtime/cinematic/SequencePlaybackRuntimeCoverageTests.cpp
+        unit/runtime/cinematic/SequencePlaybackRuntimeTests.cpp
 )
 target_compile_features(HoroCinematicRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1509,6 +1513,11 @@ add_executable(HoroRuntimeUiImageResourceTests
 )
 target_compile_features(HoroRuntimeUiImageResourceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiImageResourceTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiBindingTests
+        unit/runtime/ui/UiBindingTests.cpp
+)
+target_compile_features(HoroRuntimeUiBindingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiBindingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiDocumentSerializationTests.cpp
@@ -2013,6 +2022,15 @@ add_executable(HoroBackendOperationRegistryTests
 target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
 add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
+
+add_executable(HoroScriptInvocationTests
+        unit/extensions/ScriptValueTests.cpp
+        unit/extensions/ScriptInvocationTests.cpp
+)
+target_compile_features(HoroScriptInvocationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroScriptInvocationTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroScriptInvocationTests COMMAND HoroScriptInvocationTests)
+
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests
@@ -2307,6 +2325,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveRestoreTransactionTests
         HoroRuntimeUiIdentityTests
         HoroRuntimeUiImageResourceTests
+        HoroRuntimeUiBindingTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests

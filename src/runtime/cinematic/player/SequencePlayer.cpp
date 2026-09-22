@@ -105,6 +105,8 @@ namespace Horo::Cinematic {
 
     /** @copydoc SequencePlayer::Seek */
     Result<SequencePlayerTransition> SequencePlayer::Seek(const SequencePlayerHandle &handle, const SequenceTime target) {
+        if (const Result<void> validation = ValidateHandle(handle); validation.HasError())
+            return Result<SequencePlayerTransition>::Failure(validation.ErrorValue());
         if (target < 0 || target > snapshot_.duration)
             return Failed<SequencePlayerTransition>(SequencePlayerErrors::TimeInvalid);
         SequencePlayerSnapshot requested = snapshot_;
@@ -112,8 +114,27 @@ namespace Horo::Cinematic {
         return ApplyValueChange(handle, requested, SequencePlaybackSignal::Seeked, SequenceEventTransitionPolicy::ResetWithoutDispatch);
     }
 
+    /** @copydoc SequencePlayer::CommitEvaluationPosition */
+    Result<SequencePlayerTransition> SequencePlayer::CommitEvaluationPosition(const SequencePlayerOperationFence &fence,
+                                                                              const SequenceTime position) {
+        if (const Result<void> validation = ValidateFence(fence); validation.HasError())
+            return Result<SequencePlayerTransition>::Failure(validation.ErrorValue());
+        if (snapshot_.state != SequencePlaybackState::Playing)
+            return Failed<SequencePlayerTransition>(SequencePlayerErrors::TransitionInvalid);
+        if (position < 0 || position > snapshot_.duration)
+            return Failed<SequencePlayerTransition>(SequencePlayerErrors::TimeInvalid);
+        if (position == snapshot_.position)
+            return Result<SequencePlayerTransition>::Success(NoChange());
+        const SequencePlayerSnapshot previous = snapshot_;
+        snapshot_.position = position;
+        return Result<SequencePlayerTransition>::Success(
+            TransitionFrom(previous, SequencePlaybackSignal::Advanced, SequenceEventTransitionPolicy::Unchanged));
+    }
+
     /** @copydoc SequencePlayer::SetPlaybackSpeed */
     Result<SequencePlayerTransition> SequencePlayer::SetPlaybackSpeed(const SequencePlayerHandle &handle, const SequencePlaybackRate rate) {
+        if (const Result<void> validation = ValidateHandle(handle); validation.HasError())
+            return Result<SequencePlayerTransition>::Failure(validation.ErrorValue());
         if (!IsRateValid(rate))
             return Failed<SequencePlayerTransition>(SequencePlayerErrors::RateInvalid);
         SequencePlayerSnapshot requested = snapshot_;
