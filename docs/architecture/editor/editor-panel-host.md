@@ -321,6 +321,9 @@ pointer moves outside the narrow seam. Activity-panel drag/drop and modal popup
 ownership suppress new splitter capture. Conversely, an active splitter owns the
 primary pointer before dock rendering and suppresses competing panel-header and
 activity-item drag sources; overlapping hit regions must never start both operations.
+Panel rearrangement additionally requires the primary press to originate in that
+panel's header. Merely crossing a panel header while another typed drag payload is
+active must not replace the payload or reveal workspace split targets.
 
 Registration makes a surface available and attaches its lifecycle; placement is
 a separate layout operation. `TabRegistration` and `PanelRegistration` provide
@@ -532,6 +535,8 @@ sections:
   - Owner: `HierarchyTab`
   - Writes selection through: `EditorSelectionModel`
   - Subscribes to: selection and document notifications
+  - Asset drops use the row center as a child target and the row edges as a
+    same-parent target. The empty region remains the explicit scene-root target.
 
 - **Project tab**: shows the project file tree (`assets`, `shaders`, `src`,
   `CMakeLists.txt`).
@@ -747,6 +752,25 @@ pointer is captured. Releasing the pointer submits one transform command through
 `EditorHistory`; cancelling restores the committed document snapshot. Preview
 frames increment viewport revision but do not increment document revision,
 publish document-change events, dirty the scene, or create undo entries.
+Linear move and scale axes whose direction is nearly parallel to the camera view
+use a colored end-on ring around the hub. Their perspective projection has no
+stable screen-space arrow direction. Dragging this ring uses vertical pointer
+movement and the projected scale of a perpendicular axis. Rotation rings retain
+their projected plane behavior.
+All three rotation rings start from one world-space radius computed from the
+camera depth and projection. Their projected points are then fitted to the same
+screen-space major radius; the ellipse shape still reflects each axis plane.
+The move gizmo draws screen-sized, filled arrowheads with shaded shafts and a
+central hub. Pointer hit testing covers the shaft and tip while leaving the hub
+clear of axis capture.
+
+Content Browser assets that support scene instantiation follow the same preview
+boundary. While the primary pointer remains held over the viewport, the editor
+adds one tinted, non-pickable mesh instance to the render snapshot and updates
+its placement from the pointer ray. `Escape` removes that transient instance;
+releasing the pointer removes it and submits exactly one undoable document
+command. A viewport drop always creates a root object; hierarchy parenting is
+chosen only by an explicit hierarchy drop target.
 
 The active viewport renderer reports its typed clip-depth convention through
 `IEditorViewportRenderer`. `ViewportPanel` forwards that value to gizmo

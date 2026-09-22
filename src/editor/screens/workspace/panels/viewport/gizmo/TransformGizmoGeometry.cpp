@@ -11,6 +11,123 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr float LinearAxisMaximumViewAlignment = 0.95F;
+        constexpr float GizmoExtentPixels = 96.0F;
+        constexpr float MoveArrowHeadLength = 18.0F;
+        constexpr float MoveArrowHeadHalfWidth = 9.0F;
+        constexpr float ScaleHandleHalfSize = 9.0F;
+        constexpr float ScaleHubHalfSize = 10.0F;
+        constexpr float EndOnAxisRadius = 18.0F;
+        constexpr int RotationRingSegments = 64;
+
+        /** @brief Camera-aligned frame shared by rotation rings and the active marker. */
+        struct RotationScreenBasis {
+            Math::Vec3 right;
+            Math::Vec3 up;
+        };
+
+        [[nodiscard]] Result<RotationScreenBasis> ResolveRotationScreenBasis(const EditorViewportCamera &camera) noexcept {
+            const Result<Math::Vec3> forward = Math::TryNormalize(camera.target - camera.position);
+            if (forward.HasError())
+                return Result<RotationScreenBasis>::Failure(forward.ErrorValue());
+            const Result<Math::Vec3> right = Math::TryNormalize(Math::Cross(forward.Value(), camera.up));
+            if (right.HasError())
+                return Result<RotationScreenBasis>::Failure(right.ErrorValue());
+            const Result<Math::Vec3> up = Math::TryNormalize(Math::Cross(right.Value(), forward.Value()));
+            if (up.HasError())
+                return Result<RotationScreenBasis>::Failure(up.ErrorValue());
+            return Result<RotationScreenBasis>::Success({right.Value(), up.Value()});
+        }
+
+        [[nodiscard]] ImVec2 ProjectRotationRadial(const ImVec2 center, const Math::Vec3 radial,
+                                                   const RotationScreenBasis &screenBasis) noexcept {
+            return {
+                center.x + GizmoExtentPixels * Math::Dot(radial, screenBasis.right),
+                center.y - GizmoExtentPixels * Math::Dot(radial, screenBasis.up),
+            };
+        }
+
+        [[nodiscard]] std::array<ImU32, 3> RotationAxisColors() noexcept {
+            return {
+                ImGui::GetColorU32(ImVec4{0.98F, 0.42F, 0.38F, 1.0F}),
+                ImGui::GetColorU32(ImVec4{0.45F, 0.88F, 0.49F, 1.0F}),
+                ImGui::GetColorU32(ImVec4{0.48F, 0.64F, 1.0F, 1.0F}),
+            };
+        }
+
+        [[nodiscard]] ImU32 ShadeAxisColor(const ImU32 color, const float brightness) noexcept {
+            ImVec4 rgba = ImGui::ColorConvertU32ToFloat4(color);
+            rgba.x = std::clamp(rgba.x * brightness, 0.0F, 1.0F);
+            rgba.y = std::clamp(rgba.y * brightness, 0.0F, 1.0F);
+            rgba.z = std::clamp(rgba.z * brightness, 0.0F, 1.0F);
+            return ImGui::ColorConvertFloat4ToU32(rgba);
+        }
+
+        [[nodiscard]] ImVec2 AlongAxis(const ImVec2 center, const ImVec2 direction, const float distance,
+                                       const float lateral = 0.0F) noexcept {
+            return {center.x + direction.x * distance - direction.y * lateral, center.y + direction.y * distance + direction.x * lateral};
+        }
+
+        void DrawMoveAxisArrow(ImDrawList &drawList, const ImVec2 center, const ImVec2 direction, const float length, const ImU32 color,
+                               const bool highlighted) {
+            const ImU32 face = ShadeAxisColor(color, highlighted ? 1.3F : 1.0F);
+            const ImU32 light = ShadeAxisColor(face, 1.18F);
+            const ImU32 dark = ShadeAxisColor(face, 0.62F);
+            const float headBase = length - MoveArrowHeadLength;
+            const ImVec2 shaftStart = AlongAxis(center, direction, 7.0F);
+            const ImVec2 shaftEnd = AlongAxis(center, direction, headBase);
+            const ImVec2 tip = AlongAxis(center, direction, length);
+            const ImVec2 left = AlongAxis(center, direction, headBase, -MoveArrowHeadHalfWidth);
+            const ImVec2 right = AlongAxis(center, direction, headBase, MoveArrowHeadHalfWidth);
+            const ImVec2 middle = AlongAxis(center, direction, headBase);
+
+            drawList.AddLine(shaftStart, shaftEnd, dark, 8.0F);
+            drawList.AddLine(AlongAxis(center, direction, 7.0F, -1.0F), AlongAxis(center, direction, headBase, -1.0F), face, 5.0F);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F, -2.0F), AlongAxis(center, direction, headBase - 2.0F, -2.0F), light, 1.0F);
+            drawList.AddCircleFilled(shaftEnd, 5.0F, dark, 12);
+            drawList.AddTriangleFilled(left, tip, middle, light);
+            drawList.AddTriangleFilled(middle, tip, right, dark);
+        }
+
+        /** @brief Draws a broad scale shaft and a shaded cube handle at the shared gizmo extent. */
+        void DrawScaleAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImVec2 direction, const float length, const ImU32 color,
+                                 const bool highlighted) {
+            const ImU32 face = ShadeAxisColor(color, highlighted ? 1.25F : 1.0F);
+            const ImU32 light = ShadeAxisColor(face, 1.18F);
+            const ImU32 dark = ShadeAxisColor(face, 0.58F);
+            const ImVec2 handle = AlongAxis(center, direction, length - ScaleHandleHalfSize);
+            const float shaftLength = length - ScaleHandleHalfSize * 2.0F;
+            const ImVec2 shaftEnd = AlongAxis(center, direction, shaftLength);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F), shaftEnd, dark, 8.0F);
+            drawList.AddLine(AlongAxis(center, direction, 9.0F, -1.0F), AlongAxis(center, direction, shaftLength - 1.0F, -1.0F), face,
+                             5.0F);
+            const ImVec2 frontMin{handle.x - ScaleHandleHalfSize, handle.y - ScaleHandleHalfSize};
+            const ImVec2 frontMax{handle.x + ScaleHandleHalfSize, handle.y + ScaleHandleHalfSize};
+            constexpr ImVec2 depth{-3.0F, -3.0F};
+            drawList.AddRectFilled({frontMin.x + depth.x, frontMin.y + depth.y}, {frontMax.x + depth.x, frontMax.y + depth.y}, dark, 2.0F);
+            drawList.AddQuadFilled({frontMin.x + depth.x, frontMin.y + depth.y}, {frontMax.x + depth.x, frontMax.y + depth.y},
+                                   {frontMax.x, frontMin.y}, frontMin, light);
+            drawList.AddQuadFilled({frontMax.x + depth.x, frontMin.y + depth.y}, {frontMax.x + depth.x, frontMax.y + depth.y}, frontMax,
+                                   {frontMax.x, frontMin.y}, dark);
+            drawList.AddRectFilled(frontMin, frontMax, face, 2.0F);
+            drawList.AddRect(frontMin, frontMax, dark, 2.0F, 0, 1.5F);
+        }
+
+        /** @brief Gives uniform scaling the same solid-handle treatment as the axis tips. */
+        void DrawScaleHub(ImDrawList &drawList, const ImVec2 center, const bool highlighted) {
+            const ImU32 face = highlighted ? Theme::U32(Theme::Text()) : ImGui::GetColorU32(ImVec4{0.78F, 0.81F, 0.86F, 1.0F});
+            const ImVec2 minimum{center.x - ScaleHubHalfSize, center.y - ScaleHubHalfSize};
+            const ImVec2 maximum{center.x + ScaleHubHalfSize, center.y + ScaleHubHalfSize};
+            drawList.AddRectFilled(minimum, maximum, Theme::U32(Theme::Bg0()), 2.0F);
+            drawList.AddRectFilled({minimum.x + 2.0F, minimum.y + 2.0F}, {maximum.x - 2.0F, maximum.y - 2.0F}, face, 2.0F);
+            drawList.AddRect(minimum, maximum, Theme::U32(Theme::BorderStrong()), 2.0F, 0, 1.5F);
+        }
+
+        void DrawEndOnAxisHandle(ImDrawList &drawList, const ImVec2 center, const ImU32 color, const bool highlighted) {
+            drawList.AddCircle(center, EndOnAxisRadius, Theme::U32(Theme::Bg0()), 24, 7.0F);
+            drawList.AddCircle(center, EndOnAxisRadius, ShadeAxisColor(color, highlighted ? 1.3F : 1.0F), 24, 4.0F);
+        }
+
         [[nodiscard]] Result<std::optional<ImVec2>> ProjectToViewport(const EditorViewportCamera &camera, const Math::Vec3 worldPosition,
                                                                       const ImVec2 origin, const float width, const float height,
                                                                       const Math::ClipDepthRange depthRange) noexcept {
@@ -47,84 +164,131 @@ namespace Horo::Editor {
             return std::sqrt(x * x + y * y);
         }
 
+        /** @brief Evaluates the shared screen scale at the gizmo pivot, without off-axis perspective shear. */
+        [[nodiscard]] Result<float> GizmoPixelsPerWorldUnitAtPivot(const TransformGizmoGeometryRequest &request,
+                                                                   const Math::Vec3 worldPosition) noexcept {
+            const Result<Math::Vec3> viewDirection = Math::TryNormalize(request.camera.target - request.camera.position);
+            if (viewDirection.HasError())
+                return Result<float>::Failure(viewDirection.ErrorValue());
+            const float depth = Math::Dot(worldPosition - request.camera.position, viewDirection.Value());
+            const float visibleWorldHeight = request.camera.projection == Runtime::CameraProjection::Perspective
+                                                 ? 2.0F * depth * std::tan(request.camera.verticalFovRadians * 0.5F)
+                                                 : request.camera.orthographicHeight;
+            const float pixelsPerWorldUnit = request.height / visibleWorldHeight;
+            if (!std::isfinite(pixelsPerWorldUnit) || pixelsPerWorldUnit <= 0.0F)
+                return Result<float>::Failure(MakeError(TransformGizmoErrors::InvalidRequest, "Gizmo screen scale is invalid."));
+            return Result<float>::Success(pixelsPerWorldUnit);
+        }
+
+        void PrepareEndOnAxis(TransformGizmoFrameGeometry &geometry, const int axis, const float pixelsPerWorldUnit,
+                              std::optional<int> &endOnAxis) noexcept {
+            geometry.screenDirections[axis] = {0.0F, -1.0F};
+            geometry.pixelsPerWorldUnit[axis] = std::max(pixelsPerWorldUnit, 1.0F);
+            endOnAxis = axis;
+        }
+
+        /** @brief Projected ring samples and closest pointer distance for one rotation axis. */
+        struct RotationRingProjection {
+            std::array<ImVec2, RotationRingSegments + 1> points{};
+            float pointerDistance{std::numeric_limits<float>::max()};
+        };
+
+        /** @brief Draws one complete projected ring layer without obscuring joins between segments. */
+        void DrawRotationRingLayer(ImDrawList &drawList, const RotationRingProjection &ring, const ImU32 color, const float thickness) {
+            for (int segment = 1; segment <= RotationRingSegments; ++segment)
+                drawList.AddLine(ring.points[segment - 1], ring.points[segment], color, thickness);
+        }
+
+        /** @brief Hit-tests the same screen-space samples used to draw a rotation ring. */
+        void MeasureRotationRingPointerDistance(RotationRingProjection &ring, const ImVec2 pointer) noexcept {
+            for (int segment = 1; segment <= RotationRingSegments; ++segment)
+                ring.pointerDistance =
+                    std::min(ring.pointerDistance, DistanceToSegment(pointer, ring.points[segment - 1], ring.points[segment]));
+        }
+
         [[nodiscard]] Result<void> DrawRotationHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
                                                        TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors) {
-            float closestDistance = std::numeric_limits<float>::max();
+            const Result<float> pixelsPerWorldUnit = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
+            if (pixelsPerWorldUnit.HasError())
+                return Result<void>::Failure(pixelsPerWorldUnit.ErrorValue());
+            const Result<RotationScreenBasis> screenBasis = ResolveRotationScreenBasis(request.camera);
+            if (screenBasis.HasError())
+                return Result<void>::Failure(screenBasis.ErrorValue());
+
+            std::array<RotationRingProjection, 3> rings;
             for (int axis = 0; axis < 3; ++axis) {
                 const Math::Vec3 basisU = geometry.worldAxes[(axis + 1) % 3];
                 const Result<Math::Vec3> basisV = Math::TryNormalize(Math::Cross(geometry.worldAxes[axis], basisU));
                 if (basisV.HasError())
                     return Result<void>::Failure(basisV.ErrorValue());
-                const Result<std::optional<ImVec2>> projectedUnit =
-                    ProjectToViewport(request.camera, geometry.worldPosition + basisU, request.origin, request.width, request.height,
-                                      request.depthRange);
-                if (projectedUnit.HasError())
-                    return Result<void>::Failure(projectedUnit.ErrorValue());
-                if (!projectedUnit.Value().has_value())
-                    continue;
-                const float unitPixels = std::max(Distance(*projectedUnit.Value(), *geometry.center), 1.0F);
-                const float radiusWorld = (42.0F + static_cast<float>(axis) * 3.0F) / unitPixels;
-                geometry.pixelsPerWorldUnit[axis] = unitPixels;
-                float distance = std::numeric_limits<float>::max();
-                std::optional<ImVec2> previous;
-                for (int segment = 0; segment <= 64; ++segment) {
-                    const float angle = 2.0F * std::numbers::pi_v<float> * static_cast<float>(segment) / 64.0F;
-                    const Math::Vec3 point =
-                        geometry.worldPosition + (basisU * std::cos(angle) + basisV.Value() * std::sin(angle)) * radiusWorld;
-                    const Result<std::optional<ImVec2>> projected =
-                        ProjectToViewport(request.camera, point, request.origin, request.width, request.height, request.depthRange);
-                    if (projected.HasError())
-                        return Result<void>::Failure(projected.ErrorValue());
-                    if (previous.has_value() && projected.Value().has_value()) {
-                        distance = std::min(distance, DistanceToSegment(request.pointer, *previous, *projected.Value()));
-                        drawList.AddLine(*previous, *projected.Value(), axisColors[axis], 2.0F);
-                    }
-                    previous = projected.Value();
+                geometry.pixelsPerWorldUnit[axis] = pixelsPerWorldUnit.Value();
+                for (int segment = 0; segment <= RotationRingSegments; ++segment) {
+                    const float angle = 2.0F * std::numbers::pi_v<float> * static_cast<float>(segment) / RotationRingSegments;
+                    const Math::Vec3 radial = basisU * std::cos(angle) + basisV.Value() * std::sin(angle);
+                    rings[axis].points[segment] = ProjectRotationRadial(*geometry.center, radial, screenBasis.Value());
                 }
-                const bool active = request.activeAxis == axis;
-                const bool hit = request.hovered && distance <= 5.0F;
-                if (active || hit)
-                    drawList.AddCircle(*geometry.center, 4.0F, Theme::U32(Theme::Text()), 16, 2.0F);
-                if (hit && distance < closestDistance) {
-                    closestDistance = distance;
+                MeasureRotationRingPointerDistance(rings[axis], request.pointer);
+            }
+            float closestDistance = 8.0F;
+            if (request.hovered) {
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (rings[axis].pointerDistance >= closestDistance)
+                        continue;
+                    closestDistance = rings[axis].pointerDistance;
                     geometry.hoveredAxis = axis;
                 }
+            }
+            for (int axis = 0; axis < 3; ++axis) {
+                const bool highlighted = request.activeAxis == axis || geometry.hoveredAxis == axis;
+                const ImU32 color = highlighted ? ShadeAxisColor(axisColors[axis], 1.15F) : axisColors[axis];
+                const float thickness = highlighted ? 5.5F : 4.0F;
+                DrawRotationRingLayer(drawList, rings[axis], Theme::U32(Theme::Bg0()), highlighted ? 8.0F : 6.5F);
+                DrawRotationRingLayer(drawList, rings[axis], color, thickness);
             }
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
                                                         TransformGizmoFrameGeometry &geometry, const int axis, const ImU32 axisColor,
-                                                        float &closestDistance) {
-            const Result<std::optional<ImVec2>> projected =
-                ProjectToViewport(request.camera, geometry.worldPosition + geometry.worldAxes[axis], request.origin, request.width,
-                                  request.height, request.depthRange);
-            if (projected.HasError())
-                return Result<void>::Failure(projected.ErrorValue());
-            if (!projected.Value().has_value())
+                                                        const RotationScreenBasis &screenBasis, const float centerPixelsPerWorldUnit,
+                                                        float &closestDistance, std::optional<int> &endOnAxis) {
+            const Result<bool> directional = HasTransformGizmoLinearAxisScreenDirection(request.camera, geometry.worldAxes[axis]);
+            if (directional.HasError())
+                return Result<void>::Failure(directional.ErrorValue());
+            if (!directional.Value()) {
+                PrepareEndOnAxis(geometry, axis, centerPixelsPerWorldUnit, endOnAxis);
                 return Result<void>::Success();
-            const ImVec2 delta{projected.Value()->x - geometry.center->x, projected.Value()->y - geometry.center->y};
-            geometry.pixelsPerWorldUnit[axis] = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-            if (geometry.pixelsPerWorldUnit[axis] < 4.0F)
+            }
+            // Project only the axis orientation: perspective displacement of the pivot must not shear the gizmo.
+            const ImVec2 projectedAxis{Math::Dot(geometry.worldAxes[axis], screenBasis.right),
+                                       -Math::Dot(geometry.worldAxes[axis], screenBasis.up)};
+            const float projectedLength = std::hypot(projectedAxis.x, projectedAxis.y);
+            if (!std::isfinite(projectedLength) || projectedLength < 0.001F) {
+                PrepareEndOnAxis(geometry, axis, centerPixelsPerWorldUnit, endOnAxis);
                 return Result<void>::Success();
-            geometry.screenDirections[axis] = {
-                delta.x / geometry.pixelsPerWorldUnit[axis],
-                delta.y / geometry.pixelsPerWorldUnit[axis],
-            };
-            const ImVec2 end{
-                geometry.center->x + geometry.screenDirections[axis].x * 48.0F,
-                geometry.center->y + geometry.screenDirections[axis].y * 48.0F,
-            };
-            const float distance = DistanceToSegment(request.pointer, *geometry.center, end);
+            }
+            geometry.pixelsPerWorldUnit[axis] = projectedLength * centerPixelsPerWorldUnit;
+            geometry.screenDirections[axis] = {projectedAxis.x / projectedLength, projectedAxis.y / projectedLength};
+            const float axisLength = GizmoExtentPixels * std::min(projectedLength, 1.0F);
+            const bool move = request.tool == EditorTransformTool::Move;
+            const ImVec2 end = AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength);
+            const ImVec2 hitStart = AlongAxis(*geometry.center, geometry.screenDirections[axis], 12.0F);
+            const ImVec2 scaleHandle = AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength - ScaleHandleHalfSize);
+            const ImVec2 hitEnd =
+                move ? end : AlongAxis(*geometry.center, geometry.screenDirections[axis], axisLength - ScaleHandleHalfSize * 2.0F);
+            const float distance = DistanceToSegment(request.pointer, hitStart, hitEnd);
+            const bool overScaleHandle = !move && std::fabs(request.pointer.x - scaleHandle.x) <= ScaleHandleHalfSize + 3.0F &&
+                                         std::fabs(request.pointer.y - scaleHandle.y) <= ScaleHandleHalfSize + 3.0F;
             const bool active = request.activeAxis == axis;
-            const bool hit = request.hovered && distance <= 7.0F;
-            drawList.AddLine(*geometry.center, end, active || hit ? Theme::U32(Theme::Text()) : axisColor, active || hit ? 4.0F : 2.5F);
-            if (request.tool == EditorTransformTool::Scale)
-                drawList.AddRectFilled({end.x - 4.0F, end.y - 4.0F}, {end.x + 4.0F, end.y + 4.0F}, axisColor);
+            const bool hit = request.hovered && (distance <= 10.0F || overScaleHandle);
+            if (move)
+                DrawMoveAxisArrow(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
             else
-                drawList.AddCircleFilled(end, hit ? 5.0F : 4.0F, axisColor);
-            if (hit && distance < closestDistance) {
-                closestDistance = distance;
+                DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
+            // A visible cube handle wins over another axis shaft crossing beneath it.
+            const float hitDistance = overScaleHandle ? -1.0F : distance;
+            if (hit && hitDistance < closestDistance) {
+                closestDistance = hitDistance;
                 geometry.hoveredAxis = axis;
             }
             return Result<void>::Success();
@@ -132,21 +296,38 @@ namespace Horo::Editor {
 
         [[nodiscard]] Result<void> DrawLinearHandles(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
                                                      TransformGizmoFrameGeometry &geometry, const std::array<ImU32, 3> &axisColors) {
+            const Result<RotationScreenBasis> screenBasis = ResolveRotationScreenBasis(request.camera);
+            if (screenBasis.HasError())
+                return Result<void>::Failure(screenBasis.ErrorValue());
+            const Result<float> centerPixelsPerWorldUnit = GizmoPixelsPerWorldUnitAtPivot(request, geometry.worldPosition);
+            if (centerPixelsPerWorldUnit.HasError())
+                return Result<void>::Failure(centerPixelsPerWorldUnit.ErrorValue());
             float closestDistance = std::numeric_limits<float>::max();
+            std::optional<int> endOnAxis;
             for (int axis = 0; axis < 3; ++axis) {
-                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry, axis, axisColors[axis], closestDistance);
+                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry, axis, axisColors[axis], screenBasis.Value(),
+                                                                centerPixelsPerWorldUnit.Value(), closestDistance, endOnAxis);
                 if (drawn.HasError())
                     return drawn;
             }
+            if (endOnAxis.has_value()) {
+                const float ringDistance = Distance(request.pointer, *geometry.center);
+                const bool hit = request.hovered && std::fabs(ringDistance - EndOnAxisRadius) <= 4.0F;
+                DrawEndOnAxisHandle(drawList, *geometry.center, axisColors[*endOnAxis], request.activeAxis == endOnAxis || hit);
+                if (hit)
+                    geometry.hoveredAxis = endOnAxis;
+            }
             if (request.tool == EditorTransformTool::Scale) {
-                const bool uniformHit = request.hovered && Distance(request.pointer, *geometry.center) <= 8.0F;
-                drawList.AddRectFilled({geometry.center->x - 5.0F, geometry.center->y - 5.0F},
-                                       {geometry.center->x + 5.0F, geometry.center->y + 5.0F},
-                                       uniformHit ? Theme::U32(Theme::Text()) : ImGui::GetColorU32(ImVec4{0.8F, 0.8F, 0.8F, 1.0F}));
+                const bool uniformHit = request.hovered && std::fabs(request.pointer.x - geometry.center->x) <= ScaleHubHalfSize &&
+                                        std::fabs(request.pointer.y - geometry.center->y) <= ScaleHubHalfSize;
+                DrawScaleHub(drawList, *geometry.center, uniformHit || request.activeAxis == 3);
                 if (uniformHit)
                     geometry.hoveredAxis = 3;
-            } else
-                drawList.AddCircleFilled(*geometry.center, 4.0F, Theme::U32(Theme::Text()));
+            } else {
+                drawList.AddCircleFilled(*geometry.center, 7.0F, Theme::U32(Theme::BorderStrong()), 20);
+                drawList.AddCircleFilled(*geometry.center, 5.5F, Theme::U32(Theme::Text()), 20);
+                drawList.AddCircleFilled({geometry.center->x - 1.5F, geometry.center->y - 1.5F}, 1.5F, Theme::U32(Theme::Bg0()), 8);
+            }
             return Result<void>::Success();
         }
     }  // namespace
@@ -174,18 +355,53 @@ namespace Horo::Editor {
         if (!geometry.center.has_value())
             return Result<TransformGizmoFrameGeometry>::Success(std::move(geometry));
 
-        const std::array axisColors{
-            ImGui::GetColorU32(ImVec4{0.88F, 0.33F, 0.29F, 1.0F}),
-            ImGui::GetColorU32(ImVec4{0.37F, 0.72F, 0.54F, 1.0F}),
-            ImGui::GetColorU32(ImVec4{0.29F, 0.56F, 0.85F, 1.0F}),
+        const std::array linearAxisColors{
+            ImGui::GetColorU32(ImVec4{0.93F, 0.29F, 0.26F, 1.0F}),
+            ImGui::GetColorU32(ImVec4{0.42F, 0.83F, 0.29F, 1.0F}),
+            ImGui::GetColorU32(ImVec4{0.25F, 0.51F, 0.96F, 1.0F}),
         };
         if (const Result<void> handles = request.tool == EditorTransformTool::Rotate
-                                             ? DrawRotationHandles(drawList, request, geometry, axisColors)
-                                             : DrawLinearHandles(drawList, request, geometry, axisColors);
+                                             ? DrawRotationHandles(drawList, request, geometry, RotationAxisColors())
+                                             : DrawLinearHandles(drawList, request, geometry, linearAxisColors);
             handles.HasError()) {
             return Result<TransformGizmoFrameGeometry>::Failure(handles.ErrorValue());
         }
         return Result<TransformGizmoFrameGeometry>::Success(std::move(geometry));
+    }
+
+    /** @copydoc DrawTransformGizmoRotationPin */
+    Result<void> DrawTransformGizmoRotationPin(ImDrawList &drawList, const EditorViewportCamera &camera, const ImVec2 center,
+                                               const Math::Vec3 rotationVector, const int axis) {
+        if (axis < 0 || axis >= 3 || !std::isfinite(center.x) || !std::isfinite(center.y))
+            return Result<void>::Failure(MakeError(TransformGizmoErrors::InvalidRequest, "Rotation pin position or axis is invalid."));
+        const Result<Math::Vec3> radial = Math::TryNormalize(rotationVector);
+        if (radial.HasError())
+            return Result<void>::Failure(radial.ErrorValue());
+        const Result<RotationScreenBasis> screenBasis = ResolveRotationScreenBasis(camera);
+        if (screenBasis.HasError())
+            return Result<void>::Failure(screenBasis.ErrorValue());
+
+        const ImVec2 point = ProjectRotationRadial(center, radial.Value(), screenBasis.Value());
+        const ImU32 color = RotationAxisColors()[axis];
+        drawList.AddCircleFilled({point.x + 1.0F, point.y + 1.5F}, 7.5F, Theme::U32(Theme::Bg0()), 20);
+        drawList.AddCircleFilled(point, 6.0F, ShadeAxisColor(color, 0.55F), 20);
+        drawList.AddCircleFilled(point, 4.5F, color, 20);
+        drawList.AddCircleFilled({point.x - 1.25F, point.y - 1.25F}, 1.5F, ImGui::GetColorU32(ImVec4{1.0F, 1.0F, 1.0F, 0.9F}), 12);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc HasTransformGizmoLinearAxisScreenDirection */
+    Result<bool> HasTransformGizmoLinearAxisScreenDirection(const EditorViewportCamera &camera, const Math::Vec3 worldAxis) noexcept {
+        if (!camera.IsValid())
+            return Result<bool>::Failure(MakeError(TransformGizmoErrors::InvalidRequest, "Transform gizmo camera is invalid."));
+        const Result<Math::Vec3> normalizedAxis = Math::TryNormalize(worldAxis);
+        if (normalizedAxis.HasError())
+            return Result<bool>::Failure(normalizedAxis.ErrorValue());
+        const Result<Math::Vec3> viewDirection = Math::TryNormalize(camera.target - camera.position);
+        if (viewDirection.HasError())
+            return Result<bool>::Failure(viewDirection.ErrorValue());
+        const float alignment = std::fabs(Math::Dot(normalizedAxis.Value(), viewDirection.Value()));
+        return Result<bool>::Success(alignment <= LinearAxisMaximumViewAlignment);
     }
 
     /** @copydoc ProjectTransformGizmoRotationVector */

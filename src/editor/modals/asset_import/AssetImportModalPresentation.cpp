@@ -512,7 +512,9 @@ namespace Horo::Editor {
             }
 
             ImGui::Dummy({0.0f, 12.0f});
-            LabeledSeparator("QUEUE", fonts);
+            const std::string sectionLabel{modal.Localized(snap.items.empty() ? "asset_import.history" : "asset_import.current",
+                                                           snap.items.empty() ? "IMPORT HISTORY" : "CURRENT IMPORT")};
+            LabeledSeparator(sectionLabel.c_str(), fonts);
             ImGui::Spacing();
 
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f, 0.0f});
@@ -562,6 +564,46 @@ namespace Horo::Editor {
                 PopFont(fonts.sansCompact);
             }
 
+            if (snap.items.empty()) {
+                const auto history = modal.ImportHistory();
+                for (const OperationRecord &operation : history) {
+                    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+                    const float rowW = ImGui::GetContentRegionAvail().x;
+                    constexpr float rowH = 46.0f;
+                    ImGui::InvisibleButton(std::format("##ImportHistory{}", operation.id).c_str(), {rowW, rowH});
+
+                    const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
+                    queueDrawList->AddRectFilled(rowMin, rowMax, U32(Bg3()), 4.0f);
+                    queueDrawList->AddRect(rowMin, rowMax, U32(Border()), 4.0f);
+
+                    ImU32 icon = 0xE86C;
+                    ImVec4 statusColor = Ok();
+                    std::string_view status = modal.Localized("asset_import.history.succeeded", "Imported");
+                    if (operation.state == OperationState::Failed) {
+                        icon = 0xE000;
+                        statusColor = Err();
+                        status = modal.Localized("asset_import.history.failed", "Failed");
+                    } else if (operation.state == OperationState::Cancelled) {
+                        icon = 0xE5C9;
+                        statusColor = Dim();
+                        status = modal.Localized("asset_import.history.cancelled", "Cancelled");
+                    }
+
+                    DrawIcon(queueDrawList, {rowMin.x + 14.0f, rowMin.y + 14.0f}, icon, U32(statusColor), fonts);
+                    PushFont(fonts.sansCompact);
+                    queueDrawList->AddText({rowMin.x + 36.0f, rowMin.y + 7.0f}, U32(Text()), operation.title.c_str());
+                    queueDrawList->AddText({rowMin.x + 36.0f, rowMin.y + 25.0f}, U32(statusColor), status.data(),
+                                           status.data() + status.size());
+                    PopFont(fonts.sansCompact);
+                }
+                if (history.empty()) {
+                    PushFont(fonts.sansCompact);
+                    const std::string_view empty = modal.Localized("asset_import.history.empty", "No imports yet.");
+                    ImGui::TextColored(Dim(), "%.*s", static_cast<int>(empty.size()), empty.data());
+                    PopFont(fonts.sansCompact);
+                }
+            }
+
             ImGui::EndChild();
             ImGui::PopStyleColor();
             ImGui::PopStyleVar(2);
@@ -570,7 +612,7 @@ namespace Horo::Editor {
             ImGui::PopStyleVar(2);
         }
 
-        void DrawQueueOverviewTab(const Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
+        void DrawQueueOverviewTab(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
             if (!snap.items.empty() && snap.selectedItemIndex < snap.items.size()) {
                 const auto &sel = snap.items[snap.selectedItemIndex];
                 LabeledSeparator("SELECTED FILE", fonts);
@@ -595,7 +637,8 @@ namespace Horo::Editor {
             }
 
             if (snap.items.empty()) {
-                ImGui::TextColored(Dim(), "Select a file from the queue to view its overview.");
+                const std::string_view empty = modal.Localized("asset_import.overview.empty", "Select a file to view its overview.");
+                ImGui::TextColored(Dim(), "%.*s", static_cast<int>(empty.size()), empty.data());
             }
         }
 
@@ -1077,7 +1120,7 @@ namespace Horo::Editor {
         using enum ImportTab;
         switch (static_cast<ImportTab>(s_activeTab)) {
             case Queue:
-                DrawQueueOverviewTab(snap, fonts);
+                DrawQueueOverviewTab(modal, snap, fonts);
                 break;
             case Diagnostics:
                 DrawDiagnosticsTab(snap, fonts);

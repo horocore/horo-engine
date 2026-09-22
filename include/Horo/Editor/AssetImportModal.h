@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -28,6 +29,8 @@ namespace Horo::Assets {
 }  // namespace Horo::Assets
 
 namespace Horo::Editor {
+    class ILocalizationService;
+
     /**
      * @brief Host-owned asset import workflow modal.
      * @details Owns an AssetImportOperation and exposes its snapshots to the GUI
@@ -48,9 +51,11 @@ namespace Horo::Editor {
          * @param catalog Published immutable importer catalog snapshot.
          * @param assetRegistry Optional mutable asset registry updated by committed imports.
          * @param operationStore Optional user-facing operation authority.
+         * @param localization Optional editor localization service used by presentation copy.
          */
         AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs, std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
-                         Assets::AssetRegistry *assetRegistry = nullptr, OperationStore *operationStore = nullptr) noexcept;
+                         Assets::AssetRegistry *assetRegistry = nullptr, OperationStore *operationStore = nullptr,
+                         const ILocalizationService *localization = nullptr) noexcept;
 
         /** @brief Destroys the modal and its target-private project committer. */
         ~AssetImportModal() override;
@@ -71,6 +76,12 @@ namespace Horo::Editor {
 
         /** @brief Returns the pinned importer catalog snapshot. */
         [[nodiscard]] const Assets::AssetImporterCatalogSnapshot &Catalog() const noexcept;
+
+        /** @brief Returns retained terminal import operations, newest first. */
+        [[nodiscard]] std::span<const OperationRecord> ImportHistory() const noexcept;
+
+        /** @brief Resolves presentation copy with a fallback for headless callers. */
+        [[nodiscard]] std::string_view Localized(std::string_view key, std::string_view fallback) const;
 
         /** @brief Sets the project root for asset destination paths. Call before BeginImport when known. */
         void SetProjectRoot(const std::filesystem::path &root) noexcept;
@@ -191,12 +202,18 @@ namespace Horo::Editor {
         /** @brief Moves the visible operation to failed and releases its active handle. */
         void FailVisibleOperation(const Error &error, std::string_view phase);
 
+        /** @brief Refreshes the retained import-operation projection from the process store. */
+        void RefreshImportHistory();
+
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;
         Assets::AssetRegistry *m_assetRegistry{};
         OperationStore *m_operationStore{};
+        const ILocalizationService *m_localization{};
         std::optional<OperationId> m_visibleOperationId;
+        std::uint64_t m_historyRevision{};
+        std::vector<OperationRecord> m_importHistory;
         std::shared_ptr<CancellationSource> m_operationCancellation;
         EditorDataBus *m_events = nullptr;
         std::filesystem::path m_projectRoot; /**< Stored for committer. */

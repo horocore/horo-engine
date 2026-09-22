@@ -1,4 +1,5 @@
 #include "ContentBrowserModel.h"
+#include "Horo/Assets/MeshEditorPayload.h"
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -433,7 +434,7 @@ namespace {
         const auto writeFloat = [&writeU32](const float value) {
             writeU32(std::bit_cast<std::uint32_t>(value));
         };
-        writeU32(1);
+        writeU32(Assets::MeshEditorPayloadSchemaVersion);
         writeU32(2);
         writeU32(1);
         for (const float bound : {-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F})
@@ -468,6 +469,7 @@ namespace {
         REQUIRE((directory.entries[0].importerModuleVersion == "1.0.0"));
         REQUIRE((directory.entries[0].previewFallback == Assets::AssetPreviewFallback::Mesh));
         REQUIRE((!directory.entries[0].previewImage.IsValid()));
+        REQUIRE((!directory.entries[0].meshPreviewPoints.empty()));
 
         std::error_code cleanupError;
         std::filesystem::remove_all(projectRoot, cleanupError);

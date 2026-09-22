@@ -66,7 +66,7 @@ namespace {
         ScreenStats &stats_;
     };
 
-    TEST_CASE("Shutdown Leaves Once Destroys Screen And Revokes Services", "[unit][editor]") {
+    TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
         Input::InputRouter input;
@@ -91,6 +91,8 @@ namespace {
 
         GuiScreenHost host{gui,  modals, settings,  localization,       engineEvents,     creation,
                            jobs, input,  renderers, std::move(screens), std::move(panels)};
+        REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
+        REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
         REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
         REQUIRE((stats.enters == 0));
         REQUIRE((host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasError()));

@@ -51,6 +51,7 @@ namespace Horo::Editor {
             Math::Transform draftTransform;
             TransformGizmoMathSession math;
             Math::Vec3 currentWorldPosition;
+            Math::Vec3 currentRotationVector; /**< Current point on the active rotation plane; meaningful only for Rotate. */
             ImVec2 startMouse{};
             ImVec2 screenDirection{};
         };
