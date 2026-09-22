@@ -116,7 +116,7 @@ namespace Horo::Extensions {
             });
         }
 
-        [[nodiscard]] bool HasValidProviderOwnership(const EditorSurfaceProviderOwnership &provider, const std::size_t maximumBytes) {
+        [[nodiscard]] bool HasValidProviderOwnership(const EditorSurfaceProviderIdentity &provider, const std::size_t maximumBytes) {
             return IsCanonicalIdentity(provider.extensionId, maximumBytes) && IsCanonicalIdentity(provider.moduleId, maximumBytes) &&
                    provider.activationGeneration != 0;
         }

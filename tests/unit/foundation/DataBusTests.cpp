@@ -38,7 +38,7 @@ namespace {
     template <typename EventT, typename ValueFn>
     void AddBridgeSubscription(Horo::Editor::EditorDataBus &editorEvents, std::array<Horo::Subscription, 9> &subscriptions,
                                std::array<int, 9> &delivered, const std::size_t index, ValueFn value) {
-        subscriptions[index] = editorEvents.Subscribe<EventT>([&delivered, index, value = std::move(value)](const EventT &event) mutable {
+        subscriptions[index] = editorEvents.Subscribe<EventT>([&delivered, index, value = std::move(value)](const EventT &event) {
             delivered[index] = static_cast<int>(value(event));
         });
     }
@@ -113,7 +113,7 @@ namespace {
     template <typename EventT, typename ValueFn>
     void AddSurfaceSubscription(Horo::Editor::EditorSurfaceEventContext &context, std::vector<Horo::Subscription> &tokens,
                                 std::array<int, 9> &delivered, const std::size_t index, ValueFn value) {
-        auto result = context.Subscribe<EventT>([&delivered, index, value = std::move(value)](const EventT &event) mutable {
+        auto result = context.Subscribe<EventT>([&delivered, index, value = std::move(value)](const EventT &event) {
             delivered[index] = static_cast<int>(value(event));
         });
         REQUIRE(result.HasValue());
