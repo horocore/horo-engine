@@ -473,9 +473,9 @@ namespace {
         std::filesystem::remove_all(projectRoot, cleanupError);
     }
 
-    void RenderAtWidth(const float width, const char *windowId, Horo::Editor::GlobalDockPanel &panel,
-                       const Horo::Editor::EditorGuiContext &context,
-                       const Horo::Editor::ContentBrowserLoadState loadState = Horo::Editor::ContentBrowserLoadState::Ready) {
+    Horo::Editor::EditorWorkspaceViewCommandData RenderAtWidth(
+        const float width, const char *windowId, Horo::Editor::GlobalDockPanel &panel, const Horo::Editor::EditorGuiContext &context,
+        const Horo::Editor::ContentBrowserLoadState loadState = Horo::Editor::ContentBrowserLoadState::Ready) {
         using namespace Horo::Editor;
 
         EditorWorkspaceViewModel viewModel;
@@ -518,6 +518,7 @@ namespace {
         ImGui::Begin(windowId, nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
         panel.DrawPanel(ImGui::GetCursorScreenPos(), ImVec2(width, 220.0F), viewModel, command, context);
         ImGui::End();
+        return command;
     }
 }  // namespace
 
@@ -652,8 +653,40 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
                                  .buildOutputQuery = &buildOutputStore,
                                  .operationQuery = &operationStore,
                                  .operationControl = &operationStore};
+    BuildOutputStore clickableBuildOutputStore{4};
+    clickableBuildOutputStore.Append(BuildOutputRecord{
+        .timestampUtc = std::chrono::system_clock::now(),
+        .severity = DiagnosticSeverity::Error,
+        .stage = "compile",
+        .message = "Clickable diagnostic",
+        .source = DiagnosticSourceLocation{.absolutePath = "/tmp/HoroProject/assets/shader.glsl", .line = 12, .column = 3},
+    });
+    PanelContext clickableActivityContext{.dataBus = editorEvents, .buildOutputQuery = &clickableBuildOutputStore};
+    GlobalDockPanel clickableBuild{GlobalDockTab::BuildOutput};
+    clickableBuild.OnAttach(clickableActivityContext);
     GlobalDockPanel liveBuild{GlobalDockTab::BuildOutput};
     liveBuild.OnAttach(activityContext);
+    const GlobalDockPaneMetrics buildMetrics = ResolveGlobalDockPaneMetrics();
+    const float buildRowClickY = ImGui::GetStyle().WindowPadding.y + 36.0F + buildMetrics.toolbarHeight + buildMetrics.tableHeaderHeight +
+                                 buildMetrics.tableRowHeight * 0.5F;
+    io.AddMousePosEvent(80.0F, buildRowClickY);
+    ImGui::NewFrame();
+    RenderAtWidth(900.0F, "ClickableBuildRow", clickableBuild, context);
+    ImGui::Render();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    ImGui::NewFrame();
+    RenderAtWidth(900.0F, "ClickableBuildRow", clickableBuild, context);
+    ImGui::Render();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    ImGui::NewFrame();
+    const EditorWorkspaceViewCommandData diagnosticCommand = RenderAtWidth(900.0F, "ClickableBuildRow", clickableBuild, context);
+    ImGui::Render();
+    REQUIRE((diagnosticCommand.command == EditorWorkspaceViewCommand::OpenDiagnosticSource));
+    REQUIRE(diagnosticCommand.diagnosticSource.has_value());
+    REQUIRE((diagnosticCommand.diagnosticSource->absolutePath == "/tmp/HoroProject/assets/shader.glsl"));
+    REQUIRE((diagnosticCommand.diagnosticSource->line == 12U));
+    REQUIRE((diagnosticCommand.diagnosticSource->column == 3U));
+    clickableBuild.OnDetach();
     ImGui::NewFrame();
     RenderAtWidth(900.0F, "LiveBuildRows", liveBuild, context);
     ImGui::Render();
