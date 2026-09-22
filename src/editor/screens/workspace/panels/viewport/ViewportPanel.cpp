@@ -44,6 +44,21 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc ViewportPanel::GetDisplayName */
+    std::string ViewportPanel::GetDisplayName() const {
+        return "horo.panel.viewport.title";
+    }
+
+    /** @copydoc ViewportPanel::GetDefaultDockArea */
+    WorkspaceDockArea ViewportPanel::GetDefaultDockArea() const {
+        return WorkspaceDockArea::Document;
+    }
+
+    /** @copydoc ViewportPanel::GetObservedEventTypes */
+    std::vector<std::string> ViewportPanel::GetObservedEventTypes() const {
+        return {"SceneDocumentChangedEvent", "SelectionChangedEvent"};
+    }
+
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
         viewportRenderer_ = context.viewportRenderer;
