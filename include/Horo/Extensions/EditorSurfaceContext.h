@@ -211,7 +211,7 @@ namespace Horo::Extensions {
      */
     class EditorSurfaceContextProvider final {
     public:
-        explicit EditorSurfaceContextProvider(EditorSurfaceContextLimits limits = {});
+        explicit EditorSurfaceContextProvider(const EditorSurfaceContextLimits &limits = {});
         ~EditorSurfaceContextProvider() noexcept;
         EditorSurfaceContextProvider(const EditorSurfaceContextProvider &) = delete;
         EditorSurfaceContextProvider &operator=(const EditorSurfaceContextProvider &) = delete;

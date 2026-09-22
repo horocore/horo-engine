@@ -42,9 +42,9 @@ namespace Horo::Extensions {
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::EditorSurfaceContextCapacityExceeded, "An editor surface access list exceeds its bound."));
             for (std::size_t index = 0; index < identities.size(); ++index) {
-                const bool valid = localization ? IsCanonicalLocalizationKey(identities[index], maximumBytes)
-                                                : IsCanonicalAccessId(identities[index], maximumBytes);
-                if (!valid)
+                if (const bool valid = localization ? IsCanonicalLocalizationKey(identities[index], maximumBytes)
+                                                    : IsCanonicalAccessId(identities[index], maximumBytes);
+                    !valid)
                     return Result<void>::Failure(
                         MakeError(ExtensionErrors::EditorSurfaceContextInvalid, "An editor surface access identity is malformed."));
                 for (std::size_t previous = 0; previous < index; ++previous) {
@@ -265,7 +265,7 @@ namespace Horo::Extensions {
         return view_;
     }
 
-    EditorSurfaceContextProvider::EditorSurfaceContextProvider(EditorSurfaceContextLimits limits)
+    EditorSurfaceContextProvider::EditorSurfaceContextProvider(const EditorSurfaceContextLimits &limits)
         : state_(std::make_shared<EditorSurfaceContextProviderState>()), limits_(limits) {
         state_->contexts.reserve(limits_.maximumContexts);
     }
@@ -275,7 +275,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorSurfaceContextProvider::Attach */
-    Result<EditorSurfaceContextRegistration> EditorSurfaceContextProvider::Attach(
+    // Attachment mutates provider-owned shared lifecycle state.
+    Result<EditorSurfaceContextRegistration> EditorSurfaceContextProvider::Attach(  // NOSONAR(cpp:S5817)
         EditorSurfaceContextDescriptor descriptor, ExtensionActivationLease activation,
         const std::span<const ExtensionCapabilityHandle> approvedCapabilities) {
         if (const Result<void> valid = ValidateEditorSurfaceContextDescriptor(descriptor, limits_); valid.HasError())
@@ -309,7 +310,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorSurfaceContextProvider::BeginShutdown */
-    void EditorSurfaceContextProvider::BeginShutdown() noexcept {
+    // Shutdown mutates provider-owned shared lifecycle state.
+    void EditorSurfaceContextProvider::BeginShutdown() noexcept {  // NOSONAR(cpp:S5817)
         if (state_ == nullptr)
             return;
         std::scoped_lock lock{state_->mutex};
