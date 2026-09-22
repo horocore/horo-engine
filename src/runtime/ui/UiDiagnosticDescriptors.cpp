@@ -40,6 +40,8 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::StructuralCommandConflict,
             &UiErrors::ElementTreeLifecycleUnavailable,
             &UiErrors::LayoutInvalid,
+            &UiErrors::LayoutConstraintConflict,
+            &UiErrors::LayoutIntrinsicUnavailable,
             &UiErrors::LayoutSourceStale,
             &UiErrors::LayoutNonConvergent,
             &UiErrors::LayoutSnapshotStorageExhausted,
