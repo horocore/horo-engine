@@ -69,6 +69,10 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::DiagnosticInvalid,
             &UiErrors::DiagnosticUnsupported,
         };
+        const std::array textLayout{
+            &UiErrors::TextLayoutInputInvalid,    &UiErrors::TextLayoutSourceStale,      &UiErrors::TextLayoutCapacityExceeded,
+            &UiErrors::TextLayoutEllipsisInvalid, &UiErrors::TextLayoutStorageExhausted, &UiErrors::TextLayoutLifecycleUnavailable,
+        };
         const std::array actions{
             &UiErrors::ActionInvalid,
             &UiErrors::ActionPayloadInvalid,
@@ -127,10 +131,12 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + pointerCapture.size() + actions.size() + bindings.size() +
-                                                        controls.size() + focus.size() + renderGeometry.size() + accessibility.size()>
+            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + pointerCapture.size() + actions.size() +
+                                                        bindings.size() + controls.size() + focus.size() + renderGeometry.size() +
+                                                        accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
+            output = std::ranges::copy(textLayout, output).out;
             output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;
             output = std::ranges::copy(bindings, output).out;
