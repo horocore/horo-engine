@@ -93,6 +93,87 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                 "Provide one valid expected asset type for each stable asset identity.",
                                                 false,
                                                 true};
+    /** @copydoc LocaleInvalid */
+    const ErrorCodeDescriptor LocaleInvalid{UiDomain,
+                                            ErrorCode{"runtime_ui.locale.invalid"},
+                                            ErrorSeverity::Error,
+                                            "The Runtime UI locale evidence is malformed or not normalized.",
+                                            "Provide a bounded normalized BCP 47 locale tag from the Localization boundary.",
+                                            false,
+                                            true};
+    /** @copydoc LocaleFallbackChainInvalid */
+    const ErrorCodeDescriptor LocaleFallbackChainInvalid{UiDomain,
+                                                         ErrorCode{"runtime_ui.locale_fallback_chain.invalid"},
+                                                         ErrorSeverity::Error,
+                                                         "The Runtime UI locale fallback chain is malformed or exceeds its bound.",
+                                                         "Provide non-empty, normalized, unique locale evidence in precedence order.",
+                                                         false,
+                                                         true};
+    /** @copydoc LocalizedKeyInvalid */
+    const ErrorCodeDescriptor LocalizedKeyInvalid{UiDomain,
+                                                  ErrorCode{"runtime_ui.localized_key.invalid"},
+                                                  ErrorSeverity::Error,
+                                                  "The Runtime UI localized message key is invalid.",
+                                                  "Provide a stable owner namespace and semantic local key.",
+                                                  false,
+                                                  true};
+    /** @copydoc LocalizedMessageInvalid */
+    const ErrorCodeDescriptor LocalizedMessageInvalid{UiDomain,
+                                                      ErrorCode{"runtime_ui.localized_message.invalid"},
+                                                      ErrorSeverity::Error,
+                                                      "The Runtime UI localized message reference is invalid.",
+                                                      "Provide a valid key, bounded UTF-8 fallback, arguments, and failure policy.",
+                                                      false,
+                                                      true};
+    /** @copydoc LocalizedArgumentInvalid */
+    const ErrorCodeDescriptor LocalizedArgumentInvalid{UiDomain,
+                                                       ErrorCode{"runtime_ui.localized_argument.invalid"},
+                                                       ErrorSeverity::Error,
+                                                       "A Runtime UI localized argument is invalid.",
+                                                       "Use a declared bounded typed argument value.",
+                                                       false,
+                                                       true};
+    /** @copydoc LocalizedArgumentConflict */
+    const ErrorCodeDescriptor LocalizedArgumentConflict{UiDomain,
+                                                        ErrorCode{"runtime_ui.localized_argument.conflict"},
+                                                        ErrorSeverity::Error,
+                                                        "A Runtime UI localized message repeats an argument name.",
+                                                        "Use each named argument exactly once.",
+                                                        false,
+                                                        true};
+    /** @copydoc LocalizedArgumentCapacityExceeded */
+    const ErrorCodeDescriptor LocalizedArgumentCapacityExceeded{UiDomain,
+                                                                ErrorCode{"runtime_ui.localized_argument.capacity_exceeded"},
+                                                                ErrorSeverity::Error,
+                                                                "A Runtime UI localized message exceeds its argument bound.",
+                                                                "Reduce the number of named arguments in the message reference.",
+                                                                false,
+                                                                true};
+    /** @copydoc LocalizedAssetReferenceInvalid */
+    const ErrorCodeDescriptor
+        LocalizedAssetReferenceInvalid{UiDomain,
+                                       ErrorCode{"runtime_ui.localized_asset_reference.invalid"},
+                                       ErrorSeverity::Error,
+                                       "The Runtime UI localized asset reference is invalid.",
+                                       "Provide a valid asset type, finite variants, and an explicit fallback policy.",
+                                       false,
+                                       true};
+    /** @copydoc LocalizedAssetVariantConflict */
+    const ErrorCodeDescriptor LocalizedAssetVariantConflict{UiDomain,
+                                                            ErrorCode{"runtime_ui.localized_asset_variant.conflict"},
+                                                            ErrorSeverity::Error,
+                                                            "The Runtime UI localized asset variants conflict.",
+                                                            "Use each locale once and keep one expected type per asset identity.",
+                                                            false,
+                                                            true};
+    /** @copydoc LocalizedAssetUnavailable */
+    const ErrorCodeDescriptor LocalizedAssetUnavailable{UiDomain,
+                                                        ErrorCode{"runtime_ui.localized_asset.unavailable"},
+                                                        ErrorSeverity::Error,
+                                                        "No declared Runtime UI localized asset satisfies the fallback policy.",
+                                                        "Publish the required locale variant or declare neutral/omit fallback.",
+                                                        true,
+                                                        true};
     /** @copydoc CapacityExceeded */
     const ErrorCodeDescriptor CapacityExceeded{UiDomain,
                                                ErrorCode{"runtime_ui.capacity.exceeded"},
@@ -512,6 +593,57 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                 "Use a known direction and exact presented focus handles.",
                                                 false,
                                                 false};
+    /** @copydoc RouteStackInvalid */
+    const ErrorCodeDescriptor
+        RouteStackInvalid{UiDomain,
+                          ErrorCode{"runtime_ui.route_stack.invalid"},
+                          ErrorSeverity::Error,
+                          "The Runtime UI route-stack descriptor is invalid.",
+                          "Provide one non-zero owner-scoped stack identity, a finite route bound, and valid route definitions.",
+                          false,
+                          false};
+    /** @copydoc RouteOperationInvalid */
+    const ErrorCodeDescriptor
+        RouteOperationInvalid{UiDomain,
+                              ErrorCode{"runtime_ui.route_operation.invalid"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI route operation is malformed.",
+                              "Use a known operation, a valid route definition where required, and a complete optional guard.",
+                              false,
+                              false};
+    /** @copydoc RouteOperationStale */
+    const ErrorCodeDescriptor RouteOperationStale{UiDomain,
+                                                  ErrorCode{"runtime_ui.route_operation.stale"},
+                                                  ErrorSeverity::Warning,
+                                                  "The Runtime UI route operation guard is stale.",
+                                                  "Retarget the operation against the current route-stack revision and top instance.",
+                                                  true,
+                                                  false};
+    /** @copydoc RouteOperationReentrant */
+    const ErrorCodeDescriptor RouteOperationReentrant{UiDomain,
+                                                      ErrorCode{"runtime_ui.route_operation.reentrant"},
+                                                      ErrorSeverity::Error,
+                                                      "A Runtime UI route operation is already preparing or committing.",
+                                                      "Finish or cancel the active transaction before starting another route operation.",
+                                                      false,
+                                                      false};
+    /** @copydoc RouteOperationAlreadyCompleted */
+    const ErrorCodeDescriptor RouteOperationAlreadyCompleted{UiDomain,
+                                                             ErrorCode{"runtime_ui.route_operation.already_completed"},
+                                                             ErrorSeverity::Error,
+                                                             "The Runtime UI route transaction already has a terminal result.",
+                                                             "Use each prepared route transaction exactly once.",
+                                                             false,
+                                                             false};
+    /** @copydoc RouteOperationLifecycleUnavailable */
+    const ErrorCodeDescriptor
+        RouteOperationLifecycleUnavailable{UiDomain,
+                                           ErrorCode{"runtime_ui.route_operation.lifecycle_unavailable"},
+                                           ErrorSeverity::Error,
+                                           "The Runtime UI route stack is closed for new operations.",
+                                           "Create a route stack for the current runtime owner generation before navigating.",
+                                           false,
+                                           false};
     /** @copydoc RenderSnapshotInvalid */
     const ErrorCodeDescriptor RenderSnapshotInvalid{UiDomain,
                                                     ErrorCode{"runtime_ui.render_snapshot.invalid"},
@@ -643,4 +775,111 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                     "Use a declared Runtime UI category and canonical horo.runtime_ui error descriptor.",
                                                     false,
                                                     false};
+    /** @copydoc BindingDescriptorInvalid */
+    const ErrorCodeDescriptor BindingDescriptorInvalid{UiDomain,
+                                                       ErrorCode{"runtime_ui.binding.descriptor_invalid"},
+                                                       ErrorSeverity::Error,
+                                                       "The Runtime UI binding descriptor is malformed.",
+                                                       "Provide valid typed endpoints, direction, requirement, and update policy.",
+                                                       false,
+                                                       true};
+    /** @copydoc BindingSchemaInvalid */
+    const ErrorCodeDescriptor BindingSchemaInvalid{UiDomain,
+                                                   ErrorCode{"runtime_ui.binding.schema_invalid"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI binding provider schema is malformed.",
+                                                   "Use canonical identities, a valid schema fingerprint, and bounded property metadata.",
+                                                   false,
+                                                   true};
+    /** @copydoc BindingSchemaIncompatible */
+    const ErrorCodeDescriptor BindingSchemaIncompatible{UiDomain,
+                                                        ErrorCode{"runtime_ui.binding.schema_incompatible"},
+                                                        ErrorSeverity::Error,
+                                                        "The Runtime UI binding requires an incompatible provider schema.",
+                                                        "Recook the binding against the active provider schema generation.",
+                                                        false,
+                                                        true};
+    /** @copydoc BindingProviderUnknown */
+    const ErrorCodeDescriptor
+        BindingProviderUnknown{UiDomain,
+                               ErrorCode{"runtime_ui.binding.provider_unknown"},
+                               ErrorSeverity::Error,
+                               "The Runtime UI binding provider type is unavailable.",
+                               "Resolve the exact admitted provider type; do not fall back to reflection or a nearby scope.",
+                               true,
+                               true};
+    /** @copydoc BindingPropertyUnknown */
+    const ErrorCodeDescriptor
+        BindingPropertyUnknown{UiDomain,
+                               ErrorCode{"runtime_ui.binding.property_unknown"},
+                               ErrorSeverity::Error,
+                               "The Runtime UI binding property is unavailable.",
+                               "Recook the binding against the provider property schema or apply an explicit migration.",
+                               false,
+                               true};
+    /** @copydoc BindingPropertySignatureMismatch */
+    const ErrorCodeDescriptor
+        BindingPropertySignatureMismatch{UiDomain,
+                                         ErrorCode{"runtime_ui.binding.property_signature_mismatch"},
+                                         ErrorSeverity::Error,
+                                         "The Runtime UI binding property signature is stale.",
+                                         "Reject the candidate and recook it against the current typed property contract.",
+                                         false,
+                                         true};
+    /** @copydoc BindingDescriptorConflict */
+    const ErrorCodeDescriptor BindingDescriptorConflict{UiDomain,
+                                                        ErrorCode{"runtime_ui.binding.descriptor_conflict"},
+                                                        ErrorSeverity::Error,
+                                                        "Runtime UI binding descriptors contain a duplicate identity or target.",
+                                                        "Assign unique binding identities and one owner for each UI semantic target.",
+                                                        false,
+                                                        true};
+    /** @copydoc BindingAccessInvalid */
+    const ErrorCodeDescriptor BindingAccessInvalid{UiDomain,
+                                                   ErrorCode{"runtime_ui.binding.access_invalid"},
+                                                   ErrorSeverity::Error,
+                                                   "The Runtime UI binding direction exceeds provider access authority.",
+                                                   "Use read access for reads and an explicit typed write-command capability for writes.",
+                                                   false,
+                                                   true};
+    /** @copydoc BindingTypeMismatch */
+    const ErrorCodeDescriptor BindingTypeMismatch{UiDomain,
+                                                  ErrorCode{"runtime_ui.binding.type_mismatch"},
+                                                  ErrorSeverity::Error,
+                                                  "Runtime UI binding endpoint types are incompatible.",
+                                                  "Declare an admitted typed converter with matching input and output types.",
+                                                  false,
+                                                  true};
+    /** @copydoc BindingConverterInvalid */
+    const ErrorCodeDescriptor BindingConverterInvalid{UiDomain,
+                                                      ErrorCode{"runtime_ui.binding.converter_invalid"},
+                                                      ErrorSeverity::Error,
+                                                      "The Runtime UI binding converter descriptor is invalid.",
+                                                      "Use a registered semantic converter identity with compatible direction and types.",
+                                                      false,
+                                                      true};
+    /** @copydoc BindingFallbackInvalid */
+    const ErrorCodeDescriptor BindingFallbackInvalid{UiDomain,
+                                                     ErrorCode{"runtime_ui.binding.fallback_invalid"},
+                                                     ErrorSeverity::Error,
+                                                     "The Runtime UI binding fallback is missing or has the wrong type.",
+                                                     "Provide only a bounded fallback matching the typed UI target and optional policy.",
+                                                     false,
+                                                     true};
+    /** @copydoc BindingUpdatePolicyInvalid */
+    const ErrorCodeDescriptor BindingUpdatePolicyInvalid{UiDomain,
+                                                         ErrorCode{"runtime_ui.binding.update_policy_invalid"},
+                                                         ErrorSeverity::Error,
+                                                         "The Runtime UI binding update policy is not supported by the property.",
+                                                         "Use a policy satisfied by the provider's declared publication cadence.",
+                                                         false,
+                                                         true};
+    /** @copydoc BindingCapacityExceeded */
+    const ErrorCodeDescriptor BindingCapacityExceeded{UiDomain,
+                                                      ErrorCode{"runtime_ui.binding.capacity_exceeded"},
+                                                      ErrorSeverity::Error,
+                                                      "A Runtime UI binding schema or descriptor limit was exceeded.",
+                                                      "Reduce the bounded binding contribution or use a host-admitted capacity.",
+                                                      true,
+                                                      true};
 }  // namespace Horo::Runtime::Ui::UiErrors

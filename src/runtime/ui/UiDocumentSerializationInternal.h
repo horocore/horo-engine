@@ -12,6 +12,8 @@ namespace Horo::Runtime::Ui::SerializationInternal {
 
     [[nodiscard]] std::string EncodeUiId(const SerializedUiId &bytes);
 
+    [[nodiscard]] Result<double> ReadFiniteNumber(const Json &value);
+
     template <typename Integer> [[nodiscard]] Result<Integer> ReadUnsigned(const Json &value);
 
     template <typename Id> [[nodiscard]] Result<Id> DecodeUiId(const Json &value);
@@ -22,11 +24,15 @@ namespace Horo::Runtime::Ui::SerializationInternal {
 
     [[nodiscard]] OrderedJson EncodeCanvas(const UiCanvasDescriptor &canvas);
     [[nodiscard]] OrderedJson EncodeElement(const UiDocumentElement &element);
+    [[nodiscard]] OrderedJson EncodeLocalizedText(const UiLocalizedText &text);
+    [[nodiscard]] OrderedJson EncodeLocalizedAsset(const UiLocalizedAssetReference &reference);
     [[nodiscard]] OrderedJson EncodeDependency(const UiAssetDependency &dependency);
     [[nodiscard]] OrderedJson EncodeRoute(const UiRouteMetadata &route);
 
     [[nodiscard]] Result<UiCanvasDescriptor> DecodeCanvas(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<UiDocumentElement> DecodeElement(const Json &value, const UiDocumentSerializationLimits &limits);
+    [[nodiscard]] Result<UiLocalizedText> DecodeLocalizedText(const Json &value, const UiDocumentSerializationLimits &limits);
+    [[nodiscard]] Result<UiLocalizedAssetReference> DecodeLocalizedAsset(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<UiAssetDependency> DecodeDependency(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<UiRouteMetadata> DecodeRoute(const Json &value, const UiDocumentSerializationLimits &limits);
     [[nodiscard]] Result<Json> ParseJson(std::string_view source, const UiDocumentSerializationLimits &limits);

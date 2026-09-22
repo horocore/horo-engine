@@ -60,4 +60,26 @@ namespace Horo::Cinematic::CinematicErrors {
     extern const ErrorCodeDescriptor TransformLimitExceeded;
     /** @brief Sampled transform channels cannot form a finite scene transform. */
     extern const ErrorCodeDescriptor TransformSampleInvalid;
+    /** @brief Property-track version is not directly compatible with this evaluator. */
+    extern const ErrorCodeDescriptor PropertyVersionUnsupported;
+    /** @brief A property binding identity is absent from the exact registry snapshot. */
+    extern const ErrorCodeDescriptor PropertyBindingMissing;
+    /** @brief Property activation attempted to consume a registry before it was frozen. */
+    extern const ErrorCodeDescriptor PropertyRegistryUnfrozen;
+    /** @brief A property target belongs to a retired scene or component generation. */
+    extern const ErrorCodeDescriptor PropertyBindingStale;
+    /** @brief A property target object or component instance is unavailable. */
+    extern const ErrorCodeDescriptor PropertyBindingTargetMissing;
+    /** @brief A property target component type does not match its binding descriptor. */
+    extern const ErrorCodeDescriptor PropertyComponentMismatch;
+    /** @brief A property track type or channel shape does not match its binding descriptor. */
+    extern const ErrorCodeDescriptor PropertyTypeMismatch;
+    /** @brief Property-track data or its target relationship is malformed. */
+    extern const ErrorCodeDescriptor PropertyMalformed;
+    /** @brief Property evaluation exceeds a compiled input or caller output bound. */
+    extern const ErrorCodeDescriptor PropertyLimitExceeded;
+    /** @brief Sampled property channels are non-finite or violate a binding constraint. */
+    extern const ErrorCodeDescriptor PropertySampleInvalid;
+    /** @brief A property owner rejected a typed write, so the track was skipped. */
+    extern const ErrorCodeDescriptor PropertyWriteRejected;
 }  // namespace Horo::Cinematic::CinematicErrors
