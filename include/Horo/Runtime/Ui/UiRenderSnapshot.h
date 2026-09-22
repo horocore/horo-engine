@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Runtime/Ui/UiImageResource.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
 
 #include <array>
@@ -59,9 +60,13 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Stable Horo resource identity plus exact source generation; never a GPU handle. */
     struct UiRenderResourceReference final {
-        Assets::AssetId asset;                                  /**< Stable asset identity. */
-        UiRenderResourceRevision revision;                      /**< Exact immutable source generation. */
-        UiRenderResourceRole role{UiRenderResourceRole::Image}; /**< Required semantic realization role. */
+        Assets::AssetId asset;                                            /**< Stable asset identity. */
+        UiRenderResourceRevision revision;                                /**< Exact immutable source generation. */
+        UiRenderResourceRole role{UiRenderResourceRole::Image};           /**< Required semantic realization role. */
+        UiImageColorSpace colorSpace{UiImageColorSpace::Srgb};            /**< Image sample interpretation; ignored for non-images. */
+        UiImageSampling sampling;                                         /**< Image filtering semantics; ignored for non-images. */
+        UiImageFallbackPolicy fallback{UiImageFallbackPolicy::Reject};    /**< Explicit missing-image policy. */
+        UiImageResidencyState residency{UiImageResidencyState::Resident}; /**< Exact drawable residency evidence. */
     };
 
     /** @brief One positioned Horo glyph identity in logical 1/64-DIP units. */
@@ -118,13 +123,22 @@ namespace Horo::Runtime::Ui {
         UiLinearColor tint;                              /**< Resolved linear tint. */
     };
 
+    /** @brief Resolved nine-slice paint payload naming an image resource and source borders. */
+    struct UiNineSliceDraw final {
+        std::uint32_t resource{};                        /**< Image resource table index. */
+        std::array<float, 4> uv{0.0F, 0.0F, 1.0F, 1.0F}; /**< Normalized source rectangle [u0, v0, u1, v1]. */
+        UiImageExtent sourceExtent;                      /**< Source-pixel extent represented by uv. */
+        UiImageNineSliceInsets insets;                   /**< Source-pixel borders projected to the destination rect. */
+        UiLinearColor tint;                              /**< Resolved linear tint. */
+    };
+
     /** @brief Resolved text paint payload naming one positioned run. */
     struct UiTextDraw final {
         std::uint32_t run{}; /**< Text run table index. */
     };
 
     /** @brief Closed backend-neutral draw payload vocabulary. */
-    using UiDrawPayload = std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw>;
+    using UiDrawPayload = std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw, UiNineSliceDraw>;
 
     /** @brief One ordered logical draw emitted for an exact retained element. */
     struct UiDrawCommand final {

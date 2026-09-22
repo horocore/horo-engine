@@ -72,6 +72,8 @@ namespace Horo::Editor::ScenePersistenceDetail {
     [[nodiscard]] Result<Runtime::NavigationModifierComponent> ParseNavigationModifier(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationLinkComponent> ParseNavigationLink(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParseNavigationAgent(const Json &value);
+    [[nodiscard]] Result<AI::AiAgentComponent> ParseAiAgent(const Json &value);
+    [[nodiscard]] Result<AI::AiControllerComponent> ParseAiController(const Json &value);
 
     [[nodiscard]] Result<Runtime::RigidBodyComponent> ParseRigidBody(const Json &value);
     [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(const Json &value);

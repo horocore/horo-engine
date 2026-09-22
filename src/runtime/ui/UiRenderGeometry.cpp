@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiRenderGeometry.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiRenderGeometryInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,11 @@
 
 namespace Horo::Runtime::Ui {
     namespace {
+        using RenderGeometryInternal::AppendBorder;
+        using RenderGeometryInternal::AppendNineSlice;
+        using RenderGeometryInternal::AppendQuad;
+        using RenderGeometryInternal::QuadDescriptor;
+
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
         }
@@ -24,7 +30,7 @@ namespace Horo::Runtime::Ui {
         inline constexpr std::uint64_t BuildingLease = std::numeric_limits<std::uint64_t>::max();
 
         [[nodiscard]] constexpr bool IsKnown(const UiRenderGeometryPrimitive value) noexcept {
-            return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::TextGlyphs;
+            return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::NineSliceRectangle;
         }
 
         [[nodiscard]] bool FitsRange(const std::uint32_t first, const std::uint32_t count, const std::size_t size) noexcept {
@@ -62,27 +68,56 @@ namespace Horo::Runtime::Ui {
             return result;
         }
 
-        struct FloatPoint final {
-            float x{};
-            float y{};
-        };
-
-        struct QuadDescriptor final {
-            const UiLogicalTransform *transform{};
-            FloatPoint origin;
-            FloatPoint extent;
-            std::array<float, 4> uv;
-            UiLinearColor color;
-        };
-
-        [[nodiscard]] FloatPoint TransformPoint(const UiLogicalTransform &transform, const float x, const float y) noexcept {
-            const auto &m = transform.values;
-            return {m[0] * x + m[1] * y + m[4], m[2] * x + m[3] * y + m[5]};
+        /** @brief Assigns the batch key fields for one draw payload. */
+        template <typename Draw>
+        [[nodiscard]] Result<void> AssignBatchKey(UiRenderGeometryBatchKey &key, const UiRenderSnapshot &snapshot, const Draw &draw) {
+            using enum UiRenderGeometryPrimitive;
+            using DrawType = std::decay_t<Draw>;
+            if constexpr (std::is_same_v<DrawType, UiSolidDraw>)
+                key.primitive = SolidRectangle;
+            else if constexpr (std::is_same_v<DrawType, UiBorderDraw>)
+                key.primitive = BorderRectangle;
+            else if constexpr (std::is_same_v<DrawType, UiImageDraw>) {
+                key.primitive = ImageRectangle;
+                key.resource = draw.resource;
+            } else if constexpr (std::is_same_v<DrawType, UiSpriteDraw>) {
+                key.primitive = SpriteRectangle;
+                key.resource = draw.resource;
+            } else if constexpr (std::is_same_v<DrawType, UiNineSliceDraw>) {
+                key.primitive = NineSliceRectangle;
+                key.resource = draw.resource;
+            } else if constexpr (std::is_same_v<DrawType, UiTextDraw>) {
+                if (draw.run >= snapshot.TextRuns().size())
+                    return Failure(UiErrors::RenderGeometryInvalid);
+                key.primitive = TextGlyphs;
+                key.resource = snapshot.TextRuns()[draw.run].fontResource;
+            }
+            return Result<void>::Success();
         }
 
-        [[nodiscard]] std::array<FloatPoint, 4> RectangleCorners(const float x, const float y, const float width,
-                                                                 const float height) noexcept {
-            return {FloatPoint{x, y}, FloatPoint{x + width, y}, FloatPoint{x + width, y + height}, FloatPoint{x, y + height}};
+        /** @brief Computes the vertex and index requirement for one draw payload. */
+        template <typename Draw>
+        [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometryForDraw(const UiRenderSnapshot &snapshot,
+                                                                                 const UiDrawCommand &command, const Draw &draw) {
+            using DrawType = std::decay_t<Draw>;
+            if constexpr (std::is_same_v<DrawType, UiSolidDraw> || std::is_same_v<DrawType, UiImageDraw> ||
+                          std::is_same_v<DrawType, UiSpriteDraw>) {
+                return Result<std::array<std::size_t, 2>>::Success({4, 6});
+            } else if constexpr (std::is_same_v<DrawType, UiNineSliceDraw>) {
+                return Result<std::array<std::size_t, 2>>::Success({36, 54});
+            } else if constexpr (std::is_same_v<DrawType, UiBorderDraw>) {
+                const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
+                return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
+                                                                           : std::array<std::size_t, 2>{0, 0});
+            } else {
+                if (draw.run >= snapshot.TextRuns().size())
+                    return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
+                const auto &run = snapshot.TextRuns()[draw.run];
+                if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
+                    return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
+                return Result<std::array<std::size_t, 2>>::Success(
+                    {static_cast<std::size_t>(run.glyphCount) * 4U, static_cast<std::size_t>(run.glyphCount) * 6U});
+            }
         }
 
         [[nodiscard]] Result<UiRenderGeometryBatchKey> MakeBatchKey(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
@@ -90,87 +125,18 @@ namespace Horo::Runtime::Ui {
                                          .transform = command.transform,
                                          .clip = command.clip,
                                          .mask = command.mask};
-            const auto result = std::visit([&key, &snapshot]<typename Draw>(const Draw &draw) {
-                using enum UiRenderGeometryPrimitive;
-                if constexpr (std::is_same_v<Draw, UiSolidDraw>)
-                    key.primitive = SolidRectangle;
-                else if constexpr (std::is_same_v<Draw, UiBorderDraw>)
-                    key.primitive = BorderRectangle;
-                else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
-                    key.primitive = ImageRectangle;
-                    key.resource = draw.resource;
-                } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
-                    key.primitive = SpriteRectangle;
-                    key.resource = draw.resource;
-                } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
-                    if (draw.run >= snapshot.TextRuns().size())
-                        return Failure(UiErrors::RenderGeometryInvalid);
-                    key.primitive = TextGlyphs;
-                    key.resource = snapshot.TextRuns()[draw.run].fontResource;
-                }
-                return Result<void>::Success();
+            const auto result = std::visit([&key, &snapshot](const auto &draw) {
+                return AssignBatchKey(key, snapshot, draw);
             }, command.payload);
             return result.HasError() ? Result<UiRenderGeometryBatchKey>::Failure(result.ErrorValue())
                                      : Result<UiRenderGeometryBatchKey>::Success(key);
         }
 
         [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometry(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
-            return std::visit([&snapshot, &command]<typename Draw>(const Draw &draw) {
-                if constexpr (std::is_same_v<Draw, UiSolidDraw> || std::is_same_v<Draw, UiImageDraw> ||
-                              std::is_same_v<Draw, UiSpriteDraw>) {
-                    return Result<std::array<std::size_t, 2>>::Success({4, 6});
-                } else if constexpr (std::is_same_v<Draw, UiBorderDraw>) {
-                    const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
-                    return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
-                                                                               : std::array<std::size_t, 2>{0, 0});
-                } else {
-                    if (draw.run >= snapshot.TextRuns().size())
-                        return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
-                    const auto &run = snapshot.TextRuns()[draw.run];
-                    if (run.firstGlyph > snapshot.Glyphs().size() || run.glyphCount > snapshot.Glyphs().size() - run.firstGlyph)
-                        return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
-                    return Result<std::array<std::size_t, 2>>::Success(
-                        {static_cast<std::size_t>(run.glyphCount) * 4U, static_cast<std::size_t>(run.glyphCount) * 6U});
-                }
+            return std::visit([&snapshot, &command](const auto &draw) {
+                return RequiredGeometryForDraw(snapshot, command, draw);
             }, command.payload);
         }
-
-        void AppendQuad(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const QuadDescriptor &quad) {
-            const auto corners = RectangleCorners(quad.origin.x, quad.origin.y, quad.extent.x, quad.extent.y);
-            const std::array<FloatPoint, 4> transformed{
-                TransformPoint(*quad.transform, corners[0].x, corners[0].y),
-                TransformPoint(*quad.transform, corners[1].x, corners[1].y),
-                TransformPoint(*quad.transform, corners[2].x, corners[2].y),
-                TransformPoint(*quad.transform, corners[3].x, corners[3].y),
-            };
-            const auto first = static_cast<std::uint32_t>(vertices.size());
-            vertices.emplace_back(transformed[0].x, transformed[0].y, quad.uv[0], quad.uv[1], quad.color);
-            vertices.emplace_back(transformed[1].x, transformed[1].y, quad.uv[2], quad.uv[1], quad.color);
-            vertices.emplace_back(transformed[2].x, transformed[2].y, quad.uv[2], quad.uv[3], quad.color);
-            vertices.emplace_back(transformed[3].x, transformed[3].y, quad.uv[0], quad.uv[3], quad.color);
-            indices.insert(indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
-        }
-
-        void AppendBorder(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const UiLogicalTransform &transform,
-                          const UiLogicalRect rect, const std::int32_t width, const UiLinearColor color) {
-            const auto x = static_cast<float>(rect.origin.x);
-            const auto y = static_cast<float>(rect.origin.y);
-            const auto extentX = static_cast<float>(rect.extent.width);
-            const auto extentY = static_cast<float>(rect.extent.height);
-            const auto border = static_cast<float>(width);
-            if (border <= 0.0F || extentX <= 0.0F || extentY <= 0.0F)
-                return;
-
-            const float horizontal = std::min(extentY * 0.5F, border);
-            const float vertical = std::min(extentX * 0.5F, border);
-            const float innerHeight = std::max(0.0F, extentY - 2.0F * horizontal);
-            const std::array<float, 4> uv{0.0F, 0.0F, 0.0F, 0.0F};
-            AppendQuad(vertices, indices, {&transform, {x, y}, {extentX, horizontal}, uv, color});
-            AppendQuad(vertices, indices, {&transform, {x, y + extentY - horizontal}, {extentX, horizontal}, uv, color});
-            AppendQuad(vertices, indices, {&transform, {x, y + horizontal}, {vertical, innerHeight}, uv, color});
-            AppendQuad(vertices, indices, {&transform, {x + extentX - vertical, y + horizontal}, {vertical, innerHeight}, uv, color});
-        }
-
         [[nodiscard]] Result<void> ValidateGenerated(const std::span<const UiRenderVertex> vertices,
                                                      const std::span<const std::uint32_t> indices,
                                                      const std::span<const UiRenderGeometryBatch> batches, const std::size_t commandCount) {
@@ -226,8 +192,9 @@ namespace Horo::Runtime::Ui {
     bool UiRenderGeometryBatchKey::IsValid() const noexcept {
         if (!IsKnown(primitive))
             return false;
-        const bool textured = primitive == UiRenderGeometryPrimitive::ImageRectangle ||
-                              primitive == UiRenderGeometryPrimitive::SpriteRectangle || primitive == UiRenderGeometryPrimitive::TextGlyphs;
+        const bool textured =
+            primitive == UiRenderGeometryPrimitive::ImageRectangle || primitive == UiRenderGeometryPrimitive::SpriteRectangle ||
+            primitive == UiRenderGeometryPrimitive::TextGlyphs || primitive == UiRenderGeometryPrimitive::NineSliceRectangle;
         return textured ? resource != NoUiRenderIndex : resource == NoUiRenderIndex;
     }
 
@@ -327,6 +294,8 @@ namespace Horo::Runtime::Ui {
                     appendRectangle({0.0F, 0.0F, 1.0F, 1.0F}, draw.tint);
                 } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
                     appendRectangle(draw.uv, draw.tint);
+                } else if constexpr (std::is_same_v<Draw, UiNineSliceDraw>) {
+                    AppendNineSlice(vertices, indices, transform, command.rect, draw, WithOpacity(draw.tint, command.opacity));
                 } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
                     if (draw.run >= snapshot.TextRuns().size())
                         return Failure(UiErrors::RenderGeometryInvalid);

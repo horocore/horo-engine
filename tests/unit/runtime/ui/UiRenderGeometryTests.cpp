@@ -7,6 +7,7 @@
 #include <optional>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace Horo::Runtime::Ui {
     namespace {
@@ -60,53 +61,80 @@ namespace Horo::Runtime::Ui {
                     UiPositionedGlyph{18, 1, {352, 0}, {32, 16}, {0.5F, 0.0F, 1.0F, 1.0F}}};
         }
 
-        std::array<UiDrawCommand, 7> MakeCommands(const UiElementHandle root, const UiElementHandle child, const std::int32_t borderWidth) {
-            return {
-                UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}},
-                UiDrawCommand{root,
-                              {{100, 0}, {100, 50}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              1.0F,
-                              UiSolidDraw{{0.4F, 0.5F, 0.6F, 1.0F}}},
-                UiDrawCommand{root,
-                              {{0, 0}, {200, 50}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              1.0F,
-                              UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, borderWidth}},
-                UiDrawCommand{child,
-                              {{0, 64}, {64, 64}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              0.75F,
-                              UiImageDraw{0, {1.0F, 1.0F, 1.0F, 1.0F}}},
-                UiDrawCommand{child,
-                              {{64, 64}, {64, 64}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              0.75F,
-                              UiImageDraw{0, {0.8F, 0.8F, 0.8F, 1.0F}}},
-                UiDrawCommand{child,
-                              {{128, 64}, {64, 64}},
-                              0,
-                              NoUiRenderIndex,
-                              NoUiRenderIndex,
-                              1.0F,
-                              UiSpriteDraw{0, {0.25F, 0.0F, 0.75F, 1.0F}, {1.0F, 1.0F, 1.0F, 1.0F}}},
-                UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}},
-            };
+        UiDrawCommand MakeNineSliceCommand(const UiElementHandle child) {
+            return UiDrawCommand{child,
+                                 {{400, 0}, {128, 96}},
+                                 0,
+                                 NoUiRenderIndex,
+                                 NoUiRenderIndex,
+                                 1.0F,
+                                 UiNineSliceDraw{0, {0.0F, 0.0F, 1.0F, 1.0F}, {64, 64}, {8, 8, 8, 8}, {1.0F, 1.0F, 1.0F, 1.0F}}};
         }
 
-        UiRenderSnapshot MakeSnapshot(const std::uint64_t revision, const std::int32_t borderWidth = 4) {
+        void AddSolidAndBorderCommands(std::vector<UiDrawCommand> &commands, const UiElementHandle root, const std::int32_t borderWidth) {
+            commands.push_back(
+                UiDrawCommand{root, {{0, 0}, {100, 50}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiSolidDraw{{0.1F, 0.2F, 0.3F, 1.0F}}});
+            commands.push_back(UiDrawCommand{root,
+                                             {{100, 0}, {100, 50}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             1.0F,
+                                             UiSolidDraw{{0.4F, 0.5F, 0.6F, 1.0F}}});
+            commands.push_back(UiDrawCommand{root,
+                                             {{0, 0}, {200, 50}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             1.0F,
+                                             UiBorderDraw{{1.0F, 1.0F, 1.0F, 1.0F}, borderWidth}});
+        }
+
+        void AddImageCommands(std::vector<UiDrawCommand> &commands, const UiElementHandle child) {
+            commands.push_back(UiDrawCommand{child,
+                                             {{0, 64}, {64, 64}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             0.75F,
+                                             UiImageDraw{0, {1.0F, 1.0F, 1.0F, 1.0F}}});
+            commands.push_back(UiDrawCommand{child,
+                                             {{64, 64}, {64, 64}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             0.75F,
+                                             UiImageDraw{0, {0.8F, 0.8F, 0.8F, 1.0F}}});
+            commands.push_back(UiDrawCommand{child,
+                                             {{128, 64}, {64, 64}},
+                                             0,
+                                             NoUiRenderIndex,
+                                             NoUiRenderIndex,
+                                             1.0F,
+                                             UiSpriteDraw{0, {0.25F, 0.0F, 0.75F, 1.0F}, {1.0F, 1.0F, 1.0F, 1.0F}}});
+        }
+
+        void AddTextCommand(std::vector<UiDrawCommand> &commands, const UiElementHandle child) {
+            commands.push_back(UiDrawCommand{child, {{320, 0}, {64, 16}}, 0, NoUiRenderIndex, NoUiRenderIndex, 1.0F, UiTextDraw{0}});
+        }
+
+        std::vector<UiDrawCommand> MakeCommands(const UiElementHandle root, const UiElementHandle child, const std::int32_t borderWidth,
+                                                const bool includeNineSlice = false) {
+            std::vector<UiDrawCommand> commands;
+            AddSolidAndBorderCommands(commands, root, borderWidth);
+            AddImageCommands(commands, child);
+            AddTextCommand(commands, child);
+            if (includeNineSlice)
+                commands.push_back(MakeNineSliceCommand(child));
+            return commands;
+        }
+
+        UiRenderSnapshot MakeSnapshot(const std::uint64_t revision, const std::int32_t borderWidth = 4,
+                                      const bool includeNineSlice = false) {
             auto tree = MakeTree();
             const auto root = tree.Root().Value().handle;
             const auto child = tree.Find(Element(3)).Value();
-            const UiRenderSnapshotLimits limits{7, 1, 2, 0, 0, 1, 2};
+            const UiRenderSnapshotLimits limits{includeNineSlice ? 8U : 7U, 1, 2, 0, 0, 1, 2};
             auto extractorResult = UiRenderExtractor::Create({{Owner(), 9, 1}, limits, 1});
             REQUIRE(extractorResult.HasValue());
             auto extractor = std::move(extractorResult).Value();
@@ -117,7 +145,7 @@ namespace Horo::Runtime::Ui {
             const std::array textRuns{UiTextRun{1, 0, 2, {1.0F, 1.0F, 1.0F, 1.0F}}};
             const std::array<UiClip, 0> clips{};
             const std::array<UiMask, 0> masks{};
-            const auto commands = MakeCommands(root, child, borderWidth);
+            const auto commands = MakeCommands(root, child, borderWidth, includeNineSlice);
             const UiRenderSnapshotDescriptor descriptor{.instance = tree.Instance(),
                                                         .canvas = tree.Canvas(),
                                                         .document = tree.SourceDocument(),
@@ -132,8 +160,9 @@ namespace Horo::Runtime::Ui {
             return std::move(snapshot).Value();
         }
 
-        UiRenderGeometryArena MakeArena(const std::uint32_t concurrentPlans = 2) {
-            auto result = UiRenderGeometryArena::Create({{Owner(), 9, 1}, {64, 96, 16}, concurrentPlans});
+        UiRenderGeometryArena MakeArena(const std::uint32_t concurrentPlans = 2, const std::uint32_t vertices = 64,
+                                        const std::uint32_t indices = 96) {
+            auto result = UiRenderGeometryArena::Create({{Owner(), 9, 1}, {vertices, indices, 16}, concurrentPlans});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
@@ -233,6 +262,29 @@ namespace Horo::Runtime::Ui {
             REQUIRE(plan.Vertices()[14].y == 50.0F);
             REQUIRE(plan.Vertices()[16].y == 25.0F);
             REQUIRE(plan.Vertices()[17].y == 25.0F);
+        }
+
+        TEST_CASE("UI geometry expands a nine-slice image into nine bounded quads", "[runtime_ui][render_geometry][image]") {
+            const auto snapshot = MakeSnapshot(2, 4, true);
+            auto arena = MakeArena(2, 128, 192);
+            auto planResult = arena.Build(snapshot);
+            REQUIRE(planResult.HasValue());
+            const auto plan = std::move(planResult).Value();
+
+            REQUIRE(plan.Descriptor().commandCount == 8);
+            REQUIRE(plan.Vertices().size() == 80);
+            REQUIRE(plan.Indices().size() == 120);
+            REQUIRE(plan.Batches().size() == 6);
+            REQUIRE(plan.Batches()[5].key.primitive == UiRenderGeometryPrimitive::NineSliceRectangle);
+            REQUIRE(plan.Batches()[5].firstCommand == 7);
+            REQUIRE(plan.Batches()[5].vertexCount == 36);
+            REQUIRE(plan.Batches()[5].indexCount == 54);
+            REQUIRE(plan.Vertices()[44].x == 400.0F);
+            REQUIRE(plan.Vertices()[44].y == 0.0F);
+            REQUIRE(plan.Vertices()[46].x == 408.0F);
+            REQUIRE(plan.Vertices()[46].y == 8.0F);
+            REQUIRE(plan.Vertices()[78].x == 528.0F);
+            REQUIRE(plan.Vertices()[78].y == 96.0F);
         }
 
         TEST_CASE("UI geometry rejects capacity pressure without fallback allocation", "[runtime_ui][render_geometry][limits]") {

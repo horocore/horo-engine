@@ -31,6 +31,7 @@ namespace Horo::Runtime::Ui {
         ImageRectangle,
         SpriteRectangle,
         TextGlyphs,
+        NineSliceRectangle,
     };
 
     /** @brief One finite logical point after optional downstream physical-pixel snapping. */
