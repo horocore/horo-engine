@@ -46,8 +46,8 @@ namespace Horo::AI {
             !descriptor.decisionPlan || !IsValid(descriptor.decisionKind))
             return Failure(AIErrors::ControllerDescriptorIncompatible,
                            "AI controller descriptors require valid identities and admitted immutable dependencies.");
-        const std::shared_ptr<const BlackboardSchema> planSchema = descriptor.decisionPlan->BlackboardSchema();
-        if (!planSchema || descriptor.decisionPlan->Asset() != descriptor.decisionAsset ||
+        if (const std::shared_ptr<const BlackboardSchema> planSchema = descriptor.decisionPlan->BlackboardSchema();
+            !planSchema || descriptor.decisionPlan->Asset() != descriptor.decisionAsset ||
             descriptor.decisionPlan->Kind() != descriptor.decisionKind || planSchema != descriptor.blackboardSchema ||
             descriptor.blackboardSchema->Identity() != planSchema->Identity() ||
             descriptor.blackboardSchema->Version() != planSchema->Version())

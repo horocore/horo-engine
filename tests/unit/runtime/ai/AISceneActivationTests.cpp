@@ -182,6 +182,13 @@ namespace Horo::AI {
             CHECK_FALSE(record.hasBlackboard);
             CHECK_FALSE(record.hasRunningTask);
             CHECK(record.stagedCapabilities.bits == 0);
+
+            const auto found = snapshot.Value().Find(record.handle);
+            REQUIRE(found.HasValue());
+            CHECK(found.Value().handle == record.handle);
+            AgentHandle stale = record.handle;
+            ++stale.slot.generation;
+            ExpectError(snapshot.Value().Find(stale), AIErrors::HandleInvalid);
         }
 
         TEST_CASE("Entity destruction and scene replacement fence AI handles and release old work", "[unit][ai][scene][activation]") {
@@ -195,7 +202,10 @@ namespace Horo::AI {
             REQUIRE(runtime.StartTaskAtSafePoint(stale, MakeIdentity<TaskId>(101)).HasValue());
 
             REQUIRE(runtime.RetireOwnerAtSafePoint(first.owner).Value() == 1);
-            CHECK(runtime.Snapshot().Value().Agents().empty());
+            const auto retiredSnapshot = runtime.Snapshot();
+            REQUIRE(retiredSnapshot.HasValue());
+            CHECK(retiredSnapshot.Value().Agents().empty());
+            ExpectError(retiredSnapshot.Value().Find(stale), AIErrors::HandleInvalid);
             ExpectError(runtime.Find(stale), AIErrors::HandleInvalid);
 
             auto replacement = MakeFixture(82, 92, 38, 0);

@@ -11,6 +11,7 @@
 #include <iterator>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -80,6 +81,14 @@ namespace Horo::Editor {
             active.reserve(components.size());
             std::ranges::copy_if(components, std::back_inserter(active), &Component::enabled);
             return active;
+        }
+
+        [[nodiscard]] std::string PayloadBytes(const std::span<const std::byte> payload) {
+            std::string bytes;
+            bytes.reserve(payload.size());
+            for (const std::byte byte : payload)
+                bytes.push_back(static_cast<char>(byte));
+            return bytes;
         }
 
         /**
@@ -163,8 +172,7 @@ namespace Horo::Editor {
                 return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
 
             try {
-                const std::string bytes{reinterpret_cast<const char *>(payload.component.payload.data()), payload.component.payload.size()};
-                const Json value = Json::parse(bytes);
+                const Json value = Json::parse(PayloadBytes(payload.component.payload));
                 auto parsed = Detail::ParseNavigationAgentJson(value);
                 if (parsed.HasError())
                     return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
@@ -180,36 +188,37 @@ namespace Horo::Editor {
                 payload.component.encoding != Gameplay::ComponentPayloadEncoding::CanonicalJson || payload.component.schemaVersion != 1)
                 return Result<Json>::Failure(MakeError(PrefabComponentProjectionUnsupported));
             try {
-                const std::string bytes{reinterpret_cast<const char *>(payload.component.payload.data()), payload.component.payload.size()};
-                return Result<Json>::Success(Json::parse(bytes));
+                return Result<Json>::Success(Json::parse(PayloadBytes(payload.component.payload)));
             } catch (const nlohmann::json::exception &) {
                 return Result<Json>::Failure(MakeError(PrefabComponentProjectionUnsupported));
             }
         }
 
         [[nodiscard]] Result<AI::AiStartupPolicy> ParsePrefabAiStartupPolicy(const Json &value) {
+            using enum AI::AiStartupPolicy;
             if (!value.is_string())
                 return Result<AI::AiStartupPolicy>::Failure(MakeError(PrefabComponentProjectionUnsupported));
             const std::string policy = value.get<std::string>();
             if (policy == "scene_activation")
-                return Result<AI::AiStartupPolicy>::Success(AI::AiStartupPolicy::OnSceneActivation);
+                return Result<AI::AiStartupPolicy>::Success(OnSceneActivation);
             if (policy == "on_enable")
-                return Result<AI::AiStartupPolicy>::Success(AI::AiStartupPolicy::OnEnable);
+                return Result<AI::AiStartupPolicy>::Success(OnEnable);
             if (policy == "manual")
-                return Result<AI::AiStartupPolicy>::Success(AI::AiStartupPolicy::Manual);
+                return Result<AI::AiStartupPolicy>::Success(Manual);
             return Result<AI::AiStartupPolicy>::Failure(MakeError(PrefabComponentProjectionUnsupported));
         }
 
         [[nodiscard]] Result<AI::DecisionPlanKind> ParsePrefabAiDecisionKind(const Json &value) {
+            using enum AI::DecisionPlanKind;
             if (!value.is_string())
                 return Result<AI::DecisionPlanKind>::Failure(MakeError(PrefabComponentProjectionUnsupported));
             const std::string kind = value.get<std::string>();
             if (kind == "behavior_tree")
-                return Result<AI::DecisionPlanKind>::Success(AI::DecisionPlanKind::BehaviorTree);
+                return Result<AI::DecisionPlanKind>::Success(BehaviorTree);
             if (kind == "state_machine")
-                return Result<AI::DecisionPlanKind>::Success(AI::DecisionPlanKind::StateMachine);
+                return Result<AI::DecisionPlanKind>::Success(StateMachine);
             if (kind == "utility")
-                return Result<AI::DecisionPlanKind>::Success(AI::DecisionPlanKind::Utility);
+                return Result<AI::DecisionPlanKind>::Success(Utility);
             return Result<AI::DecisionPlanKind>::Failure(MakeError(PrefabComponentProjectionUnsupported));
         }
 
@@ -279,44 +288,57 @@ namespace Horo::Editor {
             }
         }
 
+        [[nodiscard]] Result<void> ProjectPrefabComponent(const Prefab::RawComponentPayload &payload,
+                                                          const Prefab::PrefabSceneObjectId sceneObject,
+                                                          Runtime::RuntimeComponentSet &components) {
+            if (payload.component.typeId.Value() == NavigationAgentPrefabComponentType) {
+                if (components.navigationAgent.has_value())
+                    return Result<void>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                auto parsed = ParsePrefabNavigationAgent(payload);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                auto component = std::move(parsed).Value();
+                if (component.enabled)
+                    components.navigationAgent = std::move(component);
+                return Result<void>::Success();
+            }
+            if (payload.component.typeId.Value() == AiAgentPrefabComponentType) {
+                if (components.aiAgent.has_value())
+                    return Result<void>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                auto parsed = ParsePrefabAiAgent(payload);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                auto component = std::move(parsed).Value();
+                if (component.enabled) {
+                    const auto remapped = AI::AgentId::Create(sceneObject.value);
+                    if (remapped.HasError())
+                        return Result<void>::Failure(remapped.ErrorValue());
+                    component.agent = remapped.Value();
+                    components.aiAgent = std::move(component);
+                }
+                return Result<void>::Success();
+            }
+            if (payload.component.typeId.Value() == AiControllerPrefabComponentType) {
+                if (components.aiController.has_value())
+                    return Result<void>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+                auto parsed = ParsePrefabAiController(payload);
+                if (parsed.HasError())
+                    return Result<void>::Failure(parsed.ErrorValue());
+                auto component = std::move(parsed).Value();
+                if (component.enabled)
+                    components.aiController = std::move(component);
+                return Result<void>::Success();
+            }
+            return Result<void>::Failure(MakeError(PrefabComponentProjectionUnsupported));
+        }
+
         /** @brief Projects one resolved prefab object's supported typed components into the runtime component set. */
         [[nodiscard]] Result<Runtime::RuntimeComponentSet> ProjectPrefabComponents(const Prefab::ResolvedPrefabObject &object,
                                                                                    const Prefab::PrefabSceneObjectId sceneObject) {
             Runtime::RuntimeComponentSet components{.behaviors = object.object.behaviors};
             for (const Prefab::RawComponentPayload &payload : object.object.components) {
-                if (payload.component.typeId.Value() == NavigationAgentPrefabComponentType) {
-                    if (components.navigationAgent.has_value())
-                        return Result<Runtime::RuntimeComponentSet>::Failure(MakeError(PrefabComponentProjectionUnsupported));
-                    auto parsed = ParsePrefabNavigationAgent(payload);
-                    if (parsed.HasError())
-                        return Result<Runtime::RuntimeComponentSet>::Failure(parsed.ErrorValue());
-                    if (parsed.Value().enabled)
-                        components.navigationAgent = std::move(parsed).Value();
-                } else if (payload.component.typeId.Value() == AiAgentPrefabComponentType) {
-                    if (components.aiAgent.has_value())
-                        return Result<Runtime::RuntimeComponentSet>::Failure(MakeError(PrefabComponentProjectionUnsupported));
-                    auto parsed = ParsePrefabAiAgent(payload);
-                    if (parsed.HasError())
-                        return Result<Runtime::RuntimeComponentSet>::Failure(parsed.ErrorValue());
-                    auto component = std::move(parsed).Value();
-                    if (component.enabled) {
-                        const auto remapped = AI::AgentId::Create(sceneObject.value);
-                        if (remapped.HasError())
-                            return Result<Runtime::RuntimeComponentSet>::Failure(remapped.ErrorValue());
-                        component.agent = remapped.Value();
-                        components.aiAgent = std::move(component);
-                    }
-                } else if (payload.component.typeId.Value() == AiControllerPrefabComponentType) {
-                    if (components.aiController.has_value())
-                        return Result<Runtime::RuntimeComponentSet>::Failure(MakeError(PrefabComponentProjectionUnsupported));
-                    auto parsed = ParsePrefabAiController(payload);
-                    if (parsed.HasError())
-                        return Result<Runtime::RuntimeComponentSet>::Failure(parsed.ErrorValue());
-                    if (parsed.Value().enabled)
-                        components.aiController = std::move(parsed).Value();
-                } else {
-                    return Result<Runtime::RuntimeComponentSet>::Failure(MakeError(PrefabComponentProjectionUnsupported));
-                }
+                if (const Result<void> projected = ProjectPrefabComponent(payload, sceneObject, components); projected.HasError())
+                    return Result<Runtime::RuntimeComponentSet>::Failure(projected.ErrorValue());
             }
             return Result<Runtime::RuntimeComponentSet>::Success(std::move(components));
         }

@@ -11,28 +11,30 @@
 namespace Horo::Editor::ScenePersistenceDetail {
     namespace {
         [[nodiscard]] Result<AI::AiStartupPolicy> ParseAiStartupPolicy(const Json &value) {
+            using enum AI::AiStartupPolicy;
             if (!value.is_string())
                 return Result<AI::AiStartupPolicy>::Failure(PersistenceError(SceneInvalid, "AI startup policy is invalid."));
             const std::string policy = value.get<std::string>();
             if (policy == "scene_activation")
-                return Result<AI::AiStartupPolicy>::Success(AI::AiStartupPolicy::OnSceneActivation);
+                return Result<AI::AiStartupPolicy>::Success(OnSceneActivation);
             if (policy == "on_enable")
-                return Result<AI::AiStartupPolicy>::Success(AI::AiStartupPolicy::OnEnable);
+                return Result<AI::AiStartupPolicy>::Success(OnEnable);
             if (policy == "manual")
-                return Result<AI::AiStartupPolicy>::Success(AI::AiStartupPolicy::Manual);
+                return Result<AI::AiStartupPolicy>::Success(Manual);
             return Result<AI::AiStartupPolicy>::Failure(PersistenceError(SceneInvalid, "AI startup policy is invalid."));
         }
 
         [[nodiscard]] Result<AI::DecisionPlanKind> ParseAiDecisionPlanKind(const Json &value) {
+            using enum AI::DecisionPlanKind;
             if (!value.is_string())
                 return Result<AI::DecisionPlanKind>::Failure(PersistenceError(SceneInvalid, "AI decision plan kind is invalid."));
             const std::string kind = value.get<std::string>();
             if (kind == "behavior_tree")
-                return Result<AI::DecisionPlanKind>::Success(AI::DecisionPlanKind::BehaviorTree);
+                return Result<AI::DecisionPlanKind>::Success(BehaviorTree);
             if (kind == "state_machine")
-                return Result<AI::DecisionPlanKind>::Success(AI::DecisionPlanKind::StateMachine);
+                return Result<AI::DecisionPlanKind>::Success(StateMachine);
             if (kind == "utility")
-                return Result<AI::DecisionPlanKind>::Success(AI::DecisionPlanKind::Utility);
+                return Result<AI::DecisionPlanKind>::Success(Utility);
             return Result<AI::DecisionPlanKind>::Failure(PersistenceError(SceneInvalid, "AI decision plan kind is invalid."));
         }
     }  // namespace

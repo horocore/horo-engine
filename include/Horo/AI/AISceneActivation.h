@@ -106,6 +106,16 @@ namespace Horo::AI {
     public:
         ~AiSceneActivationCandidate() override;
 
+        /**
+         * @brief Takes ownership of detached runtime state prepared for scene publication.
+         * @param runtime Runtime owner that will publish or roll back the state.
+         * @param binding Exact AI/Scene identity pair associated with the state.
+         * @param state Detached state owned until publication or shutdown.
+         * @param publicationToken Monotonic token fencing this candidate's publication.
+         */
+        AiSceneActivationCandidate(AiSceneRuntime &runtime, AiSceneActivationBinding binding,
+                                   std::unique_ptr<Detail::AiSceneRuntimeState> state, std::uint64_t publicationToken) noexcept;
+
         AiSceneActivationCandidate(const AiSceneActivationCandidate &) = delete;
         AiSceneActivationCandidate &operator=(const AiSceneActivationCandidate &) = delete;
 
@@ -122,10 +132,6 @@ namespace Horo::AI {
         }
 
     private:
-        friend class AiSceneRuntime;
-        AiSceneActivationCandidate(AiSceneRuntime &runtime, AiSceneActivationBinding binding,
-                                   std::unique_ptr<Detail::AiSceneRuntimeState> state, std::uint64_t publicationToken) noexcept;
-
         AiSceneRuntime *runtime_{};
         AiSceneActivationBinding binding_;
         std::unique_ptr<Detail::AiSceneRuntimeState> state_;
@@ -222,7 +228,7 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> ValidateCandidate(const AiSceneActivationBinding &binding) const;
         [[nodiscard]] bool PublishCandidate(std::unique_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
                                             std::uint64_t publicationToken) noexcept;
-        void ShutdownState(Detail::AiSceneRuntimeState &state) noexcept;
+        void ShutdownState(Detail::AiSceneRuntimeState &state) const noexcept;
         void RetirePublication(std::uint64_t publicationToken) noexcept;
 
         AiSceneRuntimeSettings settings_;

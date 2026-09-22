@@ -243,9 +243,8 @@ namespace Horo::Editor::SceneDocumentDetail {
         return Result<void>::Success();
     }
 
-    [[nodiscard]] inline Result<void> ValidateComponents(const SceneObjectComponentSet &components) {
-        if (Result<void> physics = ValidatePhysicsAuthoringComponents(components); physics.HasError())
-            return physics;
+    /** @brief Validates authored navigation component payloads before scene-wide relationship checks. */
+    [[nodiscard]] inline Result<void> ValidateNavigationAuthoringComponents(const SceneObjectComponentSet &components) {
         if (components.navigationSurface && Runtime::ValidateNavigationSurfaceComponent(*components.navigationSurface).HasError())
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
         if (components.navigationRegion && Runtime::ValidateNavigationRegionComponent(*components.navigationRegion).HasError())
@@ -256,38 +255,57 @@ namespace Horo::Editor::SceneDocumentDetail {
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
         if (components.navigationAgent && Runtime::ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::AgentDescriptorInvalid));
+        return Result<void>::Success();
+    }
+
+    /** @brief Validates authored AI component payloads while preserving missing runtime descriptors. */
+    [[nodiscard]] inline Result<void> ValidateAiAuthoringComponents(const SceneObjectComponentSet &components) {
         if (components.aiAgent && AI::ValidateAiAgentComponent(*components.aiAgent).HasError())
             return Result<void>::Failure(MakeError(AI::AIErrors::SceneComponentInvalid));
         if (components.aiController && AI::ValidateAiControllerComponent(*components.aiController).HasError())
             return Result<void>::Failure(MakeError(AI::AIErrors::SceneComponentInvalid));
-        if (components.camera.has_value()) {
-            const Runtime::CameraComponent &camera = *components.camera;
-            if (!IsValidCameraComponent(camera)) {
-                return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidCamera, "Camera authoring values are invalid."));
-            }
-        }
-        if (components.light.has_value()) {
-            const Runtime::LightComponent &light = *components.light;
-            if (!IsValidLightComponent(light)) {
-                return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidLight, "Light authoring values are invalid."));
-            }
-        }
+        return Result<void>::Success();
+    }
+
+    /** @brief Validates camera, light, and audio payloads owned by one authored scene object. */
+    [[nodiscard]] inline Result<void> ValidatePresentationAuthoringComponents(const SceneObjectComponentSet &components) {
+        if (components.camera.has_value() && !IsValidCameraComponent(*components.camera))
+            return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidCamera, "Camera authoring values are invalid."));
+        if (components.light.has_value() && !IsValidLightComponent(*components.light))
+            return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidLight, "Light authoring values are invalid."));
         if (components.audioSource.has_value() &&
             (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
              Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||
-             Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError())) {
+             Audio::ValidateAudioSceneLifecyclePolicy(components.audioSource->sceneLifecycle).HasError()))
             return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source values are invalid."));
-        }
+        return Result<void>::Success();
+    }
+
+    /** @brief Validates behavior attachment identities and payloads for one authored scene object. */
+    [[nodiscard]] inline Result<void> ValidateBehaviorAuthoringComponents(const SceneObjectComponentSet &components) {
         std::vector<Gameplay::BehaviorInstanceId> behaviorIds;
         behaviorIds.reserve(components.behaviors.size());
         for (const Gameplay::BehaviorComponent &behavior : components.behaviors) {
             if (Gameplay::ValidateBehaviorComponent(behavior).HasError() ||
-                std::ranges::find(behaviorIds, behavior.instanceId) != behaviorIds.end()) {
+                std::ranges::find(behaviorIds, behavior.instanceId) != behaviorIds.end())
                 return Result<void>::Failure(
                     MakeDocumentError(SceneDocumentErrors::InvalidBehavior, "Behavior attachment payload is invalid."));
-            }
             behaviorIds.push_back(behavior.instanceId);
         }
+        return Result<void>::Success();
+    }
+
+    [[nodiscard]] inline Result<void> ValidateComponents(const SceneObjectComponentSet &components) {
+        if (Result<void> physics = ValidatePhysicsAuthoringComponents(components); physics.HasError())
+            return physics;
+        if (Result<void> navigation = ValidateNavigationAuthoringComponents(components); navigation.HasError())
+            return navigation;
+        if (Result<void> ai = ValidateAiAuthoringComponents(components); ai.HasError())
+            return ai;
+        if (Result<void> presentation = ValidatePresentationAuthoringComponents(components); presentation.HasError())
+            return presentation;
+        if (Result<void> behaviors = ValidateBehaviorAuthoringComponents(components); behaviors.HasError())
+            return behaviors;
         if (const Result<void> gameplay = Gameplay::ValidateSerializedComponents(components.gameplayComponents); gameplay.HasError())
             return gameplay;
         return Result<void>::Success();
