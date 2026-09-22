@@ -35,19 +35,23 @@ namespace Horo::Runtime::Ui {
             return RequireValue(UiBindingConverterId::Parse(value));
         }
 
-        UiBindingPropertyDescriptor HealthProperty(
-            const UiBindingValueType type = UiBindingValueType::FixedScalar,
-            const UiBindingUpdateKind update = UiBindingUpdateKind::OnChange, const UiBindingAccess access = UiBindingAccess::Read,
-            const UiBindingPrivacyClass privacy = UiBindingPrivacyClass::Public,
-            const UiBindingValueLimits limits = {.maximumBytes = 32, .maximumElements = 1, .minimumScalar = 0.0, .maximumScalar = 1.0},
-            const UiBindingPropertyFlags flags = UiBindingPropertyFlags::AffectsPaint) {
+        struct PropertyOptions final {
+            UiBindingAccess access{UiBindingAccess::Read};
+            UiBindingPrivacyClass privacy{UiBindingPrivacyClass::Public};
+            UiBindingValueLimits limits{.maximumBytes = 32, .maximumElements = 1, .minimumScalar = 0.0, .maximumScalar = 1.0};
+            UiBindingPropertyFlags flags{UiBindingPropertyFlags::AffectsPaint};
+        };
+
+        UiBindingPropertyDescriptor HealthProperty(const UiBindingValueType type = UiBindingValueType::FixedScalar,
+                                                   const UiBindingUpdateKind update = UiBindingUpdateKind::OnChange,
+                                                   const PropertyOptions &options = {}) {
             return {.id = Property(),
                     .type = type,
-                    .access = access,
+                    .access = options.access,
                     .update = update,
-                    .privacy = privacy,
-                    .limits = limits,
-                    .flags = flags};
+                    .privacy = options.privacy,
+                    .limits = options.limits,
+                    .flags = options.flags};
         }
 
         UiBindingProviderDescriptor Provider(
@@ -168,10 +172,10 @@ namespace Horo::Runtime::Ui {
                                               .maximumUnsigned = 8,
                                               .minimumScalar = -1.0,
                                               .maximumScalar = 1.0};
-            const auto property = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                                 UiBindingPrivacyClass::Public, limits);
-            const auto changed = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::Manual, UiBindingAccess::Read,
-                                                UiBindingPrivacyClass::Public, limits);
+            const auto property =
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = limits});
+            const auto changed =
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::Manual, PropertyOptions{.limits = limits});
             CHECK(ComputeUiBindingPropertyFingerprint(property) != ComputeUiBindingPropertyFingerprint(changed));
             const std::array properties{property, changed};
             const auto type = ProviderType();
@@ -181,7 +185,7 @@ namespace Horo::Runtime::Ui {
             CHECK(first != second);
         }
 
-        TEST_CASE("Provider validation rejects malformed bounded metadata", "[runtime_ui][binding][schema_validation]") {
+        TEST_CASE("Provider validation rejects malformed bounds and identities", "[runtime_ui][binding][schema_validation]") {
             const std::array validProperties{HealthProperty()};
             const auto valid = Provider(validProperties);
             REQUIRE(ValidateUiBindingProviderDescriptor(valid).HasValue());
@@ -226,7 +230,10 @@ namespace Horo::Runtime::Ui {
             invalid = valid;
             invalid.schema.fingerprint++;
             ExpectError(ValidateUiBindingProviderDescriptor(invalid), UiErrors::BindingSchemaInvalid);
+        }
 
+        TEST_CASE("Provider validation enforces property capacity and ordering", "[runtime_ui][binding][schema_validation]") {
+            const std::array validProperties{HealthProperty()};
             const auto second = HealthProperty();
             auto distinct = second;
             distinct.id = Property("armor");
@@ -240,7 +247,7 @@ namespace Horo::Runtime::Ui {
             ExpectError(ValidateUiBindingProviderDescriptor(Provider(unordered)), UiErrors::BindingDescriptorConflict);
         }
 
-        TEST_CASE("Provider property validation rejects unknown enums, flags, limits, and fingerprints",
+        TEST_CASE("Provider property validation rejects unknown identities, enums, and flags",
                   "[runtime_ui][binding][property_validation]") {
             const auto expectInvalid = [](UiBindingPropertyDescriptor property, const UiBindingDescriptorLimits limits = {}) {
                 const std::array properties{property};
@@ -257,40 +264,46 @@ namespace Horo::Runtime::Ui {
             invalid = HealthProperty(static_cast<UiBindingValueType>(UiBindingValueType::Count));
             expectInvalid(invalid);
             invalid = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange,
-                                     static_cast<UiBindingAccess>(UiBindingAccess::Count));
+                                     PropertyOptions{.access = static_cast<UiBindingAccess>(UiBindingAccess::Count)});
             expectInvalid(invalid);
             invalid = HealthProperty(UiBindingValueType::FixedScalar, static_cast<UiBindingUpdateKind>(UiBindingUpdateKind::Count));
             expectInvalid(invalid);
-            invalid = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                     UiBindingPrivacyClass::Secret);
+            invalid = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange,
+                                     PropertyOptions{.privacy = UiBindingPrivacyClass::Secret});
             expectInvalid(invalid);
-            invalid = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                     UiBindingPrivacyClass::Public, {}, static_cast<UiBindingPropertyFlags>(0x8000));
+            invalid = HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange,
+                                     PropertyOptions{.flags = static_cast<UiBindingPropertyFlags>(0x8000)});
             expectInvalid(invalid);
+        }
 
+        TEST_CASE("Provider property validation rejects malformed limits and fingerprints", "[runtime_ui][binding][property_validation]") {
+            const auto expectInvalid = [](UiBindingPropertyDescriptor property, const UiBindingDescriptorLimits limits = {}) {
+                const std::array properties{property};
+                ExpectError(ValidateUiBindingProviderDescriptor(Provider(properties), limits), UiErrors::BindingSchemaInvalid);
+            };
             auto invalidLimits = UiBindingValueLimits{};
             invalidLimits.maximumBytes = 0;
-            expectInvalid(HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = invalidLimits}));
             invalidLimits = {};
             invalidLimits.maximumElements = 0;
-            expectInvalid(HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = invalidLimits}));
             invalidLimits = {.maximumBytes = 32, .maximumElements = 1, .minimumSigned = 4, .maximumSigned = 3};
-            expectInvalid(HealthProperty(UiBindingValueType::SignedInteger, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(
+                HealthProperty(UiBindingValueType::SignedInteger, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = invalidLimits}));
             invalidLimits = {.maximumBytes = 32, .maximumElements = 1, .minimumUnsigned = 4, .maximumUnsigned = 3};
-            expectInvalid(HealthProperty(UiBindingValueType::UnsignedInteger, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(HealthProperty(UiBindingValueType::UnsignedInteger, UiBindingUpdateKind::OnChange,
+                                         PropertyOptions{.limits = invalidLimits}));
             invalidLimits = {.maximumBytes = 32, .maximumElements = 1, .minimumScalar = std::numeric_limits<double>::quiet_NaN()};
-            expectInvalid(HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = invalidLimits}));
             invalidLimits = {.maximumBytes = 32, .maximumElements = 1, .minimumScalar = 2.0, .maximumScalar = 1.0};
-            expectInvalid(HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = invalidLimits}));
             invalidLimits = {.maximumBytes = 32, .maximumElements = 1, .maximumScalar = std::numeric_limits<double>::quiet_NaN()};
-            expectInvalid(HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::Read,
-                                         UiBindingPrivacyClass::Public, invalidLimits));
+            expectInvalid(
+                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, PropertyOptions{.limits = invalidLimits}));
 
             invalid = HealthProperty();
             invalid.signatureFingerprint = 1;
@@ -354,7 +367,7 @@ namespace Horo::Runtime::Ui {
             REQUIRE(ValidateUiBindingDescriptor(unavailableCadence, manualSchema).HasValue());
         }
 
-        TEST_CASE("Bindings fail closed for endpoint shape, access, and converter metadata", "[runtime_ui][binding][validation_edges]") {
+        TEST_CASE("Bindings fail closed for malformed endpoint shape", "[runtime_ui][binding][validation_edges]") {
             const auto schema = MakeSchema();
             const auto valid = Binding(schema);
 
@@ -391,14 +404,16 @@ namespace Horo::Runtime::Ui {
             invalid = valid;
             invalid.source.propertySignatureFingerprint++;
             ExpectError(ValidateUiBindingDescriptor(invalid, schema), UiErrors::BindingPropertySignatureMismatch);
+        }
 
-            const std::array writeProperties{
-                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::WriteCommand)};
+        TEST_CASE("Bindings enforce access and converter metadata", "[runtime_ui][binding][validation_edges]") {
+            const std::array writeProperties{HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange,
+                                                            PropertyOptions{.access = UiBindingAccess::WriteCommand})};
             const auto writeSchema = RequireValue(UiBindingProviderSchema::Create(Provider(writeProperties)));
             ExpectError(ValidateUiBindingDescriptor(Binding(writeSchema), writeSchema), UiErrors::BindingAccessInvalid);
 
-            const std::array bidirectionalProperties{
-                HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange, UiBindingAccess::ReadWriteCommand)};
+            const std::array bidirectionalProperties{HealthProperty(UiBindingValueType::FixedScalar, UiBindingUpdateKind::OnChange,
+                                                                    PropertyOptions{.access = UiBindingAccess::ReadWriteCommand})};
             const auto bidirectionalSchema = RequireValue(UiBindingProviderSchema::Create(Provider(bidirectionalProperties)));
             auto twoWay = Binding(bidirectionalSchema);
             twoWay.direction = UiBindingDirection::TwoWay;
