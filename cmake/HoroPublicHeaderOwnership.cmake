@@ -156,6 +156,8 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiEventDispatch.h
     Horo/Runtime/Ui/UiPointerCapture.h
     Horo/Runtime/Ui/UiActions.h
+    Horo/Runtime/Ui/UiScreenStack.h
+    Horo/Runtime/Ui/UiRouteStack.h
     Horo/Runtime/Ui/UiFocusGraph.h
     Horo/Runtime/Ui/UiControls.h
     Horo/Runtime/Ui/UiLayout.h

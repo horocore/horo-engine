@@ -512,6 +512,57 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                 "Use a known direction and exact presented focus handles.",
                                                 false,
                                                 false};
+    /** @copydoc RouteStackInvalid */
+    const ErrorCodeDescriptor
+        RouteStackInvalid{UiDomain,
+                          ErrorCode{"runtime_ui.route_stack.invalid"},
+                          ErrorSeverity::Error,
+                          "The Runtime UI route-stack descriptor is invalid.",
+                          "Provide one non-zero owner-scoped stack identity, a finite route bound, and valid route definitions.",
+                          false,
+                          false};
+    /** @copydoc RouteOperationInvalid */
+    const ErrorCodeDescriptor
+        RouteOperationInvalid{UiDomain,
+                              ErrorCode{"runtime_ui.route_operation.invalid"},
+                              ErrorSeverity::Error,
+                              "The Runtime UI route operation is malformed.",
+                              "Use a known operation, a valid route definition where required, and a complete optional guard.",
+                              false,
+                              false};
+    /** @copydoc RouteOperationStale */
+    const ErrorCodeDescriptor RouteOperationStale{UiDomain,
+                                                  ErrorCode{"runtime_ui.route_operation.stale"},
+                                                  ErrorSeverity::Warning,
+                                                  "The Runtime UI route operation guard is stale.",
+                                                  "Retarget the operation against the current route-stack revision and top instance.",
+                                                  true,
+                                                  false};
+    /** @copydoc RouteOperationReentrant */
+    const ErrorCodeDescriptor RouteOperationReentrant{UiDomain,
+                                                      ErrorCode{"runtime_ui.route_operation.reentrant"},
+                                                      ErrorSeverity::Error,
+                                                      "A Runtime UI route operation is already preparing or committing.",
+                                                      "Finish or cancel the active transaction before starting another route operation.",
+                                                      false,
+                                                      false};
+    /** @copydoc RouteOperationAlreadyCompleted */
+    const ErrorCodeDescriptor RouteOperationAlreadyCompleted{UiDomain,
+                                                             ErrorCode{"runtime_ui.route_operation.already_completed"},
+                                                             ErrorSeverity::Error,
+                                                             "The Runtime UI route transaction already has a terminal result.",
+                                                             "Use each prepared route transaction exactly once.",
+                                                             false,
+                                                             false};
+    /** @copydoc RouteOperationLifecycleUnavailable */
+    const ErrorCodeDescriptor
+        RouteOperationLifecycleUnavailable{UiDomain,
+                                           ErrorCode{"runtime_ui.route_operation.lifecycle_unavailable"},
+                                           ErrorSeverity::Error,
+                                           "The Runtime UI route stack is closed for new operations.",
+                                           "Create a route stack for the current runtime owner generation before navigating.",
+                                           false,
+                                           false};
     /** @copydoc RenderSnapshotInvalid */
     const ErrorCodeDescriptor RenderSnapshotInvalid{UiDomain,
                                                     ErrorCode{"runtime_ui.render_snapshot.invalid"},
