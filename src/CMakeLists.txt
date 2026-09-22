@@ -324,6 +324,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextLayoutPlanning.cpp
         runtime/ui/UiTextLayoutPublication.cpp
         runtime/ui/UiTextLayoutTypes.cpp
+        runtime/ui/UiGlyphAtlas.cpp
+        runtime/ui/UiGlyphAtlasStorage.cpp
+        runtime/ui/UiGlyphAtlasValidation.cpp
         runtime/ui/UiStyle.cpp
         runtime/ui/UiStyleHash.cpp
         runtime/ui/UiStyleRegistry.cpp
