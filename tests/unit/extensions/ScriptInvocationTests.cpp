@@ -6,6 +6,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Horo::Extensions::Tests {
     using namespace Support;
@@ -218,6 +219,51 @@ namespace Horo::Extensions::Tests {
         REQUIRE(handle.HasValue());
         RequireErrorCode(registry.IssueHandle(contextRegistration, providerRegistration, "second"), "script_invocation_capacity_exceeded");
         REQUIRE(registry.ReleaseHandle(handle.Value()).HasValue());
+    }
+
+    TEST_CASE("Script invocation registration state remains safe under concurrent lifecycle registration",
+              "[Extensions][ScriptInvocation]") {
+        ScriptInvocationRegistryLimits limits;
+        limits.maximumProviders = 8;
+        limits.maximumContexts = 8;
+        ScriptInvocationRegistry registry(limits);
+        constexpr std::size_t workerCount = 4;
+        std::atomic<std::size_t> ready{0};
+        std::atomic<bool> start{false};
+        std::atomic<std::size_t> registeredProviders{0};
+        std::atomic<std::size_t> registeredContexts{0};
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount);
+
+        for (std::size_t index = 0; index < workerCount; ++index) {
+            workers.emplace_back([&, generation = std::uint64_t{100 + index}] {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+
+                auto provider = registry.RegisterProvider({.generation = generation, .maximumInvocations = 1});
+                if (provider.HasError())
+                    return;
+                [[maybe_unused]] auto providerRegistration = std::move(provider).Value();
+                registeredProviders.fetch_add(1, std::memory_order_relaxed);
+
+                auto context = registry.RegisterContext({.maximumInvocations = 1, .maximumHandles = 1});
+                if (context.HasError())
+                    return;
+                [[maybe_unused]] auto contextRegistration = std::move(context).Value();
+                registeredContexts.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+
+        while (ready.load(std::memory_order_acquire) != workerCount)
+            std::this_thread::yield();
+        start.store(true, std::memory_order_release);
+        for (auto &worker : workers)
+            worker.join();
+
+        CHECK(registeredProviders.load(std::memory_order_relaxed) == workerCount);
+        CHECK(registeredContexts.load(std::memory_order_relaxed) == workerCount);
+        CHECK_FALSE(registry.IsShutdown());
     }
 
     TEST_CASE("Script invocation rejects foreign registry and shutdown admission", "[Extensions][ScriptInvocation]") {

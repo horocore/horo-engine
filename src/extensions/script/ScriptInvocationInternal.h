@@ -17,6 +17,15 @@
 #include <vector>
 
 namespace Horo::Extensions {
+    struct ScriptInvocationSynchronization final {
+        [[nodiscard]] std::mutex &Mutex() const noexcept {
+            return mutex;
+        }
+
+    private:
+        mutable std::mutex mutex;
+    };
+
     struct ScriptInvocationProviderState final {
         std::weak_ptr<ScriptInvocationRegistryState> registry;
         std::uint64_t generation{};
@@ -26,10 +35,10 @@ namespace Horo::Extensions {
         std::unordered_map<std::uint64_t, std::weak_ptr<ScriptInvocationState>> invocations;
 
         [[nodiscard]] std::mutex &Mutex() const noexcept {
-            return mutex;
+            return synchronization.Mutex();
         }
 
-        mutable std::mutex mutex;
+        ScriptInvocationSynchronization synchronization;
     };
 
     struct ScriptInvocationContextState final {
@@ -51,14 +60,14 @@ namespace Horo::Extensions {
         std::vector<ScriptHandle> handles;
 
         [[nodiscard]] std::mutex &Mutex() const noexcept {
-            return mutex;
+            return synchronization.Mutex();
         }
 
         ScriptInvocationContextState(std::weak_ptr<ScriptInvocationRegistryState> registryIn, ScriptContextId context,
                                      const ScriptInvocationContextDescriptor &descriptor, std::thread::id owner, std::size_t maximumQueued,
                                      std::size_t maximumProgress, ScriptValueLimits valueLimitsIn);
 
-        mutable std::mutex mutex;
+        ScriptInvocationSynchronization synchronization;
     };
 
     struct ScriptInvocationExecutionContext final {
@@ -109,10 +118,10 @@ namespace Horo::Extensions {
         std::atomic<std::size_t> activeInvocations{};
 
         [[nodiscard]] std::mutex &Mutex() const noexcept {
-            return mutex;
+            return synchronization.Mutex();
         }
 
-        mutable std::mutex mutex;
+        ScriptInvocationSynchronization synchronization;
     };
 
     namespace Detail {
