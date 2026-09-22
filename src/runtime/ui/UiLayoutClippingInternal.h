@@ -82,12 +82,26 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> BuildParentIndex(const UiElementTree &tree, std::span<const UiLayoutRecord> records);
         [[nodiscard]] Result<void> BuildScrollBounds(std::span<const UiLayoutRecord> records,
                                                      std::span<const UiLayoutClipDescriptor> descriptors);
+        [[nodiscard]] Result<void> ValidateUpdate(const UiElementTree &tree, const UiLayoutSnapshotDescriptor &source,
+                                                  std::span<const UiLayoutRecord> records, const UiLayoutClipUpdateRequest &request) const;
+        [[nodiscard]] Result<void> ValidateSource(const UiElementTree &tree, const UiLayoutSnapshotDescriptor &source,
+                                                  std::span<const UiLayoutRecord> records, const UiLayoutClipUpdateRequest &request) const;
+        [[nodiscard]] Result<void> ValidateElements(std::span<const UiLayoutRecord> records,
+                                                    const UiLayoutClipUpdateRequest &request) const;
+        [[nodiscard]] Result<void> ValidateBringIntoView(const UiElementTree &tree, const UiLayoutSnapshotDescriptor &source,
+                                                         const std::optional<UiFocusBringIntoViewRequest> &request) const;
         [[nodiscard]] Result<void> BuildRevealPath(std::uint32_t target);
         [[nodiscard]] Result<void> SetRevealOffset(std::uint32_t scrollElement, UiFocusBringIntoViewPolicy policy, UiLogicalRect target);
         [[nodiscard]] Result<void> RevealScrollContainer(std::span<const UiLayoutRecord> records, std::size_t pathIndex,
                                                          std::uint32_t target, UiFocusBringIntoViewPolicy policy,
                                                          UiLogicalPoint innerTranslation);
         [[nodiscard]] Result<void> ApplyBringIntoView(std::span<const UiLayoutRecord> records, const UiFocusBringIntoViewRequest &request);
+        [[nodiscard]] Result<void> BuildParentProjection(std::uint32_t index);
+        [[nodiscard]] Result<void> BuildClipProjection(std::span<const UiLayoutRecord> records,
+                                                       std::span<const UiLayoutClipDescriptor> descriptors, std::uint32_t index);
+        [[nodiscard]] Result<void> BuildScrollProjection(std::span<const UiLayoutRecord> records, std::uint32_t index);
+        [[nodiscard]] Result<void> BuildProjectionRecord(std::span<const UiLayoutRecord> records,
+                                                         std::span<const UiLayoutClipDescriptor> descriptors, std::uint32_t index);
         [[nodiscard]] Result<void> BuildProjection(std::span<const UiLayoutRecord> records,
                                                    std::span<const UiLayoutClipDescriptor> descriptors);
         [[nodiscard]] Result<void> ValidateProjection(std::size_t recordCount) const;

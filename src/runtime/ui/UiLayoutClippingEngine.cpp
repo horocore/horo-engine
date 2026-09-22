@@ -141,18 +141,70 @@ namespace Horo::Runtime::Ui {
             if (candidateScrolls.size() == descriptor.scrollCapacity)
                 return Failure(UiErrors::CapacityExceeded);
             scrollIndexes[index] = static_cast<std::uint32_t>(candidateScrolls.size());
-            candidateScrolls.push_back(
-                {records[index].element, viewports[index], contents[index], offsets[index], minimumOffsets[index], maximumOffsets[index]});
+            candidateScrolls.emplace_back(records[index].element, viewports[index], contents[index], offsets[index], minimumOffsets[index],
+                                          maximumOffsets[index]);
         }
+        return Result<void>::Success();
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::ValidateUpdate(const UiElementTree &tree, const UiLayoutSnapshotDescriptor &source,
+                                                             const std::span<const UiLayoutRecord> records,
+                                                             const UiLayoutClipUpdateRequest &request) const {
+        if (const auto sourceResult = ValidateSource(tree, source, records, request); sourceResult.HasError())
+            return sourceResult;
+        if (const auto elementsResult = ValidateElements(records, request); elementsResult.HasError())
+            return elementsResult;
+        return ValidateBringIntoView(tree, source, request.bringIntoView);
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::ValidateSource(const UiElementTree &tree, const UiLayoutSnapshotDescriptor &source,
+                                                             const std::span<const UiLayoutRecord> records,
+                                                             const UiLayoutClipUpdateRequest &request) const {
+        if (!source.sources.IsValid() || !source.interaction.IsValid() || records.empty() || records.size() > descriptor.elementCapacity ||
+            request.elements.size() != records.size())
+            return Failure(UiErrors::LayoutClipInvalid);
+        if (source.instance != descriptor.instance || source.canvas != descriptor.canvas || source.document != descriptor.document ||
+            tree.State() != UiElementTreeState::Active || tree.Instance() != descriptor.instance || tree.Canvas() != descriptor.canvas ||
+            tree.SourceDocument() != descriptor.document || tree.SourceDocumentRevision() != source.sources.document ||
+            tree.Revision() != source.sources.tree)
+            return Failure(UiErrors::LayoutClipSourceStale);
+        return Result<void>::Success();
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::ValidateElements(const std::span<const UiLayoutRecord> records,
+                                                               const UiLayoutClipUpdateRequest &request) const {
+        for (std::uint32_t index = 0; index < records.size(); ++index) {
+            if (!request.elements[index].IsValid() || request.elements[index].element != records[index].element)
+                return Failure(UiErrors::LayoutClipInvalid);
+        }
+        return Result<void>::Success();
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::ValidateBringIntoView(const UiElementTree &tree, const UiLayoutSnapshotDescriptor &source,
+                                                                    const std::optional<UiFocusBringIntoViewRequest> &request) const {
+        if (!request.has_value())
+            return Result<void>::Success();
+        const auto &bring = *request;
+        if (!bring.IsValid())
+            return Failure(UiErrors::LayoutClipInvalid);
+        if (bring.owner.instance != source.instance || bring.owner.canvas != source.canvas || bring.owner.document != source.document ||
+            bring.owner.documentRevision != source.sources.document || bring.owner.treeRevision != source.sources.tree ||
+            bring.owner.interaction != source.interaction)
+            return Failure(UiErrors::LayoutClipSourceStale);
+        const auto target = tree.Get(bring.target.element);
+        if (target.HasError())
+            return Result<void>::Failure(target.ErrorValue());
+        if (target.Value().id != bring.target.id)
+            return Failure(UiErrors::LayoutClipSourceStale);
         return Result<void>::Success();
     }
 
     Result<void> UiLayoutClipEngine::Storage::BuildRevealPath(const std::uint32_t target) {
         path.clear();
-        for (std::uint32_t current = target; current != NoIndex; current = parents[current]) {
+        for (std::uint32_t currentElement = target; currentElement != NoIndex; currentElement = parents[currentElement]) {
             if (path.size() == descriptor.elementCapacity)
                 return Failure(UiErrors::LayoutClipInvalid);
-            path.push_back(current);
+            path.push_back(currentElement);
         }
         return Result<void>::Success();
     }
@@ -223,46 +275,74 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    Result<void> UiLayoutClipEngine::Storage::BuildParentProjection(const std::uint32_t index) {
+        const auto parent = parents[index];
+        if (parent == NoIndex)
+            return Result<void>::Success();
+        translations[index] = translations[parent];
+        clipIndexes[index] = ownClipIndexes[parent] != NoIndex ? ownClipIndexes[parent] : clipIndexes[parent];
+        if (scrollIndexes[parent] == NoIndex)
+            return Result<void>::Success();
+        const auto delta = OffsetDelta(offsets[parent]);
+        if (delta.HasError())
+            return Result<void>::Failure(delta.ErrorValue());
+        const auto translated = Add(translations[index], delta.Value());
+        if (translated.HasError())
+            return Result<void>::Failure(translated.ErrorValue());
+        translations[index] = translated.Value();
+        return Result<void>::Success();
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::BuildClipProjection(const std::span<const UiLayoutRecord> records,
+                                                                  const std::span<const UiLayoutClipDescriptor> descriptors,
+                                                                  const std::uint32_t index) {
+        const auto overflow = descriptors[index].overflow;
+        if (overflow != UiLayoutOverflowPolicy::Clip && overflow != UiLayoutOverflowPolicy::Scroll)
+            return Result<void>::Success();
+        if (candidateClips.size() == descriptor.clipCapacity)
+            return Failure(UiErrors::CapacityExceeded);
+        const auto clipRect = Translate(records[index].arrangement.contentBox, translations[index]);
+        if (clipRect.HasError())
+            return Result<void>::Failure(clipRect.ErrorValue());
+        ownClipIndexes[index] = static_cast<std::uint32_t>(candidateClips.size());
+        candidateClips.emplace_back(records[index].element, clipRect.Value(), clipIndexes[index]);
+        return Result<void>::Success();
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::BuildScrollProjection(const std::span<const UiLayoutRecord> records,
+                                                                    const std::uint32_t index) {
+        if (scrollIndexes[index] == NoIndex)
+            return Result<void>::Success();
+        auto &scroll = candidateScrolls[scrollIndexes[index]];
+        const auto viewport = Translate(viewports[index], translations[index]);
+        const auto content = Translate(contents[index], translations[index]);
+        if (viewport.HasError() || content.HasError())
+            return Failure(UiErrors::LayoutClipInvalid);
+        scroll.viewport = viewport.Value();
+        scroll.content = content.Value();
+        return Result<void>::Success();
+    }
+
+    Result<void> UiLayoutClipEngine::Storage::BuildProjectionRecord(const std::span<const UiLayoutRecord> records,
+                                                                    const std::span<const UiLayoutClipDescriptor> descriptors,
+                                                                    const std::uint32_t index) {
+        if (const auto parent = BuildParentProjection(index); parent.HasError())
+            return parent;
+        if (const auto clip = BuildClipProjection(records, descriptors, index); clip.HasError())
+            return clip;
+        if (const auto scroll = BuildScrollProjection(records, index); scroll.HasError())
+            return scroll;
+        candidateRecords.emplace_back(records[index].element, translations[index], clipIndexes[index], ownClipIndexes[index],
+                                      scrollIndexes[index]);
+        return Result<void>::Success();
+    }
+
     Result<void> UiLayoutClipEngine::Storage::BuildProjection(const std::span<const UiLayoutRecord> records,
                                                               const std::span<const UiLayoutClipDescriptor> descriptors) {
         candidateRecords.clear();
         for (std::uint32_t index = 0; index < records.size(); ++index) {
-            const auto parent = parents[index];
-            if (parent != NoIndex) {
-                translations[index] = translations[parent];
-                if (scrollIndexes[parent] != NoIndex) {
-                    const auto delta = OffsetDelta(offsets[parent]);
-                    if (delta.HasError())
-                        return Result<void>::Failure(delta.ErrorValue());
-                    const auto translated = Add(translations[index], delta.Value());
-                    if (translated.HasError())
-                        return Result<void>::Failure(translated.ErrorValue());
-                    translations[index] = translated.Value();
-                }
-                clipIndexes[index] = ownClipIndexes[parent] != NoIndex ? ownClipIndexes[parent] : clipIndexes[parent];
-            }
-
-            if (descriptors[index].overflow == UiLayoutOverflowPolicy::Clip ||
-                descriptors[index].overflow == UiLayoutOverflowPolicy::Scroll) {
-                if (candidateClips.size() == descriptor.clipCapacity)
-                    return Failure(UiErrors::CapacityExceeded);
-                const auto clipRect = Translate(records[index].arrangement.contentBox, translations[index]);
-                if (clipRect.HasError())
-                    return Result<void>::Failure(clipRect.ErrorValue());
-                ownClipIndexes[index] = static_cast<std::uint32_t>(candidateClips.size());
-                candidateClips.push_back({records[index].element, clipRect.Value(), clipIndexes[index]});
-            }
-            if (scrollIndexes[index] != NoIndex) {
-                auto &scroll = candidateScrolls[scrollIndexes[index]];
-                const auto viewport = Translate(viewports[index], translations[index]);
-                const auto content = Translate(contents[index], translations[index]);
-                if (viewport.HasError() || content.HasError())
-                    return Failure(UiErrors::LayoutClipInvalid);
-                scroll.viewport = viewport.Value();
-                scroll.content = content.Value();
-            }
-            candidateRecords.push_back(
-                {records[index].element, translations[index], clipIndexes[index], ownClipIndexes[index], scrollIndexes[index]});
+            if (const auto record = BuildProjectionRecord(records, descriptors, index); record.HasError())
+                return record;
         }
         return Result<void>::Success();
     }
@@ -289,7 +369,7 @@ namespace Horo::Runtime::Ui {
     }
 
     Result<std::shared_ptr<UiLayoutClipSnapshot::Storage>> UiLayoutClipEngine::Storage::Publish(const UiLayoutSnapshotDescriptor &source) {
-        const auto slot = TryAcquire();
+        auto slot = TryAcquire();
         if (!slot)
             return Failure<std::shared_ptr<UiLayoutClipSnapshot::Storage>>(UiErrors::LayoutClipSnapshotStorageExhausted);
         slot->descriptor = {source.instance, source.canvas, source.document, source.sources, source.interaction};
@@ -343,34 +423,8 @@ namespace Horo::Runtime::Ui {
             return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipLifecycleUnavailable);
         const auto &source = layout.Descriptor();
         const auto records = layout.Records();
-        if (!source.sources.IsValid() || !source.interaction.IsValid() || records.empty() ||
-            records.size() > storage_->descriptor.elementCapacity || request.elements.size() != records.size())
-            return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipInvalid);
-        if (source.instance != storage_->descriptor.instance || source.canvas != storage_->descriptor.canvas ||
-            source.document != storage_->descriptor.document || tree.State() != UiElementTreeState::Active ||
-            tree.Instance() != storage_->descriptor.instance || tree.Canvas() != storage_->descriptor.canvas ||
-            tree.SourceDocument() != storage_->descriptor.document || tree.SourceDocumentRevision() != source.sources.document ||
-            tree.Revision() != source.sources.tree)
-            return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipSourceStale);
-
-        for (std::uint32_t index = 0; index < records.size(); ++index) {
-            if (!request.elements[index].IsValid() || request.elements[index].element != records[index].element)
-                return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipInvalid);
-        }
-        if (request.bringIntoView.has_value()) {
-            const auto &bring = *request.bringIntoView;
-            if (!bring.IsValid())
-                return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipInvalid);
-            if (bring.owner.instance != source.instance || bring.owner.canvas != source.canvas || bring.owner.document != source.document ||
-                bring.owner.documentRevision != source.sources.document || bring.owner.treeRevision != source.sources.tree ||
-                bring.owner.interaction != source.interaction)
-                return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipSourceStale);
-            const auto target = tree.Get(bring.target.element);
-            if (target.HasError())
-                return Result<UiLayoutClipSnapshot>::Failure(target.ErrorValue());
-            if (target.Value().id != bring.target.id)
-                return Failure<UiLayoutClipSnapshot>(UiErrors::LayoutClipSourceStale);
-        }
+        if (const auto validation = storage_->ValidateUpdate(tree, source, records, request); validation.HasError())
+            return Result<UiLayoutClipSnapshot>::Failure(validation.ErrorValue());
 
         if (const auto topology = storage_->BuildParentIndex(tree, records); topology.HasError())
             return Result<UiLayoutClipSnapshot>::Failure(topology.ErrorValue());

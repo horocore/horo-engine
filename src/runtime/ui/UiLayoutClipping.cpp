@@ -94,12 +94,13 @@ namespace Horo::Runtime::Ui {
 
         Result<std::int64_t> DesiredOffset(const UiFocusBringIntoViewPolicy policy, const UiLogicalRect target,
                                            const UiLogicalRect viewport, const bool horizontal) {
+            using enum UiFocusBringIntoViewPolicy;
             const auto targetStart = horizontal ? target.origin.x : target.origin.y;
             const auto targetEnd = horizontal ? Right(target) : Bottom(target);
             const auto viewportStart = horizontal ? viewport.origin.x : viewport.origin.y;
             const auto viewportEnd = horizontal ? Right(viewport) : Bottom(viewport);
             switch (policy) {
-                case UiFocusBringIntoViewPolicy::Nearest: {
+                case Nearest: {
                     const auto before = targetStart - viewportStart;
                     const auto after = targetEnd - viewportEnd;
                     if (before < 0 && after > 0)
@@ -110,19 +111,19 @@ namespace Horo::Runtime::Ui {
                         return Result<std::int64_t>::Success(after);
                     return Result<std::int64_t>::Success(0);
                 }
-                case UiFocusBringIntoViewPolicy::Start:
+                case Start:
                     return Result<std::int64_t>::Success(targetStart - viewportStart);
-                case UiFocusBringIntoViewPolicy::Center: {
+                case Center: {
                     const auto targetExtent = static_cast<std::int64_t>(horizontal ? target.extent.width : target.extent.height);
                     const auto viewportExtent = static_cast<std::int64_t>(horizontal ? viewport.extent.width : viewport.extent.height);
                     const auto targetCenterTwice = 2 * static_cast<std::int64_t>(targetStart) + targetExtent;
                     const auto viewportCenterTwice = 2 * static_cast<std::int64_t>(viewportStart) + viewportExtent;
                     return RoundDivideByTwo(targetCenterTwice - viewportCenterTwice);
                 }
-                case UiFocusBringIntoViewPolicy::End:
+                case End:
                     return Result<std::int64_t>::Success(targetEnd - viewportEnd);
-                case UiFocusBringIntoViewPolicy::None:
-                case UiFocusBringIntoViewPolicy::Count:
+                case None:
+                case Count:
                     return Failure<std::int64_t>(UiErrors::LayoutClipInvalid);
             }
             return Failure<std::int64_t>(UiErrors::LayoutClipInvalid);
