@@ -183,8 +183,8 @@ namespace Horo::Runtime::Ui {
     struct UiScreenStack::Storage final {
         explicit Storage(const UiScreenStackDescriptor &descriptor)
             : ownership(descriptor.ownership), stack(descriptor.stack),
-              definitions(descriptor.definitions.begin(), descriptor.definitions.end()) {
-            routes.reserve(descriptor.maximumRoutes);
+              definitions(descriptor.definitions.begin(), descriptor.definitions.end()), maximumRoutes(descriptor.maximumRoutes) {
+            routes.reserve(maximumRoutes);
         }
 
         [[nodiscard]] std::optional<UiRouteMetadata> Find(const UiRouteId route) const noexcept {
@@ -224,6 +224,7 @@ namespace Horo::Runtime::Ui {
         UiRouteStackId stack;
         std::vector<UiRouteMetadata> definitions;
         std::vector<UiRouteInstance> routes;
+        std::size_t maximumRoutes;
         UiRouteStackRevision revision{UiRouteStackRevision::Create(1).Value()};
         std::uint32_t nextInstanceSlot{1};
         std::uint64_t nextOperationSequence{1};
@@ -233,10 +234,11 @@ namespace Horo::Runtime::Ui {
     };
 
     /** @copydoc UiScreenStack::Transaction::Transaction */
-    UiScreenStack::Transaction::Transaction(Storage *storage, const UiRouteOperationRequest request, const UiRouteOperationId operation,
-                                            const std::optional<UiRouteMetadata> definition,
+    UiScreenStack::Transaction::Transaction(std::shared_ptr<Storage> storage, const UiRouteOperationRequest request,
+                                            const UiRouteOperationId operation, const std::optional<UiRouteMetadata> definition,
                                             const UiRouteOperationRejection preparedRejection) noexcept
-        : storage_(storage), request_(request), operation_(operation), definition_(definition), preparedRejection_(preparedRejection) {}
+        : storage_(std::move(storage)), request_(request), operation_(operation), definition_(definition),
+          preparedRejection_(preparedRejection) {}
 
     /** @copydoc UiScreenStack::Transaction::~Transaction */
     UiScreenStack::Transaction::~Transaction() {
@@ -245,9 +247,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenStack::Transaction::Transaction */
     UiScreenStack::Transaction::Transaction(Transaction &&other) noexcept
-        : storage_(other.storage_), request_(other.request_), operation_(other.operation_), definition_(other.definition_),
+        : storage_(std::move(other.storage_)), request_(other.request_), operation_(other.operation_), definition_(other.definition_),
           preparedRejection_(other.preparedRejection_), terminal_(other.terminal_) {
-        other.storage_ = nullptr;
         other.terminal_ = true;
     }
 
@@ -256,13 +257,12 @@ namespace Horo::Runtime::Ui {
         if (this == &other)
             return *this;
         Abandon();
-        storage_ = other.storage_;
+        storage_ = std::move(other.storage_);
         request_ = other.request_;
         operation_ = other.operation_;
         definition_ = other.definition_;
         preparedRejection_ = other.preparedRejection_;
         terminal_ = other.terminal_;
-        other.storage_ = nullptr;
         other.terminal_ = true;
         return *this;
     }
@@ -299,14 +299,14 @@ namespace Horo::Runtime::Ui {
         if (!descriptor.IsValid())
             return Failure<UiScreenStack>(UiErrors::RouteStackInvalid);
         try {
-            return Result<UiScreenStack>::Success(UiScreenStack{std::make_unique<Storage>(descriptor)});
+            return Result<UiScreenStack>::Success(UiScreenStack{std::make_shared<Storage>(descriptor)});
         } catch (const std::bad_alloc &) {
             return Failure<UiScreenStack>(UiErrors::CapacityExceeded);
         }
     }
 
     /** @copydoc UiScreenStack::UiScreenStack */
-    UiScreenStack::UiScreenStack(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiScreenStack::UiScreenStack(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiScreenStack::~UiScreenStack */
     UiScreenStack::~UiScreenStack() {
@@ -327,8 +327,8 @@ namespace Horo::Runtime::Ui {
                 const auto instance = storage.NextInstance();
                 if (instance.HasError())
                     return Result<std::optional<UiRouteInstanceId>>::Failure(instance.ErrorValue());
-                for (auto &route : storage.routes)
-                    route.visibility = UiRouteVisibilityState::Covered;
+                if (!storage.routes.empty())
+                    storage.routes.back().visibility = UiRouteVisibilityState::Covered;
                 storage.routes.push_back({instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible});
                 return Result<std::optional<UiRouteInstanceId>>::Success(instance.Value());
             }
@@ -392,7 +392,7 @@ namespace Horo::Runtime::Ui {
             switch (request.kind) {
                 case UiRouteOperationKind::Push:
                 case UiRouteOperationKind::Navigate:
-                    if (storage_->routes.size() == storage_->routes.capacity())
+                    if (storage_->routes.size() == storage_->maximumRoutes)
                         rejection = UiRouteOperationRejection::Capacity;
                     break;
                 case UiRouteOperationKind::Pop:
@@ -408,7 +408,7 @@ namespace Horo::Runtime::Ui {
         }
         storage_->activeOperation = operation.Value();
         storage_->busy = true;
-        return Result<Transaction>::Success(Transaction{storage_.get(), request, operation.Value(), definition, rejection});
+        return Result<Transaction>::Success(Transaction{storage_, request, operation.Value(), definition, rejection});
     }
 
     /** @copydoc UiScreenStack::Navigate */
@@ -461,7 +461,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenStack::Commit */
     Result<UiRouteOperationResult> UiScreenStack::Commit(Transaction &transaction) {
-        Storage *storage = transaction.storage_;
+        const auto storage = transaction.storage_;
         if (storage == nullptr || transaction.terminal_)
             return Failure<UiRouteOperationResult>(UiErrors::RouteOperationAlreadyCompleted);
         if (storage->state != UiScreenStackState::Active || !storage->busy || storage->activeOperation != transaction.operation_) {
@@ -499,7 +499,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiScreenStack::Cancel */
     Result<UiRouteOperationResult> UiScreenStack::Cancel(Transaction &transaction) {
-        Storage *storage = transaction.storage_;
+        const auto storage = transaction.storage_;
         if (storage == nullptr || transaction.terminal_)
             return Failure<UiRouteOperationResult>(UiErrors::RouteOperationAlreadyCompleted);
         if (storage->state == UiScreenStackState::Stopped || !storage->busy || storage->activeOperation != transaction.operation_) {

@@ -200,11 +200,11 @@ namespace Horo::Runtime::Ui {
 
         private:
             friend class UiScreenStack;
-            Transaction(Storage *storage, UiRouteOperationRequest request, UiRouteOperationId operation,
+            Transaction(std::shared_ptr<Storage> storage, UiRouteOperationRequest request, UiRouteOperationId operation,
                         std::optional<UiRouteMetadata> definition, UiRouteOperationRejection preparedRejection) noexcept;
             void Abandon() noexcept;
 
-            Storage *storage_{};
+            std::shared_ptr<Storage> storage_;
             UiRouteOperationRequest request_;
             UiRouteOperationId operation_;
             std::optional<UiRouteMetadata> definition_;
@@ -264,14 +264,14 @@ namespace Horo::Runtime::Ui {
         void Shutdown() noexcept;
 
     private:
-        explicit UiScreenStack(std::unique_ptr<Storage> storage) noexcept;
+        explicit UiScreenStack(std::shared_ptr<Storage> storage) noexcept;
         [[nodiscard]] static Result<std::optional<UiRouteInstanceId>> ApplyMutation(Storage &storage, Transaction &transaction);
         static void Finish(Transaction &transaction) noexcept;
         [[nodiscard]] static Result<UiRouteOperationResult> Commit(Transaction &transaction);
         [[nodiscard]] static Result<UiRouteOperationResult> Cancel(Transaction &transaction);
         static void Abandon(Transaction &transaction) noexcept;
 
-        std::unique_ptr<Storage> storage_;
+        std::shared_ptr<Storage> storage_;
     };
 
     /** @brief Route-stack spelling used by presentation code that does not expose the screen-specific alias. */

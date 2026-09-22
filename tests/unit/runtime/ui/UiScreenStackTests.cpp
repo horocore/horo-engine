@@ -4,6 +4,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <optional>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -150,6 +151,20 @@ namespace Horo::Runtime::Ui {
             CHECK(stack.Size() == 1);
         }
 
+        TEST_CASE("Pending transactions remain fenced after owner shutdown", "[runtime_ui][screen_stack][lifetime]") {
+            std::optional<UiScreenStack::Transaction> transaction;
+            {
+                auto stack = MakeStack();
+                auto prepared = stack.Prepare(UiRouteOperationRequest::Push(AuthoredId<UiRouteId>(1)));
+                REQUIRE(prepared.HasValue());
+                transaction.emplace(std::move(prepared).Value());
+            }
+
+            REQUIRE(transaction.has_value());
+            ExpectError(transaction->Commit(), UiErrors::RouteOperationLifecycleUnavailable);
+            ExpectError(transaction->Cancel(), UiErrors::RouteOperationAlreadyCompleted);
+        }
+
         TEST_CASE("Route stack steady-state operations do not allocate and lifecycle closes admission",
                   "[runtime_ui][screen_stack][lifecycle]") {
             auto stack = MakeStack(2);
@@ -158,9 +173,13 @@ namespace Horo::Runtime::Ui {
             const auto after = ::Horo::Tests::AllocationProbe::Count();
             RequireCommitted(pushed, UiRouteOperationKind::Push);
             CHECK(after == before);
+            REQUIRE(stack.Top().has_value());
+            const auto retainedRoute = stack.Top()->metadata.id;
 
             REQUIRE(stack.BeginRetirement().HasValue());
             ExpectError(stack.Push(AuthoredId<UiRouteId>(2)), UiErrors::RouteOperationLifecycleUnavailable);
+            CHECK(stack.Size() == 1);
+            CHECK(stack.Top()->metadata.id == retainedRoute);
             stack.Shutdown();
             stack.Shutdown();
             CHECK(stack.State() == UiScreenStackState::Stopped);
