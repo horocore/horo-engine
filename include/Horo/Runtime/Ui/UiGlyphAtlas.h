@@ -335,8 +335,12 @@ namespace Horo::Runtime::Ui {
          * @pre Calls for one atlas are serialized on its Runtime UI owner thread.
          */
         [[nodiscard]] Result<UiGlyphAtlasUploadId> RequestUpload(const UiGlyphAtlasRasterData &raster);
+
         /** @brief Alias for RequestUpload used by upload-producing adapters. */
-        [[nodiscard]] Result<UiGlyphAtlasUploadId> QueueUpload(const UiGlyphAtlasRasterData &raster);
+        [[nodiscard]] Result<UiGlyphAtlasUploadId> QueueUpload(const UiGlyphAtlasRasterData &raster) {
+            return RequestUpload(raster);
+        }
+
         /** @brief Returns immutable upload destination metadata while the request remains tracked. */
         [[nodiscard]] Result<UiGlyphAtlasUploadDescriptor> DescribeUpload(UiGlyphAtlasUploadId upload) const;
         /** @brief Returns copied bytes for a pending upload before renderer submission. */
@@ -381,8 +385,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiGlyphAtlasSnapshot Snapshot() const noexcept;
         /** @brief Stops new upload and frame admission while existing terminal retirement remains valid. */
         void StopAdmission() noexcept;
+
         /** @brief Idempotently closes admission and cancels not-yet-submitted uploads. */
-        void Shutdown() noexcept;
+        void Shutdown() noexcept {
+            StopAdmission();
+        }
+
         /** @brief Reports whether no frame or submitted upload still retains atlas ownership. */
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns the explicit admission state. */

@@ -413,7 +413,8 @@ namespace Horo::Runtime::Ui {
         }
 
         void ResetUploads(UiGlyphAtlasResetReport &report) noexcept {
-            for (auto &upload : uploads) {
+            for (std::size_t index = 0; index < uploads.size(); ++index) {
+                auto &upload = uploads[index];
                 if (!upload.occupied)
                     continue;
                 if (upload.state == UiGlyphAtlasUploadState::Pending)
@@ -424,11 +425,7 @@ namespace Horo::Runtime::Ui {
                         ReleaseEntry(entryIndex);
                 }
                 ReleaseStaging(upload);
-                upload.occupied = false;
-                upload.entrySlot = 0;
-                upload.failure.reset();
-                upload.descriptor = {};
-                upload.state = UiGlyphAtlasUploadState::Retired;
+                static_cast<void>(FreeUpload(index));
             }
         }
 
@@ -507,9 +504,7 @@ namespace Horo::Runtime::Ui {
     UiGlyphAtlas::UiGlyphAtlas(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
     /** @copydoc UiGlyphAtlas::~UiGlyphAtlas */
-    UiGlyphAtlas::~UiGlyphAtlas() {
-        Shutdown();
-    }
+    UiGlyphAtlas::~UiGlyphAtlas() = default;
 
     /** @copydoc UiGlyphAtlas::UiGlyphAtlas(UiGlyphAtlas &&) */
     UiGlyphAtlas::UiGlyphAtlas(UiGlyphAtlas &&other) noexcept = default;
@@ -571,11 +566,6 @@ namespace Horo::Runtime::Ui {
         }
         storage_->PublishUpload(uploadIndex.Value(), acquiredEntry.Value(), raster, stagingOffset);
         return Result<UiGlyphAtlasUploadId>::Success(storage_->uploads[uploadIndex.Value()].id);
-    }
-
-    /** @copydoc UiGlyphAtlas::QueueUpload */
-    Result<UiGlyphAtlasUploadId> UiGlyphAtlas::QueueUpload(const UiGlyphAtlasRasterData &raster) {
-        return RequestUpload(raster);
     }
 
     /** @copydoc UiGlyphAtlas::DescribeUpload */
@@ -854,11 +844,6 @@ namespace Horo::Runtime::Ui {
         for (auto &upload : storage_->uploads)
             if (upload.occupied && upload.state == UiGlyphAtlasUploadState::Pending)
                 static_cast<void>(storage_->CancelPendingUpload(upload));
-    }
-
-    /** @copydoc UiGlyphAtlas::Shutdown */
-    void UiGlyphAtlas::Shutdown() noexcept {
-        StopAdmission();
     }
 
     /** @copydoc UiGlyphAtlas::IsDrained */
