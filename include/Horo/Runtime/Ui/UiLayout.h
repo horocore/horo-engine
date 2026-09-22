@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace Horo::Runtime::Ui {
@@ -105,11 +106,211 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] auto operator<=>(const UiLayoutConstraints &) const noexcept = default;
     };
 
+    /** @brief Signed logical fixed-point value in 1/64-DIP units. */
+    using UiScalar = std::int32_t;
+    inline constexpr UiScalar UiScalarUnitsPerDip = 64;
+    inline constexpr UiScalar UiScalarUnit = UiScalarUnitsPerDip;
+
+    /** @brief Closed authored logical length representation. Percent values use 64 units for 100 percent. */
+    enum class UiLengthKind : std::uint8_t {
+        Auto,
+        Dip,
+        Percent,
+    };
+
+    /** @brief One deterministic authored logical length. */
+    struct UiLength final {
+        UiLengthKind kind{UiLengthKind::Auto}; /**< Closed length unit. */
+        UiScalar value{};                      /**< DIP value or normalized percent where 64 is 100 percent. */
+
+        /** @brief Creates an intrinsic/automatic length. @return Automatic length. */
+        [[nodiscard]] static constexpr UiLength Auto() noexcept {
+            return {UiLengthKind::Auto, 0};
+        }
+
+        /** @brief Creates a logical DIP length. @param value Signed 1/64-DIP value. @return DIP length. */
+        [[nodiscard]] static constexpr UiLength Dip(const UiScalar value) noexcept {
+            return {UiLengthKind::Dip, value};
+        }
+
+        /** @brief Creates a normalized percentage length. @param value 64 units represent 100 percent. @return Percentage length. */
+        [[nodiscard]] static constexpr UiLength Percent(const UiScalar value) noexcept {
+            return {UiLengthKind::Percent, value};
+        }
+
+        /** @brief Checks representation and the unit-specific non-negative contract. @param allowNegative Whether negative DIP is allowed.
+         * @return Whether this value is finite and representable.
+         */
+        [[nodiscard]] bool IsValid(bool allowNegative = false) const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLength &) const noexcept = default;
+    };
+
+    /** @brief Positive authored aspect ratio represented as width-to-height integers. */
+    struct UiAspectRatio final {
+        std::uint32_t width{};  /**< Positive width ratio component; zero disables the constraint. */
+        std::uint32_t height{}; /**< Positive height ratio component; zero disables the constraint. */
+        /** @brief Checks an absent or positive finite ratio. @return Whether the ratio is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiAspectRatio &) const noexcept = default;
+    };
+
+    /** @brief Closed placement mode for one retained layout element. */
+    enum class UiLayoutPositioning : std::uint8_t {
+        Flow,
+        Absolute,
+    };
+
+    /** @brief Closed alignment used inside an anchor or parent segment. */
+    enum class UiLayoutAlignment : std::uint8_t {
+        Start,
+        Center,
+        End,
+        Stretch,
+    };
+
+    /** @brief Four logical edge values used by margin, padding, border, and offsets. */
+    struct UiLayoutEdges final {
+        UiScalar left{};   /**< Horizontal start edge. */
+        UiScalar top{};    /**< Vertical start edge. */
+        UiScalar right{};  /**< Horizontal end edge. */
+        UiScalar bottom{}; /**< Vertical end edge. */
+        /** @brief Checks edge signs. @param allowNegative Whether negative edges are accepted. @return Whether all edges are representable.
+         */
+        [[nodiscard]] bool IsValid(bool allowNegative = false) const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutEdges &) const noexcept = default;
+    };
+
+    /** @brief One optional normalized anchor axis; anchor values use 64 units for the full parent axis. */
+    struct UiLayoutAnchorAxis final {
+        std::optional<UiScalar> start;                         /**< Optional normalized start anchor. */
+        std::optional<UiScalar> end;                           /**< Optional normalized end anchor. */
+        UiLayoutAlignment alignment{UiLayoutAlignment::Start}; /**< Alignment within a two-anchor segment. */
+        bool preserveSize{};                                   /**< Allows explicit-size stretch to use centered alignment. */
+
+        /** @brief Checks anchors, alignment, and stretch policy. @return Whether the axis is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutAnchorAxis &) const noexcept = default;
+    };
+
+    /** @brief Pair of optional horizontal and vertical anchor axes. */
+    struct UiLayoutAnchors final {
+        UiLayoutAnchorAxis horizontal; /**< Horizontal parent segment. */
+        UiLayoutAnchorAxis vertical;   /**< Vertical parent segment. */
+        /** @brief Checks both axes. @return Whether the anchor descriptor is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutAnchors &) const noexcept = default;
+    };
+
+    /** @brief Normalized pivot used when positioning an anchored element. */
+    struct UiLayoutPivot final {
+        UiScalar x{32}; /**< Horizontal normalized pivot; 32 is center. */
+        UiScalar y{32}; /**< Vertical normalized pivot; 32 is center. */
+        /** @brief Checks normalized pivot values. @return Whether both values are in [0, 64]. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutPivot &) const noexcept = default;
+    };
+
+    /** @brief Typed sizing and box-model descriptor for one element. */
+    struct UiLayoutStyle final {
+        UiLength width{UiLength::Auto()};         /**< Preferred content width. */
+        UiLength height{UiLength::Auto()};        /**< Preferred content height. */
+        UiLength minimumWidth{UiLength::Dip(0)};  /**< Inclusive content minimum width. */
+        UiLength minimumHeight{UiLength::Dip(0)}; /**< Inclusive content minimum height. */
+        UiLength maximumWidth{UiLength::Auto()};  /**< Inclusive content maximum width; Auto means no authored maximum. */
+        UiLength maximumHeight{UiLength::Auto()}; /**< Inclusive content maximum height; Auto means no authored maximum. */
+        UiAspectRatio aspectRatio;                /**< Optional positive width-to-height constraint. */
+        UiLayoutEdges margin;                     /**< Signed outer margin edges. */
+        UiLayoutEdges padding;                    /**< Non-negative inner padding edges. */
+        UiLayoutEdges border;                     /**< Non-negative border edges. */
+        UiLayoutEdges offsets;                    /**< Signed positional offsets. */
+        UiLayoutAnchors anchors;                  /**< Optional containing segments. */
+        UiLayoutPivot pivot;                      /**< Normalized anchor pivot. */
+        UiLayoutAlignment horizontalAlignment{UiLayoutAlignment::Start}; /**< Flow horizontal alignment. */
+        UiLayoutAlignment verticalAlignment{UiLayoutAlignment::Start};   /**< Flow vertical alignment. */
+        UiLayoutPositioning positioning{UiLayoutPositioning::Flow};      /**< Flow or absolute placement. */
+
+        /** @brief Checks all typed size, box, anchor, and alignment fields. @return Whether the style can enter layout. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutStyle &) const noexcept = default;
+    };
+
+    /** @brief Closed intrinsic source kind resolved by a revisioned Runtime UI provider. */
+    enum class UiLayoutIntrinsicKind : std::uint8_t {
+        None,
+        Text,
+        Image,
+    };
+
+    /** @brief Intrinsic source declaration and bounded optional fallback. */
+    struct UiLayoutIntrinsicSource final {
+        UiLayoutIntrinsicKind kind{UiLayoutIntrinsicKind::None}; /**< Provider source kind. */
+        bool required{};                                         /**< Missing provider data fails the candidate when true. */
+        UiLogicalExtent fallback;                                /**< Used only for optional missing data. */
+        /** @brief Checks kind and fallback bounds. @return Whether the source is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutIntrinsicSource &) const noexcept = default;
+    };
+
+    /** @brief Immutable authored-style and intrinsic source descriptor for one current element handle. */
+    struct UiLayoutElementDescriptor final {
+        UiElementHandle element;           /**< Exact generation-safe retained element. */
+        UiLayoutStyle style;               /**< Typed sizing and placement semantics. */
+        UiLayoutIntrinsicSource intrinsic; /**< Optional text/image measurement source. */
+        /** @brief Checks handle, style, and source evidence. @return Whether the descriptor is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutElementDescriptor &) const noexcept = default;
+    };
+
+    /** @brief Immutable request supplied to a text or image intrinsic measurement provider. */
+    struct UiLayoutIntrinsicRequest final {
+        UiElementHandle element;   /**< Exact element being measured. */
+        UiLogicalExtent available; /**< Finite logical upper bound for the measurement. */
+        bool widthDefinite{};      /**< Whether width is independently definite. */
+        bool heightDefinite{};     /**< Whether height is independently definite. */
+    };
+
+    /** @brief Revision-scoped intrinsic contribution returned by a provider. */
+    struct UiLayoutIntrinsicMeasurement final {
+        UiLogicalExtent preferred;           /**< Non-negative preferred content extent. */
+        std::int32_t baseline{NoUiBaseline}; /**< Optional content baseline. */
+        bool dependsOnParentWidth{};         /**< Width changes require one bounded remeasure. */
+        bool dependsOnParentHeight{};        /**< Height changes require one bounded remeasure. */
+        /** @brief Checks metric and dependency evidence. @return Whether the measurement is publishable. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutIntrinsicMeasurement &) const noexcept = default;
+    };
+
+    /**
+     * @brief Borrowed, revision-frozen intrinsic metric provider for text and image elements.
+     * @details Implementations must be backend-neutral, synchronous, allocation-free on the frame-hot path, and must not retain
+     *          requests or expose native font/image resources. The owning Runtime UI service keeps the provider alive for the
+     *          duration of the synchronous evaluator call.
+     */
+    class UiLayoutIntrinsicProvider {
+    public:
+        virtual ~UiLayoutIntrinsicProvider() = default;
+        /** @brief Measures one text source from immutable revisioned content. @param request Frozen bounded request. @return Metric or
+         * typed failure. */
+        [[nodiscard]] virtual Result<UiLayoutIntrinsicMeasurement> MeasureText(const UiLayoutIntrinsicRequest &request) const = 0;
+        /** @brief Measures one image source from immutable revisioned asset metrics. @param request Frozen bounded request. @return Metric
+         * or typed failure. */
+        [[nodiscard]] virtual Result<UiLayoutIntrinsicMeasurement> MeasureImage(const UiLayoutIntrinsicRequest &request) const = 0;
+    };
+
+    /** @brief Deterministic outcome classification for authored constraint conflicts. */
+    enum class UiLayoutConstraintResult : std::uint8_t {
+        Satisfied,
+        Clamped,
+        Unsatisfiable,
+    };
+
     /** @brief Cached intrinsic contribution returned by one measure operation. */
     struct UiLayoutMeasurement final {
         UiLogicalExtent desired;      /**< Preferred clamped extent. */
         bool dependsOnParentWidth{};  /**< Whether a changed assigned width requires one remeasure. */
         bool dependsOnParentHeight{}; /**< Whether a changed assigned height requires one remeasure. */
+        UiLayoutConstraintResult constraintResult{UiLayoutConstraintResult::Satisfied}; /**< Deterministic clamp/unsatisfied evidence. */
+        std::int32_t baseline{NoUiBaseline};                                            /**< Optional intrinsic baseline. */
         /** @brief Checks that desired extent is clamped to its measure range.
          * @param constraints Exact range used for measurement.
          * @return Whether this contribution is valid.
@@ -191,6 +392,50 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] virtual Result<UiLayoutArrangement> Arrange(const UiLayoutArrangeRequest &request,
                                                                   std::span<UiLogicalRect> childContent) const = 0;
     };
+
+    /**
+     * @brief Backend-neutral absolute/anchor/intrinsic evaluator used by headless and rendered Runtime UI compositions.
+     * @details The descriptor and provider spans are borrowed for the evaluator lifetime. Descriptors must be sorted by exact
+     *          element handle so lookup is bounded and deterministic. Container flow is the intentionally small vertical stack
+     *          baseline owned by this ticket; flex and grid policies remain separate container work.
+     */
+    class UiDeclarativeLayoutEvaluator final : public UiLayoutEvaluator {
+    public:
+        /** @brief Creates a validated evaluator over one current tree's immutable semantic inputs.
+         * @param descriptors Current-generation element descriptors sorted by handle.
+         * @param intrinsic Revision-frozen text/image provider, required when a source is declared.
+         * @return Borrowed evaluator or a typed descriptor/provider failure.
+         */
+        [[nodiscard]] static Result<UiDeclarativeLayoutEvaluator> Create(std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                         const UiLayoutIntrinsicProvider *intrinsic = nullptr);
+
+        UiDeclarativeLayoutEvaluator(UiDeclarativeLayoutEvaluator &&) noexcept = default;
+        UiDeclarativeLayoutEvaluator &operator=(UiDeclarativeLayoutEvaluator &&) noexcept = default;
+        UiDeclarativeLayoutEvaluator(const UiDeclarativeLayoutEvaluator &) = delete;
+        UiDeclarativeLayoutEvaluator &operator=(const UiDeclarativeLayoutEvaluator &) = delete;
+
+        /** @copydoc UiLayoutEvaluator::ResolveChildConstraints */
+        [[nodiscard]] Result<void> ResolveChildConstraints(const UiLayoutChildConstraintRequest &request,
+                                                           std::span<UiLayoutConstraints> output) const override;
+        /** @copydoc UiLayoutEvaluator::Measure */
+        [[nodiscard]] Result<UiLayoutMeasurement> Measure(const UiLayoutMeasureRequest &request) const override;
+        /** @copydoc UiLayoutEvaluator::Arrange */
+        [[nodiscard]] Result<UiLayoutArrangement> Arrange(const UiLayoutArrangeRequest &request,
+                                                          std::span<UiLogicalRect> childContent) const override;
+
+    private:
+        UiDeclarativeLayoutEvaluator(std::span<const UiLayoutElementDescriptor> descriptors,
+                                     const UiLayoutIntrinsicProvider *intrinsic) noexcept
+            : descriptors_(descriptors), intrinsic_(intrinsic) {}
+
+        [[nodiscard]] const UiLayoutElementDescriptor *Find(UiElementHandle element) const noexcept;
+
+        std::span<const UiLayoutElementDescriptor> descriptors_;
+        const UiLayoutIntrinsicProvider *intrinsic_{};
+    };
+
+    /** @brief Compatibility name for the ticket's absolute/anchor evaluator contract. */
+    using UiAbsoluteLayoutEvaluator = UiDeclarativeLayoutEvaluator;
 
     /** @brief Exact immutable publication evidence for one layout snapshot. */
     struct UiLayoutSnapshotDescriptor final {
