@@ -94,6 +94,40 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor TextLayoutStorageExhausted;
     /** @brief The text-layout engine is closed and rejects new layout work. */
     extern const ErrorCodeDescriptor TextLayoutLifecycleUnavailable;
+    /** @brief A glyph-atlas owner, key, page, raster payload, or reset request is malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasInputInvalid;
+    /** @brief A glyph-atlas request belongs to an older or foreign logical atlas generation. */
+    extern const ErrorCodeDescriptor GlyphAtlasSourceStale;
+    /** @brief A glyph-atlas page, entry, or fixed representation bound was exceeded. */
+    extern const ErrorCodeDescriptor GlyphAtlasCapacityExceeded;
+    /** @brief No safe unpinned page tile is available for the requested glyph. */
+    extern const ErrorCodeDescriptor GlyphAtlasPressure;
+    /** @brief The terminal fallback glyph has not reached resident state. */
+    extern const ErrorCodeDescriptor GlyphAtlasFallbackUnavailable;
+    /** @brief A glyph-atlas upload descriptor or copied payload is invalid. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadInvalid;
+    /** @brief Upload metadata or staging capacity cannot admit another request. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadCapacityExceeded;
+    /** @brief An upload identity is absent, foreign, or no longer tracked. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadStale;
+    /** @brief An upload lifecycle method was called from an invalid state. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadInvalidTransition;
+    /** @brief A frame identity is absent, foreign, retired, or malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasFrameInvalid;
+    /** @brief One frame requested more distinct glyph pins than its fixed bound. */
+    extern const ErrorCodeDescriptor GlyphAtlasFrameCapacityExceeded;
+    /** @brief Every configured frame slot is still in flight. */
+    extern const ErrorCodeDescriptor GlyphAtlasFrameInFlight;
+    /** @brief An eviction budget or eviction request is malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasEvictionInvalid;
+    /** @brief A reload/device-loss reset reason or generation value is malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasResetInvalid;
+    /** @brief A reset was requested while frame or submitted-upload leases remain. */
+    extern const ErrorCodeDescriptor GlyphAtlasResetBusy;
+    /** @brief A glyph atlas is closed and rejects new work. */
+    extern const ErrorCodeDescriptor GlyphAtlasLifecycleUnavailable;
+    /** @brief Submitted upload work still retains an entry or staging lease. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadInFlight;
     /** @brief A style schema, value, or resolver request is malformed. */
     extern const ErrorCodeDescriptor StyleInvalid;
     /** @brief A style asset, class, token, or property repeats a stable identity. */
