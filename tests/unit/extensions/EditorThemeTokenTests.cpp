@@ -67,7 +67,7 @@ namespace Horo::Extensions::Tests {
         frame.supportedInteractionMask = EditorThemeInteractionRoleBit(EditorThemeInteractionRole::Default);
         CHECK(ResolveEditorThemeInteractionRole(EditorThemeInteractionRole::Selected, frame) == EditorThemeInteractionRole::Default);
         frame.supportedFontMask = EditorThemeFontRoleBit(EditorThemeFontRole::Sans);
-        CHECK(ResolveEditorThemeFontRole(EditorThemeFontRole::Technical, frame) == EditorThemeFontRole::Sans);
+        CHECK(ResolveEditorThemeFontRole(EditorThemeFontRole::Monospace, frame) == EditorThemeFontRole::Sans);
         frame.supportedIconMask = EditorThemeIconRoleBit(EditorThemeIconRole::Generic);
         CHECK(ResolveEditorThemeIconRole(EditorThemeIconRole::Delete, frame) == EditorThemeIconRole::Generic);
     }
