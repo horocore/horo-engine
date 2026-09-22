@@ -53,6 +53,9 @@ namespace Horo::Editor {
         bool AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                      Math::ClipDepthRange depthRange);
+        bool HandleAcceptedAssetDrop(const ImGuiPayload *accepted, ImDrawList &drawList, const ViewportSurfaceLayout &layout,
+                                     const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                     const EditorGuiContext &context, Math::ClipDepthRange depthRange);
         void CancelAssetPlacementPreview(EditorWorkspaceViewCommandData &command);
         static void DrawAssetPlacementHint(ImDrawList &drawList, const ViewportSurfaceLayout &layout, ImVec2 pointer,
                                            const EditorGuiContext &context);
