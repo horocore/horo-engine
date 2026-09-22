@@ -340,8 +340,9 @@ namespace Horo::Runtime::Ui {
             }, command.payload);
         }
 
-        [[nodiscard]] Result<void> SnapVertices(const UiResolvedScreenCanvas &canvas, const std::span<UiRenderVertex> vertices) {
-            for (auto &vertex : vertices) {
+        [[nodiscard]] Result<void> SnapVertices(const UiResolvedScreenCanvas &canvas,
+                                                const std::span<UiRenderVertex> targetVertices) const {
+            for (auto &vertex : targetVertices) {
                 const auto snapped = SnapUiPointToPixels(canvas, vertex.x, vertex.y);
                 if (snapped.HasError())
                     return Result<void>::Failure(snapped.ErrorValue());

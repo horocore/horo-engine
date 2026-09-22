@@ -49,6 +49,14 @@ namespace Horo::Runtime::Ui {
             bool arrangeDirty{true};
         };
 
+        struct PublishedState final {
+            UiLayoutSourceRevisions sources;
+            UiLayoutConstraints rootConstraints;
+            UiLogicalRect rootContent;
+            UiCanvasScaleFactor fontScale;
+            UiInteractionRevision interaction;
+        };
+
         UiLayoutEngineDescriptor descriptor;
         UiLayoutEngineState lifecycle{UiLayoutEngineState::Active};
         std::vector<Node> activeNodes;
@@ -65,13 +73,10 @@ namespace Horo::Runtime::Ui {
         std::vector<std::shared_ptr<UiLayoutSnapshot::Storage>> slots;
         std::shared_ptr<UiLayoutSnapshot::Storage> current;
         std::size_t nextSlot{};
-        UiLayoutSourceRevisions sources;
-        UiLayoutConstraints rootConstraints;
-        UiLogicalRect rootContent;
-        UiCanvasScaleFactor fontScale;
-        UiInteractionRevision interaction;
+        PublishedState published;
 
-        explicit Storage(const UiLayoutEngineDescriptor &source) : descriptor(source), interaction(source.initialInteractionRevision) {
+        explicit Storage(const UiLayoutEngineDescriptor &source)
+            : descriptor(source), published{.interaction = source.initialInteractionRevision} {
             activeNodes.reserve(source.elementCapacity);
             candidateNodes.reserve(source.elementCapacity);
             activeChildren.reserve(source.elementCapacity - 1);
@@ -339,9 +344,9 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<std::shared_ptr<UiLayoutSnapshot::Storage>> PublishCandidate(const UiLayoutUpdateRequest &request) {
-            UiInteractionRevision publication = interaction;
+            UiInteractionRevision publication = published.interaction;
             if (current) {
-                const auto next = interaction.Next();
+                const auto next = published.interaction.Next();
                 if (next.HasError())
                     return Result<std::shared_ptr<UiLayoutSnapshot::Storage>>::Failure(next.ErrorValue());
                 publication = next.Value();
@@ -367,11 +372,11 @@ namespace Horo::Runtime::Ui {
             current = slot;
             activeNodes.swap(candidateNodes);
             activeChildren.swap(candidateChildren);
-            sources = request.sources;
-            rootConstraints = request.rootConstraints;
-            rootContent = request.rootContent;
-            fontScale = request.fontScale;
-            interaction = publication;
+            published.sources = request.sources;
+            published.rootConstraints = request.rootConstraints;
+            published.rootContent = request.rootContent;
+            published.fontScale = request.fontScale;
+            published.interaction = publication;
             invalidations.clear();
             slot->leases.fetch_add(1);
             return Result<std::shared_ptr<UiLayoutSnapshot::Storage>>::Success(std::move(slot));
@@ -523,13 +528,14 @@ namespace Horo::Runtime::Ui {
             tree.Size() > storage_->descriptor.elementCapacity)
             return Failure<UiLayoutSnapshot>(UiErrors::LayoutSourceStale);
 
-        const bool topologyChanged = storage_->activeNodes.empty() || storage_->sources.tree != request.sources.tree;
-        const bool rootChanged =
-            storage_->current && (storage_->rootConstraints != request.rootConstraints || storage_->rootContent != request.rootContent ||
-                                  storage_->fontScale != request.fontScale);
-        const bool sourcesChanged = !storage_->current || storage_->sources != request.sources ||
-                                    storage_->rootConstraints != request.rootConstraints || storage_->rootContent != request.rootContent ||
-                                    storage_->fontScale != request.fontScale;
+        const bool topologyChanged = storage_->activeNodes.empty() || storage_->published.sources.tree != request.sources.tree;
+        const bool rootChanged = storage_->current && (storage_->published.rootConstraints != request.rootConstraints ||
+                                                       storage_->published.rootContent != request.rootContent ||
+                                                       storage_->published.fontScale != request.fontScale);
+        const bool sourcesChanged = !storage_->current || storage_->published.sources != request.sources ||
+                                    storage_->published.rootConstraints != request.rootConstraints ||
+                                    storage_->published.rootContent != request.rootContent ||
+                                    storage_->published.fontScale != request.fontScale;
         if (!sourcesChanged && storage_->invalidations.empty()) {
             storage_->current->leases.fetch_add(1);
             return Result<UiLayoutSnapshot>::Success(UiLayoutSnapshot{storage_->current});
