@@ -30,10 +30,10 @@ namespace Horo::Runtime::Ui::RenderGeometryInternal {
             TransformPoint(*quad.transform, corners[3].x, corners[3].y),
         };
         const auto first = static_cast<std::uint32_t>(vertices.size());
-        vertices.emplace_back(UiRenderVertex{transformed[0].x, transformed[0].y, quad.uv[0], quad.uv[1], quad.color});
-        vertices.emplace_back(UiRenderVertex{transformed[1].x, transformed[1].y, quad.uv[2], quad.uv[1], quad.color});
-        vertices.emplace_back(UiRenderVertex{transformed[2].x, transformed[2].y, quad.uv[2], quad.uv[3], quad.color});
-        vertices.emplace_back(UiRenderVertex{transformed[3].x, transformed[3].y, quad.uv[0], quad.uv[3], quad.color});
+        vertices.emplace_back(transformed[0].x, transformed[0].y, quad.uv[0], quad.uv[1], quad.color);
+        vertices.emplace_back(transformed[1].x, transformed[1].y, quad.uv[2], quad.uv[1], quad.color);
+        vertices.emplace_back(transformed[2].x, transformed[2].y, quad.uv[2], quad.uv[3], quad.color);
+        vertices.emplace_back(transformed[3].x, transformed[3].y, quad.uv[0], quad.uv[3], quad.color);
         indices.insert(indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
     }
 

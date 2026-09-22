@@ -46,24 +46,25 @@ namespace Horo::Runtime::Ui {
         /** @brief Assigns the batch key fields for one draw payload. */
         template <typename Draw>
         [[nodiscard]] Result<void> AssignBatchKey(UiRenderGeometryBatchKey &key, const UiRenderSnapshot &snapshot, const Draw &draw) {
+            using enum UiRenderGeometryPrimitive;
             using DrawType = std::decay_t<Draw>;
             if constexpr (std::is_same_v<DrawType, UiSolidDraw>)
-                key.primitive = UiRenderGeometryPrimitive::SolidRectangle;
+                key.primitive = SolidRectangle;
             else if constexpr (std::is_same_v<DrawType, UiBorderDraw>)
-                key.primitive = UiRenderGeometryPrimitive::BorderRectangle;
+                key.primitive = BorderRectangle;
             else if constexpr (std::is_same_v<DrawType, UiImageDraw>) {
-                key.primitive = UiRenderGeometryPrimitive::ImageRectangle;
+                key.primitive = ImageRectangle;
                 key.resource = draw.resource;
             } else if constexpr (std::is_same_v<DrawType, UiSpriteDraw>) {
-                key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
+                key.primitive = SpriteRectangle;
                 key.resource = draw.resource;
             } else if constexpr (std::is_same_v<DrawType, UiNineSliceDraw>) {
-                key.primitive = UiRenderGeometryPrimitive::NineSliceRectangle;
+                key.primitive = NineSliceRectangle;
                 key.resource = draw.resource;
             } else if constexpr (std::is_same_v<DrawType, UiTextDraw>) {
                 if (draw.run >= snapshot.TextRuns().size())
                     return Failure(UiErrors::RenderGeometryInvalid);
-                key.primitive = UiRenderGeometryPrimitive::TextGlyphs;
+                key.primitive = TextGlyphs;
                 key.resource = snapshot.TextRuns()[draw.run].fontResource;
             }
             return Result<void>::Success();
