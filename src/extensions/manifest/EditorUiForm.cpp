@@ -28,10 +28,6 @@ namespace Horo::Extensions {
             return Result<void>::Failure(MakeError(ExtensionErrors::EditorUiFormCapacityExceeded, std::string{reason}));
         }
 
-        [[nodiscard]] Result<void> ThemeInvalid(const std::string_view reason) {
-            return Result<void>::Failure(MakeError(ExtensionErrors::EditorUiThemeInvalid, std::string{reason}));
-        }
-
         [[nodiscard]] bool IsKnownTextKind(const EditorUiTextKind kind) noexcept {
             return static_cast<std::uint8_t>(kind) <= static_cast<std::uint8_t>(EditorUiTextKind::TechnicalText);
         }
@@ -111,9 +107,11 @@ namespace Horo::Extensions {
                 return false;
             if (text.value.empty())
                 return !required;
-            const std::size_t maximum = text.kind == EditorUiTextKind::LocalizationKey
-                                            ? limits.maximumLocalizationKeyBytes
-                                            : (technicalMaximum == 0 ? limits.maximumTextBytes : technicalMaximum);
+            std::size_t maximum = limits.maximumTextBytes;
+            if (text.kind == EditorUiTextKind::LocalizationKey)
+                maximum = limits.maximumLocalizationKeyBytes;
+            else if (technicalMaximum != 0)
+                maximum = technicalMaximum;
             if (text.value.size() > maximum || !IsValidUtf8ScalarSequence(text.value))
                 return false;
             if (text.kind == EditorUiTextKind::LocalizationKey)
@@ -137,33 +135,9 @@ namespace Horo::Extensions {
             return !base.label.value.empty() || !base.accessibleLabel.value.empty();
         }
 
-        [[nodiscard]] bool IsInteractive(const EditorUiNodeKind kind) noexcept {
-            switch (kind) {
-                case EditorUiNodeKind::TextField:
-                case EditorUiNodeKind::Number:
-                case EditorUiNodeKind::Boolean:
-                case EditorUiNodeKind::Choice:
-                case EditorUiNodeKind::Path:
-                case EditorUiNodeKind::Color:
-                case EditorUiNodeKind::Vector:
-                case EditorUiNodeKind::Action:
-                    return true;
-                case EditorUiNodeKind::Label:
-                case EditorUiNodeKind::Text:
-                case EditorUiNodeKind::Validation:
-                case EditorUiNodeKind::Group:
-                case EditorUiNodeKind::Stack:
-                case EditorUiNodeKind::Row:
-                case EditorUiNodeKind::Grid:
-                case EditorUiNodeKind::Help:
-                    return false;
-            }
-            return false;
-        }
-
         [[nodiscard]] bool IsContainer(const EditorUiNodeKind kind) noexcept {
-            return kind == EditorUiNodeKind::Group || kind == EditorUiNodeKind::Stack || kind == EditorUiNodeKind::Row ||
-                   kind == EditorUiNodeKind::Grid;
+            using enum EditorUiNodeKind;
+            return kind == Group || kind == Stack || kind == Row || kind == Grid;
         }
 
         [[nodiscard]] Result<void> ValidateBase(const EditorUiNodeBase &base, const EditorUiFormLimits &limits) {
@@ -185,16 +159,15 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] bool IsFiniteNumberValue(const std::variant<std::int64_t, double> &value) noexcept {
-            return std::visit([](const auto typed) noexcept {
-                using T = std::decay_t<decltype(typed)>;
-                if constexpr (std::is_same_v<T, double>)
+            return std::visit([]<typename T>(const T typed) noexcept {
+                if constexpr (std::is_same_v<std::decay_t<T>, double>)
                     return IsFiniteNumber(typed);
                 return true;
             }, value);
         }
 
         [[nodiscard]] double NumberValue(const std::variant<std::int64_t, double> &value) noexcept {
-            return std::visit([](const auto typed) noexcept {
+            return std::visit([]<typename T>(const T typed) noexcept {
                 return static_cast<double>(typed);
             }, value);
         }
@@ -214,108 +187,151 @@ namespace Horo::Extensions {
             return true;
         }
 
+        [[nodiscard]] Result<void> ValidatePassiveTextNode(const EditorUiNodeBase &base, const EditorUiText &text,
+                                                           const EditorUiFormLimits &limits, const std::string_view reason) {
+            if (base.focusPolicy != EditorUiFocusPolicy::Never || base.readOnly || !IsValidText(text, limits, true))
+                return Invalid(reason);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateTextFieldNode(const EditorUiTextFieldNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidBinding(node.binding, limits) || node.maximumBytes == 0 ||
+                node.maximumBytes > limits.maximumTextBytes || !IsValidText(node.placeholder, limits, false, node.maximumBytes) ||
+                node.value.size() > node.maximumBytes || !IsValidUtf8ScalarSequence(node.value))
+                return Invalid("Text field binding, label, placeholder, or value is invalid.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateNumberNode(const EditorUiNumberNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidBinding(node.binding, limits) || !IsKnownNumberKind(node.numberKind) ||
+                !IsFiniteNumberValue(node.value))
+                return Invalid("Number field binding, label, kind, or value is invalid.");
+            if ((node.numberKind == EditorUiNumberKind::Integer && !std::holds_alternative<std::int64_t>(node.value)) ||
+                (node.numberKind == EditorUiNumberKind::Decimal && !std::holds_alternative<double>(node.value)))
+                return Invalid("Number field value type does not match its declared kind.");
+            const auto validOptionalNumber = [&](const std::optional<double> &candidate, const bool integralRequired) {
+                return !candidate.has_value() || (IsFiniteNumber(*candidate) && (!integralRequired || IsIntegral(*candidate)));
+            };
+            if (!validOptionalNumber(node.minimum, node.numberKind == EditorUiNumberKind::Integer) ||
+                !validOptionalNumber(node.maximum, node.numberKind == EditorUiNumberKind::Integer) ||
+                !validOptionalNumber(node.step, node.numberKind == EditorUiNumberKind::Integer) ||
+                (node.step.has_value() && *node.step <= 0.0) ||
+                (node.minimum.has_value() && node.maximum.has_value() && *node.minimum > *node.maximum))
+                return Invalid("Number field range or step is invalid.");
+            const double value = NumberValue(node.value);
+            if ((node.minimum.has_value() && value < *node.minimum) || (node.maximum.has_value() && value > *node.maximum))
+                return Invalid("Number field value is outside its declared range.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateChoiceNode(const EditorUiChoiceNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidBinding(node.binding, limits) || node.options.empty() ||
+                node.options.size() > limits.maximumChoices)
+                return Invalid("Choice field binding, label, or option count is invalid.");
+            std::vector<std::string> optionIds;
+            optionIds.reserve(node.options.size());
+            for (const auto &option : node.options) {
+                if (option.id.size() > limits.maximumNodeIdentityBytes ||
+                    !IsValidText(option.label, limits, true, limits.maximumChoiceLabelBytes))
+                    return Invalid("Choice option identity or label is invalid.");
+                optionIds.push_back(option.id);
+            }
+            if (!IsUniqueCanonical(optionIds, limits.maximumNodeIdentityBytes))
+                return Invalid("Choice option identities must be unique and canonical.");
+            const auto selected = std::ranges::find(optionIds, node.selected);
+            if (node.selected.empty() ? !node.allowEmpty : selected == optionIds.end())
+                return Invalid("Choice selection is not represented by its options.");
+            if (selected != optionIds.end() && !node.options[static_cast<std::size_t>(selected - optionIds.begin())].enabled)
+                return Invalid("Choice selection cannot target a disabled option.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidatePathNode(const EditorUiPathNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidBinding(node.binding, limits) || !IsKnownPathKind(node.pathKind) ||
+                node.value.size() > limits.maximumTextBytes || !IsValidUtf8ScalarSequence(node.value))
+                return Invalid("Path field binding, label, kind, or value is invalid.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateColorNode(const EditorUiColorNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidBinding(node.binding, limits) || !node.value.IsValid() ||
+                (!node.allowAlpha && node.value.alpha != 1.0F))
+                return Invalid("Color field binding, label, or value is invalid.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateVectorNode(const EditorUiVectorNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidBinding(node.binding, limits) || !node.value.IsValid())
+                return Invalid("Vector field binding, label, or value is invalid.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateActionNode(const EditorUiActionNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidAction(node.action, limits) || !IsKnownActionKind(node.actionKind) ||
+                node.base.readOnly)
+                return Invalid("Action identity, label, kind, or state is invalid.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateValidationNode(const EditorUiValidationNode &node, const EditorUiFormLimits &limits) {
+            if (node.base.focusPolicy != EditorUiFocusPolicy::Never || node.base.readOnly || !IsKnownValidationSeverity(node.severity) ||
+                !IsCanonicalIdentity(node.code, limits.maximumNodeIdentityBytes) || !IsValidText(node.message, limits, true))
+                return Invalid("Validation identity, severity, or message is invalid.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateContainerNode(const EditorUiContainerNode &node) {
+            if (node.base.focusPolicy != EditorUiFocusPolicy::Never || node.base.readOnly || !IsKnownLayoutKind(node.layout) ||
+                node.columns == 0 || (node.layout == EditorUiLayoutKind::Grid && node.columns > 16) ||
+                (node.layout != EditorUiLayoutKind::Grid && node.columns != 1))
+                return Invalid("Container layout, columns, or state is invalid.");
+            if (node.layout == EditorUiLayoutKind::Group && !HasAccessibleName(node.base))
+                return Invalid("Group containers require a localized or accessible title.");
+            return Result<void>::Success();
+        }
+
+        template <typename T> [[nodiscard]] Result<void> ValidateNodePayload(const T &node, const EditorUiFormLimits &limits) {
+            using Node = std::decay_t<T>;
+            if constexpr (std::is_same_v<Node, EditorUiLabelNode>)
+                return ValidatePassiveTextNode(node.base, node.text, limits, "Label nodes must be non-focusable and carry valid text.");
+            else if constexpr (std::is_same_v<Node, EditorUiTextNode>)
+                return ValidatePassiveTextNode(node.base, node.text, limits, "Text nodes must be non-focusable and carry valid text.");
+            else if constexpr (std::is_same_v<Node, EditorUiTextFieldNode>)
+                return ValidateTextFieldNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiNumberNode>)
+                return ValidateNumberNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiBooleanNode>)
+                return HasAccessibleName(node.base) && IsValidBinding(node.binding, limits)
+                           ? Result<void>::Success()
+                           : Invalid("Boolean field binding or label is invalid.");
+            else if constexpr (std::is_same_v<Node, EditorUiChoiceNode>)
+                return ValidateChoiceNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiPathNode>)
+                return ValidatePathNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiColorNode>)
+                return ValidateColorNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiVectorNode>)
+                return ValidateVectorNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiActionNode>)
+                return ValidateActionNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiValidationNode>)
+                return ValidateValidationNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiContainerNode>)
+                return ValidateContainerNode(node);
+            else
+                return ValidatePassiveTextNode(node.base, node.text, limits, "Help nodes must be non-focusable and carry valid text.");
+        }
+
         [[nodiscard]] Result<void> ValidateNodeInternal(const EditorUiNode &node, const EditorUiFormLimits &limits) {
-            return std::visit([&](const auto &typed) -> Result<void> {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([&]<typename T>(const T &typed) {
                 if (const Result<void> base = ValidateBase(typed.base, limits); base.HasError())
                     return base;
-                const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
-
-                if constexpr (std::is_same_v<T, EditorUiLabelNode>) {
-                    if (typed.base.focusPolicy != EditorUiFocusPolicy::Never || typed.base.readOnly ||
-                        !IsValidText(typed.text, limits, true))
-                        return Invalid("Label nodes must be non-focusable and carry valid text.");
-                } else if constexpr (std::is_same_v<T, EditorUiTextNode>) {
-                    if (typed.base.focusPolicy != EditorUiFocusPolicy::Never || typed.base.readOnly ||
-                        !IsValidText(typed.text, limits, true))
-                        return Invalid("Text nodes must be non-focusable and carry valid text.");
-                } else if constexpr (std::is_same_v<T, EditorUiTextFieldNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits) || typed.maximumBytes == 0 ||
-                        typed.maximumBytes > limits.maximumTextBytes ||
-                        !IsValidText(typed.placeholder, limits, false, typed.maximumBytes) || typed.value.size() > typed.maximumBytes ||
-                        !IsValidUtf8ScalarSequence(typed.value))
-                        return Invalid("Text field binding, label, placeholder, or value is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiNumberNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits) || !IsKnownNumberKind(typed.numberKind) ||
-                        !IsFiniteNumberValue(typed.value))
-                        return Invalid("Number field binding, label, kind, or value is invalid.");
-                    if ((typed.numberKind == EditorUiNumberKind::Integer && !std::holds_alternative<std::int64_t>(typed.value)) ||
-                        (typed.numberKind == EditorUiNumberKind::Decimal && !std::holds_alternative<double>(typed.value)))
-                        return Invalid("Number field value type does not match its declared kind.");
-                    const auto validOptionalNumber = [&](const std::optional<double> &candidate, const bool integralRequired) {
-                        return !candidate.has_value() || (IsFiniteNumber(*candidate) && (!integralRequired || IsIntegral(*candidate)));
-                    };
-                    if (!validOptionalNumber(typed.minimum, typed.numberKind == EditorUiNumberKind::Integer) ||
-                        !validOptionalNumber(typed.maximum, typed.numberKind == EditorUiNumberKind::Integer) ||
-                        !validOptionalNumber(typed.step, typed.numberKind == EditorUiNumberKind::Integer) ||
-                        (typed.step.has_value() && *typed.step <= 0.0) ||
-                        (typed.minimum.has_value() && typed.maximum.has_value() && *typed.minimum > *typed.maximum))
-                        return Invalid("Number field range or step is invalid.");
-                    const double value = NumberValue(typed.value);
-                    if ((typed.minimum.has_value() && value < *typed.minimum) || (typed.maximum.has_value() && value > *typed.maximum))
-                        return Invalid("Number field value is outside its declared range.");
-                } else if constexpr (std::is_same_v<T, EditorUiBooleanNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits))
-                        return Invalid("Boolean field binding or label is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiChoiceNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits) || typed.options.empty() ||
-                        typed.options.size() > limits.maximumChoices)
-                        return Invalid("Choice field binding, label, or option count is invalid.");
-                    std::vector<std::string> optionIds;
-                    optionIds.reserve(typed.options.size());
-                    for (const auto &option : typed.options) {
-                        if (option.id.size() > limits.maximumNodeIdentityBytes ||
-                            !IsValidText(option.label, limits, true, limits.maximumChoiceLabelBytes))
-                            return Invalid("Choice option identity or label is invalid.");
-                        optionIds.push_back(option.id);
-                    }
-                    if (!IsUniqueCanonical(optionIds, limits.maximumNodeIdentityBytes))
-                        return Invalid("Choice option identities must be unique and canonical.");
-                    const auto selected = std::ranges::find(optionIds, typed.selected);
-                    if (typed.selected.empty() ? !typed.allowEmpty : selected == optionIds.end())
-                        return Invalid("Choice selection is not represented by its options.");
-                    if (selected != optionIds.end() && !typed.options[static_cast<std::size_t>(selected - optionIds.begin())].enabled)
-                        return Invalid("Choice selection cannot target a disabled option.");
-                } else if constexpr (std::is_same_v<T, EditorUiPathNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits) || !IsKnownPathKind(typed.pathKind) ||
-                        typed.value.size() > limits.maximumTextBytes || !IsValidUtf8ScalarSequence(typed.value))
-                        return Invalid("Path field binding, label, kind, or value is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiColorNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits) || !typed.value.IsValid() ||
-                        (!typed.allowAlpha && typed.value.alpha != 1.0F))
-                        return Invalid("Color field binding, label, or value is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiVectorNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidBinding(typed.binding, limits) || !typed.value.IsValid())
-                        return Invalid("Vector field binding, label, or value is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiActionNode>) {
-                    if (!HasAccessibleName(typed.base) || !IsValidAction(typed.action, limits) || !IsKnownActionKind(typed.actionKind) ||
-                        typed.base.readOnly)
-                        return Invalid("Action identity, label, kind, or state is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiValidationNode>) {
-                    if (typed.base.focusPolicy != EditorUiFocusPolicy::Never || typed.base.readOnly ||
-                        !IsKnownValidationSeverity(typed.severity) || !IsCanonicalIdentity(typed.code, limits.maximumNodeIdentityBytes) ||
-                        !IsValidText(typed.message, limits, true))
-                        return Invalid("Validation identity, severity, or message is invalid.");
-                } else if constexpr (std::is_same_v<T, EditorUiContainerNode>) {
-                    if (typed.base.focusPolicy != EditorUiFocusPolicy::Never || typed.base.readOnly || !IsKnownLayoutKind(typed.layout) ||
-                        typed.columns == 0 || (typed.layout == EditorUiLayoutKind::Grid && typed.columns > 16) ||
-                        (typed.layout != EditorUiLayoutKind::Grid && typed.columns != 1))
-                        return Invalid("Container layout, columns, or state is invalid.");
-                    if (typed.layout == EditorUiLayoutKind::Group && !HasAccessibleName(typed.base))
-                        return Invalid("Group containers require a localized or accessible title.");
-                } else if constexpr (std::is_same_v<T, EditorUiHelpNode>) {
-                    if (typed.base.focusPolicy != EditorUiFocusPolicy::Never || typed.base.readOnly ||
-                        !IsValidText(typed.text, limits, true))
-                        return Invalid("Help nodes must be non-focusable and carry valid text.");
-                }
-
-                static_cast<void>(kind);
-                return Result<void>::Success();
+                return ValidateNodePayload(typed, limits);
             }, node.payload);
         }
 
         [[nodiscard]] const EditorUiNodeBase &BaseOf(const EditorUiNode &node) noexcept {
-            return std::visit([](const auto &typed) -> const EditorUiNodeBase & {
+            return std::visit([]<typename T>(const T &typed) -> const EditorUiNodeBase & {
                 return typed.base;
             }, node.payload);
         }
@@ -347,206 +363,84 @@ namespace Horo::Extensions {
             return depth;
         }
 
-        [[nodiscard]] EditorUiThemeToken ToneToken(const EditorUiSemanticTone tone) noexcept {
-            switch (tone) {
-                case EditorUiSemanticTone::Neutral:
-                case EditorUiSemanticTone::Secondary:
-                    return EditorUiThemeToken::Border;
-                case EditorUiSemanticTone::Primary:
-                    return EditorUiThemeToken::Accent;
-                case EditorUiSemanticTone::Positive:
-                    return EditorUiThemeToken::Positive;
-                case EditorUiSemanticTone::Warning:
-                    return EditorUiThemeToken::Warning;
-                case EditorUiSemanticTone::Critical:
-                    return EditorUiThemeToken::Critical;
-            }
-            return EditorUiThemeToken::None;
-        }
+        [[nodiscard]] Result<void> CollectNodeReferences(const EditorUiNode &node, const EditorUiFormLimits &limits,
+                                                         std::vector<std::string> &nodeIds, std::vector<std::string> &bindingIds,
+                                                         std::vector<std::string> &actionIds, std::size_t &validationCount) {
+            const EditorUiNodeBase &base = BaseOf(node);
+            if (std::ranges::find(nodeIds, base.id.value) != nodeIds.end())
+                return Invalid("Editor UI node identities must be unique within a form.");
+            nodeIds.push_back(base.id.value);
 
-        [[nodiscard]] EditorUiThemeToken ValidationToken(const EditorUiValidationSeverity severity) noexcept {
-            switch (severity) {
-                case EditorUiValidationSeverity::Info:
-                    return EditorUiThemeToken::Accent;
-                case EditorUiValidationSeverity::Warning:
-                    return EditorUiThemeToken::Warning;
-                case EditorUiValidationSeverity::Error:
-                    return EditorUiThemeToken::Critical;
-            }
-            return EditorUiThemeToken::None;
-        }
-
-        [[nodiscard]] float ControlHeight(const EditorUiComponentSize size, const EditorUiThemeMetrics &metrics) noexcept {
-            switch (size) {
-                case EditorUiComponentSize::Small:
-                    return metrics.smallControlHeight;
-                case EditorUiComponentSize::Medium:
-                    return metrics.mediumControlHeight;
-                case EditorUiComponentSize::Large:
-                    return metrics.largeControlHeight;
-            }
-            return metrics.mediumControlHeight;
-        }
-
-        [[nodiscard]] float NodeHeight(const EditorUiNodeKind kind, const EditorUiComponentSize size,
-                                       const EditorUiThemeMetrics &metrics) noexcept {
-            switch (kind) {
-                case EditorUiNodeKind::TextField:
-                case EditorUiNodeKind::Number:
-                case EditorUiNodeKind::Boolean:
-                case EditorUiNodeKind::Choice:
-                case EditorUiNodeKind::Path:
-                case EditorUiNodeKind::Color:
-                case EditorUiNodeKind::Vector:
-                case EditorUiNodeKind::Action:
-                    return ControlHeight(size, metrics);
-                case EditorUiNodeKind::Label:
-                case EditorUiNodeKind::Text:
-                case EditorUiNodeKind::Validation:
-                case EditorUiNodeKind::Group:
-                case EditorUiNodeKind::Stack:
-                case EditorUiNodeKind::Row:
-                case EditorUiNodeKind::Grid:
-                case EditorUiNodeKind::Help:
-                    return metrics.textLineHeight;
-            }
-            return metrics.textLineHeight;
-        }
-
-        [[nodiscard]] bool IsValidMetric(const float value) noexcept {
-            return std::isfinite(value) && value > 0.0F;
-        }
-
-        [[nodiscard]] Result<void> ValidateTheme(const EditorUiThemeFrame &theme) {
-            constexpr std::uint32_t knownTokenMask =
-                EditorUiThemeTokenBit(EditorUiThemeToken::Critical) | (EditorUiThemeTokenBit(EditorUiThemeToken::Critical) - 1U);
-            if (theme.schemaVersion != EditorUiFormSchemaVersion || theme.revision == 0 || !std::isfinite(theme.uiScale) ||
-                theme.uiScale <= 0.0F || theme.uiScale > 8.0F || (theme.supportedTokenMask & ~knownTokenMask) != 0U ||
-                !IsValidMetric(theme.metrics.smallControlHeight) || !IsValidMetric(theme.metrics.mediumControlHeight) ||
-                !IsValidMetric(theme.metrics.largeControlHeight) || !IsValidMetric(theme.metrics.textLineHeight) ||
-                !IsValidMetric(theme.metrics.rowGap) || !IsValidMetric(theme.metrics.defaultWidth))
-                return ThemeInvalid("Editor UI theme frame has an unsupported schema, scale, token set, or metric.");
-            if (theme.metrics.smallControlHeight > theme.metrics.mediumControlHeight ||
-                theme.metrics.mediumControlHeight > theme.metrics.largeControlHeight)
-                return ThemeInvalid("Editor UI theme control heights must be ordered from small to large.");
+            const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
+            if (kind == EditorUiNodeKind::Validation && ++validationCount > limits.maximumValidationMessages)
+                return CapacityExceeded("Editor UI validation message count exceeds its configured bound.");
+            std::visit([&]<typename T>(const T &typed) {
+                using Node = std::decay_t<T>;
+                if constexpr (requires { typed.binding.value; })
+                    bindingIds.push_back(typed.binding.value);
+                else if constexpr (std::is_same_v<Node, EditorUiActionNode>)
+                    actionIds.push_back(typed.action.value);
+            }, node.payload);
             return Result<void>::Success();
         }
 
-        [[nodiscard]] EditorUiThemeToken ResolveToken(const EditorUiThemeToken requested, const EditorUiThemeFrame &frame) noexcept {
-            if (requested == EditorUiThemeToken::None)
-                return EditorUiThemeToken::None;
-            if ((frame.supportedTokenMask & EditorUiThemeTokenBit(requested)) != 0U)
-                return requested;
+        [[nodiscard]] Result<void> ValidateNodeParent(const std::vector<EditorUiNode> &nodes, const std::size_t index,
+                                                      const EditorUiFormLimits &limits) {
+            const EditorUiNodeBase &base = BaseOf(nodes[index]);
+            if (base.parent.value.empty())
+                return Result<void>::Success();
+            const std::size_t parentIndex = FindNodeIndex(nodes, base.parent);
+            if (parentIndex >= index)
+                return Invalid("Editor UI parents must be declared before their children.");
+            if (!ParentAllowsChild(EditorUiNodeKindOf(nodes[parentIndex]), EditorUiNodeKindOf(nodes[index])))
+                return Invalid("Editor UI node parent is not a compatible container or annotation owner.");
+            if (NodeDepth(nodes, index) > limits.maximumDepth)
+                return CapacityExceeded("Editor UI form nesting depth exceeds its configured bound.");
+            return Result<void>::Success();
+        }
 
-            const std::array<EditorUiThemeToken, 2> fallbacks = [&] {
-                switch (requested) {
-                    case EditorUiThemeToken::SurfaceSubtle:
-                        return std::array{EditorUiThemeToken::Surface, EditorUiThemeToken::None};
-                    case EditorUiThemeToken::TextDisabled:
-                        return std::array{EditorUiThemeToken::TextSecondary, EditorUiThemeToken::TextPrimary};
-                    case EditorUiThemeToken::Border:
-                    case EditorUiThemeToken::Focus:
-                        return std::array{EditorUiThemeToken::Accent, EditorUiThemeToken::TextSecondary};
-                    case EditorUiThemeToken::Positive:
-                    case EditorUiThemeToken::Warning:
-                    case EditorUiThemeToken::Critical:
-                    case EditorUiThemeToken::Accent:
-                        return std::array{EditorUiThemeToken::Accent, EditorUiThemeToken::TextPrimary};
-                    case EditorUiThemeToken::TextSecondary:
-                        return std::array{EditorUiThemeToken::TextPrimary, EditorUiThemeToken::None};
-                    case EditorUiThemeToken::Surface:
-                    case EditorUiThemeToken::TextPrimary:
-                    case EditorUiThemeToken::None:
-                        return std::array{EditorUiThemeToken::None, EditorUiThemeToken::None};
+        template <typename T> [[nodiscard]] EditorUiNodeKind NodeKindOfPayload(const T &typed) noexcept {
+            using Node = std::decay_t<T>;
+            using enum EditorUiNodeKind;
+            if constexpr (std::is_same_v<Node, EditorUiLabelNode>)
+                return Label;
+            else if constexpr (std::is_same_v<Node, EditorUiTextNode>)
+                return Text;
+            else if constexpr (std::is_same_v<Node, EditorUiTextFieldNode>)
+                return TextField;
+            else if constexpr (std::is_same_v<Node, EditorUiNumberNode>)
+                return Number;
+            else if constexpr (std::is_same_v<Node, EditorUiBooleanNode>)
+                return Boolean;
+            else if constexpr (std::is_same_v<Node, EditorUiChoiceNode>)
+                return Choice;
+            else if constexpr (std::is_same_v<Node, EditorUiPathNode>)
+                return Path;
+            else if constexpr (std::is_same_v<Node, EditorUiColorNode>)
+                return Color;
+            else if constexpr (std::is_same_v<Node, EditorUiVectorNode>)
+                return Vector;
+            else if constexpr (std::is_same_v<Node, EditorUiActionNode>)
+                return Action;
+            else if constexpr (std::is_same_v<Node, EditorUiValidationNode>)
+                return Validation;
+            else if constexpr (std::is_same_v<Node, EditorUiContainerNode>) {
+                switch (typed.layout) {
+                    case EditorUiLayoutKind::Group:
+                        return Group;
+                    case EditorUiLayoutKind::Stack:
+                        return Stack;
+                    case EditorUiLayoutKind::Row:
+                        return Row;
+                    case EditorUiLayoutKind::Grid:
+                        return Grid;
+                    default:
+                        return Stack;
                 }
-                return std::array{EditorUiThemeToken::None, EditorUiThemeToken::None};
-            }();
-            for (const auto fallback : fallbacks) {
-                if (fallback != EditorUiThemeToken::None && (frame.supportedTokenMask & EditorUiThemeTokenBit(fallback)) != 0U)
-                    return fallback;
-            }
-            return EditorUiThemeToken::None;
+            } else
+                return Help;
         }
 
-        struct ResolvedStyle final {
-            EditorUiThemeToken foreground{EditorUiThemeToken::TextPrimary};
-            EditorUiThemeToken background{EditorUiThemeToken::None};
-            EditorUiThemeToken border{EditorUiThemeToken::None};
-        };
-
-        [[nodiscard]] ResolvedStyle StyleForNode(const EditorUiNode &node, const EditorUiThemeFrame &theme) noexcept {
-            const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
-            const EditorUiNodeBase &base = BaseOf(node);
-            ResolvedStyle style;
-            if (kind == EditorUiNodeKind::Help)
-                style.foreground = EditorUiThemeToken::TextSecondary;
-            else if (kind == EditorUiNodeKind::Validation)
-                style.foreground = std::get<EditorUiValidationNode>(node.payload).severity == EditorUiValidationSeverity::Info
-                                       ? EditorUiThemeToken::TextSecondary
-                                       : ValidationToken(std::get<EditorUiValidationNode>(node.payload).severity);
-            else if (IsInteractive(kind)) {
-                style.background = EditorUiThemeToken::Surface;
-                if (kind == EditorUiNodeKind::Action) {
-                    const auto actionKind = std::get<EditorUiActionNode>(node.payload).actionKind;
-                    style.border =
-                        actionKind == EditorUiActionKind::Primary
-                            ? EditorUiThemeToken::Accent
-                            : (actionKind == EditorUiActionKind::Destructive ? EditorUiThemeToken::Critical : EditorUiThemeToken::Border);
-                } else {
-                    style.border = EditorUiThemeToken::Border;
-                }
-            } else if (IsContainer(kind)) {
-                style.background = kind == EditorUiNodeKind::Group ? EditorUiThemeToken::SurfaceSubtle : EditorUiThemeToken::None;
-            }
-            if (base.tone != EditorUiSemanticTone::Neutral && kind != EditorUiNodeKind::Validation)
-                style.border = ToneToken(base.tone);
-            if (!base.enabled) {
-                style.foreground = EditorUiThemeToken::TextDisabled;
-                style.background = EditorUiThemeToken::SurfaceSubtle;
-            }
-            style.foreground = ResolveToken(style.foreground, theme);
-            style.background = ResolveToken(style.background, theme);
-            style.border = ResolveToken(style.border, theme);
-            return style;
-        }
-
-        [[nodiscard]] std::size_t SiblingIndex(const std::vector<EditorUiNode> &nodes, const std::size_t nodeIndex) noexcept {
-            const EditorUiId parent = BaseOf(nodes[nodeIndex]).parent;
-            std::size_t siblingIndex = 0;
-            for (std::size_t index = 0; index < nodeIndex; ++index) {
-                if (BaseOf(nodes[index]).parent == parent)
-                    ++siblingIndex;
-            }
-            return siblingIndex;
-        }
-
-        [[nodiscard]] std::size_t SiblingCount(const std::vector<EditorUiNode> &nodes, const EditorUiId &parent) noexcept {
-            return static_cast<std::size_t>(std::ranges::count_if(nodes, [&](const EditorUiNode &node) {
-                return BaseOf(node).parent == parent;
-            }));
-        }
-
-        [[nodiscard]] std::pair<float, float> ResponsiveWidthAndOffset(const std::vector<EditorUiNode> &nodes, const std::size_t nodeIndex,
-                                                                       const float width) noexcept {
-            const EditorUiId parent = BaseOf(nodes[nodeIndex]).parent;
-            if (parent.value.empty())
-                return {width, 0.0F};
-            const std::size_t parentIndex = FindNodeIndex(nodes, parent);
-            if (parentIndex >= nodes.size())
-                return {width, 0.0F};
-            const EditorUiNodeKind parentKind = EditorUiNodeKindOf(nodes[parentIndex]);
-            const std::size_t siblings = std::max<std::size_t>(SiblingCount(nodes, parent), 1U);
-            std::size_t columns = 1;
-            if (parentKind == EditorUiNodeKind::Row)
-                columns = siblings;
-            else if (parentKind == EditorUiNodeKind::Grid)
-                columns = std::max<std::size_t>(std::get<EditorUiContainerNode>(nodes[parentIndex].payload).columns, 1U);
-            if (columns == 1)
-                return {width, 0.0F};
-            const float cellWidth = width / static_cast<float>(columns);
-            const std::size_t column = SiblingIndex(nodes, nodeIndex) % columns;
-            return {cellWidth, cellWidth * static_cast<float>(column)};
-        }
     }  // namespace
 
     /** @copydoc EditorUiColorValue::IsValid */
@@ -568,44 +462,8 @@ namespace Horo::Extensions {
 
     /** @copydoc EditorUiNodeKindOf */
     EditorUiNodeKind EditorUiNodeKindOf(const EditorUiNode &node) noexcept {
-        return std::visit([](const auto &typed) noexcept {
-            using T = std::decay_t<decltype(typed)>;
-            if constexpr (std::is_same_v<T, EditorUiLabelNode>)
-                return EditorUiNodeKind::Label;
-            else if constexpr (std::is_same_v<T, EditorUiTextNode>)
-                return EditorUiNodeKind::Text;
-            else if constexpr (std::is_same_v<T, EditorUiTextFieldNode>)
-                return EditorUiNodeKind::TextField;
-            else if constexpr (std::is_same_v<T, EditorUiNumberNode>)
-                return EditorUiNodeKind::Number;
-            else if constexpr (std::is_same_v<T, EditorUiBooleanNode>)
-                return EditorUiNodeKind::Boolean;
-            else if constexpr (std::is_same_v<T, EditorUiChoiceNode>)
-                return EditorUiNodeKind::Choice;
-            else if constexpr (std::is_same_v<T, EditorUiPathNode>)
-                return EditorUiNodeKind::Path;
-            else if constexpr (std::is_same_v<T, EditorUiColorNode>)
-                return EditorUiNodeKind::Color;
-            else if constexpr (std::is_same_v<T, EditorUiVectorNode>)
-                return EditorUiNodeKind::Vector;
-            else if constexpr (std::is_same_v<T, EditorUiActionNode>)
-                return EditorUiNodeKind::Action;
-            else if constexpr (std::is_same_v<T, EditorUiValidationNode>)
-                return EditorUiNodeKind::Validation;
-            else if constexpr (std::is_same_v<T, EditorUiContainerNode>) {
-                switch (typed.layout) {
-                    case EditorUiLayoutKind::Group:
-                        return EditorUiNodeKind::Group;
-                    case EditorUiLayoutKind::Stack:
-                        return EditorUiNodeKind::Stack;
-                    case EditorUiLayoutKind::Row:
-                        return EditorUiNodeKind::Row;
-                    case EditorUiLayoutKind::Grid:
-                        return EditorUiNodeKind::Grid;
-                }
-                return EditorUiNodeKind::Stack;
-            } else
-                return EditorUiNodeKind::Help;
+        return std::visit([]<typename T>(const T &typed) noexcept {
+            return NodeKindOfPayload(typed);
         }, node.payload);
     }
 
@@ -640,43 +498,11 @@ namespace Horo::Extensions {
             const EditorUiNode &node = form.nodes[index];
             if (const Result<void> validation = ValidateNodeInternal(node, limits); validation.HasError())
                 return validation;
-            const EditorUiNodeBase &base = BaseOf(node);
-            if (std::ranges::find(nodeIds, base.id.value) != nodeIds.end())
-                return Invalid("Editor UI node identities must be unique within a form.");
-            nodeIds.push_back(base.id.value);
-
-            const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
-            if (kind == EditorUiNodeKind::Validation) {
-                ++validationCount;
-                if (validationCount > limits.maximumValidationMessages)
-                    return CapacityExceeded("Editor UI validation message count exceeds its configured bound.");
-            }
-            if (kind == EditorUiNodeKind::TextField)
-                bindingIds.push_back(std::get<EditorUiTextFieldNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Number)
-                bindingIds.push_back(std::get<EditorUiNumberNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Boolean)
-                bindingIds.push_back(std::get<EditorUiBooleanNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Choice)
-                bindingIds.push_back(std::get<EditorUiChoiceNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Path)
-                bindingIds.push_back(std::get<EditorUiPathNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Color)
-                bindingIds.push_back(std::get<EditorUiColorNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Vector)
-                bindingIds.push_back(std::get<EditorUiVectorNode>(node.payload).binding.value);
-            else if (kind == EditorUiNodeKind::Action)
-                actionIds.push_back(std::get<EditorUiActionNode>(node.payload).action.value);
-
-            if (!base.parent.value.empty()) {
-                const std::size_t parentIndex = FindNodeIndex(form.nodes, base.parent);
-                if (parentIndex >= index)
-                    return Invalid("Editor UI parents must be declared before their children.");
-                if (!ParentAllowsChild(EditorUiNodeKindOf(form.nodes[parentIndex]), kind))
-                    return Invalid("Editor UI node parent is not a compatible container or annotation owner.");
-                if (NodeDepth(form.nodes, index) > limits.maximumDepth)
-                    return CapacityExceeded("Editor UI form nesting depth exceeds its configured bound.");
-            }
+            if (const Result<void> references = CollectNodeReferences(node, limits, nodeIds, bindingIds, actionIds, validationCount);
+                references.HasError())
+                return references;
+            if (const Result<void> parent = ValidateNodeParent(form.nodes, index, limits); parent.HasError())
+                return parent;
         }
         if (!IsUniqueCanonical(bindingIds, limits.maximumBindingIdentityBytes))
             return Invalid("Editor UI value-binding identities must be unique and canonical.");
@@ -686,7 +512,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorUiFormBuilder::Create */
-    Result<EditorUiFormBuilder> EditorUiFormBuilder::Create(EditorUiId id, EditorUiText title, const EditorUiFormLimits limits) {
+    Result<EditorUiFormBuilder> EditorUiFormBuilder::Create(EditorUiId id, EditorUiText title, const EditorUiFormLimits &limits) {
         if (!IsValidLimits(limits))
             return Result<EditorUiFormBuilder>::Failure(
                 MakeError(ExtensionErrors::EditorUiFormInvalid, "Editor UI form limits are zero, oversized, or otherwise unsupported."));
@@ -697,161 +523,4 @@ namespace Horo::Extensions {
         return Result<EditorUiFormBuilder>::Success(EditorUiFormBuilder{std::move(form), limits});
     }
 
-    /** @copydoc EditorUiFormBuilder::EditorUiFormBuilder */
-    EditorUiFormBuilder::EditorUiFormBuilder(EditorUiForm form, const EditorUiFormLimits limits) noexcept
-        : form_(std::move(form)), limits_(limits) {}
-
-    /** @copydoc EditorUiFormBuilder::Add */
-    Result<void> EditorUiFormBuilder::Add(EditorUiNode node) {
-        if (form_.nodes.size() >= limits_.maximumNodes)
-            return CapacityExceeded("Editor UI form node capacity is exhausted.");
-        if (const Result<void> validation = ValidateNodeInternal(node, limits_); validation.HasError())
-            return validation;
-        const EditorUiNodeBase &base = BaseOf(node);
-        if (std::ranges::find_if(form_.nodes, [&](const EditorUiNode &existing) {
-            return BaseOf(existing).id == base.id;
-        }) != form_.nodes.end())
-            return Invalid("Editor UI node identities must be unique within a form.");
-        try {
-            form_.nodes.push_back(std::move(node));
-        } catch (const std::bad_alloc &) {
-            return CapacityExceeded("Editor UI form node storage could not be extended.");
-        }
-        return Result<void>::Success();
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddLabel */
-    Result<void> EditorUiFormBuilder::AddLabel(EditorUiLabelNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddText */
-    Result<void> EditorUiFormBuilder::AddText(EditorUiTextNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddTextField */
-    Result<void> EditorUiFormBuilder::AddTextField(EditorUiTextFieldNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddNumber */
-    Result<void> EditorUiFormBuilder::AddNumber(EditorUiNumberNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddBoolean */
-    Result<void> EditorUiFormBuilder::AddBoolean(EditorUiBooleanNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddChoice */
-    Result<void> EditorUiFormBuilder::AddChoice(EditorUiChoiceNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddPath */
-    Result<void> EditorUiFormBuilder::AddPath(EditorUiPathNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddColor */
-    Result<void> EditorUiFormBuilder::AddColor(EditorUiColorNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddVector */
-    Result<void> EditorUiFormBuilder::AddVector(EditorUiVectorNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddAction */
-    Result<void> EditorUiFormBuilder::AddAction(EditorUiActionNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddValidation */
-    Result<void> EditorUiFormBuilder::AddValidation(EditorUiValidationNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddContainer */
-    Result<void> EditorUiFormBuilder::AddContainer(EditorUiContainerNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::AddHelp */
-    Result<void> EditorUiFormBuilder::AddHelp(EditorUiHelpNode node) {
-        return Add(EditorUiNode{std::move(node)});
-    }
-
-    /** @copydoc EditorUiFormBuilder::Build */
-    Result<EditorUiForm> EditorUiFormBuilder::Build() && {
-        if (const Result<void> validation = ValidateEditorUiForm(form_, limits_); validation.HasError())
-            return Result<EditorUiForm>::Failure(std::move(validation).ErrorValue());
-        return Result<EditorUiForm>::Success(std::move(form_));
-    }
-
-    /** @copydoc ResolveEditorUiThemeToken */
-    EditorUiThemeToken ResolveEditorUiThemeToken(const EditorUiThemeToken requested, const EditorUiThemeFrame &frame) noexcept {
-        return ResolveToken(requested, frame);
-    }
-
-    /** @copydoc BuildEditorUiRenderSnapshot */
-    Result<EditorUiRenderSnapshot> BuildEditorUiRenderSnapshot(const EditorUiForm &form, const EditorUiThemeFrame &theme,
-                                                               const float availableWidth) {
-        if (const Result<void> validation = ValidateEditorUiForm(form); validation.HasError())
-            return Result<EditorUiRenderSnapshot>::Failure(std::move(validation).ErrorValue());
-        if (const Result<void> validation = ValidateTheme(theme); validation.HasError())
-            return Result<EditorUiRenderSnapshot>::Failure(std::move(validation).ErrorValue());
-        const float logicalWidth = availableWidth == 0.0F ? theme.metrics.defaultWidth : availableWidth;
-        if (!std::isfinite(logicalWidth) || logicalWidth <= 0.0F || logicalWidth > 32'768.0F)
-            return Result<EditorUiRenderSnapshot>::Failure(
-                MakeError(ExtensionErrors::EditorUiThemeInvalid, "Editor UI available width is outside the finite adapter bound."));
-
-        EditorUiRenderSnapshot snapshot{.schemaVersion = EditorUiFormSchemaVersion,
-                                        .form = form.id,
-                                        .themeRevision = theme.revision,
-                                        .uiScale = theme.uiScale,
-                                        .availableWidth = logicalWidth * theme.uiScale};
-        try {
-            snapshot.nodes.reserve(form.nodes.size());
-        } catch (const std::bad_alloc &) {
-            return Result<EditorUiRenderSnapshot>::Failure(
-                MakeError(ExtensionErrors::EditorUiFormCapacityExceeded, "Editor UI render snapshot storage could not be reserved."));
-        }
-
-        float cursorY = 0.0F;
-        std::uint32_t focusOrder = 0;
-        for (std::size_t index = 0; index < form.nodes.size(); ++index) {
-            const EditorUiNode &node = form.nodes[index];
-            const EditorUiNodeBase &base = BaseOf(node);
-            const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
-            const auto [logicalNodeWidth, logicalNodeX] = ResponsiveWidthAndOffset(form.nodes, index, logicalWidth);
-            const float logicalHeight = NodeHeight(kind, base.size, theme.metrics);
-            const ResolvedStyle style = StyleForNode(node, theme);
-            EditorUiRenderNode renderNode{.id = base.id,
-                                          .parent = base.parent,
-                                          .kind = kind,
-                                          .size = base.size,
-                                          .tone = base.tone,
-                                          .foregroundToken = style.foreground,
-                                          .backgroundToken = style.background,
-                                          .borderToken = style.border,
-                                          .enabled = base.enabled,
-                                          .readOnly = base.readOnly,
-                                          .focusable =
-                                              base.enabled && base.focusPolicy == EditorUiFocusPolicy::Automatic && IsInteractive(kind),
-                                          .focusOrder = 0,
-                                          .x = logicalNodeX * theme.uiScale,
-                                          .y = cursorY,
-                                          .width = logicalNodeWidth * theme.uiScale,
-                                          .height = logicalHeight * theme.uiScale};
-            if (renderNode.focusable)
-                renderNode.focusOrder = ++focusOrder;
-            snapshot.nodes.push_back(std::move(renderNode));
-            cursorY += (logicalHeight + theme.metrics.rowGap) * theme.uiScale;
-        }
-        return Result<EditorUiRenderSnapshot>::Success(std::move(snapshot));
-    }
 }  // namespace Horo::Extensions

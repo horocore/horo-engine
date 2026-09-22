@@ -33,12 +33,7 @@ namespace Horo::Extensions::Tests {
                                     .readOnly = false};
         }
 
-        EditorUiForm BuildReferenceForm() {
-            auto builderResult =
-                EditorUiFormBuilder::Create(EditorUiId{"com.example.reference.form"}, Localized("examples.reference_form.title"));
-            REQUIRE(builderResult.HasValue());
-            auto builder = std::move(builderResult).Value();
-
+        void AddReferenceBasics(EditorUiFormBuilder &builder) {
             REQUIRE(builder
                         .AddContainer(EditorUiContainerNode{.base = Base("layout", {}, "examples.reference_form.settings",
                                                                          EditorUiFocusPolicy::Never),
@@ -75,6 +70,9 @@ namespace Horo::Extensions::Tests {
                                                         .binding = EditorUiBindingId{"settings.enabled"},
                                                         .value = true})
                         .HasValue());
+        }
+
+        void AddReferencePresentation(EditorUiFormBuilder &builder) {
             REQUIRE(builder
                         .AddChoice(EditorUiChoiceNode{.base = Base("profile", "layout", "examples.reference_form.profile"),
                                                       .binding = EditorUiBindingId{"settings.profile"},
@@ -108,6 +106,9 @@ namespace Horo::Extensions::Tests {
                                                       .actionKind = EditorUiActionKind::Primary,
                                                       .requiresConfirmation = false})
                         .HasValue());
+        }
+
+        void AddReferenceFeedback(EditorUiFormBuilder &builder) {
             REQUIRE(builder
                         .AddValidation(EditorUiValidationNode{.base = Base("quality_warning", "quality", {}, EditorUiFocusPolicy::Never),
                                                               .severity = EditorUiValidationSeverity::Warning,
@@ -118,6 +119,17 @@ namespace Horo::Extensions::Tests {
                         .AddHelp(EditorUiHelpNode{.base = Base("help", "layout", {}, EditorUiFocusPolicy::Never),
                                                   .text = Localized("examples.reference_form.help")})
                         .HasValue());
+        }
+
+        EditorUiForm BuildReferenceForm() {
+            auto builderResult =
+                EditorUiFormBuilder::Create(EditorUiId{"com.example.reference.form"}, Localized("examples.reference_form.title"));
+            REQUIRE(builderResult.HasValue());
+            auto builder = std::move(builderResult).Value();
+
+            AddReferenceBasics(builder);
+            AddReferencePresentation(builder);
+            AddReferenceFeedback(builder);
 
             auto form = std::move(builder).Build();
             REQUIRE(form.HasValue());

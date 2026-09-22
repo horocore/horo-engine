@@ -375,7 +375,7 @@ namespace Horo::Extensions {
          * @param limits Resource bounds applied to additions and final validation.
          * @return Builder or a typed validation/capacity error.
          */
-        [[nodiscard]] static Result<EditorUiFormBuilder> Create(EditorUiId id, EditorUiText title, EditorUiFormLimits limits = {});
+        [[nodiscard]] static Result<EditorUiFormBuilder> Create(EditorUiId id, EditorUiText title, const EditorUiFormLimits &limits = {});
 
         EditorUiFormBuilder(const EditorUiFormBuilder &) = delete;
         EditorUiFormBuilder &operator=(const EditorUiFormBuilder &) = delete;
@@ -406,7 +406,7 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<EditorUiForm> Build() &&;
 
     private:
-        EditorUiFormBuilder(EditorUiForm form, EditorUiFormLimits limits) noexcept;
+        EditorUiFormBuilder(EditorUiForm form, const EditorUiFormLimits &limits) noexcept;
 
         EditorUiForm form_;
         EditorUiFormLimits limits_;

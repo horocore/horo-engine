@@ -25,19 +25,13 @@ namespace {
                                 .readOnly = false};
     }
 
-    Result<EditorUiForm> BuildForm() {
-        auto builderResult = EditorUiFormBuilder::Create(EditorUiId{"com.horo.examples.gui-form-basic.settings"},
-                                                         Localized("examples.gui_form_basic.title"));
-        if (builderResult.HasError())
-            return Result<EditorUiForm>::Failure(builderResult.ErrorValue());
-        auto builder = std::move(builderResult).Value();
-
+    Result<void> AddExampleBasics(EditorUiFormBuilder &builder) {
         if (auto result = builder.AddContainer(
                 EditorUiContainerNode{.base = Base("settings", {}, "examples.gui_form_basic.settings", EditorUiFocusPolicy::Never),
                                       .layout = EditorUiLayoutKind::Group,
                                       .columns = 1});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
         if (auto result = builder.AddTextField(EditorUiTextFieldNode{.base = Base("name", "settings", "examples.gui_form_basic.name"),
                                                                      .binding = EditorUiBindingId{"settings.name"},
                                                                      .value = "Example",
@@ -45,7 +39,7 @@ namespace {
                                                                      .maximumBytes = 64,
                                                                      .multiline = false});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
         if (auto result = builder.AddNumber(EditorUiNumberNode{.base = Base("samples", "settings", "examples.gui_form_basic.samples"),
                                                                .binding = EditorUiBindingId{"settings.samples"},
                                                                .numberKind = EditorUiNumberKind::Integer,
@@ -54,12 +48,16 @@ namespace {
                                                                .maximum = 16.0,
                                                                .step = 1.0});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
         if (auto result = builder.AddBoolean(EditorUiBooleanNode{.base = Base("enabled", "settings", "examples.gui_form_basic.enabled"),
                                                                  .binding = EditorUiBindingId{"settings.enabled"},
                                                                  .value = true});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    Result<void> AddExamplePresentation(EditorUiFormBuilder &builder) {
         if (auto result =
                 builder.AddChoice(EditorUiChoiceNode{.base = Base("mode", "settings", "examples.gui_form_basic.mode"),
                                                      .binding = EditorUiBindingId{"settings.mode"},
@@ -69,23 +67,36 @@ namespace {
                                                                  {"quality", Localized("examples.gui_form_basic.mode.quality"), true}},
                                                      .allowEmpty = false});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
         if (auto result = builder.AddColor(EditorUiColorNode{.base = Base("accent", "settings", "examples.gui_form_basic.accent"),
                                                              .binding = EditorUiBindingId{"settings.accent"},
                                                              .value = EditorUiColorValue{0.25F, 0.5F, 0.9F, 1.0F},
                                                              .allowAlpha = false});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
         if (auto result = builder.AddVector(EditorUiVectorNode{.base = Base("offset", "settings", "examples.gui_form_basic.offset"),
                                                                .binding = EditorUiBindingId{"settings.offset"},
                                                                .value = EditorUiVectorValue{{0.0, 1.0, 0.0, 0.0}, 3}});
             result.HasError())
-            return Result<EditorUiForm>::Failure(result.ErrorValue());
+            return Result<void>::Failure(result.ErrorValue());
         if (auto result = builder.AddAction(EditorUiActionNode{.base = Base("apply", "settings", "examples.gui_form_basic.apply"),
                                                                .action = EditorUiActionId{"actions.apply"},
                                                                .actionKind = EditorUiActionKind::Primary,
                                                                .requiresConfirmation = false});
             result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        return Result<void>::Success();
+    }
+
+    Result<EditorUiForm> BuildForm() {
+        auto builderResult = EditorUiFormBuilder::Create(EditorUiId{"com.horo.examples.gui-form-basic.settings"},
+                                                         Localized("examples.gui_form_basic.title"));
+        if (builderResult.HasError())
+            return Result<EditorUiForm>::Failure(builderResult.ErrorValue());
+        auto builder = std::move(builderResult).Value();
+        if (const auto result = AddExampleBasics(builder); result.HasError())
+            return Result<EditorUiForm>::Failure(result.ErrorValue());
+        if (const auto result = AddExamplePresentation(builder); result.HasError())
             return Result<EditorUiForm>::Failure(result.ErrorValue());
         return std::move(builder).Build();
     }
