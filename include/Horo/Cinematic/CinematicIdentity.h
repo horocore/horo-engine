@@ -7,9 +7,9 @@
 
 #include "Horo/Cinematic/CinematicErrors.h"
 #include "Horo/Foundation/Result.h"
+#include "Horo/Foundation/StableIdentity.h"
 
 #include <array>
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -42,24 +42,11 @@ namespace Horo::Cinematic {
     }  // namespace Detail
 
     /** @brief Strong generation-safe identity in one tag-defined cinematic domain. */
-    template <typename Tag> struct CinematicIdentity final {
-        using IdentityTag = Tag;
-
-        std::uint64_t stableValue{}; /**< Durable owner-issued value retained across editor, save, and cook boundaries. */
-        std::uint32_t generation{};  /**< Non-zero, non-wrapping generation for reuse after explicit retirement. */
-
-        /** @brief Checks representation, not current document residency. @return True when both dimensions are non-zero. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return stableValue != 0 && generation != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const CinematicIdentity &) const noexcept = default;
-    };
+    template <typename Tag> using CinematicIdentity = Foundation::StableIdentity<Tag>;
 
     struct SequenceIdentityTag;
     struct TrackIdentityTag;
     struct KeyframeIdentityTag;
-    struct PropertyBindingIdentityTag;
     struct TransformBindingIdentityTag;
     struct RuntimeSessionIdentityTag;
     struct SequencePlayerIdentityTag;
@@ -71,7 +58,8 @@ namespace Horo::Cinematic {
     /** @brief Stable generation-safe identity of one keyframe in authored sequence data. */
     using KeyframeId = CinematicIdentity<KeyframeIdentityTag>;
     /** @brief Stable generation-safe identity of one declared property binding. */
-    using PropertyBindingId = CinematicIdentity<PropertyBindingIdentityTag>;
+    using PropertyBindingIdentityTag = Foundation::PropertyBindingIdentityTag;
+    using PropertyBindingId = Foundation::PropertyBindingId;
     /** @brief Stable generation-safe identity of one scene transform binding. */
     using TransformBindingId = CinematicIdentity<TransformBindingIdentityTag>;
     /** @brief Stable generation-safe identity of one cinematic runtime session. */

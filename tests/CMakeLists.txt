@@ -431,6 +431,8 @@ add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CurveSamplingTests.cpp
         unit/runtime/cinematic/CinematicIdentityTests.cpp
+        unit/runtime/cinematic/PropertyTrackCoverageTests.cpp
+        unit/runtime/cinematic/PropertyTrackTests.cpp
         unit/runtime/cinematic/SequenceAssetTests.cpp
         unit/runtime/cinematic/TransformTrackTests.cpp
 )
@@ -442,6 +444,8 @@ add_executable(HoroCinematicRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/SequenceEvaluationTests.cpp
         unit/runtime/cinematic/SequencePlayerTests.cpp
+        unit/runtime/cinematic/SequencePlaybackRuntimeCoverageTests.cpp
+        unit/runtime/cinematic/SequencePlaybackRuntimeTests.cpp
 )
 target_compile_features(HoroCinematicRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -749,6 +749,7 @@ add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp
         runtime/cinematic/model/CinematicErrors.cpp
         runtime/cinematic/model/CinematicIdentity.cpp
+        runtime/cinematic/model/PropertyTrack.cpp
         runtime/cinematic/model/SequenceAsset.cpp
         runtime/cinematic/model/SequenceAssetCook.cpp
         runtime/cinematic/model/TransformTrack.cpp
@@ -757,7 +758,7 @@ add_library(HoroEngine::CinematicModel ALIAS HoroCinematicModel)
 target_compile_features(HoroCinematicModel PUBLIC cxx_std_20)
 target_include_directories(HoroCinematicModel PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroCinematicModel
-        PUBLIC HoroEngine::Foundation HoroEngine::Assets
+        PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json
 )
 
@@ -766,6 +767,9 @@ add_library(HoroCinematicRuntime STATIC
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
         runtime/cinematic/player/SequencePlayer.cpp
         runtime/cinematic/player/SequencePlayerErrors.cpp
+        runtime/cinematic/player/SequencePlaybackRuntime.cpp
+        runtime/cinematic/player/SequencePlaybackRuntimeErrors.cpp
+        runtime/cinematic/player/SequencePlaybackRuntimeService.cpp
 )
 add_library(HoroEngine::CinematicRuntime ALIAS HoroCinematicRuntime)
 target_compile_features(HoroCinematicRuntime PUBLIC cxx_std_20)
@@ -1073,6 +1077,8 @@ target_link_libraries(HoroRenderFrontend
 )
 
 add_library(HoroSceneModel STATIC
+        runtime/scene/PropertyBindingErrors.cpp
+        runtime/scene/PropertyBindingRegistry.cpp
         runtime/scene/primitive/PrimitiveCatalog.cpp
         runtime/scene/primitive/PrimitiveMesh.cpp
         runtime/scene/primitive/PrimitiveMeshErrors.cpp
@@ -1084,7 +1090,14 @@ target_include_directories(HoroSceneModel
         PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
-target_link_libraries(HoroSceneModel PUBLIC HoroEngine::Foundation HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi)
+target_link_libraries(HoroSceneModel
+        PUBLIC HoroEngine::Foundation HoroEngine::GameplayApi HoroEngine::RenderApi HoroEngine::RuntimeUi HoroEngine::AudioApi
+)
+
+# CinematicModel is declared earlier for the runtime target graph, while its
+# SceneModel dependency is defined in this block. Keep the public edge explicit
+# after both targets exist.
+target_link_libraries(HoroCinematicModel PUBLIC HoroEngine::SceneModel)
 
 # RuntimeSceneDefinition exposes PrimitiveMeshDescriptor in its public scene
 # contract, so the owning SceneModel dependency is part of the public edge.
