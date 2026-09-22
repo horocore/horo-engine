@@ -28,15 +28,6 @@ namespace Horo::Extensions {
                 case Vector:
                 case Action:
                     return true;
-                case Label:
-                case Text:
-                case Validation:
-                case Group:
-                case Stack:
-                case Row:
-                case Grid:
-                case Help:
-                    return false;
                 default:
                     return false;
             }
@@ -97,17 +88,18 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] EditorUiThemeToken ResolveToken(const EditorUiThemeToken requested, const EditorUiThemeFrame &frame) noexcept {
-            if (requested == EditorUiThemeToken::None)
-                return EditorUiThemeToken::None;
+            using enum EditorUiThemeToken;
+            if (requested == None)
+                return None;
             if ((frame.supportedTokenMask & EditorUiThemeTokenBit(requested)) != 0U)
                 return requested;
 
             const auto fallbacks = FallbackTokens(requested);
             for (const auto fallback : fallbacks) {
-                if (fallback != EditorUiThemeToken::None && (frame.supportedTokenMask & EditorUiThemeTokenBit(fallback)) != 0U)
+                if (fallback != None && (frame.supportedTokenMask & EditorUiThemeTokenBit(fallback)) != 0U)
                     return fallback;
             }
-            return EditorUiThemeToken::None;
+            return None;
         }
 
         [[nodiscard]] EditorUiThemeToken ToneToken(const EditorUiSemanticTone tone) noexcept {
@@ -170,15 +162,6 @@ namespace Horo::Extensions {
                 case Vector:
                 case Action:
                     return ControlHeight(size, metrics);
-                case Label:
-                case Text:
-                case Validation:
-                case Group:
-                case Stack:
-                case Row:
-                case Grid:
-                case Help:
-                    return metrics.textLineHeight;
                 default:
                     return metrics.textLineHeight;
             }
@@ -192,45 +175,47 @@ namespace Horo::Extensions {
 
         [[nodiscard]] EditorUiThemeToken ActionBorderToken(const EditorUiActionKind actionKind) noexcept {
             using enum EditorUiActionKind;
+            using enum EditorUiThemeToken;
             switch (actionKind) {
                 case Primary:
-                    return EditorUiThemeToken::Accent;
+                    return Accent;
                 case Destructive:
-                    return EditorUiThemeToken::Critical;
+                    return Critical;
                 case Secondary:
-                    return EditorUiThemeToken::Border;
+                    return Border;
                 default:
-                    return EditorUiThemeToken::Border;
+                    return Border;
             }
         }
 
         [[nodiscard]] ResolvedStyle StyleForNode(const EditorUiNode &node, const EditorUiThemeFrame &theme) noexcept {
+            using enum EditorUiThemeToken;
             const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
             const EditorUiNodeBase &base = BaseOf(node);
             ResolvedStyle style;
             if (kind == EditorUiNodeKind::Help)
-                style.foreground = EditorUiThemeToken::TextSecondary;
+                style.foreground = TextSecondary;
             else if (kind == EditorUiNodeKind::Validation) {
                 const auto severity = std::get<EditorUiValidationNode>(node.payload).severity;
                 if (severity == EditorUiValidationSeverity::Info)
-                    style.foreground = EditorUiThemeToken::TextSecondary;
+                    style.foreground = TextSecondary;
                 else
                     style.foreground = ValidationToken(severity);
             } else if (IsInteractive(kind)) {
-                style.background = EditorUiThemeToken::Surface;
+                style.background = Surface;
                 if (kind == EditorUiNodeKind::Action) {
                     style.border = ActionBorderToken(std::get<EditorUiActionNode>(node.payload).actionKind);
                 } else {
-                    style.border = EditorUiThemeToken::Border;
+                    style.border = Border;
                 }
             } else if (IsContainer(kind)) {
-                style.background = kind == EditorUiNodeKind::Group ? EditorUiThemeToken::SurfaceSubtle : EditorUiThemeToken::None;
+                style.background = kind == EditorUiNodeKind::Group ? SurfaceSubtle : None;
             }
             if (base.tone != EditorUiSemanticTone::Neutral && kind != EditorUiNodeKind::Validation)
                 style.border = ToneToken(base.tone);
             if (!base.enabled) {
-                style.foreground = EditorUiThemeToken::TextDisabled;
-                style.background = EditorUiThemeToken::SurfaceSubtle;
+                style.foreground = TextDisabled;
+                style.background = SurfaceSubtle;
             }
             style.foreground = ResolveToken(style.foreground, theme);
             style.background = ResolveToken(style.background, theme);
@@ -278,12 +263,9 @@ namespace Horo::Extensions {
             }
 
             [[nodiscard]] std::size_t ChildCount(const EditorUiId &parent) const noexcept {
-                std::size_t count = 0;
-                for (const EditorUiNode &node : nodes_) {
-                    if (BaseOf(node).parent == parent)
-                        ++count;
-                }
-                return count;
+                return static_cast<std::size_t>(std::count_if(nodes_.begin(), nodes_.end(), [&](const EditorUiNode &node) {
+                    return BaseOf(node).parent == parent;
+                }));
             }
 
             [[nodiscard]] std::size_t GridColumns(const EditorUiContainerNode &container) const noexcept {

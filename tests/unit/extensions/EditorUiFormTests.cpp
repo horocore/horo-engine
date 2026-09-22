@@ -244,6 +244,32 @@ namespace Horo::Extensions::Tests {
             return std::move(form).Value();
         }
 
+        EditorUiForm BuildEmptyLayoutForm() {
+            auto builderResult =
+                EditorUiFormBuilder::Create(EditorUiId{"com.example.empty-layout.form"}, Localized("examples.empty_layout.title"));
+            REQUIRE(builderResult.HasValue());
+            auto builder = std::move(builderResult).Value();
+            REQUIRE(
+                builder
+                    .AddContainer(EditorUiContainerNode{.base = Base("root", {}, "examples.empty_layout.root", EditorUiFocusPolicy::Never),
+                                                        .layout = EditorUiLayoutKind::Group,
+                                                        .columns = 1})
+                    .HasValue());
+            REQUIRE(builder
+                        .AddContainer(EditorUiContainerNode{.base = Base("row", "root", {}, EditorUiFocusPolicy::Never),
+                                                            .layout = EditorUiLayoutKind::Row,
+                                                            .columns = 1})
+                        .HasValue());
+            REQUIRE(builder
+                        .AddContainer(EditorUiContainerNode{.base = Base("grid", "root", {}, EditorUiFocusPolicy::Never),
+                                                            .layout = EditorUiLayoutKind::Grid,
+                                                            .columns = 2})
+                        .HasValue());
+            auto form = std::move(builder).Build();
+            REQUIRE(form.HasValue());
+            return std::move(form).Value();
+        }
+
         void RequireError(const Result<void> &result, const std::string_view code) {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == code);
@@ -413,6 +439,18 @@ namespace Horo::Extensions::Tests {
         CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Critical, theme) == EditorUiThemeToken::TextPrimary);
         CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::None, theme) == EditorUiThemeToken::None);
 
+        theme.supportedTokenMask = EditorUiThemeTokenBit(EditorUiThemeToken::TextSecondary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Border, theme) == EditorUiThemeToken::TextSecondary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Focus, theme) == EditorUiThemeToken::TextSecondary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::TextDisabled, theme) == EditorUiThemeToken::TextSecondary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::TextSecondary, theme) == EditorUiThemeToken::TextSecondary);
+
+        theme.supportedTokenMask = EditorUiThemeTokenBit(EditorUiThemeToken::TextPrimary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Accent, theme) == EditorUiThemeToken::TextPrimary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Positive, theme) == EditorUiThemeToken::TextPrimary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Warning, theme) == EditorUiThemeToken::TextPrimary);
+        CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Surface, theme) == EditorUiThemeToken::None);
+
         theme.supportedTokenMask = 0;
         CHECK(ResolveEditorUiThemeToken(EditorUiThemeToken::Critical, theme) == EditorUiThemeToken::None);
     }
@@ -431,8 +469,24 @@ namespace Horo::Extensions::Tests {
         REQUIRE(invalidScale.HasError());
         CHECK(invalidScale.ErrorValue().code.Value() == "editor_ui_theme_invalid");
 
+        theme.uiScale = 1.0F;
+        const auto invalidWidth = BuildEditorUiRenderSnapshot(form, theme, std::numeric_limits<float>::infinity());
+        REQUIRE(invalidWidth.HasError());
+        CHECK(invalidWidth.ErrorValue().code.Value() == "editor_ui_theme_invalid");
+
         EditorUiFormLimits limits;
         limits.maximumDepth = 1;
         CHECK(ValidateEditorUiForm(form, limits).HasError());
+    }
+
+    TEST_CASE("Empty layout containers retain deterministic fallback bounds", "[Extensions][EditorUiForm]") {
+        const EditorUiForm form = BuildEmptyLayoutForm();
+        const auto snapshot = BuildEditorUiRenderSnapshot(form, EditorUiThemeFrame{}, 320.0F);
+        REQUIRE(snapshot.HasValue());
+        REQUIRE(snapshot.Value().nodes.size() == 3);
+        CHECK(snapshot.Value().nodes[0].height == Catch::Approx(48.0F));
+        CHECK(snapshot.Value().nodes[1].height == Catch::Approx(20.0F));
+        CHECK(snapshot.Value().nodes[2].height == Catch::Approx(20.0F));
+        CHECK(snapshot.Value().nodes[2].y == Catch::Approx(28.0F));
     }
 }  // namespace Horo::Extensions::Tests

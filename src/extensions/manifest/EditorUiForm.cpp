@@ -209,17 +209,18 @@ namespace Horo::Extensions {
             if ((node.numberKind == EditorUiNumberKind::Integer && !std::holds_alternative<std::int64_t>(node.value)) ||
                 (node.numberKind == EditorUiNumberKind::Decimal && !std::holds_alternative<double>(node.value)))
                 return Invalid("Number field value type does not match its declared kind.");
-            const auto validOptionalNumber = [&](const std::optional<double> &candidate, const bool integralRequired) {
+            if (const auto validOptionalNumber =
+                    [](const std::optional<double> &candidate, const bool integralRequired) {
                 return !candidate.has_value() || (IsFiniteNumber(*candidate) && (!integralRequired || IsIntegral(*candidate)));
             };
-            if (!validOptionalNumber(node.minimum, node.numberKind == EditorUiNumberKind::Integer) ||
+                !validOptionalNumber(node.minimum, node.numberKind == EditorUiNumberKind::Integer) ||
                 !validOptionalNumber(node.maximum, node.numberKind == EditorUiNumberKind::Integer) ||
                 !validOptionalNumber(node.step, node.numberKind == EditorUiNumberKind::Integer) ||
                 (node.step.has_value() && *node.step <= 0.0) ||
                 (node.minimum.has_value() && node.maximum.has_value() && *node.minimum > *node.maximum))
                 return Invalid("Number field range or step is invalid.");
-            const double value = NumberValue(node.value);
-            if ((node.minimum.has_value() && value < *node.minimum) || (node.maximum.has_value() && value > *node.maximum))
+            if (const double value = NumberValue(node.value);
+                (node.minimum.has_value() && value < *node.minimum) || (node.maximum.has_value() && value > *node.maximum))
                 return Invalid("Number field value is outside its declared range.");
             return Result<void>::Success();
         }
@@ -281,11 +282,11 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] Result<void> ValidateContainerNode(const EditorUiContainerNode &node) {
+            using enum EditorUiLayoutKind;
             if (node.base.focusPolicy != EditorUiFocusPolicy::Never || node.base.readOnly || !IsKnownLayoutKind(node.layout) ||
-                node.columns == 0 || (node.layout == EditorUiLayoutKind::Grid && node.columns > 16) ||
-                (node.layout != EditorUiLayoutKind::Grid && node.columns != 1))
+                node.columns == 0 || (node.layout == Grid && node.columns > 16) || (node.layout != Grid && node.columns != 1))
                 return Invalid("Container layout, columns, or state is invalid.");
-            if (node.layout == EditorUiLayoutKind::Group && !HasAccessibleName(node.base))
+            if (node.layout == Group && !HasAccessibleName(node.base))
                 return Invalid("Group containers require a localized or accessible title.");
             return Result<void>::Success();
         }
@@ -371,9 +372,11 @@ namespace Horo::Extensions {
                 return Invalid("Editor UI node identities must be unique within a form.");
             nodeIds.push_back(base.id.value);
 
-            const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
-            if (kind == EditorUiNodeKind::Validation && ++validationCount > limits.maximumValidationMessages)
-                return CapacityExceeded("Editor UI validation message count exceeds its configured bound.");
+            if (const EditorUiNodeKind kind = EditorUiNodeKindOf(node); kind == EditorUiNodeKind::Validation) {
+                ++validationCount;
+                if (validationCount > limits.maximumValidationMessages)
+                    return CapacityExceeded("Editor UI validation message count exceeds its configured bound.");
+            }
             std::visit([&]<typename T>(const T &typed) {
                 using Node = std::decay_t<T>;
                 if constexpr (requires { typed.binding.value; })
