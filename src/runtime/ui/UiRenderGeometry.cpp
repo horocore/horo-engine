@@ -90,22 +90,22 @@ namespace Horo::Runtime::Ui {
                                          .transform = command.transform,
                                          .clip = command.clip,
                                          .mask = command.mask};
-            const auto result = std::visit([&key, &snapshot](const auto &draw) -> Result<void> {
-                using Draw = std::decay_t<decltype(draw)>;
+            const auto result = std::visit([&key, &snapshot]<typename Draw>(const Draw &draw) {
+                using enum UiRenderGeometryPrimitive;
                 if constexpr (std::is_same_v<Draw, UiSolidDraw>)
-                    key.primitive = UiRenderGeometryPrimitive::SolidRectangle;
+                    key.primitive = SolidRectangle;
                 else if constexpr (std::is_same_v<Draw, UiBorderDraw>)
-                    key.primitive = UiRenderGeometryPrimitive::BorderRectangle;
+                    key.primitive = BorderRectangle;
                 else if constexpr (std::is_same_v<Draw, UiImageDraw>) {
-                    key.primitive = UiRenderGeometryPrimitive::ImageRectangle;
+                    key.primitive = ImageRectangle;
                     key.resource = draw.resource;
                 } else if constexpr (std::is_same_v<Draw, UiSpriteDraw>) {
-                    key.primitive = UiRenderGeometryPrimitive::SpriteRectangle;
+                    key.primitive = SpriteRectangle;
                     key.resource = draw.resource;
                 } else if constexpr (std::is_same_v<Draw, UiTextDraw>) {
                     if (draw.run >= snapshot.TextRuns().size())
                         return Failure(UiErrors::RenderGeometryInvalid);
-                    key.primitive = UiRenderGeometryPrimitive::TextGlyphs;
+                    key.primitive = TextGlyphs;
                     key.resource = snapshot.TextRuns()[draw.run].fontResource;
                 }
                 return Result<void>::Success();
@@ -115,8 +115,7 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<std::array<std::size_t, 2>> RequiredGeometry(const UiRenderSnapshot &snapshot, const UiDrawCommand &command) {
-            return std::visit([&snapshot, &command](const auto &draw) -> Result<std::array<std::size_t, 2>> {
-                using Draw = std::decay_t<decltype(draw)>;
+            return std::visit([&snapshot, &command]<typename Draw>(const Draw &draw) {
                 if constexpr (std::is_same_v<Draw, UiSolidDraw> || std::is_same_v<Draw, UiImageDraw> ||
                               std::is_same_v<Draw, UiSpriteDraw>) {
                     return Result<std::array<std::size_t, 2>>::Success({4, 6});
@@ -145,20 +144,20 @@ namespace Horo::Runtime::Ui {
                 TransformPoint(*quad.transform, corners[3].x, corners[3].y),
             };
             const auto first = static_cast<std::uint32_t>(vertices.size());
-            vertices.push_back({transformed[0].x, transformed[0].y, quad.uv[0], quad.uv[1], quad.color});
-            vertices.push_back({transformed[1].x, transformed[1].y, quad.uv[2], quad.uv[1], quad.color});
-            vertices.push_back({transformed[2].x, transformed[2].y, quad.uv[2], quad.uv[3], quad.color});
-            vertices.push_back({transformed[3].x, transformed[3].y, quad.uv[0], quad.uv[3], quad.color});
+            vertices.emplace_back(transformed[0].x, transformed[0].y, quad.uv[0], quad.uv[1], quad.color);
+            vertices.emplace_back(transformed[1].x, transformed[1].y, quad.uv[2], quad.uv[1], quad.color);
+            vertices.emplace_back(transformed[2].x, transformed[2].y, quad.uv[2], quad.uv[3], quad.color);
+            vertices.emplace_back(transformed[3].x, transformed[3].y, quad.uv[0], quad.uv[3], quad.color);
             indices.insert(indices.end(), {first, first + 1U, first + 2U, first, first + 2U, first + 3U});
         }
 
         void AppendBorder(std::vector<UiRenderVertex> &vertices, std::vector<std::uint32_t> &indices, const UiLogicalTransform &transform,
                           const UiLogicalRect rect, const std::int32_t width, const UiLinearColor color) {
-            const float x = static_cast<float>(rect.origin.x);
-            const float y = static_cast<float>(rect.origin.y);
-            const float extentX = static_cast<float>(rect.extent.width);
-            const float extentY = static_cast<float>(rect.extent.height);
-            const float border = static_cast<float>(width);
+            const auto x = static_cast<float>(rect.origin.x);
+            const auto y = static_cast<float>(rect.origin.y);
+            const auto extentX = static_cast<float>(rect.extent.width);
+            const auto extentY = static_cast<float>(rect.extent.height);
+            const auto border = static_cast<float>(width);
             if (border <= 0.0F || extentX <= 0.0F || extentY <= 0.0F)
                 return;
 
