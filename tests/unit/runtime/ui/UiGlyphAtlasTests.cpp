@@ -131,6 +131,30 @@ namespace Horo::Runtime::Ui {
             REQUIRE(atlas.Discard(admitted.Value()).HasValue());
         }
 
+        TEST_CASE("Glyph atlas retries failed uploads and deduplicates repeated frame pins", "[runtime_ui][glyph_atlas][retry]") {
+            auto atlas = MakeAtlas();
+            std::array<std::byte, 16> bytes{};
+            const auto failed = atlas.RequestUpload(Raster(Key(1), bytes));
+            REQUIRE(failed.HasValue());
+            REQUIRE(atlas.Fail(failed.Value(), MakeError(UiErrors::GlyphAtlasUploadInvalid)).HasValue());
+
+            const auto retry = atlas.RequestUpload(Raster(Key(1), bytes));
+            REQUIRE(retry.HasValue());
+            REQUIRE(retry.Value() != failed.Value());
+            REQUIRE(atlas.MarkSubmitted(retry.Value(), {1, 1}).HasValue());
+            REQUIRE(atlas.Complete(retry.Value()).HasValue());
+
+            const auto frame = atlas.BeginFrame();
+            REQUIRE(frame.HasValue());
+            REQUIRE(atlas.Resolve(frame.Value(), Key(1)).HasValue());
+            REQUIRE(atlas.Resolve(frame.Value(), Key(1)).HasValue());
+            REQUIRE(atlas.Resolve(frame.Value(), Key(1)).HasValue());
+            REQUIRE(atlas.Snapshot().pinnedEntries == 1);
+            REQUIRE(atlas.RetireFrame(frame.Value(), UiGlyphAtlasFrameOutcome::Presented).HasValue());
+            REQUIRE(atlas.Discard(retry.Value()).HasValue());
+            RequireError(atlas.State(failed.Value()), UiErrors::GlyphAtlasUploadStale);
+        }
+
         TEST_CASE("Glyph atlas enforces upload, frame, and reset lifecycle ordering", "[runtime_ui][glyph_atlas][lifecycle]") {
             auto atlas = MakeAtlas();
             std::array<std::byte, 16> bytes{};

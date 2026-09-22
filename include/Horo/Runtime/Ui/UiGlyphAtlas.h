@@ -119,31 +119,25 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] auto operator<=>(const UiGlyphAtlasGlyphKey &) const noexcept = default;
     };
 
+    /** @brief Strongly typed integer extent used by atlas pages and tiles. */
+    template <typename Tag> struct UiGlyphAtlasExtent final {
+        std::uint32_t width{};  /**< Extent width in raster pixels. */
+        std::uint32_t height{}; /**< Extent height in raster pixels. */
+
+        /** @brief Checks non-zero dimensions. @return Whether the extent is representable. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return width > 0 && height > 0;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(const UiGlyphAtlasExtent &) const noexcept = default;
+    };
+
+    struct UiGlyphAtlasPageExtentTag;
+    struct UiGlyphAtlasTileExtentTag;
     /** @brief Integer page-space extent of one atlas page. */
-    struct UiGlyphAtlasPageExtent final {
-        std::uint32_t width{};  /**< Page width in raster pixels. */
-        std::uint32_t height{}; /**< Page height in raster pixels. */
-
-        /** @brief Checks non-zero page dimensions. @return Whether the extent is representable. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return width > 0 && height > 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const UiGlyphAtlasPageExtent &) const noexcept = default;
-    };
-
+    using UiGlyphAtlasPageExtent = UiGlyphAtlasExtent<UiGlyphAtlasPageExtentTag>;
     /** @brief Fixed tile extent used by the bounded page allocator. */
-    struct UiGlyphAtlasTileExtent final {
-        std::uint32_t width{};  /**< Tile width in raster pixels. */
-        std::uint32_t height{}; /**< Tile height in raster pixels. */
-
-        /** @brief Checks non-zero tile dimensions. @return Whether the extent is representable. */
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return width > 0 && height > 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const UiGlyphAtlasTileExtent &) const noexcept = default;
-    };
+    using UiGlyphAtlasTileExtent = UiGlyphAtlasExtent<UiGlyphAtlasTileExtentTag>;
 
     /** @brief Pixel-space rectangle and normalized sampling coordinates for one atlas entry. */
     struct UiGlyphAtlasRect final {
