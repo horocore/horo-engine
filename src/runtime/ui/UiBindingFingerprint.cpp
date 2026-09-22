@@ -40,19 +40,19 @@ namespace Horo::Runtime::Ui {
 
         void AppendOptional(FingerprintBuilder &builder, const std::optional<std::int64_t> &value) noexcept {
             builder.Byte(value.has_value() ? 1U : 0U);
-            if (value)
+            if (value.has_value())
                 builder.U64(static_cast<std::uint64_t>(*value));
         }
 
         void AppendOptional(FingerprintBuilder &builder, const std::optional<std::uint64_t> &value) noexcept {
             builder.Byte(value.has_value() ? 1U : 0U);
-            if (value)
+            if (value.has_value())
                 builder.U64(*value);
         }
 
         void AppendOptional(FingerprintBuilder &builder, const std::optional<double> &value) noexcept {
             builder.Byte(value.has_value() ? 1U : 0U);
-            if (value) {
+            if (value.has_value()) {
                 static_assert(sizeof(double) == sizeof(std::uint64_t));
                 builder.U64(std::bit_cast<std::uint64_t>(*value));
             }

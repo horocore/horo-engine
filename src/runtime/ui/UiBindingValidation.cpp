@@ -1,7 +1,7 @@
 #include "Horo/Runtime/Ui/UiBinding.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiBindingInternal.h"
 
-#include <algorithm>
 #include <cmath>
 #include <new>
 #include <utility>
@@ -12,62 +12,10 @@ namespace Horo::Runtime::Ui {
         constexpr std::uint16_t KnownPropertyFlags = static_cast<std::uint16_t>(
             UiBindingPropertyFlags::Required | UiBindingPropertyFlags::Nullable | UiBindingPropertyFlags::AffectsLayout |
             UiBindingPropertyFlags::AffectsPaint | UiBindingPropertyFlags::AffectsAccessibility | UiBindingPropertyFlags::AffectsActions);
-        constexpr UiBindingProviderScopeMask KnownScopeMask = static_cast<UiBindingProviderScopeMask>((1U << 4U) - 1U);
+        constexpr std::uint32_t KnownScopeMask = (1U << 4U) - 1U;
 
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
-        }
-
-        [[nodiscard]] constexpr bool IsLowercaseAlphaNumeric(const unsigned char value) noexcept {
-            return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
-        }
-
-        [[nodiscard]] constexpr bool IsIdentifierSeparator(const unsigned char value) noexcept {
-            return value == '.' || value == '-' || value == '_';
-        }
-
-        [[nodiscard]] bool IsCanonicalNamespacedId(const std::string_view value, const std::size_t maximumBytes,
-                                                   const bool requireNamespace) noexcept {
-            if (value.empty() || value.size() > maximumBytes)
-                return false;
-
-            bool previousSeparator = true;
-            std::size_t segmentCount = 0;
-            for (const unsigned char character : value) {
-                if (character == '.') {
-                    if (previousSeparator)
-                        return false;
-                    previousSeparator = true;
-                    ++segmentCount;
-                    continue;
-                }
-                if (IsIdentifierSeparator(character)) {
-                    if (previousSeparator)
-                        return false;
-                    previousSeparator = true;
-                    continue;
-                }
-                if (!IsLowercaseAlphaNumeric(character))
-                    return false;
-                previousSeparator = false;
-            }
-            if (previousSeparator)
-                return false;
-            ++segmentCount;
-            return !requireNamespace || segmentCount >= 2;
-        }
-
-        [[nodiscard]] bool IsCanonicalPropertyId(const std::string_view value) noexcept {
-            if (value.empty() || value.size() > MaximumUiBindingPropertyIdBytes)
-                return false;
-            for (const unsigned char character : value)
-                if (!IsLowercaseAlphaNumeric(character) && character != '_')
-                    return false;
-            return true;
-        }
-
-        [[nodiscard]] bool IsCanonicalModuleId(const std::string_view value) noexcept {
-            return IsCanonicalNamespacedId(value, MaximumUiBindingProviderTypeIdBytes, true);
         }
 
         [[nodiscard]] bool IsProviderOwnedBy(const UiBindingProviderTypeId &type, const ModuleId &owner) noexcept {
@@ -116,14 +64,15 @@ namespace Horo::Runtime::Ui {
             if (limits.maximumBytes == 0 || limits.maximumBytes > MaximumUiBindingValueBytes || limits.maximumElements == 0 ||
                 limits.maximumElements > MaximumUiBindingValueElements)
                 return false;
-            if (limits.minimumSigned && limits.maximumSigned && *limits.minimumSigned > *limits.maximumSigned)
+            if (limits.minimumSigned.has_value() && limits.maximumSigned.has_value() && *limits.minimumSigned > *limits.maximumSigned)
                 return false;
-            if (limits.minimumUnsigned && limits.maximumUnsigned && *limits.minimumUnsigned > *limits.maximumUnsigned)
+            if (limits.minimumUnsigned.has_value() && limits.maximumUnsigned.has_value() &&
+                *limits.minimumUnsigned > *limits.maximumUnsigned)
                 return false;
-            if (limits.minimumScalar &&
-                (!IsFinite(*limits.minimumScalar) || (limits.maximumScalar && *limits.minimumScalar > *limits.maximumScalar)))
+            if (limits.minimumScalar.has_value() &&
+                (!IsFinite(*limits.minimumScalar) || (limits.maximumScalar.has_value() && *limits.minimumScalar > *limits.maximumScalar)))
                 return false;
-            if (limits.maximumScalar && !IsFinite(*limits.maximumScalar))
+            if (limits.maximumScalar.has_value() && !IsFinite(*limits.maximumScalar))
                 return false;
             return true;
         }
@@ -148,12 +97,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ValidateProviderShape(const UiBindingProviderDescriptor &descriptor,
                                                          const UiBindingDescriptorLimits &limits) {
             if (!descriptor.type.IsValid() || descriptor.type.Value().size() > limits.maximumIdentifierBytes ||
-                !IsCanonicalModuleId(descriptor.ownerModule.value) || !IsProviderOwnedBy(descriptor.type, descriptor.ownerModule) ||
-                !descriptor.schema.IsValid() || descriptor.properties.empty())
+                !BindingInternal::IsCanonicalNamespacedId(descriptor.ownerModule.value, MaximumUiBindingProviderTypeIdBytes) ||
+                !IsProviderOwnedBy(descriptor.type, descriptor.ownerModule) || !descriptor.schema.IsValid() ||
+                descriptor.properties.empty())
                 return Failure(UiErrors::BindingSchemaInvalid);
             if (descriptor.properties.size() > limits.maximumPropertiesPerProvider)
                 return Failure(UiErrors::BindingCapacityExceeded);
-            if (descriptor.allowedScopes == 0 || (descriptor.allowedScopes & ~KnownScopeMask) != 0 ||
+            if (descriptor.allowedScopes == 0 || (static_cast<std::uint32_t>(descriptor.allowedScopes) & ~KnownScopeMask) != 0 ||
                 (static_cast<std::uint16_t>(descriptor.flags) & ~KnownProviderFlags) != 0)
                 return Failure(UiErrors::BindingSchemaInvalid);
             for (std::size_t index = 0; index < descriptor.properties.size(); ++index) {
@@ -167,35 +117,30 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] const UiBindingPropertyDescriptor *FindProperty(const std::span<const UiBindingPropertyDescriptor> properties,
-                                                                      const UiBindingPropertyId id) noexcept {
-            const auto found = std::ranges::lower_bound(properties, id, {}, &UiBindingPropertyDescriptor::id);
-            return found != properties.end() && found->id == id ? &*found : nullptr;
-        }
-
         [[nodiscard]] Result<void> InvalidFallback() {
             return Failure(UiErrors::BindingFallbackInvalid);
         }
 
         [[nodiscard]] Result<void> ValidateSignedFallback(const UiBindingValue &value, const UiBindingValueLimits &limits) {
             const auto number = std::get<std::int64_t>(value);
-            return (!limits.minimumSigned || number >= *limits.minimumSigned) && (!limits.maximumSigned || number <= *limits.maximumSigned)
+            return (!limits.minimumSigned.has_value() || number >= *limits.minimumSigned) &&
+                           (!limits.maximumSigned.has_value() || number <= *limits.maximumSigned)
                        ? Result<void>::Success()
                        : InvalidFallback();
         }
 
         [[nodiscard]] Result<void> ValidateUnsignedFallback(const UiBindingValue &value, const UiBindingValueLimits &limits) {
             const auto number = std::get<std::uint64_t>(value);
-            return (!limits.minimumUnsigned || number >= *limits.minimumUnsigned) &&
-                           (!limits.maximumUnsigned || number <= *limits.maximumUnsigned)
+            return (!limits.minimumUnsigned.has_value() || number >= *limits.minimumUnsigned) &&
+                           (!limits.maximumUnsigned.has_value() || number <= *limits.maximumUnsigned)
                        ? Result<void>::Success()
                        : InvalidFallback();
         }
 
         [[nodiscard]] Result<void> ValidateScalarFallback(const UiBindingValue &value, const UiBindingValueLimits &limits) {
             const auto number = std::get<double>(value);
-            return IsFinite(number) && (!limits.minimumScalar || number >= *limits.minimumScalar) &&
-                           (!limits.maximumScalar || number <= *limits.maximumScalar)
+            return IsFinite(number) && (!limits.minimumScalar.has_value() || number >= *limits.minimumScalar) &&
+                           (!limits.maximumScalar.has_value() || number <= *limits.maximumScalar)
                        ? Result<void>::Success()
                        : InvalidFallback();
         }
@@ -212,9 +157,19 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ValidateReferenceFallback(const UiBindingValue &value, const UiBindingValueType expected,
                                                              const UiBindingValueLimits &limits) {
             const auto &reference = std::get<UiBindingReference>(value);
-            const auto expectedKind = expected == UiBindingValueType::AssetId    ? UiBindingReferenceKind::Asset
-                                      : expected == UiBindingValueType::EntityId ? UiBindingReferenceKind::Entity
-                                                                                 : UiBindingReferenceKind::Domain;
+            using enum UiBindingReferenceKind;
+            UiBindingReferenceKind expectedKind = Domain;
+            switch (expected) {
+                case UiBindingValueType::AssetId:
+                    expectedKind = Asset;
+                    break;
+                case UiBindingValueType::EntityId:
+                    expectedKind = Entity;
+                    break;
+                case UiBindingValueType::DomainId:
+                default:
+                    break;
+            }
             return reference.kind == expectedKind && !reference.value.empty() && reference.value.size() <= limits.maximumBytes
                        ? Result<void>::Success()
                        : InvalidFallback();
@@ -224,39 +179,40 @@ namespace Horo::Runtime::Ui {
                                                     const UiBindingValueLimits &limits) {
             if (UiBindingValueTypeOf(value) != expected)
                 return InvalidFallback();
+            using enum UiBindingValueType;
             switch (expected) {
-                case UiBindingValueType::Boolean:
-                case UiBindingValueType::Enum:
-                case UiBindingValueType::Flags:
+                case Boolean:
+                case Enum:
+                case Flags:
                     return Result<void>::Success();
-                case UiBindingValueType::SignedInteger:
+                case SignedInteger:
                     return ValidateSignedFallback(value, limits);
-                case UiBindingValueType::UnsignedInteger:
+                case UnsignedInteger:
                     return ValidateUnsignedFallback(value, limits);
-                case UiBindingValueType::FixedScalar:
+                case FixedScalar:
                     return ValidateScalarFallback(value, limits);
-                case UiBindingValueType::BoundedText:
+                case BoundedText:
                     return ValidateTextFallback(value, limits);
-                case UiBindingValueType::LocalizedMessage:
+                case LocalizedMessage:
                     return ValidateLocalizedFallback(value, limits);
-                case UiBindingValueType::Vector2:
+                case Vector2:
                     return IsFinite(std::get<UiBindingVector2>(value)) ? Result<void>::Success() : InvalidFallback();
-                case UiBindingValueType::Vector3:
+                case Vector3:
                     return IsFinite(std::get<UiBindingVector3>(value)) ? Result<void>::Success() : InvalidFallback();
-                case UiBindingValueType::Color:
+                case Color:
                     return IsFinite(std::get<UiBindingColor>(value)) ? Result<void>::Success() : InvalidFallback();
-                case UiBindingValueType::AssetId:
-                case UiBindingValueType::EntityId:
-                case UiBindingValueType::DomainId:
+                case AssetId:
+                case EntityId:
+                case DomainId:
                     return ValidateReferenceFallback(value, expected, limits);
-                case UiBindingValueType::Optional:
+                case Optional:
                     return std::holds_alternative<UiBindingNullValue>(value) ? Result<void>::Success() : InvalidFallback();
-                case UiBindingValueType::List:
-                case UiBindingValueType::Record:
-                case UiBindingValueType::Count:
+                case List:
+                case Record:
+                case Count:
+                default:
                     return InvalidFallback();
             }
-            return InvalidFallback();
         }
 
         [[nodiscard]] Result<void> ValidateBindingShape(const UiBindingDescriptor &descriptor, const UiBindingProviderTypeId &providerType,
@@ -274,7 +230,7 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<void> ValidateBindingProperty(const UiBindingDescriptor &descriptor,
                                                            const std::span<const UiBindingPropertyDescriptor> properties) {
-            const UiBindingPropertyDescriptor *property = FindProperty(properties, descriptor.source.property);
+            const UiBindingPropertyDescriptor *property = BindingInternal::FindProperty(properties, descriptor.source.property);
             if (property == nullptr)
                 return Failure(UiErrors::BindingPropertyUnknown);
             if (descriptor.source.propertySignatureFingerprint != ComputeUiBindingPropertyFingerprint(*property))
@@ -284,11 +240,10 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<void> ValidateBindingAccess(const UiBindingDescriptor &descriptor,
                                                          const UiBindingPropertyDescriptor &property) {
-            const bool readsSource =
-                descriptor.direction == UiBindingDirection::SourceToTarget || descriptor.direction == UiBindingDirection::TwoWay;
-            const bool writesSource =
-                descriptor.direction == UiBindingDirection::TargetToSource || descriptor.direction == UiBindingDirection::TwoWay;
-            if ((readsSource && property.access == UiBindingAccess::WriteCommand) ||
+            using enum UiBindingDirection;
+            const bool readsSource = descriptor.direction == SourceToTarget || descriptor.direction == TwoWay;
+            if (const bool writesSource = descriptor.direction == TargetToSource || descriptor.direction == TwoWay;
+                (readsSource && property.access == UiBindingAccess::WriteCommand) ||
                 (writesSource && property.access == UiBindingAccess::Read))
                 return Failure(UiErrors::BindingAccessInvalid);
             if (property.update == UiBindingUpdateKind::Manual && descriptor.updatePolicy != UiBindingUpdatePolicy::Manual)
@@ -327,7 +282,7 @@ namespace Horo::Runtime::Ui {
                                                           const std::span<const UiBindingPropertyDescriptor> properties) {
             if (const Result<void> valid = ValidateBindingShape(descriptor, providerType, version); valid.HasError())
                 return valid;
-            const UiBindingPropertyDescriptor *property = FindProperty(properties, descriptor.source.property);
+            const UiBindingPropertyDescriptor *property = BindingInternal::FindProperty(properties, descriptor.source.property);
             if (const Result<void> valid = ValidateBindingProperty(descriptor, properties); valid.HasError())
                 return valid;
             const auto targetType = UiBindingTargetValueType(descriptor.target.property);

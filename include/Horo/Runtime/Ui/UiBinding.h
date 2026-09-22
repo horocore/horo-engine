@@ -528,8 +528,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiBindingProviderFlags Flags() const noexcept;
         /** @brief Returns identity-sorted provider properties owned by this schema. */
         [[nodiscard]] std::span<const UiBindingPropertyDescriptor> Properties() const noexcept;
-        /** @brief Finds a property without fallback or reflection. @return Borrowed property or nullptr. */
-        [[nodiscard]] const UiBindingPropertyDescriptor *Find(UiBindingPropertyId id) const noexcept;
+        /**
+         * @brief Finds a property without fallback or reflection.
+         * @param id Stable property identity to find.
+         * @return Borrowed property or nullptr.
+         */
+        [[nodiscard]] const UiBindingPropertyDescriptor *Find(const UiBindingPropertyId &id) const noexcept;
 
     private:
         UiBindingProviderSchema(UiBindingProviderTypeId type, ModuleId ownerModule, UiBindingSchemaVersion version,
