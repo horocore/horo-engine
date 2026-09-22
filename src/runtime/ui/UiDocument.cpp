@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "UiAssetDependencyInternal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,20 @@ namespace Horo::Runtime::Ui {
     namespace {
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
+        }
+
+        [[nodiscard]] Result<void> MergeDocumentDependency(std::vector<UiAssetDependency> &dependencies, UiAssetDependency dependency) {
+            switch (Internal::MergeUiAssetDependency(dependencies, std::move(dependency), MaximumUiDocumentDependencies)) {
+                case Internal::UiAssetDependencyMergeResult::Inserted:
+                case Internal::UiAssetDependencyMergeResult::Strengthened:
+                    return Result<void>::Success();
+                case Internal::UiAssetDependencyMergeResult::CapacityExceeded:
+                    return Failure(UiErrors::CapacityExceeded);
+                case Internal::UiAssetDependencyMergeResult::Invalid:
+                case Internal::UiAssetDependencyMergeResult::Conflict:
+                    return Failure(UiErrors::DependencyInvalid);
+            }
+            return Failure(UiErrors::DependencyInvalid);
         }
 
         [[nodiscard]] bool IsValidSchemaVersion(const UiDocumentSchemaVersion version) noexcept {
@@ -57,16 +72,17 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValidReferenceShape(const UiReference &reference) noexcept {
             if (!IsValidReferenceKind(reference.kind))
                 return false;
+            using enum UiReferenceKind;
             switch (reference.kind) {
-                case UiReferenceKind::Element:
+                case Element:
                     return IsElementReferenceShape(reference);
-                case UiReferenceKind::Canvas:
+                case Canvas:
                     return IsCanvasReferenceShape(reference);
-                case UiReferenceKind::Document:
+                case Document:
                     return IsDocumentReferenceShape(reference);
-                case UiReferenceKind::Asset:
+                case Asset:
                     return IsAssetReferenceShape(reference);
-                case UiReferenceKind::Count:
+                case Count:
                     return false;
             }
             return false;
@@ -75,8 +91,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValidProperty(const UiTypedProperty &property) noexcept {
             if (!IsValidText(property.key))
                 return false;
-            return std::visit([](const auto &value) {
-                using Value = std::decay_t<decltype(value)>;
+            return std::visit([]<typename T>(const T &value) {
+                using Value = std::decay_t<T>;
                 if constexpr (std::is_same_v<Value, double>)
                     return std::isfinite(value);
                 if constexpr (std::is_same_v<Value, std::string>)
@@ -133,7 +149,7 @@ namespace Horo::Runtime::Ui {
             std::unordered_map<UiElementId, std::size_t, UiElementIdHash> indices;
             indices.reserve(elements.size());
             for (std::size_t index = 0; index < elements.size(); ++index)
-                if (!indices.emplace(elements[index].id, index).second)
+                if (!indices.try_emplace(elements[index].id, index).second)
                     return false;
 
             enum class VisitState : std::uint8_t {
@@ -141,18 +157,19 @@ namespace Horo::Runtime::Ui {
                 Visiting,
                 Visited
             };
-            std::vector<VisitState> states(elements.size(), VisitState::Unvisited);
+            using enum VisitState;
+            std::vector states(elements.size(), Unvisited);
             std::vector<std::size_t> path;
             path.reserve(elements.size());
             for (std::size_t start = 0; start < elements.size(); ++start) {
-                if (states[start] == VisitState::Visited)
+                if (states[start] == Visited)
                     continue;
                 path.clear();
                 auto current = start;
-                while (states[current] != VisitState::Visited) {
-                    if (states[current] == VisitState::Visiting)
+                while (states[current] != Visited) {
+                    if (states[current] == Visiting)
                         return false;
-                    states[current] = VisitState::Visiting;
+                    states[current] = Visiting;
                     path.push_back(current);
                     const auto parent = elements[current].parent;
                     if (!parent.IsValid())
@@ -163,7 +180,7 @@ namespace Horo::Runtime::Ui {
                     current = found->second;
                 }
                 for (const auto index : path)
-                    states[index] = VisitState::Visited;
+                    states[index] = Visited;
             }
             return true;
         }
@@ -214,19 +231,20 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ValidateReferenceTarget(const UiReference &reference, const std::vector<UiCanvasDescriptor> &canvases,
                                                            const std::vector<UiDocumentElement> &elements,
                                                            const std::vector<UiAssetDependency> &dependencies) {
+            using enum UiReferenceKind;
             switch (reference.kind) {
-                case UiReferenceKind::Element:
+                case Element:
                     return ContainsElement(elements, reference.element) ? Result<void>::Success()
                                                                         : Failure(UiErrors::DocumentReferenceInvalid);
-                case UiReferenceKind::Canvas:
+                case Canvas:
                     return ContainsCanvas(canvases, reference.canvas) ? Result<void>::Success()
                                                                       : Failure(UiErrors::DocumentReferenceInvalid);
-                case UiReferenceKind::Asset:
+                case Asset:
                     return ContainsDependency(dependencies, reference) ? Result<void>::Success()
                                                                        : Failure(UiErrors::DocumentReferenceInvalid);
-                case UiReferenceKind::Document:
+                case Document:
                     return Result<void>::Success();
-                case UiReferenceKind::Count:
+                case Count:
                     return Failure(UiErrors::DocumentReferenceInvalid);
             }
             return Failure(UiErrors::DocumentReferenceInvalid);
@@ -319,12 +337,24 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
+    struct UiDocument::State final {
+        UiDocumentSchemaVersion schemaVersion;
+        UiDocumentId id;
+        UiDocumentRevision revision;
+        std::vector<UiCanvasDescriptor> canvases;
+        std::vector<UiDocumentElement> elements;
+        std::vector<UiLocalizedText> localizedTexts;
+        std::vector<UiLocalizedAssetReference> localizedAssets;
+        std::vector<UiAssetDependency> dependencies;
+        std::vector<UiRouteMetadata> routes;
+    };
+
     /** @copydoc UiDocument::UiDocument */
-    UiDocument::UiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
-                           std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                           std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes) noexcept
-        : schemaVersion_(schemaVersion), id_(id), revision_(revision), canvases_(std::move(canvases)), elements_(std::move(elements)),
-          dependencies_(std::move(dependencies)), routes_(std::move(routes)) {}
+    UiDocument::UiDocument(State state) noexcept
+        : schemaVersion_(state.schemaVersion), id_(state.id), revision_(state.revision), canvases_(std::move(state.canvases)),
+          elements_(std::move(state.elements)), localizedTexts_(std::move(state.localizedTexts)),
+          localizedAssets_(std::move(state.localizedAssets)), dependencies_(std::move(state.dependencies)),
+          routes_(std::move(state.routes)) {}
 
     /** @copydoc UiDocument::SchemaVersion */
     UiDocumentSchemaVersion UiDocument::SchemaVersion() const noexcept {
@@ -344,6 +374,16 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiDocument::Canvases */
     std::span<const UiCanvasDescriptor> UiDocument::Canvases() const noexcept {
         return canvases_;
+    }
+
+    /** @copydoc UiDocument::LocalizedTexts */
+    std::span<const UiLocalizedText> UiDocument::LocalizedTexts() const noexcept {
+        return localizedTexts_;
+    }
+
+    /** @copydoc UiDocument::LocalizedAssets */
+    std::span<const UiLocalizedAssetReference> UiDocument::LocalizedAssets() const noexcept {
+        return localizedAssets_;
     }
 
     /** @copydoc UiDocument::Elements */
@@ -373,6 +413,51 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiDocumentBuilder::AddLocalizedText */
+    Result<void> UiDocumentBuilder::AddLocalizedText(UiLocalizedText text) {
+        if (!text.IsValid())
+            return Failure(UiErrors::LocalizedMessageInvalid);
+        if (localizedTexts_.size() == MaximumUiDocumentLocalizedTexts)
+            return Failure(UiErrors::CapacityExceeded);
+        localizedTexts_.push_back(std::move(text));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiDocumentBuilder::AddLocalizedAsset */
+    Result<void> UiDocumentBuilder::AddLocalizedAsset(UiLocalizedAssetReference reference) {
+        if (!reference.IsValid())
+            return Failure(UiErrors::LocalizedAssetReferenceInvalid);
+        if (localizedAssets_.size() == MaximumUiDocumentLocalizedAssets)
+            return Failure(UiErrors::CapacityExceeded);
+
+        std::size_t newDependencyCount = 0;
+        for (const UiAssetDependency &dependency : reference.Dependencies()) {
+            if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
+                return Failure(UiErrors::DependencyInvalid);
+            const auto position = std::ranges::lower_bound(dependencies_, dependency.asset, {}, &UiAssetDependency::asset);
+            if (position != dependencies_.end() && position->asset == dependency.asset) {
+                if (position->expectedType != dependency.expectedType)
+                    return Failure(UiErrors::DependencyInvalid);
+            } else if (dependencies_.size() + newDependencyCount >= MaximumUiDocumentDependencies) {
+                return Failure(UiErrors::CapacityExceeded);
+            } else {
+                ++newDependencyCount;
+            }
+        }
+
+        localizedAssets_.reserve(localizedAssets_.size() + 1);
+        dependencies_.reserve(dependencies_.size() + newDependencyCount);
+        for (const UiAssetDependency &dependency : reference.Dependencies()) {
+            const auto merged = Internal::MergeUiAssetDependency(dependencies_, dependency, MaximumUiDocumentDependencies);
+            if (merged == Internal::UiAssetDependencyMergeResult::CapacityExceeded)
+                return Failure(UiErrors::CapacityExceeded);
+            if (merged == Internal::UiAssetDependencyMergeResult::Invalid || merged == Internal::UiAssetDependencyMergeResult::Conflict)
+                return Failure(UiErrors::DependencyInvalid);
+        }
+        localizedAssets_.push_back(std::move(reference));
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiDocumentBuilder::AddElement */
     Result<void> UiDocumentBuilder::AddElement(UiDocumentElement element) {
         if (elements_.size() == MaximumUiDocumentElements)
@@ -383,19 +468,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiDocumentBuilder::RequireAsset */
     Result<void> UiDocumentBuilder::RequireAsset(UiAssetDependency dependency) {
-        if (!dependency.asset.IsValid() || dependency.expectedType.Value().empty())
-            return Failure(UiErrors::DependencyInvalid);
-        const auto found = std::ranges::find(dependencies_, dependency.asset, &UiAssetDependency::asset);
-        if (found == dependencies_.end()) {
-            if (dependencies_.size() == MaximumUiDocumentDependencies)
-                return Failure(UiErrors::CapacityExceeded);
-            dependencies_.push_back(std::move(dependency));
-            return Result<void>::Success();
-        }
-        if (found->expectedType != dependency.expectedType)
-            return Failure(UiErrors::DependencyInvalid);
-        found->required = found->required || dependency.required;
-        return Result<void>::Success();
+        return MergeDocumentDependency(dependencies_, std::move(dependency));
     }
 
     /** @copydoc UiDocumentBuilder::AddRoute */
@@ -418,7 +491,9 @@ namespace Horo::Runtime::Ui {
         std::ranges::sort(dependencies_, {}, &UiAssetDependency::asset);
         std::ranges::sort(routes_, {}, &UiRouteMetadata::id);
         return Result<UiDocument>::Success(UiDocument{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_),
-                                                      std::move(dependencies_), std::move(routes_)});
+        return Result<UiDocument>::Success(UiDocument{
+            UiDocument::State{schemaVersion_, id_, revision_, std::move(canvases_), std::move(elements_), std::move(localizedTexts_),
+                              std::move(localizedAssets_), std::move(dependencies_), std::move(routes_)}});
     }
 
     /** @copydoc CookedUiDocument::CookedUiDocument */
@@ -487,6 +562,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc CookedUiDocument::Payload */
     std::span<const std::uint8_t> CookedUiDocument::Payload() const noexcept {
         return payload_;
+    }
     }
 
     /** @copydoc ValidateUiCanvasAssetReference */

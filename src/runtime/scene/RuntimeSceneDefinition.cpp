@@ -91,6 +91,10 @@ namespace Horo::Runtime {
                 return false;
             if (components.navigationAgent && ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
                 return false;
+            if (components.aiAgent && AI::ValidateAiAgentComponent(*components.aiAgent).HasError())
+                return false;
+            if (components.aiController && AI::ValidateAiControllerComponent(*components.aiController).HasError())
+                return false;
             if (!ValidBehaviors(components.behaviors) || !ValidGameplayComponents(components.gameplayComponents))
                 return false;
             return true;
@@ -124,10 +128,22 @@ namespace Horo::Runtime {
             return ValidatePhysicsSceneComponentViews(physicsComponents);
         }
 
+        /** @brief Validates AI payloads and stable agent identities across the complete scene. */
+        [[nodiscard]] Result<void> ValidateAiComponents(const std::span<const RuntimeEntityDefinition> entities) {
+            std::vector<AI::AiSceneComponentView> aiComponents;
+            aiComponents.reserve(entities.size());
+            for (const RuntimeEntityDefinition &entity : entities)
+                aiComponents.push_back({.agent = entity.components.aiAgent ? &*entity.components.aiAgent : nullptr,
+                                        .controller = entity.components.aiController ? &*entity.components.aiController : nullptr});
+            return AI::ValidateAiSceneComponents(aiComponents);
+        }
+
         /** @brief Validates all authored subsystem projections before publishing a definition. */
         [[nodiscard]] Result<void> ValidateAuthoredComponents(const std::span<const RuntimeEntityDefinition> entities) {
             if (Result<void> navigation = ValidateNavigationComponents(entities); navigation.HasError())
                 return navigation;
+            if (Result<void> ai = ValidateAiComponents(entities); ai.HasError())
+                return ai;
             return ValidatePhysicsComponents(entities);
         }
 

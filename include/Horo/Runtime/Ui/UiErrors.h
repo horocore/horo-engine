@@ -30,6 +30,26 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DocumentDuplicateIdentity;
     /** @brief An asset dependency is malformed or conflicts with an earlier requirement. */
     extern const ErrorCodeDescriptor DependencyInvalid;
+    /** @brief A locale tag is malformed, non-normalized, or exceeds its bound. */
+    extern const ErrorCodeDescriptor LocaleInvalid;
+    /** @brief A locale fallback chain is empty, duplicated, malformed, or too large. */
+    extern const ErrorCodeDescriptor LocaleFallbackChainInvalid;
+    /** @brief A localized message key is malformed or violates the stable key grammar. */
+    extern const ErrorCodeDescriptor LocalizedKeyInvalid;
+    /** @brief A localized message reference contains invalid fallback or policy data. */
+    extern const ErrorCodeDescriptor LocalizedMessageInvalid;
+    /** @brief A named localized argument is malformed or contains an unsupported value. */
+    extern const ErrorCodeDescriptor LocalizedArgumentInvalid;
+    /** @brief A localized message repeats a named argument. */
+    extern const ErrorCodeDescriptor LocalizedArgumentConflict;
+    /** @brief A localized message exceeds its bounded argument capacity. */
+    extern const ErrorCodeDescriptor LocalizedArgumentCapacityExceeded;
+    /** @brief A localized asset reference or fallback policy is malformed. */
+    extern const ErrorCodeDescriptor LocalizedAssetReferenceInvalid;
+    /** @brief A localized asset reference repeats a locale or conflicts in its manifest. */
+    extern const ErrorCodeDescriptor LocalizedAssetVariantConflict;
+    /** @brief No authored localized asset can satisfy the requested fallback policy. */
+    extern const ErrorCodeDescriptor LocalizedAssetUnavailable;
     /** @brief A bounded document or cooked payload limit was exceeded. */
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief Cooked bytes are empty or exceed the declared representation contract. */
@@ -82,7 +102,7 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor DocumentMigrationInvalid;
     /** @brief A scene/component canvas reference lacks stable identity or revision evidence. */
     extern const ErrorCodeDescriptor CanvasReferenceInvalid;
-    /** @brief A canvas descriptor, viewport extent, or caller-supplied scale is malformed. */
+    /** @brief A canvas descriptor, viewport evidence, presentation policy, or caller-supplied scale is malformed. */
     extern const ErrorCodeDescriptor CanvasSpaceInvalid;
     /** @brief A screen/world resolver was used with the wrong semantic canvas mode. */
     extern const ErrorCodeDescriptor CanvasSpaceModeMismatch;
@@ -102,6 +122,10 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ElementTreeLifecycleUnavailable;
     /** @brief A layout request, geometry value, evaluator result, or dirty target is malformed. */
     extern const ErrorCodeDescriptor LayoutInvalid;
+    /** @brief A layout descriptor combines constraints that have no unambiguous semantic interpretation. */
+    extern const ErrorCodeDescriptor LayoutConstraintConflict;
+    /** @brief A required text or image intrinsic metric is unavailable for the frozen content revision. */
+    extern const ErrorCodeDescriptor LayoutIntrinsicUnavailable;
     /** @brief Layout source identity or revision evidence does not match the active tree/canvas. */
     extern const ErrorCodeDescriptor LayoutSourceStale;
     /** @brief Arrange-time dependency resolution changed more than the one bounded remeasure permits. */
@@ -110,6 +134,60 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor LayoutSnapshotStorageExhausted;
     /** @brief The layout engine is retiring or stopped and rejects new work. */
     extern const ErrorCodeDescriptor LayoutLifecycleUnavailable;
+    /** @brief A clip policy, clip chain, scroll extent, or reveal calculation is malformed. */
+    extern const ErrorCodeDescriptor LayoutClipInvalid;
+    /** @brief A clip/scroll request belongs to another layout owner or generation. */
+    extern const ErrorCodeDescriptor LayoutClipSourceStale;
+    /** @brief Every preallocated immutable clip/scroll snapshot slot remains leased. */
+    extern const ErrorCodeDescriptor LayoutClipSnapshotStorageExhausted;
+    /** @brief The clip/scroll projector is retiring or stopped and rejects new work. */
+    extern const ErrorCodeDescriptor LayoutClipLifecycleUnavailable;
+    /** @brief A shaped text view, layout policy, or positioned result is malformed. */
+    extern const ErrorCodeDescriptor TextLayoutInputInvalid;
+    /** @brief Text layout source identity or revision evidence is stale or foreign. */
+    extern const ErrorCodeDescriptor TextLayoutSourceStale;
+    /** @brief Text layout output exceeds its preallocated source, line, glyph, or run bound. */
+    extern const ErrorCodeDescriptor TextLayoutCapacityExceeded;
+    /** @brief A required pre-shaped ellipsis view is absent or malformed. */
+    extern const ErrorCodeDescriptor TextLayoutEllipsisInvalid;
+    /** @brief Every preallocated immutable text-layout result slot remains leased. */
+    extern const ErrorCodeDescriptor TextLayoutStorageExhausted;
+    /** @brief The text-layout engine is closed and rejects new layout work. */
+    extern const ErrorCodeDescriptor TextLayoutLifecycleUnavailable;
+    /** @brief A glyph-atlas owner, key, page, raster payload, or reset request is malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasInputInvalid;
+    /** @brief A glyph-atlas request belongs to an older or foreign logical atlas generation. */
+    extern const ErrorCodeDescriptor GlyphAtlasSourceStale;
+    /** @brief A glyph-atlas page, entry, or fixed representation bound was exceeded. */
+    extern const ErrorCodeDescriptor GlyphAtlasCapacityExceeded;
+    /** @brief No safe unpinned page tile is available for the requested glyph. */
+    extern const ErrorCodeDescriptor GlyphAtlasPressure;
+    /** @brief The terminal fallback glyph has not reached resident state. */
+    extern const ErrorCodeDescriptor GlyphAtlasFallbackUnavailable;
+    /** @brief A glyph-atlas upload descriptor or copied payload is invalid. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadInvalid;
+    /** @brief Upload metadata or staging capacity cannot admit another request. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadCapacityExceeded;
+    /** @brief An upload identity is absent, foreign, or no longer tracked. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadStale;
+    /** @brief An upload lifecycle method was called from an invalid state. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadInvalidTransition;
+    /** @brief A frame identity is absent, foreign, retired, or malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasFrameInvalid;
+    /** @brief One frame requested more distinct glyph pins than its fixed bound. */
+    extern const ErrorCodeDescriptor GlyphAtlasFrameCapacityExceeded;
+    /** @brief Every configured frame slot is still in flight. */
+    extern const ErrorCodeDescriptor GlyphAtlasFrameInFlight;
+    /** @brief An eviction budget or eviction request is malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasEvictionInvalid;
+    /** @brief A reload/device-loss reset reason or generation value is malformed. */
+    extern const ErrorCodeDescriptor GlyphAtlasResetInvalid;
+    /** @brief A reset was requested while frame or submitted-upload leases remain. */
+    extern const ErrorCodeDescriptor GlyphAtlasResetBusy;
+    /** @brief A glyph atlas is closed and rejects new work. */
+    extern const ErrorCodeDescriptor GlyphAtlasLifecycleUnavailable;
+    /** @brief Submitted upload work still retains an entry or staging lease. */
+    extern const ErrorCodeDescriptor GlyphAtlasUploadInFlight;
     /** @brief A style schema, value, or resolver request is malformed. */
     extern const ErrorCodeDescriptor StyleInvalid;
     /** @brief A style asset, class, token, or property repeats a stable identity. */
@@ -260,10 +338,46 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor RenderPresentationInvalid;
     /** @brief Runtime UI render-completion evidence is older than the last observed or presented revision. */
     extern const ErrorCodeDescriptor RenderPresentationStale;
+    /** @brief A Runtime UI image or atlas resource declaration is malformed. */
+    extern const ErrorCodeDescriptor ImageResourceInvalid;
+    /** @brief A Runtime UI image region is absent, duplicated, or inconsistent with its page. */
+    extern const ErrorCodeDescriptor ImageRegionInvalid;
+    /** @brief A Runtime UI image publication carries incompatible residency or fallback evidence. */
+    extern const ErrorCodeDescriptor ImageResidencyInvalid;
+    /** @brief Every preallocated Runtime UI image-resource slot is occupied or permanently retired. */
+    extern const ErrorCodeDescriptor ImageResourceStorageExhausted;
+    /** @brief A Runtime UI image-resource registry is closed and rejects new admission. */
+    extern const ErrorCodeDescriptor ImageResourceLifecycleUnavailable;
     /** @brief Runtime UI diagnostic evidence is malformed or exceeds its fixed bounds. */
     extern const ErrorCodeDescriptor DiagnosticInvalid;
     /** @brief A Runtime UI diagnostic category or source error is not part of the declared contract. */
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
+    /** @brief A binding identity, endpoint, policy, or descriptor shape is malformed. */
+    extern const ErrorCodeDescriptor BindingDescriptorInvalid;
+    /** @brief A provider schema or property declaration is malformed. */
+    extern const ErrorCodeDescriptor BindingSchemaInvalid;
+    /** @brief A binding schema requirement is not satisfied by the active provider schema. */
+    extern const ErrorCodeDescriptor BindingSchemaIncompatible;
+    /** @brief A binding provider type is not the provider schema being validated. */
+    extern const ErrorCodeDescriptor BindingProviderUnknown;
+    /** @brief A binding property is not present in the provider schema. */
+    extern const ErrorCodeDescriptor BindingPropertyUnknown;
+    /** @brief A cooked property signature no longer matches the active schema. */
+    extern const ErrorCodeDescriptor BindingPropertySignatureMismatch;
+    /** @brief Two binding descriptors claim the same stable or UI target identity. */
+    extern const ErrorCodeDescriptor BindingDescriptorConflict;
+    /** @brief A binding direction is not allowed by the provider property access policy. */
+    extern const ErrorCodeDescriptor BindingAccessInvalid;
+    /** @brief A source and target value type are incompatible without an admitted converter. */
+    extern const ErrorCodeDescriptor BindingTypeMismatch;
+    /** @brief A binding converter descriptor is malformed or has incompatible endpoint types. */
+    extern const ErrorCodeDescriptor BindingConverterInvalid;
+    /** @brief A binding fallback is absent, malformed, or has the wrong target type. */
+    extern const ErrorCodeDescriptor BindingFallbackInvalid;
+    /** @brief A binding update policy cannot be satisfied by the provider property. */
+    extern const ErrorCodeDescriptor BindingUpdatePolicyInvalid;
+    /** @brief A binding descriptor or provider schema exceeds its finite construction bounds. */
+    extern const ErrorCodeDescriptor BindingCapacityExceeded;
     /** @brief An accessibility semantic schema value is malformed or unsupported. */
     extern const ErrorCodeDescriptor AccessibilitySchemaInvalid;
     /** @brief An accessibility node role is unknown or incompatible with its control data. */

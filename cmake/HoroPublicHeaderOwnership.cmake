@@ -10,6 +10,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/CancellationToken.h
     Horo/Foundation/Configuration.h
     Horo/Foundation/DataBus.h
+    Horo/Foundation/EditorEventTypes.h
     Horo/Foundation/Diagnostics.h
     Horo/Foundation/Diagnostics/DiagnosticBundle.h
     Horo/Foundation/Diagnostics/OperationHistory.h
@@ -27,6 +28,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/ModuleDescriptor.h
     Horo/Foundation/ModuleHost.h
     Horo/Foundation/OperationStore.h
+    Horo/Foundation/ProcessEvents.h
     Horo/Foundation/PathUtils.h
     Horo/Foundation/Paths.h
     Horo/Foundation/Platform.h
@@ -34,6 +36,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/Result.h
     Horo/Foundation/Sha256.h
     Horo/Foundation/StableHash.h
+    Horo/Foundation/StableIdentity.h
     Horo/Foundation/StrongId.h
     Horo/Foundation/String.h
     Horo/Foundation/Telemetry/Operation.h
@@ -146,9 +149,13 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiErrors.h
+    Horo/Runtime/Ui/UiAssetDependency.h
+    Horo/Runtime/Ui/UiImageResource.h
     Horo/Runtime/Ui/UiAccessibility.h
     Horo/Runtime/Ui/UiIdentity.h
+    Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiCanvasSpace.h
+    Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiAssetLoading.h
     Horo/Runtime/Ui/UiDocumentSerialization.h
@@ -162,6 +169,9 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiFocusGraph.h
     Horo/Runtime/Ui/UiControls.h
     Horo/Runtime/Ui/UiLayout.h
+    Horo/Runtime/Ui/UiLayoutClipping.h
+    Horo/Runtime/Ui/UiTextLayout.h
+    Horo/Runtime/Ui/UiGlyphAtlas.h
     Horo/Runtime/Ui/UiStyle.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
@@ -347,6 +357,7 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AIErrors.h
+    Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h
     Horo/AI/AITaskLifecycle.h
     Horo/AI/BehaviorTree.h
@@ -355,6 +366,9 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionAssetValidation.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
+)
+horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
+    Horo/AI/AISceneActivation.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h
@@ -398,6 +412,7 @@ horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h
     Horo/Cinematic/CinematicErrors.h
     Horo/Cinematic/CinematicIdentity.h
+    Horo/Cinematic/PropertyTrack.h
     Horo/Cinematic/SequenceAsset.h
     Horo/Cinematic/TransformTrack.h
 )
@@ -406,6 +421,8 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequenceEvaluationErrors.h
     Horo/Cinematic/SequencePlayer.h
     Horo/Cinematic/SequencePlayerErrors.h
+    Horo/Cinematic/SequencePlaybackRuntime.h
+    Horo/Cinematic/SequencePlaybackRuntimeErrors.h
 )
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavMeshData.h
@@ -576,6 +593,8 @@ horo_configure_target_header_boundary(HoroRenderFrontend PUBLIC_HEADERS
     Horo/Runtime/Render/UiRenderComposition.h
 )
 horo_configure_target_header_boundary(HoroSceneModel PUBLIC_HEADERS
+    Horo/Runtime/Scene/PropertyBindingErrors.h
+    Horo/Runtime/Scene/PropertyBindingRegistry.h
     Horo/Runtime/Scene/PrimitiveCatalog.h
     Horo/Runtime/Scene/PrimitiveMesh.h
     Horo/Runtime/Scene/PrimitiveMeshDescriptor.h
@@ -597,6 +616,7 @@ horo_configure_target_header_boundary(HoroEditorRenderExtraction)
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ActivityBarLayout.h
     Horo/Editor/EditorConfiguration.h
+    Horo/Editor/EditorEngineEventBridge.h
     Horo/Editor/EditorMenuModel.h
     Horo/Editor/EditorModalHost.h
     Horo/Editor/EditorServiceRegistry.h
@@ -604,6 +624,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/EditorSettingsEvents.h
     Horo/Editor/EditorSettingsService.h
     Horo/Editor/EditorSettingsStore.h
+    Horo/Editor/EditorSurfaceEventContext.h
     Horo/Editor/EditorStatusBarModel.h
     Horo/Editor/EditorWorkspaceEvents.h
     Horo/Editor/GuiRoute.h
@@ -663,6 +684,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h
     Horo/Extensions/EditorSurfaceDescriptor.h
+    Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h
@@ -674,6 +696,8 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/PipelineStepRegistry.h
     Horo/Extensions/ProjectValidatorRegistry.h
     Horo/Extensions/ScriptExportDescriptor.h
+    Horo/Extensions/ScriptInvocation.h
+    Horo/Extensions/ScriptValue.h
     Horo/Extensions/ToolchainProviderRegistry.h
 )
 

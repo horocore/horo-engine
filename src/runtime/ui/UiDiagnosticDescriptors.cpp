@@ -17,6 +17,16 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::DocumentInvalid,
             &UiErrors::DocumentDuplicateIdentity,
             &UiErrors::DependencyInvalid,
+            &UiErrors::LocaleInvalid,
+            &UiErrors::LocaleFallbackChainInvalid,
+            &UiErrors::LocalizedKeyInvalid,
+            &UiErrors::LocalizedMessageInvalid,
+            &UiErrors::LocalizedArgumentInvalid,
+            &UiErrors::LocalizedArgumentConflict,
+            &UiErrors::LocalizedArgumentCapacityExceeded,
+            &UiErrors::LocalizedAssetReferenceInvalid,
+            &UiErrors::LocalizedAssetVariantConflict,
+            &UiErrors::LocalizedAssetUnavailable,
             &UiErrors::CapacityExceeded,
             &UiErrors::PayloadInvalid,
             &UiErrors::CookedFormatUnsupported,
@@ -44,10 +54,16 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::StructuralCommandConflict,
             &UiErrors::ElementTreeLifecycleUnavailable,
             &UiErrors::LayoutInvalid,
+            &UiErrors::LayoutConstraintConflict,
+            &UiErrors::LayoutIntrinsicUnavailable,
             &UiErrors::LayoutSourceStale,
             &UiErrors::LayoutNonConvergent,
             &UiErrors::LayoutSnapshotStorageExhausted,
             &UiErrors::LayoutLifecycleUnavailable,
+            &UiErrors::LayoutClipInvalid,
+            &UiErrors::LayoutClipSourceStale,
+            &UiErrors::LayoutClipSnapshotStorageExhausted,
+            &UiErrors::LayoutClipLifecycleUnavailable,
             &UiErrors::HitTestInvalid,
             &UiErrors::HitTestSourceStale,
             &UiErrors::HitTestNotPresented,
@@ -62,6 +78,11 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::RenderCompositionInvalid,
             &UiErrors::RenderPresentationInvalid,
             &UiErrors::RenderPresentationStale,
+            &UiErrors::ImageResourceInvalid,
+            &UiErrors::ImageRegionInvalid,
+            &UiErrors::ImageResidencyInvalid,
+            &UiErrors::ImageResourceStorageExhausted,
+            &UiErrors::ImageResourceLifecycleUnavailable,
             &UiErrors::EventDispatchInvalid,
             &UiErrors::EventDispatchSourceStale,
             &UiErrors::EventDispatchModalBoundaryViolation,
@@ -72,6 +93,29 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::EventDispatchLifecycleUnavailable,
             &UiErrors::DiagnosticInvalid,
             &UiErrors::DiagnosticUnsupported,
+        };
+        const std::array textLayout{
+            &UiErrors::TextLayoutInputInvalid,    &UiErrors::TextLayoutSourceStale,      &UiErrors::TextLayoutCapacityExceeded,
+            &UiErrors::TextLayoutEllipsisInvalid, &UiErrors::TextLayoutStorageExhausted, &UiErrors::TextLayoutLifecycleUnavailable,
+        };
+        const std::array glyphAtlas{
+            &UiErrors::GlyphAtlasInputInvalid,
+            &UiErrors::GlyphAtlasSourceStale,
+            &UiErrors::GlyphAtlasCapacityExceeded,
+            &UiErrors::GlyphAtlasPressure,
+            &UiErrors::GlyphAtlasFallbackUnavailable,
+            &UiErrors::GlyphAtlasUploadInvalid,
+            &UiErrors::GlyphAtlasUploadCapacityExceeded,
+            &UiErrors::GlyphAtlasUploadStale,
+            &UiErrors::GlyphAtlasUploadInvalidTransition,
+            &UiErrors::GlyphAtlasFrameInvalid,
+            &UiErrors::GlyphAtlasFrameCapacityExceeded,
+            &UiErrors::GlyphAtlasFrameInFlight,
+            &UiErrors::GlyphAtlasEvictionInvalid,
+            &UiErrors::GlyphAtlasResetInvalid,
+            &UiErrors::GlyphAtlasResetBusy,
+            &UiErrors::GlyphAtlasLifecycleUnavailable,
+            &UiErrors::GlyphAtlasUploadInFlight,
         };
         const std::array actions{
             &UiErrors::ActionInvalid,
@@ -85,6 +129,13 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::ActionHandlerFailed,
             &UiErrors::ActionLifecycleUnavailable,
             &UiErrors::NavigationInvalid,
+        };
+        const std::array bindings{
+            &UiErrors::BindingDescriptorInvalid,  &UiErrors::BindingSchemaInvalid,   &UiErrors::BindingSchemaIncompatible,
+            &UiErrors::BindingProviderUnknown,    &UiErrors::BindingPropertyUnknown, &UiErrors::BindingPropertySignatureMismatch,
+            &UiErrors::BindingDescriptorConflict, &UiErrors::BindingAccessInvalid,   &UiErrors::BindingTypeMismatch,
+            &UiErrors::BindingConverterInvalid,   &UiErrors::BindingFallbackInvalid, &UiErrors::BindingUpdatePolicyInvalid,
+            &UiErrors::BindingCapacityExceeded,
         };
         const std::array pointerCapture{
             &UiErrors::PointerCaptureInvalid, &UiErrors::PointerCaptureSourceStale,      &UiErrors::PointerCaptureInteractionStale,
@@ -124,12 +175,16 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::AccessibilityActionRejected,       &UiErrors::AccessibilityFocusConflict,
         };
         const auto descriptors = [] {
-            std::array<const ErrorCodeDescriptor *, core.size() + pointerCapture.size() + actions.size() + controls.size() + focus.size() +
+            std::array<const ErrorCodeDescriptor *, core.size() + textLayout.size() + glyphAtlas.size() + pointerCapture.size() +
+                                                        actions.size() + bindings.size() + controls.size() + focus.size() +
                                                         renderGeometry.size() + accessibility.size()>
                 combined{};
             auto output = std::ranges::copy(core, combined.begin()).out;
+            output = std::ranges::copy(textLayout, output).out;
+            output = std::ranges::copy(glyphAtlas, output).out;
             output = std::ranges::copy(pointerCapture, output).out;
             output = std::ranges::copy(actions, output).out;
+            output = std::ranges::copy(bindings, output).out;
             output = std::ranges::copy(controls, output).out;
             output = std::ranges::copy(focus, output).out;
             output = std::ranges::copy(renderGeometry, output).out;

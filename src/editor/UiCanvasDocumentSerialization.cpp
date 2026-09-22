@@ -95,6 +95,67 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
             return Failure<Runtime::Ui::UiScaleMode>(UiCanvasDocumentErrors::Malformed, "UI Canvas scale mode is unsupported.");
         }
 
+        [[nodiscard]] Result<Runtime::Ui::UiSafeAreaMode> ParseSafeAreaMode(const Json &value) {
+            if (!value.is_string())
+                return Failure<Runtime::Ui::UiSafeAreaMode>(UiCanvasDocumentErrors::Malformed, "UI Canvas safe-area mode is invalid.");
+            const std::string mode = value.get<std::string>();
+            using enum Runtime::Ui::UiSafeAreaMode;
+            if (mode == "ignore")
+                return Result<Runtime::Ui::UiSafeAreaMode>::Success(Ignore);
+            if (mode == "inset")
+                return Result<Runtime::Ui::UiSafeAreaMode>::Success(Inset);
+            return Failure<Runtime::Ui::UiSafeAreaMode>(UiCanvasDocumentErrors::Malformed, "UI Canvas safe-area mode is unsupported.");
+        }
+
+        [[nodiscard]] Result<Runtime::Ui::UiPixelSnapMode> ParsePixelSnapMode(const Json &value) {
+            if (!value.is_string())
+                return Failure<Runtime::Ui::UiPixelSnapMode>(UiCanvasDocumentErrors::Malformed, "UI Canvas pixel-snap mode is invalid.");
+            const std::string mode = value.get<std::string>();
+            using enum Runtime::Ui::UiPixelSnapMode;
+            if (mode == "disabled")
+                return Result<Runtime::Ui::UiPixelSnapMode>::Success(Disabled);
+            if (mode == "edges")
+                return Result<Runtime::Ui::UiPixelSnapMode>::Success(Edges);
+            return Failure<Runtime::Ui::UiPixelSnapMode>(UiCanvasDocumentErrors::Malformed, "UI Canvas pixel-snap mode is unsupported.");
+        }
+
+        [[nodiscard]] Result<Runtime::Ui::UiCanvasScaleFactor> ParseScaleFactor(const Json &value, const std::string_view field) {
+            if (!value.is_object() || !value.contains("numerator") || !value.contains("denominator"))
+                return Failure<Runtime::Ui::UiCanvasScaleFactor>(UiCanvasDocumentErrors::Malformed,
+                                                                 "UI Canvas scale factor is incomplete: " + std::string(field));
+            const Result<std::uint32_t> numerator = ParseUInt32(value["numerator"], std::string(field) + ".numerator");
+            const Result<std::uint32_t> denominator = ParseUInt32(value["denominator"], std::string(field) + ".denominator");
+            if (numerator.HasError() || denominator.HasError())
+                return Failure<Runtime::Ui::UiCanvasScaleFactor>(UiCanvasDocumentErrors::Malformed,
+                                                                 "UI Canvas scale factor is invalid: " + std::string(field));
+            const Runtime::Ui::UiCanvasScaleFactor factor{numerator.Value(), denominator.Value()};
+            if (!factor.IsValid())
+                return Failure<Runtime::Ui::UiCanvasScaleFactor>(UiCanvasDocumentErrors::Malformed,
+                                                                 "UI Canvas scale factor is outside the supported bound: " +
+                                                                     std::string(field));
+            return Result<Runtime::Ui::UiCanvasScaleFactor>::Success(factor);
+        }
+
+        [[nodiscard]] Result<Runtime::Ui::UiCanvasPresentationPolicy> ParsePresentation(const Json &value) {
+            if (!value.is_object() || !value.contains("safeArea") || !value.contains("uiScale") || !value.contains("fontScale") ||
+                !value.contains("pixelSnap"))
+                return Failure<Runtime::Ui::UiCanvasPresentationPolicy>(UiCanvasDocumentErrors::Malformed,
+                                                                        "UI Canvas presentation policy is incomplete.");
+            const Result<Runtime::Ui::UiSafeAreaMode> safeArea = ParseSafeAreaMode(value["safeArea"]);
+            const Result<Runtime::Ui::UiCanvasScaleFactor> uiScale = ParseScaleFactor(value["uiScale"], "presentation.uiScale");
+            const Result<Runtime::Ui::UiCanvasScaleFactor> fontScale = ParseScaleFactor(value["fontScale"], "presentation.fontScale");
+            const Result<Runtime::Ui::UiPixelSnapMode> pixelSnap = ParsePixelSnapMode(value["pixelSnap"]);
+            if (safeArea.HasError() || uiScale.HasError() || fontScale.HasError() || pixelSnap.HasError())
+                return Failure<Runtime::Ui::UiCanvasPresentationPolicy>(UiCanvasDocumentErrors::Malformed,
+                                                                        "UI Canvas presentation policy is invalid.");
+            const Runtime::Ui::UiCanvasPresentationPolicy presentation{safeArea.Value(), uiScale.Value(), fontScale.Value(),
+                                                                       pixelSnap.Value()};
+            if (!presentation.IsValid())
+                return Failure<Runtime::Ui::UiCanvasPresentationPolicy>(UiCanvasDocumentErrors::Malformed,
+                                                                        "UI Canvas presentation policy is invalid.");
+            return Result<Runtime::Ui::UiCanvasPresentationPolicy>::Success(presentation);
+        }
+
         [[nodiscard]] std::string RenderModeText(const Runtime::Ui::UiRenderMode mode) {
             using enum Runtime::Ui::UiRenderMode;
             switch (mode) {
@@ -119,6 +180,39 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
                     return "constant_physical_size";
             }
             return {};
+        }
+
+        [[nodiscard]] std::string SafeAreaModeText(const Runtime::Ui::UiSafeAreaMode mode) {
+            using enum Runtime::Ui::UiSafeAreaMode;
+            switch (mode) {
+                case Ignore:
+                    return "ignore";
+                case Inset:
+                    return "inset";
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::string PixelSnapModeText(const Runtime::Ui::UiPixelSnapMode mode) {
+            using enum Runtime::Ui::UiPixelSnapMode;
+            switch (mode) {
+                case Disabled:
+                    return "disabled";
+                case Edges:
+                    return "edges";
+            }
+            return {};
+        }
+
+        [[nodiscard]] Json EncodeScaleFactor(const Runtime::Ui::UiCanvasScaleFactor &factor) {
+            return Json{{"numerator", factor.numerator}, {"denominator", factor.denominator}};
+        }
+
+        [[nodiscard]] Json EncodePresentation(const Runtime::Ui::UiCanvasPresentationPolicy &presentation) {
+            return Json{{"safeArea", SafeAreaModeText(presentation.safeArea)},
+                        {"uiScale", EncodeScaleFactor(presentation.uiScale)},
+                        {"fontScale", EncodeScaleFactor(presentation.fontScale)},
+                        {"pixelSnap", PixelSnapModeText(presentation.pixelSnap)}};
         }
 
         /** @brief Validates the required top-level UI Canvas fields and format version. */
@@ -165,8 +259,11 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
                     ParseUiId<Runtime::Ui::UiElementId>(canvas["rootElement"], "canvas.rootElement");
                 const Result<Runtime::Ui::UiRenderMode> renderMode = ParseRenderMode(canvas["renderMode"]);
                 const Result<Runtime::Ui::UiScaleMode> scaleMode = ParseScaleMode(canvas["scaleMode"]);
+                Result<Runtime::Ui::UiCanvasPresentationPolicy> presentation = Result<Runtime::Ui::UiCanvasPresentationPolicy>::Success({});
+                if (canvas.contains("presentation"))
+                    presentation = ParsePresentation(canvas["presentation"]);
                 const Json &resolution = canvas["referenceResolution"];
-                if (id.HasError() || rootElement.HasError() || renderMode.HasError() || scaleMode.HasError() ||
+                if (id.HasError() || rootElement.HasError() || renderMode.HasError() || scaleMode.HasError() || presentation.HasError() ||
                     !resolution.contains("width") || !resolution.contains("height"))
                     return Failure(UiCanvasDocumentErrors::Malformed, "UI Canvas descriptor identity or mode is invalid.");
                 const Result<std::uint32_t> width = ParseUInt32(resolution["width"], "canvas.referenceResolution.width");
@@ -179,6 +276,7 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
                         .renderMode = renderMode.Value(),
                         .referenceResolution = {.width = width.Value(), .height = height.Value()},
                         .scaleMode = scaleMode.Value(),
+                        .presentation = presentation.Value(),
                     });
                     added.HasError())
                     return Failure(UiCanvasDocumentErrors::InvalidDocument, added.ErrorValue().message);
@@ -238,6 +336,7 @@ namespace Horo::Editor::UiCanvasDocumentSerialization {
                     {"renderMode", RenderModeText(canvas.renderMode)},
                     {"referenceResolution", {{"width", canvas.referenceResolution.width}, {"height", canvas.referenceResolution.height}}},
                     {"scaleMode", ScaleModeText(canvas.scaleMode)},
+                    {"presentation", EncodePresentation(canvas.presentation)},
                 });
             }
             Json dependencies = Json::array();

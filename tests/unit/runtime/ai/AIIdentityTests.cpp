@@ -165,6 +165,12 @@ namespace Horo::AI {
                 &AIErrors::PerceptionDescriptorIncompatible,
                 &AIErrors::PerceptionCapabilityUnavailable,
                 &AIErrors::PerceptionRegistryStorageUnavailable,
+                &AIErrors::SceneComponentInvalid,
+                &AIErrors::ControllerDescriptorMissing,
+                &AIErrors::ControllerDescriptorIncompatible,
+                &AIErrors::CapabilityUnavailable,
+                &AIErrors::SceneActivationInvalid,
+                &AIErrors::AgentCapacityExceeded,
             };
         }
 

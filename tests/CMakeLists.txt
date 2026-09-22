@@ -360,6 +360,8 @@ horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroAITests
         unit/runtime/ai/AIIdentityTests.cpp
+        unit/runtime/ai/AISceneActivationTests.cpp
+        unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
@@ -369,7 +371,7 @@ add_executable(HoroAITests
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
-target_link_libraries(HoroAITests PRIVATE HoroEngine::AI)
+target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 
 add_executable(HoroAnimationApiTests
@@ -431,6 +433,8 @@ add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CurveSamplingTests.cpp
         unit/runtime/cinematic/CinematicIdentityTests.cpp
+        unit/runtime/cinematic/PropertyTrackCoverageTests.cpp
+        unit/runtime/cinematic/PropertyTrackTests.cpp
         unit/runtime/cinematic/SequenceAssetTests.cpp
         unit/runtime/cinematic/TransformTrackTests.cpp
 )
@@ -442,6 +446,8 @@ add_executable(HoroCinematicRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/SequenceEvaluationTests.cpp
         unit/runtime/cinematic/SequencePlayerTests.cpp
+        unit/runtime/cinematic/SequencePlaybackRuntimeCoverageTests.cpp
+        unit/runtime/cinematic/SequencePlaybackRuntimeTests.cpp
 )
 target_compile_features(HoroCinematicRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -919,7 +925,7 @@ add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiCanvasDocumentTests.cpp
 )
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
 )
@@ -1504,13 +1510,28 @@ add_executable(HoroRuntimeUiIdentityTests
 )
 target_compile_features(HoroRuntimeUiIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiIdentityTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiImageResourceTests
+        unit/runtime/ui/UiImageResourceTests.cpp
+)
+target_compile_features(HoroRuntimeUiImageResourceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiImageResourceTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiBindingTests
+        unit/runtime/ui/UiBindingTests.cpp
+)
+target_compile_features(HoroRuntimeUiBindingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiBindingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiAssetLoadingTests.cpp
         unit/runtime/ui/UiDocumentSerializationTests.cpp
 )
 target_compile_features(HoroRuntimeUiDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi)
+target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi nlohmann_json::nlohmann_json)
+add_executable(HoroRuntimeUiLocalizationTests
+        unit/runtime/ui/UiLocalizationTests.cpp
+)
+target_compile_features(HoroRuntimeUiLocalizationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiLocalizationTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiCanvasSpaceTests
         unit/runtime/ui/UiCanvasSpaceTests.cpp
 )
@@ -1546,6 +1567,25 @@ add_executable(HoroRuntimeUiLayoutTests
 )
 target_compile_features(HoroRuntimeUiLayoutTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiLayoutClippingTests
+        unit/runtime/ui/UiLayoutClippingTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiLayoutClippingTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiLayoutClippingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiLayoutClippingTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiTextLayoutTests
+        unit/runtime/ui/UiTextLayoutTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiTextLayoutTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiTextLayoutTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiTextLayoutTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiGlyphAtlasTests
+        unit/runtime/ui/UiGlyphAtlasTests.cpp
+)
+target_compile_features(HoroRuntimeUiGlyphAtlasTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiGlyphAtlasTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiStyleTests
         unit/runtime/ui/UiStyleTests.cpp
 )
@@ -1898,6 +1938,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
+        unit/extensions/EditorUiFormTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ScriptExportDescriptorTests.cpp
@@ -2009,6 +2050,15 @@ add_executable(HoroBackendOperationRegistryTests
 target_compile_features(HoroBackendOperationRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroBackendOperationRegistryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
 add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegistryTests)
+
+add_executable(HoroScriptInvocationTests
+        unit/extensions/ScriptValueTests.cpp
+        unit/extensions/ScriptInvocationTests.cpp
+)
+target_compile_features(HoroScriptInvocationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroScriptInvocationTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroScriptInvocationTests COMMAND HoroScriptInvocationTests)
+
 add_test(
         NAME HoroBackendServiceRegistryUnresponsiveRetirementTests
         COMMAND HoroBackendServiceRegistryTests
@@ -2302,7 +2352,10 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveCaptureSnapshotTests
         HoroRuntimeSaveRestoreTransactionTests
         HoroRuntimeUiIdentityTests
+        HoroRuntimeUiImageResourceTests
+        HoroRuntimeUiBindingTests
         HoroRuntimeUiDocumentTests
+        HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests
         HoroRuntimeUiAccessibilityTests
@@ -2310,6 +2363,9 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiRenderSnapshotTests
         HoroRuntimeUiRenderGeometryTests
         HoroRuntimeUiLayoutTests
+        HoroRuntimeUiLayoutClippingTests
+        HoroRuntimeUiTextLayoutTests
+        HoroRuntimeUiGlyphAtlasTests
         HoroRuntimeUiStyleTests
         HoroRuntimeUiHitTestingTests
         HoroRuntimeUiEventDispatchTests

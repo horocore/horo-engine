@@ -1,6 +1,7 @@
 #include "JsonUtils.h"
 #include "UiDocumentSerializationInternal.h"
 
+#include <memory>
 #include <new>
 #include <ranges>
 #include <utility>
@@ -17,10 +18,9 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(MakeError(descriptor, std::move(message)));
         }
 
-        [[nodiscard]] Result<void> AppendCanvases(UiDocumentBuilder &builder, const Internal::Json &encoded,
-                                                  const UiDocumentSerializationLimits &limits) {
+        [[nodiscard]] Result<void> AppendCanvases(UiDocumentBuilder &builder, const Internal::Json &encoded) {
             for (const auto &value : encoded) {
-                auto canvas = Internal::DecodeCanvas(value, limits);
+                auto canvas = Internal::DecodeCanvas(value);
                 if (canvas.HasError())
                     return Result<void>::Failure(canvas.ErrorValue());
                 if (auto added = builder.AddCanvas(std::move(canvas).Value()); added.HasError())
@@ -36,6 +36,30 @@ namespace Horo::Runtime::Ui {
                 if (element.HasError())
                     return Result<void>::Failure(element.ErrorValue());
                 if (auto added = builder.AddElement(std::move(element).Value()); added.HasError())
+                    return added;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> AppendLocalizedTexts(UiDocumentBuilder &builder, const Internal::Json &encoded,
+                                                        const UiDocumentSerializationLimits &limits) {
+            for (const auto &value : encoded) {
+                auto text = Internal::DecodeLocalizedText(value, limits);
+                if (text.HasError())
+                    return Result<void>::Failure(text.ErrorValue());
+                if (auto added = builder.AddLocalizedText(std::move(text).Value()); added.HasError())
+                    return added;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> AppendLocalizedAssets(UiDocumentBuilder &builder, const Internal::Json &encoded,
+                                                         const UiDocumentSerializationLimits &limits) {
+            for (const auto &value : encoded) {
+                auto reference = Internal::DecodeLocalizedAsset(value, limits);
+                if (reference.HasError())
+                    return Result<void>::Failure(reference.ErrorValue());
+                if (auto added = builder.AddLocalizedAsset(std::move(reference).Value()); added.HasError())
                     return added;
             }
             return Result<void>::Success();
@@ -79,6 +103,21 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> CopyLocalizedTexts(UiDocumentBuilder &builder, const std::span<const UiLocalizedText> texts) {
+            for (const auto &text : texts)
+                if (auto result = builder.AddLocalizedText(text); result.HasError())
+                    return result;
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> CopyLocalizedAssets(UiDocumentBuilder &builder,
+                                                       const std::span<const UiLocalizedAssetReference> assets) {
+            for (const auto &asset : assets)
+                if (auto result = builder.AddLocalizedAsset(asset); result.HasError())
+                    return result;
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> CopyDependencies(UiDocumentBuilder &builder, const std::span<const UiAssetDependency> dependencies) {
             for (const auto &dependency : dependencies)
                 if (auto result = builder.RequireAsset(dependency); result.HasError())
@@ -117,6 +156,8 @@ namespace Horo::Runtime::Ui {
             UiDocumentRevision revision;
             const Internal::Json *canvases;
             const Internal::Json *elements;
+            const Internal::Json *localizedTexts;
+            const Internal::Json *localizedAssets;
             const Internal::Json *dependencies;
             const Internal::Json *routes;
         };
@@ -143,17 +184,22 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] bool HasValidDocumentArrays(const Internal::Json &canvases, const Internal::Json &elements,
+                                                  const Internal::Json &localizedTexts, const Internal::Json &localizedAssets,
                                                   const Internal::Json &dependencies, const Internal::Json &routes,
                                                   const UiDocumentSerializationLimits &limits) {
             return canvases.is_array() && !canvases.empty() && canvases.size() <= MaximumUiDocumentCanvases && elements.is_array() &&
-                   elements.size() <= limits.maximumElements && dependencies.is_array() &&
+                   elements.size() <= limits.maximumElements && localizedTexts.is_array() &&
+                   localizedTexts.size() <= MaximumUiDocumentLocalizedTexts && localizedAssets.is_array() &&
+                   localizedAssets.size() <= MaximumUiDocumentLocalizedAssets && dependencies.is_array() &&
                    dependencies.size() <= MaximumUiDocumentDependencies && routes.is_array() && routes.size() <= limits.maximumRoutes;
         }
 
         [[nodiscard]] Result<DocumentSections> DecodeDocumentSections(const Internal::Json &root,
                                                                       const UiDocumentSerializationLimits &limits) {
-            if (!Horo::Foundation::HasAllowedFields(root, {"schemaVersion", "documentId", "revision", "canvases", "elements",
-                                                           "dependencies", "routes"}))
+            if (!Horo::Foundation::HasAllowedFields(root,
+                                                    {"schemaVersion", "documentId", "revision", "canvases", "elements", "dependencies",
+                                                     "routes"},
+                                                    {"localizedTexts", "localizedAssets"}))
                 return Failed<DocumentSections>(UiErrors::DocumentSerializationInvalid, "Runtime UI document fields are not canonical.");
             auto version = DecodeSchemaVersion(root.at("schemaVersion"));
             if (version.HasError())
@@ -166,12 +212,15 @@ namespace Horo::Runtime::Ui {
                 return Result<DocumentSections>::Failure(typedRevision.ErrorValue());
             const auto &canvases = root.at("canvases");
             const auto &elements = root.at("elements");
+            static const Internal::Json emptyArray = Internal::Json::array();
+            const auto &localizedTexts = root.contains("localizedTexts") ? root.at("localizedTexts") : emptyArray;
+            const auto &localizedAssets = root.contains("localizedAssets") ? root.at("localizedAssets") : emptyArray;
             const auto &dependencies = root.at("dependencies");
             const auto &routes = root.at("routes");
-            if (!HasValidDocumentArrays(canvases, elements, dependencies, routes, limits))
+            if (!HasValidDocumentArrays(canvases, elements, localizedTexts, localizedAssets, dependencies, routes, limits))
                 return Failed<DocumentSections>(UiErrors::DocumentPayloadTooLarge);
-            return Result<DocumentSections>::Success(
-                {version.Value(), id.Value(), typedRevision.Value(), &canvases, &elements, &dependencies, &routes});
+            return Result<DocumentSections>::Success({version.Value(), id.Value(), typedRevision.Value(), &canvases, &elements,
+                                                      &localizedTexts, &localizedAssets, &dependencies, &routes});
         }
 
         [[nodiscard]] Result<UiDocument> CloneDocument(const UiDocument &source, const UiDocumentSchemaVersion schemaVersion,
@@ -180,6 +229,10 @@ namespace Horo::Runtime::Ui {
             if (auto result = CopyCanvases(builder, source.Canvases()); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = CopyElements(builder, source.Elements()); result.HasError())
+                return Result<UiDocument>::Failure(result.ErrorValue());
+            if (auto result = CopyLocalizedTexts(builder, source.LocalizedTexts()); result.HasError())
+                return Result<UiDocument>::Failure(result.ErrorValue());
+            if (auto result = CopyLocalizedAssets(builder, source.LocalizedAssets()); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = CopyDependencies(builder, source.Dependencies()); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
@@ -199,9 +252,13 @@ namespace Horo::Runtime::Ui {
                 return Result<UiDocument>::Failure(sections.ErrorValue());
             const auto &content = sections.Value();
             UiDocumentBuilder builder{content.id, content.revision, content.version};
-            if (auto result = AppendCanvases(builder, *content.canvases, limits); result.HasError())
+            if (auto result = AppendCanvases(builder, *content.canvases); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = AppendElements(builder, *content.elements, limits); result.HasError())
+                return Result<UiDocument>::Failure(result.ErrorValue());
+            if (auto result = AppendLocalizedTexts(builder, *content.localizedTexts, limits); result.HasError())
+                return Result<UiDocument>::Failure(result.ErrorValue());
+            if (auto result = AppendLocalizedAssets(builder, *content.localizedAssets, limits); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
             if (auto result = AppendDependencies(builder, *content.dependencies, limits); result.HasError())
                 return Result<UiDocument>::Failure(result.ErrorValue());
@@ -230,7 +287,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiDocumentMigrationStep *FindMigrationStep(const UiDocumentSchemaVersion version,
                                                                        const std::span<const UiDocumentMigrationStep> steps) {
             const auto found = std::ranges::find(steps, version, &UiDocumentMigrationStep::from);
-            return found == steps.end() ? nullptr : &*found;
+            return found == steps.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] Result<UiDocument> ApplyMigration(const UiDocument &current, const UiDocumentMigrationStep &step,
@@ -271,12 +328,18 @@ namespace Horo::Runtime::Ui {
                                        {"revision", document.Revision().Value()},
                                        {"canvases", Internal::OrderedJson::array()},
                                        {"elements", Internal::OrderedJson::array()},
+                                       {"localizedTexts", Internal::OrderedJson::array()},
+                                       {"localizedAssets", Internal::OrderedJson::array()},
                                        {"dependencies", Internal::OrderedJson::array()},
                                        {"routes", Internal::OrderedJson::array()}};
             for (const auto &canvas : document.Canvases())
                 root.at("canvases").push_back(Internal::EncodeCanvas(canvas));
             for (const auto &element : document.Elements())
                 root.at("elements").push_back(Internal::EncodeElement(element));
+            for (const auto &text : document.LocalizedTexts())
+                root.at("localizedTexts").push_back(Internal::EncodeLocalizedText(text));
+            for (const auto &asset : document.LocalizedAssets())
+                root.at("localizedAssets").push_back(Internal::EncodeLocalizedAsset(asset));
             for (const auto &dependency : document.Dependencies())
                 root.at("dependencies").push_back(Internal::EncodeDependency(dependency));
             for (const auto &route : document.Routes())

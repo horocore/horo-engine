@@ -209,12 +209,19 @@ struct UiCanvasDescriptor {
     UiRenderMode renderMode;
     UiCanvasReferenceResolution referenceResolution;
     UiScaleMode scaleMode;
+    UiCanvasPresentationPolicy presentation;
 };
 ```
 
-This descriptor is the coordinate-space foundation. Safe-area, DPI/font-scale,
-sorting, and input-scope contracts are layered by their owning follow-up
-capabilities rather than being represented by placeholder fields here.
+This descriptor is the coordinate-space foundation. `UiCanvasPresentationPolicy`
+is the single typed source for safe-area mode, uniform UI scale, accessibility
+font scale, and downstream pixel snapping. The viewport owner publishes one
+immutable `UiCanvasViewportEvidence` value containing physical extent, optional
+physical-pixels-per-DIP evidence, and physical safe-area insets. Runtime UI
+resolves that evidence into `UiResolvedScreenCanvas` without querying Platform,
+Renderer, or an editor widget.
+Serialized canvases may omit the presentation block for backward compatibility;
+the loader supplies the neutral `Ignore`, `1/1`, `1/1`, and `Disabled` defaults.
 
 `UiRenderMode` is the closed `ScreenSpaceOverlay`, `ScreenSpaceCamera`, or
 `WorldSpace` vocabulary. `UiScaleMode` is the closed `ScaleWithScreenSize`,
@@ -227,11 +234,23 @@ positive rational pixels-per-DIP value; Runtime UI does not query a display or
 invent DPI evidence.
 
 Screen resolution uses checked integer rational arithmetic and ties-to-even
-rounding into the 1/64-DIP logical domain. Safe-area insets, font scale, and
-physical pixel snapping remain the later RUI-002.7 policy and are supplied before
-or after this resolver at their declared boundaries. World-space canvases retain
-their authored logical extent in headless/runtime state; camera projection and
-device pixels remain Renderer-owned.
+rounding into the 1/64-DIP logical domain. When safe-area mode is `Inset`, the
+resolver keeps the full viewport for scale selection, then publishes a bounded
+physical content rectangle and computes the logical extent from that rectangle.
+The content rectangle is the layout root's viewport and is also the origin used
+by screen hit testing. UI scale is folded into the resolved physical-pixels-per-
+DIP ratio; font scale is carried into intrinsic text measurement and shaping but
+does not change non-text layout geometry. Resize, monitor/DPI, safe-area, or
+viewport changes produce a new immutable resolution input; consumers replace
+layout and render generations at their normal safe point.
+
+Physical pixel snapping is downstream derived render data. `Edges` snapping uses
+the resolved safe content rectangle and ties-to-even conversion, and may only
+change generated render vertices. It never changes logical layout, scroll extent,
+serialized values, or hit-test geometry. World-space canvases retain their
+authored logical extent in headless/runtime state; safe-area and screen-pixel
+snapping are rejected for that mode because camera projection and device pixels
+remain Renderer-owned.
 
 Screen-space UI is resolved after world rendering unless a render graph pass
 explicitly composes it earlier. World-space UI produces normal render instances
@@ -296,6 +315,29 @@ hit testing. Required failure publishes nothing and retains the prior last-good
 generation according to ADR-073. Gameplay code does not mutate boxes or render
 quads directly. Physical pixel snapping is downstream derived render data and
 cannot feed back into logical layout, scroll extent or serialized state.
+
+### Clipping, Scroll Content And Bring-Into-View
+
+Runtime UI derives clipping and scrolling from the exact immutable layout
+generation through `UiLayoutClipEngine`. Each arranged element supplies one typed
+overflow policy: `Visible` contributes no clip, `Clip` establishes a descendant
+clip, and `Scroll` establishes both a clip and a bounded scroll record. Scroll
+content is the checked union of the arranged content box and descendant overflow;
+signed offsets are clamped to the resulting leading/trailing bounds before they
+are projected into canvas-space translations.
+
+The published projection stores ancestor-ordered clip nodes, source-aligned
+element records and immutable scroll records. Nested scroll translations are
+accumulated in tree order, and a focus graph's generation-fenced
+`UiFocusBringIntoViewRequest` is resolved from the innermost scroll ancestor
+outward. Each intermediate offset is clamped before the next ancestor is
+evaluated, so a failed or stale request cannot partially publish nested state.
+The focus graph emits the request but never calls layout or scroll code.
+
+Projection publication uses bounded preallocated snapshot slots and retains the
+last-good immutable generation when source, capacity or lifecycle validation
+fails. Input and rendering consume the published projection; neither recomputes
+clip chains, scroll extents or reveal offsets.
 
 ## Panel And Frame Contract
 

@@ -98,7 +98,7 @@ time and schedules the callback.
 
 | Target | Layer | Responsibilities | Dependencies |
 |---|---|---|---|
-| `HoroEngine::CinematicModel` | Model / Asset | `SequenceAsset`, tracks, keyframes, curves, interpolation math, playback settings, schemas, and bounded asset parsers. | `Foundation`, `SceneModel`, `Assets` |
+| `HoroEngine::CinematicModel` | Model / Asset | `SequenceAsset`, tracks, keyframes, curves, interpolation math, playback settings, schemas, and bounded asset parsers. | `Foundation`, `Runtime` (stable scene identities), `SceneModel`, `Assets` |
 | `HoroEngine::CinematicRuntime` | Runtime | `SequencePlayer`, `SequencePlaybackClock`, `SequenceBindingAuthority`, `SequenceEvaluationSystem`, camera requests, and event queues. Host-injected domain adapters enforce authority. | `CinematicModel`, `RuntimeScene`, `Runtime` |
 | `HoroEngine::EditorServices` | Presentation / Tooling | Timeline workspace controllers, property recording, curve editing services, track solo/mute adapters, and Problems panel integration. | `CinematicRuntime`, `CinematicModel`, `SceneModel`, `EditorModel` |
 
