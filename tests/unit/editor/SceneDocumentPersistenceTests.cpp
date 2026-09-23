@@ -79,7 +79,7 @@ TEST_CASE("Project default scene mutation validates containment and replaces met
     REQUIRE((SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasValue()));
     const auto loaded = LoadProjectDefaultScene(project.Root());
     REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
-    CHECK(loaded.Value()->absolutePath == std::filesystem::weakly_canonical(project.ScenePath()));
+    CHECK(std::filesystem::weakly_canonical(loaded.Value()->absolutePath) == std::filesystem::weakly_canonical(project.ScenePath()));
 }
 
 TEST_CASE("Project default scene mutation removes its prepared file after replacement failure", "[unit][editor][persistence]") {
