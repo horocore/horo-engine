@@ -93,6 +93,28 @@ TEST_CASE("Project default scene mutation removes its prepared file after replac
     CHECK_FALSE(std::filesystem::exists(project.Root() / ".horo/project.json.save.tmp"));
 }
 
+TEST_CASE("Project default scene mutation reports unreadable and incomplete metadata", "[unit][editor][persistence]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+
+    std::filesystem::remove(project.Root() / ".horo/project.json");
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasError());
+
+    {
+        std::ofstream metadata{project.Root() / ".horo/project.json"};
+        metadata << "{invalid";
+    }
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasError());
+
+    {
+        std::ofstream metadata{project.Root() / ".horo/project.json"};
+        metadata << R"({"settings":{}})";
+    }
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasError());
+}
+
 TEST_CASE("Navigation link direction and modifier shape round trip explicitly", "[unit][editor][persistence][navigation]") {
     TemporaryProject project;
     project.PrepareEmptyScene();

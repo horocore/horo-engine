@@ -323,6 +323,7 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
 TEST_CASE("AssetImportModal tracks included queue items and appends files safely", "[native]") {
     const Theme::Fonts fonts{};
     JobSystem jobs;
+    OperationStore operations{4, 4};
     const ScopedTempDirectory project{"horo-import-inclusion"};
     const auto firstSource = project.Path() / "first.obj";
     const auto secondSource = project.Path() / "second.obj";
@@ -333,7 +334,7 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
         second << "second";
     }
 
-    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution())};
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
     modal.SetProjectRoot(project.Path());
     std::filesystem::create_directories(project.Path() / "assets/Imported");
     modal.SetDefaultDestination(project.Path() / "assets/Imported");
@@ -359,7 +360,58 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
     CHECK(modal.IncludedItemCount() == 0);
     REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
     CHECK(modal.IsImportComplete());
+    REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
     CHECK_FALSE(modal.SourceFileSize(99).has_value());
+
+    TestAssetImportModal batchModal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    REQUIRE((batchModal.BeginImport({firstSource, secondSource}, project.Path(), cancellation).HasValue()));
+    const auto visibleOperations = operations.SnapshotIfChanged(0);
+    REQUIRE(visibleOperations.has_value());
+    CHECK(visibleOperations->operations.front().title == "first +1");
+}
+
+TEST_CASE("AssetImportModal rejects unresolved conflicts and invalid batch items", "[native]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    const ScopedTempDirectory project{"horo-import-validation"};
+    const auto source = project.Path() / "source.obj";
+    {
+        std::ofstream output{source};
+        output << "source";
+    }
+    std::filesystem::create_directories(project.Path() / "assets");
+    {
+        std::ofstream existing{project.Path() / "assets/source.horoasset"};
+        existing << "existing";
+    }
+
+    CancellationToken cancellation;
+    TestAssetImportModal conflictModal{fonts, jobs, PublishCatalog(BasicContribution())};
+    REQUIRE((conflictModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    REQUIRE((conflictModal.ImportSingleItem(0, cancellation).HasValue()));
+    REQUIRE(conflictModal.HasPendingConflicts());
+    const auto blocked = conflictModal.ImportIncludedItems(cancellation);
+    REQUIRE(blocked.HasError());
+    CHECK(blocked.ErrorValue().code.Value() == "editor.asset_import.conflict_pending");
+    conflictModal.ResolveCurrentConflict(AssetImportModal::ConflictChoice::Skip, false);
+    CHECK_FALSE(conflictModal.HasPendingConflicts());
+    CHECK(conflictModal.IsImportComplete());
+
+    TestAssetImportModal invalidModal{fonts, jobs, PublishCatalog(BasicContribution())};
+    REQUIRE((invalidModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    invalidModal.MutableSnapshot().items.front().displayName.clear();
+    const auto invalid = invalidModal.ImportIncludedItems(cancellation);
+    REQUIRE(invalid.HasError());
+    CHECK(invalid.ErrorValue().code.Value() == "editor.asset_import.invalid_asset_name");
+
+    OperationStore operations{4, 4};
+    TestAssetImportModal cancelledModal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    REQUIRE((cancelledModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    const auto visibleOperations = operations.SnapshotIfChanged(0);
+    REQUIRE(visibleOperations.has_value());
+    REQUIRE(visibleOperations->operations.front().requestCancel);
+    visibleOperations->operations.front().requestCancel();
+    CHECK(cancelledModal.ImportIncludedItems(cancellation).HasError());
 }
 
 TEST_CASE("AssetImportModal projects terminal import history while ignoring other operations", "[native]") {
