@@ -8,6 +8,24 @@
 #include <ranges>
 
 namespace Horo::Editor {
+    namespace {
+        [[nodiscard]] bool IsTransformTool(const EditorTransformTool tool) noexcept {
+            return tool == EditorTransformTool::Move || tool == EditorTransformTool::Rotate || tool == EditorTransformTool::Scale;
+        }
+
+        [[nodiscard]] const SceneObject *FindSelectedObject(const EditorWorkspaceViewModel &viewModel) noexcept {
+            if (!viewModel.primarySelection.has_value())
+                return nullptr;
+            const auto selected = std::ranges::find(viewModel.objects, *viewModel.primarySelection, &SceneObject::id);
+            return selected == viewModel.objects.end() ? nullptr : &*selected;
+        }
+
+        [[nodiscard]] bool CanDrawTransformGizmo(const EditorWorkspaceViewModel &viewModel, const SceneObject *selectedObject) noexcept {
+            return IsTransformTool(viewModel.activeTransformTool) && selectedObject != nullptr && !selectedObject->effectivelyLocked &&
+                   viewModel.primarySelectionWorldTransform.has_value() && viewModel.primarySelectionParentWorldTransform.has_value();
+        }
+    }  // namespace
+
     void TransformGizmoController::OnCaptureCancelled() noexcept {
         if (drag_.has_value())
             cancelPreviewOnNextDraw_ = true;
@@ -24,6 +42,15 @@ namespace Horo::Editor {
         return drag_.has_value();
     }
 
+    bool TransformGizmoController::HasInvalidDrag(const SceneObject *selectedObject,
+                                                  const EditorWorkspaceViewModel &viewModel) const noexcept {
+        if (!drag_.has_value())
+            return false;
+        return selectedObject == nullptr || selectedObject->id != drag_->object || !IsTransformTool(viewModel.activeTransformTool) ||
+               selectedObject->effectivelyLocked || viewModel.activeTransformTool != drag_->tool ||
+               viewModel.activeTransformSpace != drag_->space;
+    }
+
     bool TransformGizmoController::Draw(ImDrawList &drawList, const TransformGizmoDrawContext &context,
                                         ViewportInteractionCapture &capture) {
         if (cancelPreviewOnNextDraw_) {
@@ -33,15 +60,8 @@ namespace Horo::Editor {
         }
 
         const EditorWorkspaceViewModel &viewModel = context.viewModel;
-        const auto selectedObject = viewModel.primarySelection.has_value()
-                                        ? std::ranges::find(viewModel.objects, *viewModel.primarySelection, &SceneObject::id)
-                                        : viewModel.objects.end();
-        const bool transformTool = viewModel.activeTransformTool == EditorTransformTool::Move ||
-                                   viewModel.activeTransformTool == EditorTransformTool::Rotate ||
-                                   viewModel.activeTransformTool == EditorTransformTool::Scale;
-        if (drag_.has_value() && (selectedObject == viewModel.objects.end() || selectedObject->id != drag_->object || !transformTool ||
-                                  selectedObject->effectivelyLocked || viewModel.activeTransformTool != drag_->tool ||
-                                  viewModel.activeTransformSpace != drag_->space)) {
+        const SceneObject *selectedObject = FindSelectedObject(viewModel);
+        if (HasInvalidDrag(selectedObject, viewModel)) {
             capture.Cancel(Input::CaptureCancellationReason::Explicit);
             cancelPreviewOnNextDraw_ = false;
             context.command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
@@ -49,8 +69,7 @@ namespace Horo::Editor {
         }
 
         std::optional<ImVec2> rotationCenter;
-        if (transformTool && selectedObject != viewModel.objects.end() && !selectedObject->effectivelyLocked &&
-            viewModel.primarySelectionWorldTransform.has_value() && viewModel.primarySelectionParentWorldTransform.has_value()) {
+        if (CanDrawTransformGizmo(viewModel, selectedObject)) {
             const Math::Mat4 &worldTransform = viewModel.primarySelectionPreviewWorldTransform.has_value()
                                                    ? *viewModel.primarySelectionPreviewWorldTransform
                                                    : *viewModel.primarySelectionWorldTransform;

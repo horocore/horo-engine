@@ -1,7 +1,11 @@
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
+#include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
+#include "Horo/Runtime/Input.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <array>
@@ -168,4 +172,41 @@ TEST_CASE("Asset import presentation handles empty and unresolved importer selec
     ClickTab(fixture.imgui, fixture.modal, 2);
 
     REQUIRE(fixture.modal.Snapshot().items.front().importerContributionId.empty());
+}
+
+TEST_CASE("Asset import presentation renders retained history status variants", "[unit][editor][gui][asset-import]") {
+    using namespace Horo;
+    using namespace Horo::Assets;
+    using namespace Horo::Editor;
+
+    Tests::HeadlessEditorGuiFixture imgui;
+    Tests::ScopedJobSystem jobs;
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    OperationStore operations{8, 8};
+
+    static constexpr std::array states{OperationState::Succeeded, OperationState::Failed, OperationState::Cancelled};
+    for (const OperationState state : states) {
+        const auto operation = operations.Begin(OperationDescriptor{
+            .kind = OperationKind::Import,
+            .title = "history-entry",
+            .phase = "import",
+            .message = "Importing assets",
+        });
+        REQUIRE(operation.has_value());
+        REQUIRE(operations.Update(*operation, OperationUpdate{
+                                                  .state = state,
+                                                  .phase = "complete",
+                                                  .message = "Import finished",
+                                              }));
+    }
+
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog(), nullptr, &operations);
+    auto *const modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+    REQUIRE(modalPtr->ImportHistory().size() == states.size());
+
+    DrawFrame(imgui, *modalPtr);
 }

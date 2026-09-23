@@ -288,17 +288,17 @@ namespace Horo::Editor {
         if (!snapshot.has_value())
             return;
         m_historyRevision = snapshot->revision;
+        using enum OperationState;
         for (const OperationRecord &operation : snapshot->operations) {
             if (operation.kind != OperationKind::Import)
                 continue;
-            const bool terminal = operation.state == OperationState::Succeeded || operation.state == OperationState::Failed ||
-                                  operation.state == OperationState::Cancelled;
-            if (!terminal) {
+            if (const bool terminal = operation.state == Succeeded || operation.state == Failed || operation.state == Cancelled;
+                !terminal) {
                 m_pendingImportOperations.insert(operation.id);
                 continue;
             }
-            const bool wasPending = m_pendingImportOperations.erase(operation.id) != 0;
-            if (!wasPending && operation.id <= m_lastTerminalImportId)
+            if (const bool wasPending = m_pendingImportOperations.erase(operation.id) != 0;
+                !wasPending && operation.id <= m_lastTerminalImportId)
                 continue;
             m_lastTerminalImportId = std::max(m_lastTerminalImportId, operation.id);
             m_importHistory.insert(m_importHistory.begin(), operation);
