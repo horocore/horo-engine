@@ -6,6 +6,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Input.h"
+#include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -317,4 +318,89 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
 
     REQUIRE((std::filesystem::exists(projectRoot / "assets/Meshes/source.horoasset")));
     REQUIRE((!std::filesystem::exists(projectRoot / "assets/Meshes/Meshes")));
+}
+
+TEST_CASE("AssetImportModal tracks included queue items and appends files safely", "[native]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    const ScopedTempDirectory project{"horo-import-inclusion"};
+    const auto firstSource = project.Path() / "first.obj";
+    const auto secondSource = project.Path() / "second.obj";
+    {
+        std::ofstream first{firstSource};
+        first << "first";
+        std::ofstream second{secondSource};
+        second << "second";
+    }
+
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution())};
+    modal.SetProjectRoot(project.Path());
+    std::filesystem::create_directories(project.Path() / "assets/Imported");
+    modal.SetDefaultDestination(project.Path() / "assets/Imported");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+    modal.SetDefaultDestination(project.Path() / "outside");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+    modal.SetDefaultDestination("assets/Imported");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+
+    CancellationToken cancellation;
+    REQUIRE((modal.BeginImport({firstSource}, project.Path(), cancellation).HasValue()));
+    REQUIRE((modal.BeginImport({secondSource}, project.Path(), cancellation).HasValue()));
+    REQUIRE(modal.Snapshot().items.size() == 2);
+    REQUIRE(modal.SourceFileSize(0).has_value());
+    REQUIRE(modal.SourceFileSize(1).has_value());
+    CHECK(modal.IncludedItemCount() == 2);
+
+    modal.SetItemIncluded(0, false);
+    modal.SetItemIncluded(1, false);
+    modal.SetItemIncluded(99, true);
+    CHECK_FALSE(modal.IsItemIncluded(0));
+    CHECK_FALSE(modal.IsItemIncluded(1));
+    CHECK(modal.IncludedItemCount() == 0);
+    REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
+    CHECK(modal.IsImportComplete());
+    CHECK_FALSE(modal.SourceFileSize(99).has_value());
+}
+
+TEST_CASE("AssetImportModal projects terminal import history while ignoring other operations", "[native]") {
+    Tests::HeadlessEditorGuiFixture imgui;
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    Tests::ScopedJobSystem jobs;
+    OperationStore operations{8, 8};
+
+    const auto build = operations.Begin(OperationDescriptor{
+        .kind = OperationKind::Build,
+        .title = "build",
+        .phase = "build",
+        .message = "Building",
+    });
+    REQUIRE(build.has_value());
+    REQUIRE(operations.Update(*build, OperationUpdate{.state = OperationState::Succeeded, .phase = "complete", .message = "Built"}));
+    const auto import = operations.Begin(OperationDescriptor{
+        .kind = OperationKind::Import,
+        .title = "queued-import",
+        .phase = "import",
+        .message = "Importing",
+    });
+    REQUIRE(import.has_value());
+
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto *const modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+    CHECK(modalPtr->ImportHistory().empty());
+
+    REQUIRE(operations.Update(*import, OperationUpdate{.state = OperationState::Failed, .phase = "import", .message = "Import failed"}));
+    imgui.BeginFrame();
+    static_cast<void>(modalPtr->Draw());
+    imgui.EndFrame();
+    REQUIRE(modalPtr->ImportHistory().size() == 1);
+    CHECK(modalPtr->ImportHistory().front().title == "queued-import");
+
+    imgui.BeginFrame();
+    static_cast<void>(modalPtr->Draw());
+    imgui.EndFrame();
+    CHECK(modalPtr->ImportHistory().size() == 1);
 }
