@@ -1,25 +1,20 @@
-/**
- * @copydoc AssetImportModalPresentation.h
- *
- * HTML reference: docs/architecture/runtime/asset-import-modal.html
- * Layout: header → summary → importer info → tabs → [sidebar | content] → footer
- */
+/** @copydoc AssetImportModalPresentation.h */
 
 #include "AssetImportModalPresentation.h"
 
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "editor/menu/EditorMenuPlatform.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <algorithm>
-#include <array>
-#include <cfloat>
-#include <cmath>
+#include <cctype>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,1107 +25,782 @@ namespace Horo::Editor {
         using namespace Theme;
         using namespace Ui;
 
-        namespace ImportLayout {
-            constexpr float ModalW = 1000.0f;
-            constexpr float ModalH = 730.0f;
-            constexpr float HeaderH = 44.0f;
-            constexpr float SummaryH = 64.0f;
-            constexpr float ImporterInfoH = 54.0f;
-            constexpr float TabsH = 48.0f;
-            constexpr float FooterH = Layout::FooterH;
-            constexpr float SidebarW = 310.0f;
-            constexpr float ViewportPad = 48.0f;
-            constexpr float SplitColumnGap = 16.0f;
-        }  // namespace ImportLayout
+        constexpr ImVec4 WarningColor{0.91f, 0.64f, 0.24f, 1.0f};
+        constexpr ImVec4 ErrorColor{0.83f, 0.32f, 0.29f, 1.0f};
+        constexpr float PanelGap = 14.0f;
+        constexpr float PanelPadding = 16.0f;
 
-        /** @brief Active tab index. */
-        enum class ImportTab : int {
-            Queue = 0,
-            Diagnostics,
-            Settings,
-            Destination,
-            Count,
-        };
-
-        struct SplitColumns {
-            float startX;
-            float startY;
-            float width;
-            float gap;
-        };
-
-        [[nodiscard]] SplitColumns CurrentSplitColumns() {
-            const float availableWidth = ImGui::GetContentRegionAvail().x;
-            const ImVec2 cursor = ImGui::GetCursorPos();
-            return {
-                .startX = cursor.x,
-                .startY = cursor.y,
-                .width = std::max(0.0f, (availableWidth - ImportLayout::SplitColumnGap) * 0.5f),
-                .gap = ImportLayout::SplitColumnGap,
-            };
+        [[nodiscard]] std::string Copy(std::string_view text) {
+            return std::string{text};
         }
 
-        void MoveToSecondColumn(const SplitColumns &columns) {
-            ImGui::SetCursorPos({columns.startX + columns.width + columns.gap, columns.startY});
+        [[nodiscard]] std::string FileName(const Assets::AssetImportItem &item) {
+            const auto name = item.absoluteSourcePath.filename().string();
+            return name.empty() ? item.displayName : name;
         }
 
-        void FinishSplitColumns(const SplitColumns &columns) {
-            const float endY = ImGui::GetCursorPosY();
-            ImGui::SetCursorPos({columns.startX, endY});
+        [[nodiscard]] std::string FileSize(const AssetImportModal &modal, std::size_t index) {
+            const auto sourceSize = modal.SourceFileSize(index);
+            if (!sourceSize)
+                return "—";
+            const float bytes = static_cast<float>(*sourceSize);
+            if (bytes >= 1024.0f * 1024.0f)
+                return std::format("{:.1f} MB", bytes / (1024.0f * 1024.0f));
+            if (bytes >= 1024.0f)
+                return std::format("{:.1f} KB", bytes / 1024.0f);
+            return std::format("{} B", *sourceSize);
         }
 
-        [[nodiscard]] bool StartsWithInsensitive(std::string_view text, std::string_view prefix) {
-            if (prefix.size() > text.size())
-                return false;
-            for (std::size_t i = 0; i < prefix.size(); ++i) {
-                const auto a = static_cast<unsigned char>(text[i]);
-                const auto b = static_cast<unsigned char>(prefix[i]);
-                if (std::tolower(a) != std::tolower(b))
-                    return false;
+        [[nodiscard]] std::string AssetKind(const AssetImportModal &modal, const Assets::AssetImportItem &item) {
+            if (item.sourceExtension == "fbx" || item.sourceExtension == "obj" || item.sourceExtension == "gltf" ||
+                item.sourceExtension == "glb")
+                return Copy(modal.Localized("asset_import.type.model", "3D Model"));
+            if (item.sourceExtension == "png" || item.sourceExtension == "jpg" || item.sourceExtension == "jpeg")
+                return Copy(modal.Localized("asset_import.type.texture", "Texture"));
+            if (item.sourceExtension == "wav" || item.sourceExtension == "mp3" || item.sourceExtension == "ogg")
+                return Copy(modal.Localized("asset_import.type.audio", "Audio"));
+            return Copy(modal.Localized("asset_import.type.asset", "Asset"));
+        }
+
+        [[nodiscard]] UiIcon AssetIcon(const Assets::AssetImportItem &item) {
+            if (item.sourceExtension == "fbx" || item.sourceExtension == "obj" || item.sourceExtension == "gltf" ||
+                item.sourceExtension == "glb")
+                return UiIcon::HierarchyMesh;
+            if (item.sourceExtension == "png" || item.sourceExtension == "jpg" || item.sourceExtension == "jpeg")
+                return UiIcon::Image;
+            if (item.sourceExtension == "wav" || item.sourceExtension == "mp3" || item.sourceExtension == "ogg")
+                return UiIcon::AudioFile;
+            return UiIcon::Package;
+        }
+
+        [[nodiscard]] bool HasDiagnostic(const Assets::AssetImportItem &item, Assets::ImportDiagnostic::Severity severity) {
+            return std::ranges::any_of(item.diagnostics, [severity](const auto &diagnostic) {
+                return diagnostic.severity == severity;
+            });
+        }
+
+        [[nodiscard]] std::vector<std::filesystem::path> ReadSelectedPaths(FILE *pipe) {
+            std::vector<std::filesystem::path> paths;
+            if (!pipe)
+                return paths;
+            char buffer[4096];
+            while (fgets(buffer, sizeof(buffer), pipe)) {
+                std::string line{buffer};
+                while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+                    line.pop_back();
+                if (!line.empty())
+                    paths.emplace_back(line);
             }
-            return true;
+            return paths;
         }
 
-        std::string DisplayFileName(const std::filesystem::path &path);
-        std::string DisplayAssetLabel(const std::filesystem::path &path);
-
-        [[nodiscard]] std::string CleanDiagnosticMessage(const std::filesystem::path &path, std::string_view message) {
-            std::string_view cleaned = message;
-
-            const std::string stem = DisplayAssetLabel(path);
-            const std::string filename = DisplayFileName(path);
-
-            auto stripPrefix = [&](std::string_view prefix) {
-                if (prefix.empty() || !StartsWithInsensitive(cleaned, prefix))
-                    return;
-                cleaned.remove_prefix(prefix.size());
-                while (!cleaned.empty() &&
-                       (cleaned.front() == ' ' || cleaned.front() == ':' || cleaned.front() == '-' || cleaned.front() == '\t')) {
-                    cleaned.remove_prefix(1);
-                }
-            };
-
-            stripPrefix(stem);
-            stripPrefix(filename);
-
-            return std::string(cleaned);
-        }
-
-        [[nodiscard]] const char *DiagnosticTimeLabel(std::size_t diagnosticIndex) {
-            static constexpr std::array kTimes{"14:02", "14:02", "14:03", "14:03", "14:03", "14:04"};
-            return kTimes[diagnosticIndex % std::size(kTimes)];
-        }
-
-        /** @brief Returns the display label for a tab. */
-        const char *TabLabel(int tab) {
-            using enum ImportTab;
-            switch (static_cast<ImportTab>(tab)) {
-                case Queue:
-                    return "Overview";
-                case Diagnostics:
-                    return "Diagnostics";
-                case Settings:
-                    return "Importer Settings";
-                case Destination:
-                    return "Destination";
-                case Count:
-                default:
-                    return "";
-            }
-        }
-
-        std::string DisplayFileName(const std::filesystem::path &path) {
-            const auto filename = path.filename().string();
-            return filename.empty() ? path.string() : filename;
-        }
-
-        std::string DisplayAssetLabel(const std::filesystem::path &path) {
-            const auto stem = path.stem().string();
-            return stem.empty() ? DisplayFileName(path) : stem;
-        }
-
-        std::string FriendlyImporterName(std::string_view contributionId) {
-            const std::size_t lastDot = contributionId.find_last_of('.');
-            std::string name{contributionId.substr(lastDot == std::string_view::npos ? 0 : lastDot + 1)};
-            std::ranges::replace(name, '-', ' ');
-
-            bool wordStart = true;
-
-            for (char &value : name) {
-                if (value == ' ') {
-                    wordStart = true;
-                    continue;
-                }
-                value = wordStart ? static_cast<char>(std::toupper(static_cast<unsigned char>(value))) : value;
-                wordStart = false;
-            }
-
-            if (name.rfind("Obj", 0) == 0)
-                name.replace(0, 3, "OBJ");
-            if (name.rfind("Fbx", 0) == 0)
-                name.replace(0, 3, "FBX");
-            return name;
-        }
-
-        [[nodiscard]] std::optional<std::filesystem::path> OpenFolderSelectionDialog(const char *prompt) {
+        [[nodiscard]] std::vector<std::filesystem::path> ChooseFiles() {
 #if defined(__APPLE__)
-            std::string command = "osascript -e 'POSIX path of (choose folder with prompt \"";
-            for (const char value : std::string_view(prompt ? prompt : "Select Folder")) {
-                if (value == '"' || value == '\\' || value == '\'')
-                    command += '\\';
-                command += value;
-            }
-            command += "\")' 2>/dev/null";
-            FILE *pipe = popen(command.c_str(), "r");
+            FILE *pipe = popen("osascript -e 'set selectedFiles to choose file with multiple selections allowed' "
+                               "-e 'set output to \"\"' -e 'repeat with selectedFile in selectedFiles' "
+                               "-e 'set output to output & POSIX path of selectedFile & linefeed' "
+                               "-e 'end repeat' -e 'return output' "
+                               "2>/dev/null",
+                               "r");
 #elif defined(__linux__)
-            std::string command = "zenity --file-selection --directory --title=\"";
-            for (const char value : std::string_view(prompt ? prompt : "Select Folder")) {
-                if (value == '"' || value == '\\' || value == '\'')
-                    command += '\\';
-                command += value;
-            }
-            command += "\" 2>/dev/null";
-            FILE *pipe = popen(command.c_str(), "r");
+            FILE *pipe = popen("zenity --file-selection --multiple --separator='|' 2>/dev/null", "r");
 #elif defined(_WIN32)
-            std::string command = "powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; $f = New-Object "
-                                  "System.Windows.Forms.FolderBrowserDialog; $f.Description = '";
-            for (const char value : std::string_view(prompt ? prompt : "Select Folder")) {
-                if (value == '\'' || value == '"')
-                    command += '`';
-                command += value;
-            }
-            command += "'; if($f.ShowDialog() -eq 'OK'){ $f.SelectedPath }\" 2>nul";
-            FILE *pipe = _popen(command.c_str(), "r");
+            FILE *pipe = _popen("powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; "
+                                "$d = New-Object System.Windows.Forms.OpenFileDialog; $d.Multiselect = $true; "
+                                "if ($d.ShowDialog() -eq 'OK') { $d.FileNames }\" 2>nul",
+                                "r");
 #else
-            static_cast<void>(prompt);
+            return {};
+#endif
+            auto paths = ReadSelectedPaths(pipe);
+#if defined(__linux__)
+            if (paths.size() == 1) {
+                const std::string combined = paths.front().string();
+                paths.clear();
+                for (std::size_t start = 0; start < combined.size();) {
+                    const auto end = combined.find('|', start);
+                    paths.emplace_back(combined.substr(start, end == std::string::npos ? end : end - start));
+                    if (end == std::string::npos)
+                        break;
+                    start = end + 1;
+                }
+            }
+#endif
+#if defined(_WIN32)
+            if (pipe)
+                static_cast<void>(_pclose(pipe));
+#else
+            if (pipe)
+                static_cast<void>(pclose(pipe));
+#endif
+            return paths;
+        }
+
+        [[nodiscard]] std::optional<std::filesystem::path> ChooseFolder() {
+#if defined(__APPLE__)
+            FILE *pipe = popen("osascript -e 'POSIX path of (choose folder)' 2>/dev/null", "r");
+#elif defined(__linux__)
+            FILE *pipe = popen("zenity --file-selection --directory 2>/dev/null", "r");
+#elif defined(_WIN32)
+            FILE *pipe = _popen("powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; "
+                                "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                                "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }\" 2>nul",
+                                "r");
+#else
             return std::nullopt;
 #endif
-            if (!pipe)
-                return std::nullopt;
-
-            std::string buffer(1024, '\0');
-            std::string result;
-            while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr)
-                result += buffer.c_str();
+            auto paths = ReadSelectedPaths(pipe);
 #if defined(_WIN32)
-            if (const int status = _pclose(pipe); status != 0)
-                return std::nullopt;
+            if (pipe)
+                static_cast<void>(_pclose(pipe));
 #else
-            if (const int status = pclose(pipe); status != 0)
-                return std::nullopt;
+            if (pipe)
+                static_cast<void>(pclose(pipe));
 #endif
-            while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
-                result.pop_back();
-            if (result.empty())
-                return std::nullopt;
-            return std::filesystem::path{result};
+            return paths.empty() ? std::nullopt : std::optional{paths.front()};
         }
 
-        [[nodiscard]] std::optional<std::string> ProjectRelativeFolder(const std::filesystem::path &projectRoot,
-                                                                       const std::filesystem::path &selectedFolder) {
+        [[nodiscard]] std::optional<std::string> ProjectFolder(const std::filesystem::path &projectRoot,
+                                                               const std::filesystem::path &selectedFolder) {
             if (projectRoot.empty())
                 return std::nullopt;
-
             std::error_code error;
-            const auto canonicalRoot = std::filesystem::weakly_canonical(projectRoot, error);
+            const auto root = std::filesystem::weakly_canonical(projectRoot, error);
             if (error)
                 return std::nullopt;
-            const auto canonicalSelection = std::filesystem::weakly_canonical(selectedFolder, error);
+            const auto selected = std::filesystem::weakly_canonical(selectedFolder, error);
             if (error)
                 return std::nullopt;
-
-            const auto relative = canonicalSelection.lexically_relative(canonicalRoot);
-            if (relative.empty() || relative == ".")
-                return std::string{};
+            const auto relative = selected.lexically_relative(root);
+            if (relative.empty() || relative.is_absolute())
+                return std::nullopt;
             if (const auto first = relative.begin(); first != relative.end() && *first == "..")
                 return std::nullopt;
-            return relative.generic_string();
+            const auto folder = relative.generic_string();
+            if (folder != "assets" && !folder.starts_with("assets/"))
+                return std::nullopt;
+            return folder;
         }
 
-        void DrawDashedRect(ImDrawList *drawList, const ImVec2 &min, const ImVec2 &max, ImU32 color) {
-            constexpr float dash = 6.0f;
-            constexpr float gap = 4.0f;
-            constexpr float thickness = 1.0f;
-            constexpr float step = dash + gap;
-
-            if (max.x > min.x) {
-                const auto stepCount = static_cast<std::size_t>(std::ceil((max.x - min.x) / step));
-                for (std::size_t i = 0; i < stepCount; ++i) {
-                    const float x = min.x + static_cast<float>(i) * step;
-                    const float end = std::min(x + dash, max.x);
-                    drawList->AddLine({x, min.y}, {end, min.y}, color, thickness);
-                    drawList->AddLine({x, max.y}, {end, max.y}, color, thickness);
-                }
+        [[nodiscard]] std::vector<std::filesystem::path> DroppedFiles(const ImGuiPayload *payload) {
+            std::vector<std::filesystem::path> paths;
+            if (!payload || !payload->Data)
+                return paths;
+            const std::string_view data{static_cast<const char *>(payload->Data), static_cast<std::size_t>(payload->DataSize)};
+            for (std::size_t start = 0; start < data.size();) {
+                const auto end = data.find('\n', start);
+                auto path = data.substr(start, end == std::string_view::npos ? data.size() - start : end - start);
+                while (!path.empty() && (path.back() == '\0' || path.back() == '\r'))
+                    path.remove_suffix(1);
+                if (!path.empty())
+                    paths.emplace_back(path);
+                if (end == std::string_view::npos)
+                    break;
+                start = end + 1;
             }
-            if (max.y > min.y) {
-                const auto stepCount = static_cast<std::size_t>(std::ceil((max.y - min.y) / step));
-                for (std::size_t i = 0; i < stepCount; ++i) {
-                    const float y = min.y + static_cast<float>(i) * step;
-                    const float end = std::min(y + dash, max.y);
-                    drawList->AddLine({min.x, y}, {min.x, end}, color, thickness);
-                    drawList->AddLine({max.x, y}, {max.x, end}, color, thickness);
-                }
-            }
+            return paths;
         }
 
-        struct DiagnosticRow {
-            std::string assetLabel;
-            std::string message;
-            Assets::ImportDiagnostic::Severity severity;
-        };
+        void AddFiles(AssetImportModal &modal, const std::vector<std::filesystem::path> &paths) {
+            if (paths.empty() || modal.IsUiPreview())
+                return;
+            CancellationToken cancellation;
+            if (modal.ProjectRoot().empty())
+                static_cast<void>(modal.BeginImport(paths, cancellation));
+            else
+                static_cast<void>(modal.BeginImport(paths, modal.ProjectRoot(), cancellation));
+        }
 
-        [[nodiscard]] std::vector<DiagnosticRow> CollectDiagnosticRows(const Assets::AssetImportSnapshot &snap) {
-            std::vector<DiagnosticRow> rows;
-            rows.reserve(16);
-
-            for (const auto &item : snap.items) {
-                const std::filesystem::path sourcePath{item.sourceFile.String()};
-                const std::string assetLabel = DisplayAssetLabel(sourcePath);
-
-                for (const auto &diagnostic : item.diagnostics) {
-                    const std::string cleanedMessage = CleanDiagnosticMessage(sourcePath, diagnostic.message);
-                    if (cleanedMessage.empty())
-                        continue;
-
-                    const auto isDuplicate = [&](const DiagnosticRow &row) {
-                        return row.assetLabel == assetLabel && row.message == cleanedMessage && row.severity == diagnostic.severity;
-                    };
-
-                    if (std::ranges::find_if(rows, isDuplicate) == rows.end()) {
-                        rows.push_back({
-                            .assetLabel = assetLabel,
-                            .message = cleanedMessage,
-                            .severity = diagnostic.severity,
-                        });
+        void DrawDestination(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg2());
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PanelPadding, 9.0f});
+            ImGui::BeginChild("ImportDestination", {0.0f, 54.0f}, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            const auto label = Copy(modal.Localized("asset_import.destination", "Destination"));
+            PushFont(fonts.sansCompact);
+            const ImVec2 iconPosition = ImGui::GetCursorScreenPos();
+            DrawEditorIcon(ImGui::GetWindowDrawList(), UiIcon::Folder, {iconPosition.x, iconPosition.y + 5.0f}, {20.0f, 20.0f},
+                           ImGui::ColorConvertFloat4ToU32(Text()), fonts.icon);
+            ImGui::Dummy({22.0f, 27.0f});
+            ImGui::SameLine(0.0f, 8.0f);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(Dim(), "%s", label.c_str());
+            ImGui::SameLine(0.0f, 17.0f);
+            const ImVec2 divider = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddLine({divider.x, divider.y + 2.0f}, {divider.x, divider.y + 25.0f},
+                                                ImGui::ColorConvertFloat4ToU32(Border()));
+            ImGui::Dummy({1.0f, 27.0f});
+            ImGui::SameLine(0.0f, 16.0f);
+            const auto folder = snapshot.items.empty() || snapshot.selectedItemIndex >= snapshot.items.size()
+                                    ? std::string{modal.DefaultDestinationFolder()}
+                                    : snapshot.items[snapshot.selectedItemIndex].destinationFolder;
+            const std::string path = folder.empty() ? "assets" : folder;
+            const std::string projectName = modal.ProjectRoot().filename().string();
+            if (!projectName.empty()) {
+                ImGui::TextColored(Text(), "%s", projectName.c_str());
+                ImGui::SameLine(0.0f, 8.0f);
+                ImGui::TextColored(Dim(), ">");
+                ImGui::SameLine(0.0f, 8.0f);
+            }
+            const std::filesystem::path breadcrumb{path};
+            for (auto part = breadcrumb.begin(); part != breadcrumb.end(); ++part) {
+                ImGui::TextColored(Text(), "%s", part->string().c_str());
+                if (std::next(part) != breadcrumb.end()) {
+                    ImGui::SameLine(0.0f, 8.0f);
+                    ImGui::TextColored(Dim(), ">");
+                    ImGui::SameLine(0.0f, 8.0f);
+                }
+            }
+            PopFont(fonts.sansCompact);
+            ImGui::SameLine(ImGui::GetWindowWidth() - 128.0f);
+            if (Button({.label = Copy(modal.Localized("asset_import.change", "Change...")).c_str(),
+                        .size = {104.0f, 32.0f},
+                        .variant = ButtonVariant::Secondary,
+                        .enabled = !modal.ProjectRoot().empty() && !modal.IsUiPreview()})) {
+                if (const auto selected = ChooseFolder()) {
+                    if (const auto relative = ProjectFolder(modal.ProjectRoot(), *selected)) {
+                        modal.SetDefaultDestination(*selected);
+                        for (auto &item : snapshot.items)
+                            if (!item.result.has_value())
+                                item.destinationFolder = *relative;
                     }
                 }
             }
-            return rows;
-        }
-
-        [[nodiscard]] std::vector<std::filesystem::path> ParseDroppedFiles(const ImGuiPayload *payload) {
-            std::vector<std::filesystem::path> droppedFiles;
-            if (!payload || !payload->Data)
-                return droppedFiles;
-
-            std::string_view fileList(static_cast<const char *>(payload->Data), payload->DataSize);
-            std::size_t offset = 0;
-            while (offset < fileList.size()) {
-                auto lineEnd = fileList.find('\n', offset);
-                if (lineEnd == std::string_view::npos)
-                    lineEnd = fileList.size();
-                auto value = fileList.substr(offset, lineEnd - offset);
-                while (!value.empty() && value.back() == '\0')
-                    value.remove_suffix(1);
-                if (!value.empty())
-                    droppedFiles.emplace_back(value);
-                offset = lineEnd + 1;
-            }
-            return droppedFiles;
-        }
-
-        [[nodiscard]] const char *PhaseStatusLabel(Assets::AssetImportPhase phase) noexcept {
-            using enum Assets::AssetImportPhase;
-            switch (phase) {
-                case Selecting:
-                    return "SELECTING";
-                case Preparing:
-                case Committing:
-                    return "IMPORTING";
-                case ReadyToCommit:
-                    return "READY";
-                case Completed:
-                    return "COMPLETED";
-                case Failed:
-                    return "FAILED";
-                case Cancelled:
-                    return "CANCELLED";
-            }
-            return "SELECTING";
-        }
-
-        void DrawSummary(const Assets::AssetImportSnapshot &snap, const Fonts &fonts, std::size_t doneCount, std::size_t errorCount,
-                         std::size_t warningCount) {
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.0f, 13.0f});
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg2());
-            ImGui::BeginChild("ImportSummary", ImVec2{0.0f, ImportLayout::SummaryH}, true,
-                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-
-            using enum Assets::AssetImportPhase;
-            const char *statusText = PhaseStatusLabel(snap.phase);
-
-            const ImVec2 pillPos = ImGui::GetCursorScreenPos();
-            BadgeTone statusTone = BadgeTone::Accent;
-            if (snap.phase == ReadyToCommit || snap.phase == Completed)
-                statusTone = BadgeTone::Success;
-            else if (snap.phase == Failed)
-                statusTone = BadgeTone::Error;
-            else if (snap.phase == Cancelled)
-                statusTone = BadgeTone::Neutral;
-
-            const BadgeProps statusBadge{
-                .label = statusText,
-                .tone = statusTone,
-                .size = BadgeSize::Medium,
-                .leadingIndicator = true,
-            };
-            const float pillW = BadgeWidth(statusBadge, fonts);
-            Badge(statusBadge, fonts);
-
-            const float summaryY = pillPos.y + 1.0f;
-            ImGui::SetCursorScreenPos({pillPos.x + pillW + 34.0f, summaryY});
-            PushFont(fonts.sansCompact);
-            ImGui::TextColored(Dim(), "Processed");
-            ImGui::SetCursorScreenPos({pillPos.x + pillW + 34.0f, summaryY + 21.0f});
-            ImGui::TextColored(Text(), "%zu / %zu", doneCount + errorCount, snap.items.size());
-
-            const float trackX = pillPos.x + pillW + 145.0f;
-            const float trackY = pillPos.y + 13.0f;
-            const float trackW = 220.0f;
-            const auto total = static_cast<float>(snap.items.size());
-            const float progress = total > 0.0f ? static_cast<float>(doneCount + errorCount) / total : 0.0f;
-            ImDrawList *dl = ImGui::GetWindowDrawList();
-            dl->AddRectFilled({trackX, trackY}, {trackX + trackW, trackY + 5.0f}, U32(Bg3()), 2.5f);
-            dl->AddRectFilled({trackX, trackY}, {trackX + trackW * progress, trackY + 5.0f}, U32(Accent()), 2.5f);
-
-            ImGui::SetCursorScreenPos({trackX + trackW + 34.0f, summaryY});
-            ImGui::TextColored(Dim(), "Warnings");
-            ImGui::SetCursorScreenPos({trackX + trackW + 34.0f, summaryY + 21.0f});
-            ImGui::TextColored(warningCount > 0 ? ImVec4{0.91f, 0.64f, 0.24f, 1.0f} : Text(), "%zu", warningCount);
-
-            ImGui::SetCursorScreenPos({trackX + trackW + 135.0f, summaryY});
-            ImGui::TextColored(Dim(), "Errors");
-            ImGui::SetCursorScreenPos({trackX + trackW + 135.0f, summaryY + 21.0f});
-            ImGui::TextColored(errorCount > 0 ? ImVec4{0.83f, 0.32f, 0.29f, 1.0f} : Text(), "%zu", errorCount);
-            PopFont(fonts.sansCompact);
-
             ImGui::EndChild();
-            ImGui::PopStyleColor();
             ImGui::PopStyleVar();
-        }
-
-        void DrawTabs(int &activeTab, const Fonts &fonts) {
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.0f, 0.0f});
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg0());
-            ImGui::BeginChild("Tabs", ImVec2{0.0f, ImportLayout::TabsH}, true,
-                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-            ImDrawList *tabsDrawList = ImGui::GetWindowDrawList();
-
-            constexpr float tabPadX = 16.0f;
-            float cursorX = 22.0f;
-            PushFont(fonts.sansCompact);
-            for (int i = 0; i < static_cast<int>(ImportTab::Count); ++i) {
-                const bool active = i == activeTab;
-                const char *label = TabLabel(i);
-                const float labelW = ImGui::CalcTextSize(label).x;
-
-                const float tabW = tabPadX * 2.0f + labelW;
-                ImGui::SetCursorPos({cursorX, 0.0f});
-                if (ImGui::InvisibleButton(std::format("##ImportTab{}", i).c_str(), {tabW, ImportLayout::TabsH - 2.0f}))
-                    activeTab = i;
-
-                const ImVec2 tabMin = ImGui::GetItemRectMin();
-                const ImVec2 tabMax = ImGui::GetItemRectMax();
-                const float textY = tabMin.y + (tabMax.y - tabMin.y - ImGui::GetTextLineHeight()) * 0.5f;
-                tabsDrawList->AddText({tabMin.x + tabPadX, textY}, U32(active ? Text() : Dim()), label);
-
-                if (active) {
-                    tabsDrawList->AddRectFilled({tabMin.x, tabMax.y - 2.0f}, {tabMax.x, tabMax.y}, U32(Accent()));
-                }
-                cursorX += tabW + 2.0f;
-            }
-            PopFont(fonts.sansCompact);
-
-            ImGui::EndChild();
             ImGui::PopStyleColor();
-            ImGui::PopStyleVar();
         }
 
-        void DrawImportQueueItem(AssetImportModal &modal, const Assets::AssetImportItem &item, const std::size_t index,
-                                 const std::size_t selectedItemIndex, const Fonts &fonts, ImDrawList &queueDrawList) {
-            bool hasError = false;
-            bool hasWarning = false;
-            for (const auto &diagnostic : item.diagnostics) {
-                hasError |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Error;
-                hasWarning |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning;
+        void DrawDashedBorder(ImDrawList *drawList, const ImVec2 &min, const ImVec2 &max, ImU32 color) {
+            constexpr float dash = 6.0f;
+            constexpr float step = 11.0f;
+            for (float x = min.x; x < max.x; x += step) {
+                drawList->AddLine({x, min.y}, {std::min(x + dash, max.x), min.y}, color);
+                drawList->AddLine({x, max.y}, {std::min(x + dash, max.x), max.y}, color);
             }
+            for (float y = min.y; y < max.y; y += step) {
+                drawList->AddLine({min.x, y}, {min.x, std::min(y + dash, max.y)}, color);
+                drawList->AddLine({max.x, y}, {max.x, std::min(y + dash, max.y)}, color);
+            }
+        }
 
-            Ui::UiIcon icon = Ui::UiIcon::Pending;
-            if (item.result.has_value())
-                icon = Ui::UiIcon::Success;
-            if (hasWarning)
-                icon = Ui::UiIcon::Warning;
-            if (hasError)
-                icon = Ui::UiIcon::Error;
-
-            const bool selected = index == selectedItemIndex;
-            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-            const float rowW = ImGui::GetContentRegionAvail().x;
-            constexpr float rowH = 38.0f;
-            if (ImGui::InvisibleButton(std::format("##QueueItem{}", index).c_str(), {rowW, rowH}))
-                modal.SelectItem(index);
-
-            const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
-            const ImU32 rowBg = U32(selected ? ImVec4{Accent().x, Accent().y, Accent().z, 0.12f} : Bg3());
-            queueDrawList.AddRectFilled(rowMin, rowMax, rowBg, 4.0f);
-            queueDrawList.AddRect(rowMin, rowMax, U32(selected ? Accent() : Border()), 4.0f);
-
-            const float rowCenter = rowMin.y + rowH * 0.5f;
-            const float iconY = rowCenter - fonts.icon->FontSize * 0.5f;
-            Ui::DrawEditorIcon(&queueDrawList, icon, {rowMin.x + 14.0f, iconY}, {fonts.icon->FontSize, fonts.icon->FontSize}, U32(Text()),
-                               fonts.icon);
-
+        void DrawDropZone(AssetImportModal &modal, const Fonts &fonts, float height) {
+            const float width = ImGui::GetContentRegionAvail().x;
+            const ImVec2 topLeft = ImGui::GetCursorScreenPos();
+            if (ImGui::InvisibleButton("##ImportDropZone", {width, height}) && !modal.IsUiPreview())
+                AddFiles(modal, ChooseFiles());
+            ImDrawList *drawList = ImGui::GetWindowDrawList();
+            const ImVec2 bottomRight{topLeft.x + width, topLeft.y + height};
+            drawList->AddRectFilled(topLeft, bottomRight, ImGui::ColorConvertFloat4ToU32(Bg2()), 5.0f);
+            DrawDashedBorder(drawList, topLeft, bottomRight, ImGui::ColorConvertFloat4ToU32(ImGui::IsItemHovered() ? Accent() : Border()));
+            const auto title = Copy(modal.Localized("asset_import.add_files", "Add more files"));
+            const auto hint = Copy(modal.Localized("asset_import.drop_hint", "Drag and drop files here or click to browse"));
             PushFont(fonts.sansCompact);
-            const float textY = rowMin.y + (rowH - fonts.sansCompact->FontSize) * 0.5f;
-            const std::string displayName = DisplayFileName(std::filesystem::path{item.sourceFile.String()});
-            queueDrawList.AddText({rowMin.x + 36.0f, textY}, U32(Text()), displayName.c_str());
+            const float titleWidth = ImGui::CalcTextSize(title.c_str()).x;
+            const float hintWidth = ImGui::CalcTextSize(hint.c_str()).x;
+            DrawEditorIcon(drawList, UiIcon::Create, {topLeft.x + (width - titleWidth) * 0.5f - 24.0f, topLeft.y + height * 0.5f - 20.0f},
+                           {18.0f, 18.0f}, ImGui::ColorConvertFloat4ToU32(Accent()), fonts.icon);
+            drawList->AddText({topLeft.x + (width - titleWidth) * 0.5f, topLeft.y + height * 0.5f - 20.0f},
+                              ImGui::ColorConvertFloat4ToU32(Accent()), title.c_str());
+            drawList->AddText({topLeft.x + (width - hintWidth) * 0.5f, topLeft.y + height * 0.5f + 4.0f},
+                              ImGui::ColorConvertFloat4ToU32(Dim()), hint.c_str());
             PopFont(fonts.sansCompact);
-        }
-
-        void DrawImportHistoryItem(const AssetImportModal &modal, const OperationRecord &operation, const Fonts &fonts,
-                                   ImDrawList &queueDrawList) {
-            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-            const float rowW = ImGui::GetContentRegionAvail().x;
-            constexpr float rowH = 46.0f;
-            ImGui::InvisibleButton(std::format("##ImportHistory{}", operation.id).c_str(), {rowW, rowH});
-
-            const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
-            queueDrawList.AddRectFilled(rowMin, rowMax, U32(Bg3()), 4.0f);
-            queueDrawList.AddRect(rowMin, rowMax, U32(Border()), 4.0f);
-
-            Ui::UiIcon icon = Ui::UiIcon::Success;
-            ImVec4 statusColor = Ok();
-            std::string_view status = modal.Localized("asset_import.history.succeeded", "Imported");
-            if (operation.state == OperationState::Failed) {
-                icon = Ui::UiIcon::Error;
-                statusColor = Err();
-                status = modal.Localized("asset_import.history.failed", "Failed");
-            } else if (operation.state == OperationState::Cancelled) {
-                icon = Ui::UiIcon::Cancelled;
-                statusColor = Dim();
-                status = modal.Localized("asset_import.history.cancelled", "Cancelled");
-            }
-
-            Ui::DrawEditorIcon(&queueDrawList, icon, {rowMin.x + 14.0f, rowMin.y + 14.0f}, {fonts.icon->FontSize, fonts.icon->FontSize},
-                               U32(statusColor), fonts.icon);
-            PushFont(fonts.sansCompact);
-            queueDrawList.AddText({rowMin.x + 36.0f, rowMin.y + 7.0f}, U32(Text()), operation.title.c_str());
-            queueDrawList.AddText({rowMin.x + 36.0f, rowMin.y + 25.0f}, U32(statusColor), status.data(), status.data() + status.size());
-            PopFont(fonts.sansCompact);
-        }
-
-        void DrawImportHistory(const AssetImportModal &modal, const Fonts &fonts, ImDrawList &queueDrawList) {
-            const auto history = modal.ImportHistory();
-            for (const OperationRecord &operation : history)
-                DrawImportHistoryItem(modal, operation, fonts, queueDrawList);
-            if (history.empty()) {
-                PushFont(fonts.sansCompact);
-                const std::string_view empty = modal.Localized("asset_import.history.empty", "No imports yet.");
-                ImGui::TextColored(Dim(), "%.*s", static_cast<int>(empty.size()), empty.data());
-                PopFont(fonts.sansCompact);
-            }
-        }
-
-        void DrawImportQueue(AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f, 0.0f});
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{0.0f, 5.0f});
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg0());
-            ImGui::BeginChild("QueueList", ImVec2{0.0f, 0.0f}, false);
-            ImDrawList *queueDrawList = ImGui::GetWindowDrawList();
-
-            if (!snap.items.empty()) {
-                for (std::size_t i = 0; i < snap.items.size(); ++i)
-                    DrawImportQueueItem(modal, snap.items[i], i, snap.selectedItemIndex, fonts, *queueDrawList);
-            } else {
-                DrawImportHistory(modal, fonts, *queueDrawList);
-            }
-
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-            ImGui::PopStyleVar(2);
-        }
-
-        void DrawSidebar(AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts, float bodyH) {
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{16.0f, 16.0f});
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{8.0f, 8.0f});
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg0());
-            ImGui::BeginChild("Sidebar", ImVec2{ImportLayout::SidebarW, bodyH}, true,
-                              ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-            ImDrawList *sidebarDrawList = ImGui::GetWindowDrawList();
-
-            LabeledSeparator("SOURCE", fonts);
-            ImGui::Spacing();
-
-            const float zoneW = ImGui::GetContentRegionAvail().x;
-            constexpr float zoneH = 98.0f;
-            const ImVec2 zonePos = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton("##ImportDropZone", {zoneW, zoneH});
-            const bool zoneHovered = ImGui::IsItemHovered();
-            sidebarDrawList->AddRectFilled(zonePos, {zonePos.x + zoneW, zonePos.y + zoneH}, U32(zoneHovered ? Bg2() : Bg1()), 4.0f);
-            DrawDashedRect(sidebarDrawList, zonePos, {zonePos.x + zoneW, zonePos.y + zoneH}, U32(zoneHovered ? Accent() : Border()));
-
-            {
-                ScopedTextStyle titleStyle(fonts.sansEmphasis, TextPx::Title(), FontPx::SansEmphasis);
-                const char *dropTitle = "Drop files here";
-                const float dropTitleW = ImGui::CalcTextSize(dropTitle).x;
-                sidebarDrawList->AddText({zonePos.x + (zoneW - dropTitleW) * 0.5f, zonePos.y + 31.0f}, U32(Text()), dropTitle);
-            }
-            PushFont(fonts.sansCompact);
-            const char *dropSubtitle = "or click to browse";
-            const float dropSubtitleW = ImGui::CalcTextSize(dropSubtitle).x;
-            sidebarDrawList->AddText({zonePos.x + (zoneW - dropSubtitleW) * 0.5f, zonePos.y + 57.0f}, U32(Dim()), dropSubtitle);
-            PopFont(fonts.sansCompact);
-
             if (ImGui::BeginDragDropTarget()) {
-                if (const auto droppedFiles = ParseDroppedFiles(ImGui::AcceptDragDropPayload("FILES")); !droppedFiles.empty()) {
-                    CancellationToken cancellation;
-                    static_cast<void>(modal.BeginImport(droppedFiles, cancellation));
-                }
+                AddFiles(modal, DroppedFiles(ImGui::AcceptDragDropPayload("FILES")));
                 ImGui::EndDragDropTarget();
             }
-
-            ImGui::Dummy({0.0f, 12.0f});
-            const std::string sectionLabel{modal.Localized(snap.items.empty() ? "asset_import.history" : "asset_import.current",
-                                                           snap.items.empty() ? "IMPORT HISTORY" : "CURRENT IMPORT")};
-            LabeledSeparator(sectionLabel.c_str(), fonts);
-            ImGui::Spacing();
-
-            DrawImportQueue(modal, snap, fonts);
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-            ImGui::PopStyleVar(2);
         }
 
-        void DrawQueueOverviewTab(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
-            if (!snap.items.empty() && snap.selectedItemIndex < snap.items.size()) {
-                const auto &sel = snap.items[snap.selectedItemIndex];
-                LabeledSeparator("SELECTED FILE", fonts);
-                ImGui::Dummy({0.0f, 6.0f});
-                PushFont(fonts.sansCompact);
-                ImGui::TextColored(Dim(), "File");
-                ImGui::SameLine(0, 24);
-                ImGui::TextColored(Text(), "%s", sel.displayName.c_str());
-                ImGui::SameLine(0, 30);
-                ImGui::TextColored(Dim(), "Type");
-                ImGui::SameLine(0, 12);
-                ImGui::TextColored(Text(), ".%s", sel.sourceExtension.c_str());
-                ImGui::SameLine(0, 30);
-                ImGui::TextColored(Dim(), "Importer");
-                ImGui::SameLine(0, 12);
-                if (!sel.importerContributionId.empty())
-                    ImGui::TextColored(Accent(), "%s", FriendlyImporterName(sel.importerContributionId).c_str());
-                else
-                    ImGui::TextColored(ImVec4{0.83f, 0.32f, 0.29f, 1.0f}, "None for .%s", sel.sourceExtension.c_str());
-                PopFont(fonts.sansCompact);
-                ImGui::Dummy({0.0f, 12.0f});
-            }
-
-            if (snap.items.empty()) {
-                const std::string_view empty = modal.Localized("asset_import.overview.empty", "Select a file to view its overview.");
-                ImGui::TextColored(Dim(), "%.*s", static_cast<int>(empty.size()), empty.data());
-            }
-        }
-
-        void DrawDiagnosticsTab(const Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
-            if (snap.items.empty()) {
-                ImGui::TextColored(Dim(), "No diagnostics available.");
-                return;
-            }
-
-            const auto rows = CollectDiagnosticRows(snap);
-            if (rows.empty()) {
-                ImGui::TextColored(Dim(), "No diagnostics available.");
-                return;
-            }
-
-            constexpr float rowHeight = 48.0f;
-            constexpr float leftPadding = 18.0f;
-            constexpr float rightPadding = 14.0f;
-            constexpr float timeColumnWidth = 92.0f;
-            constexpr float gapAfterTime = 34.0f;
-            constexpr float gapAfterAsset = 34.0f;
-
-            ImDrawList *diagnosticsDrawList = ImGui::GetWindowDrawList();
+        void DrawFiles(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts, float width,
+                       float height) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg1());
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PanelPadding, PanelPadding});
+            ImGui::BeginChild("ImportFilePanel", {width, height}, true);
+            const auto heading = Copy(modal.Localized("asset_import.selected_files", "Selected Files"));
+            PushFont(fonts.sansEmphasis);
+            ImGui::TextColored(Text(), "%s", heading.c_str());
+            PopFont(fonts.sansEmphasis);
             PushFont(fonts.sansCompact);
+            const auto count = std::format("{} {}", snapshot.items.size(), Copy(modal.Localized("asset_import.files", "files")));
+            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(count.c_str()).x);
+            ImGui::TextColored(Dim(), "%s", count.c_str());
+            PopFont(fonts.sansCompact);
+            ImGui::Dummy({0.0f, 7.0f});
 
-            const float availableWidth = ImGui::GetContentRegionAvail().x;
-            const float assetColumnWidth = std::clamp(availableWidth * 0.23f, 170.0f, 220.0f);
-
-            for (std::size_t diagnosticIndex = 0; diagnosticIndex < rows.size(); ++diagnosticIndex) {
-                const auto &row = rows[diagnosticIndex];
-
-                auto messageColor = ImVec4{0.72f, 0.71f, 0.68f, 1.0f};
-                if (row.severity == Assets::ImportDiagnostic::Severity::Error)
-                    messageColor = ImVec4{0.83f, 0.32f, 0.29f, 1.0f};
-                else if (row.severity == Assets::ImportDiagnostic::Severity::Warning)
-                    messageColor = ImVec4{0.91f, 0.64f, 0.24f, 1.0f};
-
+            const float zoneHeight = 76.0f;
+            const float listHeight =
+                std::max(0.0f, ImGui::GetContentRegionAvail().y - zoneHeight - 7.0f - 2.0f * ImGui::GetStyle().ItemSpacing.y - 2.0f);
+            const ImGuiWindowFlags listFlags =
+                snapshot.items.empty() ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : ImGuiWindowFlags_None;
+            ImGui::BeginChild("ImportFileList", {0.0f, listHeight}, false, listFlags);
+            for (std::size_t index = 0; index < snapshot.items.size(); ++index) {
+                const auto &item = snapshot.items[index];
+                const bool selected = snapshot.selectedItemIndex == index;
                 const ImVec2 rowMin = ImGui::GetCursorScreenPos();
                 const float rowWidth = ImGui::GetContentRegionAvail().x;
-                ImGui::InvisibleButton(std::format("##DiagnosticRow{}", diagnosticIndex).c_str(), {rowWidth, rowHeight});
+                constexpr float rowHeight = 56.0f;
+                if (ImGui::InvisibleButton(std::format("##ImportFile{}", index).c_str(), {rowWidth, rowHeight}))
+                    modal.SelectItem(index);
                 const ImVec2 rowMax{rowMin.x + rowWidth, rowMin.y + rowHeight};
-
-                const float textY = rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f;
-                const float timeX = rowMin.x + leftPadding;
-                const float assetX = timeX + timeColumnWidth + gapAfterTime;
-                const float messageX = assetX + assetColumnWidth + gapAfterAsset;
-
-                diagnosticsDrawList->PushClipRect({timeX, rowMin.y}, {timeX + timeColumnWidth, rowMax.y}, true);
-                diagnosticsDrawList->AddText({timeX, textY}, U32(Dim()), DiagnosticTimeLabel(diagnosticIndex));
-                diagnosticsDrawList->PopClipRect();
-
-                diagnosticsDrawList->PushClipRect({assetX, rowMin.y}, {assetX + assetColumnWidth, rowMax.y}, true);
-                diagnosticsDrawList->AddText({assetX, textY}, U32(Accent()), row.assetLabel.c_str());
-                diagnosticsDrawList->PopClipRect();
-
-                diagnosticsDrawList->PushClipRect({messageX, rowMin.y}, {rowMax.x - rightPadding, rowMax.y}, true);
-                diagnosticsDrawList->AddText({messageX, textY}, U32(messageColor), row.message.c_str());
-                diagnosticsDrawList->PopClipRect();
-            }
-
-            PopFont(fonts.sansCompact);
-        }
-
-        void DrawBooleanSettingField(const Assets::ImportSettingDescriptor &setting, const std::string &key, Assets::AssetImportItem &item,
-                                     const Fonts &fonts) {
-            bool defaultValue = false;
-            if (std::holds_alternative<bool>(setting.defaultValue))
-                defaultValue = std::get<bool>(setting.defaultValue);
-            if (bool val = item.settings.contains(key) ? (item.settings[key] == "true") : defaultValue;
-                ToggleControl(("##Setting_" + setting.id).c_str(), &val, fonts, true)) {
-                item.settings[key] = val ? "true" : "false";
-            }
-        }
-
-        void DrawChoiceSettingField(const Assets::ImportSettingDescriptor &setting, const std::string &key, Assets::AssetImportItem &item,
-                                    const Fonts &fonts) {
-            std::vector<const char *> labels;
-            for (const auto &c : setting.choices)
-                labels.push_back(c.labelKey.c_str());
-            if (int current = item.settings.contains(key) ? std::stoi(item.settings[key]) : 0;
-                ComboControl(("##Setting_" + setting.id).c_str(), &current, labels.data(), static_cast<int>(labels.size()), fonts)) {
-                item.settings[key] = std::to_string(current);
-            }
-        }
-
-        void DrawNumberSettingField(const Assets::ImportSettingDescriptor &setting, const std::string &key, Assets::AssetImportItem &item,
-                                    const Fonts &fonts) {
-            if (setting.kind == Assets::ImportSettingKind::Integer) {
-                int defaultValue = 0;
-                if (std::holds_alternative<std::int64_t>(setting.defaultValue))
-                    defaultValue = static_cast<int>(std::get<std::int64_t>(setting.defaultValue));
-                int val = item.settings.contains(key) ? std::stoi(item.settings[key]) : defaultValue;
-                InputIntControl(("##Setting_" + setting.id).c_str(), &val, fonts);
-                item.settings[key] = std::to_string(val);
-            } else {
-                float defaultValue = 0.0f;
-                if (std::holds_alternative<double>(setting.defaultValue))
-                    defaultValue = static_cast<float>(std::get<double>(setting.defaultValue));
-                float val = item.settings.contains(key) ? std::stof(item.settings[key]) : defaultValue;
-                InputFloatControl(("##Setting_" + setting.id).c_str(), &val, fonts);
-                item.settings[key] = std::to_string(val);
-            }
-        }
-
-        void DrawTextSettingField(const Assets::ImportSettingDescriptor &setting, const std::string &key, Assets::AssetImportItem &item,
-                                  const Fonts &fonts) {
-            if (std::string textVal = item.settings.contains(key) ? item.settings[key] : std::string{};
-                InputTextControl(("##Setting_" + setting.id).c_str(), textVal, 256, fonts)) {
-                item.settings[key] = std::move(textVal);
-            }
-        }
-
-        void DrawDynamicSettingRow(const Assets::ImportSettingDescriptor &setting, Assets::AssetImportItem &item, const Fonts &fonts) {
-            PushFont(fonts.sansCompact);
-            FieldLabel(setting.labelKey.c_str(), fonts);
-
-            const std::string key = "settings." + setting.id;
-
-            using enum Assets::ImportSettingKind;
-            switch (setting.kind) {
-                case Boolean:
-                    DrawBooleanSettingField(setting, key, item, fonts);
-                    break;
-                case Choice:
-                    DrawChoiceSettingField(setting, key, item, fonts);
-                    break;
-                case Integer:
-                case Float:
-                    DrawNumberSettingField(setting, key, item, fonts);
-                    break;
-                case Text:
-                    DrawTextSettingField(setting, key, item, fonts);
-                    break;
-            }
-            PopFont(fonts.sansCompact);
-        }
-
-        void DrawSettingsTab(const AssetImportModal &modal, Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
-            if (const bool hasSelection = !snap.items.empty() && snap.selectedItemIndex < snap.items.size(); !hasSelection) {
-                ImGui::TextColored(Dim(), "Select a file from the queue to view its importer settings.");
-                return;
-            }
-
-            auto &sel = snap.items[snap.selectedItemIndex];
-
-            LabeledSeparator("IMPORTER", fonts);
-            ImGui::Dummy({0.0f, 4.0f});
-
-            const auto *contrib = modal.Catalog().FindContributionByExtension(sel.sourceExtension);
-            if (!contrib) {
-                PushFont(fonts.sansCompact);
-                ImGui::TextColored(ImVec4{0.83f, 0.32f, 0.29f, 1.0f}, "No importer available for .%s files.", sel.sourceExtension.c_str());
-                ImGui::Dummy({0.0f, 4.0f});
-                ImGui::TextColored(Dim(), "Install or enable an importer extension that handles .%s files.", sel.sourceExtension.c_str());
-                PopFont(fonts.sansCompact);
-                return;
-            }
-
-            PushFont(fonts.sansCompact);
-            ImGui::TextColored(Dim(), "Name");
-            ImGui::SameLine(0, 24);
-            ImGui::TextColored(Accent(), "%s", FriendlyImporterName(contrib->contributionId).c_str());
-            if (contrib->builtIn) {
-                ImGui::SameLine(0, 10);
-                ImGui::TextColored(ImVec4{Accent().x, Accent().y, Accent().z, 0.7f}, "BUILT-IN");
-            }
-            PopFont(fonts.sansCompact);
-
-            ImGui::Dummy({0.0f, 8.0f});
-
-            if (contrib->settings.empty()) {
-                ImGui::TextColored(Dim(), "This importer has no configurable settings.");
-            } else {
-                LabeledSeparator("SETTINGS", fonts);
-                ImGui::Dummy({0.0f, 4.0f});
-
-                for (const auto &setting : contrib->settings) {
-                    DrawDynamicSettingRow(setting, sel, fonts);
+                auto *drawList = ImGui::GetWindowDrawList();
+                const ImVec4 background = selected ? ImVec4{Accent().x, Accent().y, Accent().z, 0.13f} : Bg2();
+                drawList->AddRectFilled(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(background), 5.0f);
+                drawList->AddRect(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(selected ? Accent() : Border()), 5.0f);
+                drawList->AddRectFilled({rowMin.x + 9.0f, rowMin.y + 8.0f}, {rowMin.x + 49.0f, rowMin.y + 48.0f},
+                                        ImGui::ColorConvertFloat4ToU32(Bg3()), 5.0f);
+                DrawEditorIcon(drawList, AssetIcon(item), {rowMin.x + 17.0f, rowMin.y + 16.0f}, {24.0f, 24.0f},
+                               ImGui::ColorConvertFloat4ToU32(Text()), fonts.icon);
+                const auto name = FileName(item);
+                const auto details = std::format("{}  |  {}", AssetKind(modal, item), FileSize(modal, index));
+                drawList->PushClipRect({rowMin.x + 64.0f, rowMin.y}, {rowMax.x - 60.0f, rowMax.y}, true);
+                drawList->AddText({rowMin.x + 64.0f, rowMin.y + 8.0f}, ImGui::ColorConvertFloat4ToU32(Text()), name.c_str());
+                drawList->AddText({rowMin.x + 64.0f, rowMin.y + 29.0f}, ImGui::ColorConvertFloat4ToU32(Dim()), details.c_str());
+                drawList->PopClipRect();
+                if (HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Warning) ||
+                    HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error)) {
+                    const auto tone = HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error) ? ErrorColor : WarningColor;
+                    DrawEditorIcon(drawList,
+                                   HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error) ? UiIcon::Error : UiIcon::Warning,
+                                   {rowMax.x - 57.0f, rowMin.y + 19.0f}, {17.0f, 17.0f}, ImGui::ColorConvertFloat4ToU32(tone), fonts.icon);
                 }
+                ImGui::SetCursorScreenPos({rowMax.x - 32.0f, rowMin.y + 16.0f});
+                bool included = modal.IsItemIncluded(index);
+                ImGui::BeginDisabled(item.result.has_value());
+                if (CheckboxControl(std::format("##IncludeImport{}", index).c_str(), &included, fonts))
+                    modal.SetItemIncluded(index, included);
+                ImGui::EndDisabled();
+                ImGui::SetCursorScreenPos({rowMin.x, rowMax.y + 5.0f});
             }
-
-            ImGui::Dummy({0.0f, 4.0f});
-            if (sel.result.has_value()) {
-                ImGui::TextColored(ImVec4{0.37f, 0.72f, 0.54f, 1.0f}, "✓ This file has been imported.");
-            } else {
-                ImGui::TextColored(Dim(), "Configure settings above, then click Import in the footer.");
+            if (snapshot.items.empty()) {
+                const auto empty = Copy(modal.Localized("asset_import.no_files", "No files selected yet."));
+                const float textWidth = ImGui::CalcTextSize(empty.c_str()).x;
+                const ImVec2 available = ImGui::GetContentRegionAvail();
+                const ImVec2 origin = ImGui::GetCursorScreenPos();
+                ImGui::SetCursorScreenPos({origin.x + (available.x - textWidth) * 0.5f, origin.y + std::max(20.0f, available.y * 0.48f)});
+                ImGui::TextColored(Dim(), "%s", empty.c_str());
             }
-        }
-
-        void DrawDestinationPathRow(const AssetImportModal &modal, Assets::AssetImportItem *selItem, const Fonts &fonts) {
-            constexpr float browseButtonWidth = 38.0f;
-            constexpr float browseGap = 8.0f;
-            const float targetInputWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - browseButtonWidth - browseGap);
-            if (std::string targetFolder = (selItem && !selItem->destinationFolder.empty()) ? selItem->destinationFolder : "assets";
-                InputTextControl("##TargetFolder", targetFolder, 256, fonts, InputTextOptions{.width = targetInputWidth}) && selItem)
-                selItem->destinationFolder = std::move(targetFolder);
-            ImGui::SameLine(0.0f, browseGap);
-
-            auto handleBrowseDestination = [&] {
-                const auto selectedFolder = OpenFolderSelectionDialog("Select asset destination");
-                if (!selectedFolder)
-                    return;
-                if (const auto relative = ProjectRelativeFolder(modal.ProjectRoot(), *selectedFolder); relative && selItem)
-                    selItem->destinationFolder = relative->empty() ? "assets" : *relative;
-            };
-
-            if (IconButton({
-                    .id = "##BrowseTargetFolder",
-                    .glyph = IconButtonGlyph::Folder,
-                    .size = {browseButtonWidth, ImGui::GetFrameHeight()},
-                    .tooltip = "Browse project folders",
-                    .enabled = selItem != nullptr,
-                })) {
-                handleBrowseDestination();
-            }
-        }
-
-        void DrawDestinationStrategyColumns(Assets::AssetImportItem *selItem, const Fonts &fonts) {
-            int subfolderByType = selItem ? selItem->subfolderByType : 0;
-            int assetIdStrategy = selItem ? selItem->assetIdStrategy : 0;
-
-            static constexpr std::array kSubfolderModes{"Meshes / Textures / Audio", "Mirror source structure", "Flat"};
-            static constexpr std::array kAssetIdModes{"New GUID", "Stable hash"};
-
-            const SplitColumns columns = CurrentSplitColumns();
-
-            ImGui::BeginGroup();
-            FieldLabel("SUBFOLDER BY TYPE", fonts);
-            ImGui::SetNextItemWidth(columns.width);
-            if (ComboControl("##SubfolderByType", &subfolderByType, kSubfolderModes.data(), static_cast<int>(std::size(kSubfolderModes)),
-                             fonts) &&
-                selItem) {
-                selItem->subfolderByType = subfolderByType;
-            }
-            ImGui::EndGroup();
-
-            MoveToSecondColumn(columns);
-            ImGui::BeginGroup();
-            FieldLabel("ASSETID STRATEGY", fonts);
-            ImGui::SetNextItemWidth(columns.width);
-            if (ComboControl("##AssetIdStrategy", &assetIdStrategy, kAssetIdModes.data(), static_cast<int>(std::size(kAssetIdModes)),
-                             fonts) &&
-                selItem) {
-                selItem->assetIdStrategy = assetIdStrategy;
-            }
-            ImGui::EndGroup();
-
-            FinishSplitColumns(columns);
-        }
-
-        void DrawDestinationTab(const AssetImportModal &modal, Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
-            const bool hasSelection = !snap.items.empty() && snap.selectedItemIndex < snap.items.size();
-            auto *selItem = hasSelection ? &snap.items[snap.selectedItemIndex] : nullptr;
-
-            bool createMetaSidecar = selItem ? selItem->createMetaSidecar : true;
-            bool overwriteWithoutPrompt = selItem ? selItem->overwriteWithoutPrompt : false;
-
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{10.0f, 7.0f});
-
-            FieldLabel("ASSET NAME", fonts);
-            if (std::string assetName = selItem ? selItem->displayName : std::string{};
-                InputTextControl("##AssetName", assetName, 256, fonts) && selItem) {
-                selItem->displayName = std::move(assetName);
-            }
-            ImGui::Dummy({0.0f, 6.0f});
-
-            FieldLabel("TARGET FOLDER", fonts);
-            DrawDestinationPathRow(modal, selItem, fonts);
-            ImGui::Dummy({0.0f, 6.0f});
-
-            DrawDestinationStrategyColumns(selItem, fonts);
-
-            ImGui::Dummy({0.0f, 12.0f});
-            if (CheckboxControl("Create .meta sidecar for each asset", &createMetaSidecar, fonts) && selItem) {
-                selItem->createMetaSidecar = createMetaSidecar;
-            }
-            ImGui::Dummy({0.0f, 5.0f});
-            if (CheckboxControl("Overwrite existing assets without prompt", &overwriteWithoutPrompt, fonts) && selItem) {
-                selItem->overwriteWithoutPrompt = overwriteWithoutPrompt;
-            }
-
+            ImGui::EndChild();
+            ImGui::Dummy({0.0f, 7.0f});
+            DrawDropZone(modal, fonts, zoneHeight);
+            ImGui::EndChild();
             ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
         }
 
-        void DrawCreatePresetModal(AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts, float actionH,
-                                   float gap) {
-            static std::string s_presetNameBuffer;
-            static bool presetNameError = false;
+        [[nodiscard]] bool IsPrimarySetting(std::string_view id) {
+            return id == "unitScale" || id == "importMaterials" || id == "generateCollision" || id == "importAnimations";
+        }
 
-            if (ImGui::BeginPopupModal("Create Import Preset", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                FieldLabel("PRESET NAME", fonts);
-                static_cast<void>(InputTextControl("##NewImportPresetName", s_presetNameBuffer, 256, fonts,
-                                                   InputTextOptions{.error = presetNameError, .width = 280.0F}));
-                ImGui::Dummy({0.0f, 10.0f});
+        [[nodiscard]] const Assets::ImportSettingDescriptor *FindSetting(const Assets::AssetImporterContribution &contribution,
+                                                                         std::string_view id) {
+            const auto found = std::ranges::find_if(contribution.settings, [id](const auto &setting) {
+                return setting.id == id;
+            });
+            return found == contribution.settings.end() ? nullptr : &*found;
+        }
 
-                if (const ButtonProps dismissPresetProps{
-                        .label = "Cancel",
-                        .size = {90.0f, actionH},
-                        .variant = ButtonVariant::Secondary,
-                    };
-                    Button(dismissPresetProps)) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::SameLine(0.0f, gap);
-                if (const ButtonProps createPresetProps{
-                        .label = "Create",
-                        .size = {90.0f, actionH},
-                        .variant = ButtonVariant::Primary,
-                        .enabled = !s_presetNameBuffer.empty(),
-                    };
-                    Button(createPresetProps)) {
-                    if (modal.CreatePreset(snap.selectedItemIndex, s_presetNameBuffer)) {
-                        presetNameError = false;
-                        ImGui::CloseCurrentPopup();
-                    } else {
-                        presetNameError = true;
+        void DrawSetting(const AssetImportModal &modal, const Assets::ImportSettingDescriptor &setting, Assets::AssetImportItem &item,
+                         const Fonts &fonts) {
+            const std::string key = "settings." + setting.id;
+            PushFont(fonts.sansCompact);
+            ImGui::AlignTextToFramePadding();
+            const auto label =
+                setting.id == "unitScale"          ? Copy(modal.Localized("asset_import.scale", "Scale"))
+                : setting.id == "importMaterials"  ? Copy(modal.Localized("asset_import.generate_materials", "Generate Materials"))
+                : setting.id == "importAnimations" ? Copy(modal.Localized("asset_import.animation_import", "Animation Import"))
+                                                   : setting.labelKey;
+            ImGui::TextColored(Muted(), "%s", label.c_str());
+            PopFont(fonts.sansCompact);
+            ImGui::SameLine(190.0f);
+            ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
+            if (setting.kind == Assets::ImportSettingKind::Boolean) {
+                bool value = item.settings.contains(key)
+                                 ? item.settings[key] == "true"
+                                 : std::holds_alternative<bool>(setting.defaultValue) && std::get<bool>(setting.defaultValue);
+                if (ToggleControl(("##Setting_" + setting.id).c_str(), &value, fonts, true))
+                    item.settings[key] = value ? "true" : "false";
+            } else if (setting.kind == Assets::ImportSettingKind::Choice) {
+                std::vector<const char *> choices;
+                choices.reserve(setting.choices.size());
+                for (const auto &choice : setting.choices)
+                    choices.push_back(choice.labelKey.c_str());
+                int index = 0;
+                if (const auto found = item.settings.find(key); found != item.settings.end()) {
+                    try {
+                        index = std::stoi(found->second);
+                    } catch (...) {
+                        index = 0;
                     }
                 }
-                if (presetNameError)
-                    ImGui::TextColored(ImVec4{0.83f, 0.32f, 0.29f, 1.0f}, "Use a unique preset name.");
+                index = std::clamp(index, 0, std::max(0, static_cast<int>(choices.size()) - 1));
+                if (ComboControl(("##Setting_" + setting.id).c_str(), &index, choices.data(), static_cast<int>(choices.size()), fonts))
+                    item.settings[key] = std::to_string(index);
+            } else if (setting.kind == Assets::ImportSettingKind::Float) {
+                float value = std::holds_alternative<double>(setting.defaultValue)
+                                  ? static_cast<float>(std::get<double>(setting.defaultValue))
+                                  : 0.0f;
+                if (const auto found = item.settings.find(key); found != item.settings.end()) {
+                    try {
+                        value = std::stof(found->second);
+                    } catch (...) {
+                    }
+                }
+                if (setting.id == "unitScale")
+                    static_cast<void>(InputFloatStepperControl(("##Setting_" + setting.id).c_str(), &value, fonts));
+                else
+                    InputFloatControl(("##Setting_" + setting.id).c_str(), &value, fonts);
+                item.settings[key] = std::to_string(value);
+            } else if (setting.kind == Assets::ImportSettingKind::Integer) {
+                int value = std::holds_alternative<std::int64_t>(setting.defaultValue)
+                                ? static_cast<int>(std::get<std::int64_t>(setting.defaultValue))
+                                : 0;
+                if (const auto found = item.settings.find(key); found != item.settings.end()) {
+                    try {
+                        value = std::stoi(found->second);
+                    } catch (...) {
+                    }
+                }
+                InputIntControl(("##Setting_" + setting.id).c_str(), &value, fonts);
+                item.settings[key] = std::to_string(value);
+            } else {
+                std::string value = item.settings.contains(key) ? item.settings[key] : std::string{};
+                if (InputTextControl(("##Setting_" + setting.id).c_str(), value, 256, fonts))
+                    item.settings[key] = std::move(value);
+            }
+        }
+
+        void DrawUnavailableSetting(const AssetImportModal &modal, std::string_view labelKey, std::string_view fallback, const char *id,
+                                    bool number, const Fonts &fonts) {
+            const auto label = Copy(modal.Localized(labelKey, fallback));
+            ImGui::TextColored(Muted(), "%s", label.c_str());
+            ImGui::SameLine(190.0f);
+            ImGui::BeginDisabled();
+            if (number) {
+                float value = 1.0f;
+                ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
+                static_cast<void>(InputFloatStepperControl(id, &value, fonts));
+            } else {
+                bool value = false;
+                static_cast<void>(ToggleControl(id, &value, fonts, true));
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ShowTooltip(Copy(modal.Localized("asset_import.setting_unavailable", "This importer does not support this setting."))
+                                .c_str(),
+                            &fonts);
+        }
+
+        void DrawPreset(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
+            const auto index = snapshot.selectedItemIndex;
+            auto names = modal.PresetNames(index);
+            std::vector<const char *> labels;
+            labels.reserve(names.size());
+            for (const auto &name : names)
+                labels.push_back(name.c_str());
+            int selected = 0;
+            const auto active = modal.ActivePresetName(index);
+            if (const auto found = std::ranges::find(names, active); found != names.end())
+                selected = static_cast<int>(std::distance(names.begin(), found));
+            ImGui::TextColored(Muted(), "%s", Copy(modal.Localized("asset_import.preset", "Import Preset")).c_str());
+            ImGui::SameLine(190.0f);
+            ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
+            if (ComboControl("##ImportPreset", &selected, labels.data(), static_cast<int>(labels.size()), fonts))
+                static_cast<void>(modal.ApplyPreset(index, names[selected]));
+        }
+
+        void DrawCreatePresetAction(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
+            const auto index = snapshot.selectedItemIndex;
+            const auto createPreset = Copy(modal.Localized("asset_import.create_preset", "Create preset from current settings"));
+            const auto presetPopupTitle = Copy(modal.Localized("asset_import.create", "Create")) + " " +
+                                          Copy(modal.Localized("asset_import.preset", "Import Preset")) + "##CreateImportPresetPopup";
+            if (Button({.label = createPreset.c_str(), .variant = ButtonVariant::Secondary}))
+                ImGui::OpenPopup(presetPopupTitle.c_str());
+            if (ImGui::BeginPopupModal(presetPopupTitle.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                static std::string name;
+                FieldLabel(Copy(modal.Localized("asset_import.preset_name", "Preset Name")).c_str(), fonts);
+                static_cast<void>(InputTextControl("##PresetName", name, 256, fonts));
+                if (Button({.label = Copy(modal.Localized("asset_import.cancel", "Cancel")).c_str(), .variant = ButtonVariant::Secondary}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Button({.label = Copy(modal.Localized("asset_import.create", "Create")).c_str(), .enabled = !name.empty()}) &&
+                    modal.CreatePreset(index, name)) {
+                    name.clear();
+                    ImGui::CloseCurrentPopup();
+                }
                 ImGui::EndPopup();
             }
         }
 
-        void DrawFooter(AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts, ScopedModalShell &modalShell,
-                        ModalFrameResult &frameResult) {
-            modalShell.BeginFooter({28.0F, 0.0F}, true);
+        void DrawDetails(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, const Fonts &fonts, float height) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg1());
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PanelPadding, PanelPadding});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f, 5.0f});
+            ImGui::BeginChild("ImportDetails", {0.0f, height}, true);
+            if (snapshot.items.empty() || snapshot.selectedItemIndex >= snapshot.items.size()) {
+                const ImVec2 origin = ImGui::GetCursorScreenPos();
+                const ImVec2 available = ImGui::GetContentRegionAvail();
+                const auto message = Copy(modal.Localized("asset_import.select_file", "Select a file to see its import settings."));
+                const float messageWidth = ImGui::CalcTextSize(message.c_str()).x;
+                const ImVec2 iconPosition{origin.x + available.x * 0.5f - 18.0f, origin.y + available.y * 0.5f - 35.0f};
+                DrawEditorIcon(ImGui::GetWindowDrawList(), UiIcon::Package, iconPosition, {36.0f, 36.0f},
+                               ImGui::ColorConvertFloat4ToU32(Dim()), fonts.icon);
+                ImGui::SetCursorScreenPos({origin.x + std::max(0.0f, (available.x - messageWidth) * 0.5f), iconPosition.y + 48.0f});
+                ImGui::TextColored(Dim(), "%s", message.c_str());
+                ImGui::EndChild();
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor();
+                return;
+            }
+            auto &item = snapshot.items[snapshot.selectedItemIndex];
+            const ImVec2 preview = ImGui::GetCursorScreenPos();
+            auto *drawList = ImGui::GetWindowDrawList();
+            drawList->AddRectFilled(preview, {preview.x + 136.0f, preview.y + 116.0f}, ImGui::ColorConvertFloat4ToU32(Bg2()), 5.0f);
+            if (AssetIcon(item) == UiIcon::HierarchyMesh) {
+                const ImU32 grid = ImGui::ColorConvertFloat4ToU32(Border());
+                drawList->PushClipRect({preview.x + 1.0f, preview.y + 1.0f}, {preview.x + 135.0f, preview.y + 115.0f}, true);
+                for (float y = 78.0f; y <= 116.0f; y += 10.0f)
+                    drawList->AddLine({preview.x, preview.y + y}, {preview.x + 136.0f, preview.y + y}, grid);
+                for (float x = -24.0f; x <= 160.0f; x += 20.0f)
+                    drawList->AddLine({preview.x + 68.0f, preview.y + 72.0f}, {preview.x + x, preview.y + 116.0f}, grid);
+                drawList->PopClipRect();
+            }
+            drawList->AddRect(preview, {preview.x + 136.0f, preview.y + 116.0f}, ImGui::ColorConvertFloat4ToU32(Border()), 5.0f);
+            DrawEditorIcon(drawList, AssetIcon(item), {preview.x + 48.0f, preview.y + 35.0f}, {40.0f, 40.0f},
+                           ImGui::ColorConvertFloat4ToU32(Dim()), fonts.icon);
+            ImGui::Dummy({136.0f, 116.0f});
+            ImGui::SameLine(0.0f, 16.0f);
+            ImGui::BeginGroup();
+            {
+                ScopedTextStyle titleStyle(fonts.sansEmphasis, TextPx::Heading(), FontPx::SansEmphasis);
+                ImGui::TextColored(Text(), "%s", FileName(item).c_str());
+            }
+            ImGui::TextColored(Muted(), "%s  |  %s", AssetKind(modal, item).c_str(), FileSize(modal, snapshot.selectedItemIndex).c_str());
+#if defined(__APPLE__)
+            ImGui::TextColored(Accent(), "%s", Copy(modal.Localized("asset_import.show_in_finder", "Show in Finder")).c_str());
+            if (ImGui::IsItemClicked() && item.absoluteSourcePath.is_absolute() && !modal.IsUiPreview())
+                static_cast<void>(RevealInNativeFileManager(item.absoluteSourcePath));
+#else
+            ImGui::TextColored(Dim(), "%s", item.absoluteSourcePath.parent_path().filename().string().c_str());
+#endif
+            ImGui::EndGroup();
+            ImGui::Dummy({0.0f, 4.0f});
+            ImGui::Separator();
+            ImGui::Dummy({0.0f, 4.0f});
+            {
+                ScopedTextStyle headingStyle(fonts.sansEmphasis, TextPx::CardTitle(), FontPx::SansEmphasis);
+                ImGui::TextColored(Text(), "%s", Copy(modal.Localized("asset_import.settings", "Import Settings")).c_str());
+            }
+            ImGui::Dummy({0.0f, 3.0f});
+            const auto *contribution = modal.Catalog().FindContributionByExtension(item.sourceExtension);
+            if (!contribution) {
+                ImGui::TextColored(ErrorColor, "%s",
+                                   Copy(modal.Localized("asset_import.no_importer", "No importer is available for this file type."))
+                                       .c_str());
+            } else {
+                ImGui::TextColored(Muted(), "%s", Copy(modal.Localized("asset_import.asset_type", "Asset Type")).c_str());
+                ImGui::SameLine(190.0f);
+                const auto assetType = AssetKind(modal, item);
+                const char *assetTypes[]{assetType.c_str()};
+                int selectedType = 0;
+                ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
+                static_cast<void>(ComboControl("##ImportAssetType", &selectedType, assetTypes, 1, fonts));
+                DrawPreset(modal, snapshot, fonts);
+                if (AssetIcon(item) == UiIcon::HierarchyMesh) {
+                    if (const auto *scale = FindSetting(*contribution, "unitScale"))
+                        DrawSetting(modal, *scale, item, fonts);
+                    else
+                        DrawUnavailableSetting(modal, "asset_import.scale", "Scale", "##UnavailableScale", true, fonts);
+                    if (const auto *materials = FindSetting(*contribution, "importMaterials"))
+                        DrawSetting(modal, *materials, item, fonts);
+                    else
+                        DrawUnavailableSetting(modal, "asset_import.generate_materials", "Generate Materials", "##UnavailableMaterials",
+                                               false, fonts);
+                    if (const auto *collision = FindSetting(*contribution, "generateCollision"))
+                        DrawSetting(modal, *collision, item, fonts);
+                    else
+                        DrawUnavailableSetting(modal, "asset_import.generate_collision", "Generate Collision", "##UnavailableCollision",
+                                               false, fonts);
+                    if (const auto *animation = FindSetting(*contribution, "importAnimations"))
+                        DrawSetting(modal, *animation, item, fonts);
+                    else
+                        DrawUnavailableSetting(modal, "asset_import.animation_import", "Animation Import", "##UnavailableAnimation", false,
+                                               fonts);
+                } else {
+                    for (const auto &setting : contribution->settings)
+                        DrawSetting(modal, setting, item, fonts);
+                }
+            }
+            ImGui::Dummy({0.0f, 4.0f});
+            ImGui::Separator();
+            if (ImGui::TreeNodeEx(Copy(modal.Localized("asset_import.advanced", "Advanced")).c_str())) {
+                DrawCreatePresetAction(modal, snapshot, fonts);
+                if (contribution && AssetIcon(item) == UiIcon::HierarchyMesh) {
+                    for (const auto &setting : contribution->settings)
+                        if (!IsPrimarySetting(setting.id))
+                            DrawSetting(modal, setting, item, fonts);
+                }
+                std::string name = item.displayName;
+                FieldLabel(Copy(modal.Localized("asset_import.asset_name", "Asset Name")).c_str(), fonts);
+                if (InputTextControl("##ImportAssetName", name, 256, fonts))
+                    item.displayName = std::move(name);
+                int subfolder = item.subfolderByType;
+                const auto byType = Copy(modal.Localized("asset_import.folder.by_type", "By asset type"));
+                const auto mirror = Copy(modal.Localized("asset_import.folder.mirror", "Mirror source"));
+                const auto flat = Copy(modal.Localized("asset_import.folder.flat", "Flat"));
+                const char *folders[]{byType.c_str(), mirror.c_str(), flat.c_str()};
+                FieldLabel(Copy(modal.Localized("asset_import.folder_strategy", "Folder Strategy")).c_str(), fonts);
+                if (ComboControl("##ImportFolderStrategy", &subfolder, folders, 3, fonts))
+                    item.subfolderByType = subfolder;
+                int idStrategy = item.assetIdStrategy;
+                const auto newGuid = Copy(modal.Localized("asset_import.id.new_guid", "New GUID"));
+                const auto stableHash = Copy(modal.Localized("asset_import.id.stable_hash", "Stable hash"));
+                const char *idStrategies[]{newGuid.c_str(), stableHash.c_str()};
+                FieldLabel(Copy(modal.Localized("asset_import.id_strategy", "Asset ID Strategy")).c_str(), fonts);
+                if (ComboControl("##ImportAssetIdStrategy", &idStrategy, idStrategies, 2, fonts))
+                    item.assetIdStrategy = idStrategy;
+                bool sidecar = item.createMetaSidecar;
+                if (CheckboxControl(Copy(modal.Localized("asset_import.meta_sidecar", "Create .meta sidecar")).c_str(), &sidecar, fonts))
+                    item.createMetaSidecar = sidecar;
+                bool overwrite = item.overwriteWithoutPrompt;
+                if (CheckboxControl(Copy(modal.Localized("asset_import.overwrite", "Overwrite without prompt")).c_str(), &overwrite, fonts))
+                    item.overwriteWithoutPrompt = overwrite;
+                for (const auto &diagnostic : item.diagnostics) {
+                    const auto color = diagnostic.severity == Assets::ImportDiagnostic::Severity::Error ? ErrorColor : WarningColor;
+                    ImGui::PushStyleColor(ImGuiCol_Text, color);
+                    ImGui::TextWrapped("%s", diagnostic.message.c_str());
+                    ImGui::PopStyleColor();
+                }
+                ImGui::TreePop();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor();
+        }
 
-            constexpr float actionH = 32.0f;
-            const float actionY = (ImGui::GetWindowHeight() - actionH) * 0.5f;
-            ImGui::SetCursorPosY(actionY);
-            PushFont(fonts.sansCompact);
-            ImGui::AlignTextToFramePadding();
-            std::string statusText = std::format("{} file(s)", snap.items.size());
-            std::size_t imported = 0;
-            for (const auto &it : snap.items)
-                if (it.result.has_value())
-                    ++imported;
-            if (imported > 0)
-                statusText += std::format(" — {} imported", imported);
-            ImGui::TextColored(Dim(), "%s", statusText.c_str());
-            PopFont(fonts.sansCompact);
-
-            constexpr float cancelW = 100.0f;
-            constexpr float importW = 100.0f;
-            constexpr float gap = 12.0f;
-            constexpr float presetW = 176.0f;
-            constexpr float presetAddW = 36.0f;
-            constexpr float presetGap = 6.0f;
-            constexpr float presetActionsGap = 18.0f;
-            const float actionsW = presetW + presetAddW + presetGap + presetActionsGap + cancelW + importW + gap;
-            ImGui::SameLine(ImGui::GetWindowWidth() - actionsW - 28.0f);
-            ImGui::SetCursorPosY(actionY);
-
-            const bool hasSelected = !snap.items.empty() && snap.selectedItemIndex < snap.items.size();
-            const auto *selItem = hasSelected ? &snap.items[snap.selectedItemIndex] : nullptr;
-            const bool hasImporter = selItem && !selItem->importerContributionId.empty();
-            std::vector<std::string> presetNames =
-                hasImporter ? modal.PresetNames(snap.selectedItemIndex) : std::vector<std::string>{"Default"};
-            std::vector<const char *> presetLabels;
-            presetLabels.reserve(presetNames.size());
-            for (const auto &presetName : presetNames)
-                presetLabels.push_back(presetName.c_str());
-
-            int presetIndex = 0;
-            if (hasSelected) {
-                const auto activePreset = modal.ActivePresetName(snap.selectedItemIndex);
-                const auto active = std::ranges::find(presetNames, activePreset);
-                if (active != presetNames.end())
-                    presetIndex = static_cast<int>(std::distance(presetNames.begin(), active));
+        void DrawFooter(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts, ScopedModalShell &shell,
+                        ModalFrameResult &result) {
+            shell.BeginFooter({24.0f, 0.0f}, true);
+            const float actionHeight = 34.0f;
+            ImGui::SetCursorPosY((ImGui::GetWindowHeight() - actionHeight) * 0.5f);
+            std::size_t warnings = 0;
+            std::size_t errors = 0;
+            for (const auto &item : snapshot.items) {
+                warnings += HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Warning) ? 1 : 0;
+                errors += HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error) ? 1 : 0;
+            }
+            const Assets::ImportDiagnostic *firstDiagnostic = nullptr;
+            for (const auto &item : snapshot.items) {
+                for (const auto &diagnostic : item.diagnostics) {
+                    if ((errors > 0 && diagnostic.severity == Assets::ImportDiagnostic::Severity::Error) ||
+                        (errors == 0 && diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning)) {
+                        firstDiagnostic = &diagnostic;
+                        break;
+                    }
+                }
+                if (firstDiagnostic)
+                    break;
+            }
+            if (errors > 0 || warnings > 0) {
+                const auto tone = errors > 0 ? ErrorColor : WarningColor;
+                const ImVec2 iconPosition = ImGui::GetCursorScreenPos();
+                DrawEditorIcon(ImGui::GetWindowDrawList(), errors > 0 ? UiIcon::Error : UiIcon::Warning, iconPosition, {18.0f, 18.0f},
+                               ImGui::ColorConvertFloat4ToU32(tone), fonts.icon);
+                ImGui::Dummy({20.0f, 18.0f});
+                ImGui::SameLine(0.0f, 8.0f);
+            }
+            if (errors > 0)
+                ImGui::TextColored(ErrorColor, "%zu %s", errors,
+                                   Copy(modal.Localized(errors == 1 ? "asset_import.error" : "asset_import.errors",
+                                                        errors == 1 ? "error" : "errors"))
+                                       .c_str());
+            else if (warnings > 0)
+                ImGui::TextColored(WarningColor, "%zu %s", warnings,
+                                   Copy(modal.Localized(warnings == 1 ? "asset_import.warning" : "asset_import.warnings",
+                                                        warnings == 1 ? "warning" : "warnings"))
+                                       .c_str());
+            else
+                ImGui::TextColored(Dim(), "%zu %s", snapshot.items.size(), Copy(modal.Localized("asset_import.files", "files")).c_str());
+            if (firstDiagnostic) {
+                ImGui::SameLine(0.0f, 14.0f);
+                const ImVec2 divider = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddLine({divider.x, divider.y}, {divider.x, divider.y + 18.0f},
+                                                    ImGui::ColorConvertFloat4ToU32(Border()));
+                ImGui::Dummy({1.0f, 18.0f});
+                ImGui::SameLine(0.0f, 14.0f);
+                ImGui::TextColored(Dim(), "%.55s", firstDiagnostic->message.c_str());
             }
 
-            ImGui::SetNextItemWidth(presetW);
-            if (ComboControl("##ImportPreset", &presetIndex, presetLabels.data(), static_cast<int>(presetLabels.size()), fonts,
-                             ComboControlOptions{.height = actionH}) &&
-                hasSelected) {
-                static_cast<void>(modal.ApplyPreset(snap.selectedItemIndex, presetNames[presetIndex]));
+            constexpr float cancelWidth = 112.0f;
+            constexpr float importWidth = 174.0f;
+            ImGui::SameLine(ImGui::GetWindowWidth() - cancelWidth - importWidth - 38.0f);
+            ImGui::SetCursorPosY((ImGui::GetWindowHeight() - actionHeight) * 0.5f);
+            const bool complete = modal.IsImportComplete();
+            if (Button({.label = Copy(modal.Localized(complete ? "asset_import.done" : "asset_import.cancel", complete ? "Done" : "Cancel"))
+                                     .c_str(),
+                        .size = {cancelWidth, actionHeight},
+                        .variant = ButtonVariant::Secondary}))
+                result = ModalFrameResult::RequestClose(complete ? ModalCloseReason::Completed : ModalCloseReason::Cancelled);
+            ImGui::SameLine(0.0f, 12.0f);
+            bool valid = modal.IncludedItemCount() > 0 && !modal.HasPendingConflicts();
+            for (std::size_t index = 0; index < snapshot.items.size(); ++index)
+                if (modal.IsItemIncluded(index) &&
+                    (snapshot.items[index].displayName.empty() || snapshot.items[index].importerContributionId.empty()))
+                    valid = false;
+            const auto label = std::format("{} {} {}", Copy(modal.Localized("asset_import.import", "Import")), modal.IncludedItemCount(),
+                                           Copy(modal.Localized("asset_import.assets", "Assets")));
+            if (Button(
+                    {.label = label.c_str(), .size = {importWidth, actionHeight}, .variant = ButtonVariant::Primary, .enabled = valid})) {
+                if (!modal.IsUiPreview()) {
+                    CancellationToken cancellation;
+                    static_cast<void>(modal.ImportIncludedItems(cancellation));
+                }
             }
-
-            ImGui::SameLine(0.0f, presetGap);
-            if (IconButton({
-                    .id = "##CreateImportPreset",
-                    .glyph = IconButtonGlyph::Plus,
-                    .size = {presetAddW, actionH},
-                    .tooltip = "Create preset from current importer settings",
-                    .enabled = hasImporter,
-                })) {
-                ImGui::OpenPopup("Create Import Preset");
-            }
-
-            DrawCreatePresetModal(modal, snap, fonts, actionH, gap);
-
-            ImGui::SameLine(0.0f, presetActionsGap);
-            const bool importComplete = modal.IsImportComplete();
-            ButtonProps cancelProps{
-                .label = importComplete ? "Done" : "Cancel",
-                .size = {cancelW, actionH},
-                .variant = importComplete ? ButtonVariant::Primary : ButtonVariant::Secondary,
-                .enabled = true,
-            };
-            const bool canImport =
-                selItem && !selItem->displayName.empty() && !selItem->result.has_value() && !selItem->importerContributionId.empty();
-            ButtonProps importProps{
-                .label = "Import",
-                .size = {importW, actionH},
-                .variant = ButtonVariant::Primary,
-                .enabled = canImport,
-            };
-
-            if (Button(cancelProps))
-                frameResult = ModalFrameResult::RequestClose(importComplete ? ModalCloseReason::Completed : ModalCloseReason::Cancelled);
-            ImGui::SameLine(0.0f, gap);
-            if (Button(importProps)) {
-                CancellationToken cancellation;
-                static_cast<void>(modal.ImportSingleItem(snap.selectedItemIndex, cancellation));
-            }
-
-            modalShell.EndFooter();
+            shell.EndFooter();
         }
     }  // namespace
 
     ModalFrameResult DrawAssetImportModalPresentation(AssetImportModal &modal, const Fonts &fonts) {
-        auto &snap = modal.MutableSnapshot();
-        ModalFrameResult frameResult = ModalFrameResult::None();
-
-        ScopedModalShell modalShell(
-            {
-                .id = "Asset Import",
-                .title = "Import New Asset...",
-                .requestedSize = {ImportLayout::ModalW, ImportLayout::ModalH},
-                .viewportPadding = ImportLayout::ViewportPad,
-                .headerHeight = ImportLayout::HeaderH,
-                .footerHeight = ImportLayout::FooterH,
-                .titleFontSize = Theme::TextPx::Title(),
-            },
-            fonts);
-        if (modalShell.CloseRequested())
-            frameResult =
-                ModalFrameResult::RequestClose(modal.IsImportComplete() ? ModalCloseReason::Completed : ModalCloseReason::Cancelled);
-
-        std::size_t doneCount = 0;
-        std::size_t errorCount = 0;
-        std::size_t warningCount = 0;
-
-        for (const auto &item : snap.items) {
-            bool hasError = false;
-            bool hasWarning = false;
-            for (const auto &diagnostic : item.diagnostics) {
-                hasError |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Error;
-                hasWarning |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning;
-            }
-
-            if (hasError)
-                ++errorCount;
-            else if (item.result.has_value())
-                ++doneCount;
-
-            if (hasWarning)
-                ++warningCount;
+        auto &snapshot = modal.MutableSnapshot();
+        ModalFrameResult result = ModalFrameResult::None();
+        const auto title = Copy(modal.Localized("asset_import.title", "Import Assets"));
+        std::optional<ModalPlacementRegion> previewRegion;
+        if (modal.IsUiPreview()) {
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            previewRegion = ModalPlacementRegion{
+                .position = {viewport->WorkPos.x + EditorUiPreviewSidebarWidth,
+                             viewport->WorkPos.y + EditorUiPreviewHeaderHeight},
+                .size = {viewport->WorkSize.x - EditorUiPreviewSidebarWidth,
+                         viewport->WorkSize.y - EditorUiPreviewHeaderHeight},
+            };
         }
-
-        DrawSummary(snap, fonts, doneCount, errorCount, warningCount);
-
-        static auto s_activeTab = static_cast<int>(ImportTab::Queue);
-        DrawTabs(s_activeTab, fonts);
-
-        const float footerY = modalShell.FooterStartY();
-        const float bodyH = std::max(0.0f, footerY - ImGui::GetCursorPosY());
-
-        DrawSidebar(modal, snap, fonts, bodyH);
-
-        // Content panel
-        ImGui::SameLine(0.0f, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.0f, 22.0f});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{8.0f, 8.0f});
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg1());
-        ImGui::BeginChild("Content", ImVec2{0.0f, bodyH}, true);
-
-        using enum ImportTab;
-        switch (static_cast<ImportTab>(s_activeTab)) {
-            case Queue:
-                DrawQueueOverviewTab(modal, snap, fonts);
-                break;
-            case Diagnostics:
-                DrawDiagnosticsTab(snap, fonts);
-                break;
-            case Settings:
-                DrawSettingsTab(modal, snap, fonts);
-                break;
-            case Destination:
-                DrawDestinationTab(modal, snap, fonts);
-                break;
-            case Count:
-            default:
-                break;
-        }
-
+        ScopedModalShell shell({.id = "Asset Import",
+                                .title = title.c_str(),
+                                .requestedSize = {1000.0f, 690.0f},
+                                .viewportPadding = 64.0f,
+                                .headerHeight = 38.0f,
+                                .footerHeight = 68.0f,
+                                .placementRegion = previewRegion,
+                                .titleFontSize = TextPx::Title()},
+                               fonts);
+        if (shell.CloseRequested())
+            result = ModalFrameResult::RequestClose(modal.IsImportComplete() ? ModalCloseReason::Completed : ModalCloseReason::Cancelled);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{22.0f, 12.0f});
+        ImGui::BeginChild("##ImportBody", {0.0f, shell.BodyHeight()}, false,
+                          ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGui::TextColored(Dim(), "%s",
+                           Copy(modal.Localized("asset_import.subtitle", "Add files to your project and configure how they are imported."))
+                               .c_str());
+        ImGui::Dummy({0.0f, 4.0f});
+        DrawDestination(modal, snapshot, fonts);
+        ImGui::Dummy({0.0f, 6.0f});
+        const float width = ImGui::GetContentRegionAvail().x;
+        const float height = std::max(160.0f, ImGui::GetContentRegionAvail().y - 12.0f);
+        const float columnWidth = std::max(180.0f, (width - PanelGap) * 0.5f);
+        DrawFiles(modal, snapshot, fonts, columnWidth, height);
+        ImGui::SameLine(0.0f, PanelGap);
+        DrawDetails(modal, snapshot, fonts, height);
         ImGui::EndChild();
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(2);
-
-        DrawFooter(modal, snap, fonts, modalShell, frameResult);
-
-        return frameResult;
+        ImGui::PopStyleVar();
+        DrawFooter(modal, snapshot, fonts, shell, result);
+        return result;
     }
 }  // namespace Horo::Editor
