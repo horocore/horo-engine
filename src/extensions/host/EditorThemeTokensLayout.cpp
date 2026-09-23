@@ -49,8 +49,9 @@ namespace Horo::Extensions {
     /** @copydoc ResolveEditorThemeTypographyRole */
     EditorThemeTypographyRole ResolveEditorThemeTypographyRole(const EditorThemeTypographyRole requested,
                                                                const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeTypographyRole::Count) || requested == EditorThemeTypographyRole::None)
-            return EditorThemeTypographyRole::None;
+        using enum EditorThemeTypographyRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedTypographyMask, requested, EditorThemeTypographyRoleBit))
             return requested;
         return TypographyFallback(requested, frame);
@@ -58,8 +59,9 @@ namespace Horo::Extensions {
 
     /** @copydoc ResolveEditorThemeSpacingRole */
     EditorThemeSpacingRole ResolveEditorThemeSpacingRole(const EditorThemeSpacingRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeSpacingRole::Count) || requested == EditorThemeSpacingRole::None)
-            return EditorThemeSpacingRole::None;
+        using enum EditorThemeSpacingRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedSpacingMask, requested, EditorThemeSpacingRoleBit))
             return requested;
         return SpacingFallback(requested, frame);
@@ -67,8 +69,9 @@ namespace Horo::Extensions {
 
     /** @copydoc ResolveEditorThemeSizeRole */
     EditorThemeSizeRole ResolveEditorThemeSizeRole(const EditorThemeSizeRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeSizeRole::Count) || requested == EditorThemeSizeRole::None)
-            return EditorThemeSizeRole::None;
+        using enum EditorThemeSizeRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedSizeMask, requested, EditorThemeSizeRoleBit))
             return requested;
         return SizeFallback(requested, frame);
@@ -76,26 +79,23 @@ namespace Horo::Extensions {
 
     /** @copydoc ResolveEditorThemeRadiusRole */
     EditorThemeRadiusRole ResolveEditorThemeRadiusRole(const EditorThemeRadiusRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeRadiusRole::Count) || requested == EditorThemeRadiusRole::None)
-            return EditorThemeRadiusRole::None;
+        using enum EditorThemeRadiusRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedRadiusMask, requested, EditorThemeRadiusRoleBit))
             return requested;
-        return ThemeTokenInternal::IsSupported(frame.supportedRadiusMask, EditorThemeRadiusRole::Control, EditorThemeRadiusRoleBit)
-                   ? EditorThemeRadiusRole::Control
-                   : EditorThemeRadiusRole::None;
+        return ThemeTokenInternal::IsSupported(frame.supportedRadiusMask, Control, EditorThemeRadiusRoleBit) ? Control : None;
     }
 
     /** @copydoc ResolveEditorThemeInteractionRole */
     EditorThemeInteractionRole ResolveEditorThemeInteractionRole(const EditorThemeInteractionRole requested,
                                                                  const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeInteractionRole::Count) || requested == EditorThemeInteractionRole::None)
-            return EditorThemeInteractionRole::None;
+        using enum EditorThemeInteractionRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedInteractionMask, requested, EditorThemeInteractionRoleBit))
             return requested;
-        return ThemeTokenInternal::IsSupported(frame.supportedInteractionMask, EditorThemeInteractionRole::Default,
-                                               EditorThemeInteractionRoleBit)
-                   ? EditorThemeInteractionRole::Default
-                   : EditorThemeInteractionRole::None;
+        return ThemeTokenInternal::IsSupported(frame.supportedInteractionMask, Default, EditorThemeInteractionRoleBit) ? Default : None;
     }
 
     /** @copydoc TypographyFor */

@@ -2,6 +2,7 @@
 #include "Horo/Extensions/EditorThemeTokens.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -27,11 +28,9 @@ namespace Horo::Extensions {
                                     &colors.positive,     &colors.warning,       &colors.critical,    &colors.surfaceRaised,
                                     &colors.surfaceHover, &colors.borderStrong,  &colors.accentHover, &colors.accentActive,
                                     &colors.onAccent,     &colors.overlay};
-            for (const EditorThemeColor *const color : values) {
-                if (!color->IsValid())
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(values, [](const EditorThemeColor *const color) {
+                return color->IsValid();
+            });
         }
 
         [[nodiscard]] bool ValidateTypography(const EditorThemeTypographyTokens &tokens, const float minimumReadable) noexcept {
@@ -104,11 +103,9 @@ namespace Horo::Extensions {
                     return false;
             }
             const std::array sizes{tokens.sansBase, tokens.sansCompactBase, tokens.sansEmphasisBase, tokens.monospaceBase, tokens.iconBase};
-            for (const float size : sizes) {
-                if (!std::isfinite(size) || size <= 0.0F)
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(sizes, [](const float size) {
+                return std::isfinite(size) && size > 0.0F;
+            });
         }
 
         [[nodiscard]] bool ValidateIcons(const EditorThemeIconTokens &tokens) noexcept {

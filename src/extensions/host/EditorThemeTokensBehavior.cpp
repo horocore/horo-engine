@@ -4,43 +4,38 @@
 namespace Horo::Extensions {
     /** @copydoc ResolveEditorThemeMotionRole */
     EditorThemeMotionRole ResolveEditorThemeMotionRole(const EditorThemeMotionRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeMotionRole::Count) || requested == EditorThemeMotionRole::None)
-            return EditorThemeMotionRole::None;
+        using enum EditorThemeMotionRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (frame.accessibility.reduceMotion)
-            return ThemeTokenInternal::IsSupported(frame.supportedMotionMask, EditorThemeMotionRole::Instant, EditorThemeMotionRoleBit)
-                       ? EditorThemeMotionRole::Instant
-                       : EditorThemeMotionRole::None;
+            return ThemeTokenInternal::IsSupported(frame.supportedMotionMask, Instant, EditorThemeMotionRoleBit) ? Instant : None;
         if (ThemeTokenInternal::IsSupported(frame.supportedMotionMask, requested, EditorThemeMotionRoleBit))
             return requested;
-        if (ThemeTokenInternal::IsSupported(frame.supportedMotionMask, EditorThemeMotionRole::Normal, EditorThemeMotionRoleBit))
-            return EditorThemeMotionRole::Normal;
-        if (ThemeTokenInternal::IsSupported(frame.supportedMotionMask, EditorThemeMotionRole::Fast, EditorThemeMotionRoleBit))
-            return EditorThemeMotionRole::Fast;
-        return ThemeTokenInternal::IsSupported(frame.supportedMotionMask, EditorThemeMotionRole::Instant, EditorThemeMotionRoleBit)
-                   ? EditorThemeMotionRole::Instant
-                   : EditorThemeMotionRole::None;
+        if (ThemeTokenInternal::IsSupported(frame.supportedMotionMask, Normal, EditorThemeMotionRoleBit))
+            return Normal;
+        if (ThemeTokenInternal::IsSupported(frame.supportedMotionMask, Fast, EditorThemeMotionRoleBit))
+            return Fast;
+        return ThemeTokenInternal::IsSupported(frame.supportedMotionMask, Instant, EditorThemeMotionRoleBit) ? Instant : None;
     }
 
     /** @copydoc ResolveEditorThemeFontRole */
     EditorThemeFontRole ResolveEditorThemeFontRole(const EditorThemeFontRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeFontRole::Count) || requested == EditorThemeFontRole::None)
-            return EditorThemeFontRole::None;
+        using enum EditorThemeFontRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedFontMask, requested, EditorThemeFontRoleBit))
             return requested;
-        return ThemeTokenInternal::IsSupported(frame.supportedFontMask, EditorThemeFontRole::Sans, EditorThemeFontRoleBit)
-                   ? EditorThemeFontRole::Sans
-                   : EditorThemeFontRole::None;
+        return ThemeTokenInternal::IsSupported(frame.supportedFontMask, Sans, EditorThemeFontRoleBit) ? Sans : None;
     }
 
     /** @copydoc ResolveEditorThemeIconRole */
     EditorThemeIconRole ResolveEditorThemeIconRole(const EditorThemeIconRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeIconRole::Count) || requested == EditorThemeIconRole::None)
-            return EditorThemeIconRole::None;
+        using enum EditorThemeIconRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedIconMask, requested, EditorThemeIconRoleBit))
             return requested;
-        return ThemeTokenInternal::IsSupported(frame.supportedIconMask, EditorThemeIconRole::Generic, EditorThemeIconRoleBit)
-                   ? EditorThemeIconRole::Generic
-                   : EditorThemeIconRole::None;
+        return ThemeTokenInternal::IsSupported(frame.supportedIconMask, Generic, EditorThemeIconRoleBit) ? Generic : None;
     }
 
     /** @copydoc MotionFor */

@@ -54,8 +54,9 @@ namespace Horo::Extensions {
 
     /** @copydoc ResolveEditorThemeColorRole */
     EditorThemeColorRole ResolveEditorThemeColorRole(const EditorThemeColorRole requested, const EditorThemeFrame &frame) noexcept {
-        if (!ThemeTokenInternal::IsKnownRole(requested, EditorThemeColorRole::Count) || requested == EditorThemeColorRole::None)
-            return EditorThemeColorRole::None;
+        using enum EditorThemeColorRole;
+        if (!ThemeTokenInternal::IsKnownRole(requested, Count) || requested == None)
+            return None;
         if (ThemeTokenInternal::IsSupported(frame.supportedTokenMask, requested, EditorThemeColorRoleBit))
             return requested;
         return ColorFallback(requested, frame);
