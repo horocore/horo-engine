@@ -10,12 +10,12 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
 #include <iterator>
 #include <optional>
+#include <portable-file-dialogs.h>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -79,85 +79,22 @@ namespace Horo::Editor {
             });
         }
 
-        [[nodiscard]] std::vector<std::filesystem::path> ReadSelectedPaths(FILE *pipe) {
+        [[nodiscard]] std::vector<std::filesystem::path> ChooseFiles(const std::filesystem::path &defaultPath) {
+            pfd::open_file dialog("Select Asset Files", defaultPath.string(), {"All Files", "*"}, pfd::opt::multiselect);
+            const auto selected = dialog.result();
             std::vector<std::filesystem::path> paths;
-            if (!pipe)
-                return paths;
-            char buffer[4096];
-            while (fgets(buffer, sizeof(buffer), pipe)) {
-                std::string line{buffer};
-                while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-                    line.pop_back();
-                if (!line.empty())
-                    paths.emplace_back(line);
-            }
+            paths.reserve(selected.size());
+            for (const auto &path : selected)
+                paths.emplace_back(path);
             return paths;
         }
 
-        [[nodiscard]] std::vector<std::filesystem::path> ChooseFiles() {
-#if defined(__APPLE__)
-            FILE *pipe = popen("osascript -e 'set selectedFiles to choose file with multiple selections allowed' "
-                               "-e 'set output to \"\"' -e 'repeat with selectedFile in selectedFiles' "
-                               "-e 'set output to output & POSIX path of selectedFile & linefeed' "
-                               "-e 'end repeat' -e 'return output' "
-                               "2>/dev/null",
-                               "r");
-#elif defined(__linux__)
-            FILE *pipe = popen("zenity --file-selection --multiple --separator='|' 2>/dev/null", "r");
-#elif defined(_WIN32)
-            FILE *pipe = _popen("powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; "
-                                "$d = New-Object System.Windows.Forms.OpenFileDialog; $d.Multiselect = $true; "
-                                "if ($d.ShowDialog() -eq 'OK') { $d.FileNames }\" 2>nul",
-                                "r");
-#else
-            return {};
-#endif
-            auto paths = ReadSelectedPaths(pipe);
-#if defined(__linux__)
-            if (paths.size() == 1) {
-                const std::string combined = paths.front().string();
-                paths.clear();
-                for (std::size_t start = 0; start < combined.size();) {
-                    const auto end = combined.find('|', start);
-                    paths.emplace_back(combined.substr(start, end == std::string::npos ? end : end - start));
-                    if (end == std::string::npos)
-                        break;
-                    start = end + 1;
-                }
-            }
-#endif
-#if defined(_WIN32)
-            if (pipe)
-                static_cast<void>(_pclose(pipe));
-#else
-            if (pipe)
-                static_cast<void>(pclose(pipe));
-#endif
-            return paths;
-        }
-
-        [[nodiscard]] std::optional<std::filesystem::path> ChooseFolder() {
-#if defined(__APPLE__)
-            FILE *pipe = popen("osascript -e 'POSIX path of (choose folder)' 2>/dev/null", "r");
-#elif defined(__linux__)
-            FILE *pipe = popen("zenity --file-selection --directory 2>/dev/null", "r");
-#elif defined(_WIN32)
-            FILE *pipe = _popen("powershell -NoProfile -Command \"Add-Type -AssemblyName System.Windows.Forms; "
-                                "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                                "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }\" 2>nul",
-                                "r");
-#else
-            return std::nullopt;
-#endif
-            auto paths = ReadSelectedPaths(pipe);
-#if defined(_WIN32)
-            if (pipe)
-                static_cast<void>(_pclose(pipe));
-#else
-            if (pipe)
-                static_cast<void>(pclose(pipe));
-#endif
-            return paths.empty() ? std::nullopt : std::optional{paths.front()};
+        [[nodiscard]] std::optional<std::filesystem::path> ChooseFolder(const std::filesystem::path &defaultPath) {
+            pfd::select_folder dialog("Select Asset Destination", defaultPath.string());
+            const std::string selected = dialog.result();
+            if (selected.empty())
+                return std::nullopt;
+            return std::filesystem::path{selected};
         }
 
         [[nodiscard]] std::optional<std::string> ProjectFolder(const std::filesystem::path &projectRoot,
@@ -256,7 +193,7 @@ namespace Horo::Editor {
                         .size = {104.0f, 32.0f},
                         .variant = ButtonVariant::Secondary,
                         .enabled = !modal.ProjectRoot().empty() && !modal.IsUiPreview()})) {
-                if (const auto selected = ChooseFolder()) {
+                if (const auto selected = ChooseFolder(modal.ProjectRoot())) {
                     if (const auto relative = ProjectFolder(modal.ProjectRoot(), *selected)) {
                         modal.SetDefaultDestination(*selected);
                         for (auto &item : snapshot.items)
@@ -287,7 +224,7 @@ namespace Horo::Editor {
             const float width = ImGui::GetContentRegionAvail().x;
             const ImVec2 topLeft = ImGui::GetCursorScreenPos();
             if (ImGui::InvisibleButton("##ImportDropZone", {width, height}) && !modal.IsUiPreview())
-                AddFiles(modal, ChooseFiles());
+                AddFiles(modal, ChooseFiles(modal.ProjectRoot()));
             ImDrawList *drawList = ImGui::GetWindowDrawList();
             const ImVec2 bottomRight{topLeft.x + width, topLeft.y + height};
             drawList->AddRectFilled(topLeft, bottomRight, ImGui::ColorConvertFloat4ToU32(Bg2()), 5.0f);
@@ -766,10 +703,8 @@ namespace Horo::Editor {
         if (modal.IsUiPreview()) {
             const ImGuiViewport *viewport = ImGui::GetMainViewport();
             previewRegion = ModalPlacementRegion{
-                .position = {viewport->WorkPos.x + EditorUiPreviewSidebarWidth,
-                             viewport->WorkPos.y + EditorUiPreviewHeaderHeight},
-                .size = {viewport->WorkSize.x - EditorUiPreviewSidebarWidth,
-                         viewport->WorkSize.y - EditorUiPreviewHeaderHeight},
+                .position = {viewport->WorkPos.x + EditorUiPreviewSidebarWidth, viewport->WorkPos.y + EditorUiPreviewHeaderHeight},
+                .size = {viewport->WorkSize.x - EditorUiPreviewSidebarWidth, viewport->WorkSize.y - EditorUiPreviewHeaderHeight},
             };
         }
         ScopedModalShell shell({.id = "Asset Import",
