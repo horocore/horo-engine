@@ -256,6 +256,17 @@ namespace Horo::PlatformServices {
             return MarkRunningErased(handle.Id(), handle.Generation(), typeid(T));
         }
 
+        /**
+         * @brief Records cooperative cancellation from a provider completion boundary using copied request identity.
+         * @param id Frontend-issued request identity.
+         * @param generation Frontend generation captured when the request was admitted.
+         * @return Applied, unchanged, or a typed stale/expired failure.
+         */
+        template <typename T>
+        [[nodiscard]] Result<PlatformRequestMutation> RequestCancel(PlatformRequestId id, PlatformRequestGeneration generation) {
+            return RequestCancelErased(id, generation, typeid(T));
+        }
+
         /** @brief Publishes one immutable successful payload; later terminal publications are ignored. */
         template <typename T>
         [[nodiscard]] Result<PlatformRequestMutation> CompleteSuccess(const PlatformRequestHandle<T> &handle, T value) {
@@ -264,13 +275,49 @@ namespace Horo::PlatformServices {
                                   std::static_pointer_cast<const void>(std::move(payload)), std::nullopt);
         }
 
+        /**
+         * @brief Publishes a provider success by generation-fenced identity without requiring the move-only caller handle.
+         * @param id Frontend-issued request identity.
+         * @param generation Frontend generation captured when the request was admitted.
+         * @param value Owned immutable provider result.
+         * @return Applied, unchanged after an earlier terminal result, or a typed stale/expired failure.
+         */
+        template <typename T>
+            requires(!std::is_void_v<T>)
+        [[nodiscard]] Result<PlatformRequestMutation> CompleteSuccess(PlatformRequestId id, PlatformRequestGeneration generation, T value) {
+            auto payload = std::make_shared<const T>(std::move(value));
+            return CompleteErased(id, generation, typeid(T), PlatformRequestState::Succeeded,
+                                  std::static_pointer_cast<const void>(std::move(payload)), std::nullopt);
+        }
+
         /** @brief Publishes successful completion for a void request; later terminal publications are ignored. */
         [[nodiscard]] Result<PlatformRequestMutation> CompleteSuccess(const PlatformRequestHandle<void> &handle);
+
+        /**
+         * @brief Publishes provider success for a void request by generation-fenced identity.
+         * @param id Frontend-issued request identity.
+         * @param generation Frontend generation captured when the request was admitted.
+         * @return Applied, unchanged after an earlier terminal result, or a typed stale/expired failure.
+         */
+        [[nodiscard]] Result<PlatformRequestMutation> CompleteSuccess(PlatformRequestId id, PlatformRequestGeneration generation);
 
         /** @brief Publishes one immutable typed failure; later terminal publications are ignored. */
         template <typename T>
         [[nodiscard]] Result<PlatformRequestMutation> CompleteFailure(const PlatformRequestHandle<T> &handle, Error error) {
             return CompleteErased(handle.Id(), handle.Generation(), typeid(T), PlatformRequestState::Failed, {}, std::move(error));
+        }
+
+        /**
+         * @brief Publishes provider failure by generation-fenced identity.
+         * @param id Frontend-issued request identity.
+         * @param generation Frontend generation captured when the request was admitted.
+         * @param error Typed provider failure.
+         * @return Applied, unchanged after an earlier terminal result, or a typed stale/expired failure.
+         */
+        template <typename T>
+        [[nodiscard]] Result<PlatformRequestMutation> CompleteFailure(PlatformRequestId id, PlatformRequestGeneration generation,
+                                                                      Error error) {
+            return CompleteErased(id, generation, typeid(T), PlatformRequestState::Failed, {}, std::move(error));
         }
 
         /** @brief Publishes acknowledged cancellation with a typed cancellation error. */
@@ -279,10 +326,36 @@ namespace Horo::PlatformServices {
             return CompleteErased(handle.Id(), handle.Generation(), typeid(T), PlatformRequestState::Cancelled, {}, std::move(error));
         }
 
+        /**
+         * @brief Publishes acknowledged cancellation by generation-fenced identity.
+         * @param id Frontend-issued request identity.
+         * @param generation Frontend generation captured when the request was admitted.
+         * @param error Typed cancellation failure.
+         * @return Applied, unchanged after an earlier terminal result, or a typed stale/expired failure.
+         */
+        template <typename T>
+        [[nodiscard]] Result<PlatformRequestMutation> CompleteCancelled(PlatformRequestId id, PlatformRequestGeneration generation,
+                                                                        Error error) {
+            return CompleteErased(id, generation, typeid(T), PlatformRequestState::Cancelled, {}, std::move(error));
+        }
+
         /** @brief Publishes frontend-owned timeout with a typed timeout error supplied by the later policy layer. */
         template <typename T>
         [[nodiscard]] Result<PlatformRequestMutation> CompleteTimedOut(const PlatformRequestHandle<T> &handle, Error error) {
             return CompleteErased(handle.Id(), handle.Generation(), typeid(T), PlatformRequestState::TimedOut, {}, std::move(error));
+        }
+
+        /**
+         * @brief Publishes frontend-owned timeout by generation-fenced identity.
+         * @param id Frontend-issued request identity.
+         * @param generation Frontend generation captured when the request was admitted.
+         * @param error Typed timeout failure.
+         * @return Applied, unchanged after an earlier terminal result, or a typed stale/expired failure.
+         */
+        template <typename T>
+        [[nodiscard]] Result<PlatformRequestMutation> CompleteTimedOut(PlatformRequestId id, PlatformRequestGeneration generation,
+                                                                       Error error) {
+            return CompleteErased(id, generation, typeid(T), PlatformRequestState::TimedOut, {}, std::move(error));
         }
 
         /** @brief Records cooperative cancellation once; repeated or post-terminal requests are successful no-ops. */

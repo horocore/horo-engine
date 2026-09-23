@@ -253,6 +253,18 @@ The query, subscription and cancellation surfaces remain owned by the request st
 until the PLS-001.4 completion handoff connects admitted frontend handles to that
 store; they are not frontend methods in this slice.
 
+Implementation status updated 24 September 2026: issue #1880 adds the production
+`NullPlatformServicesBackend`, whose inert capability snapshot marks every service
+unavailable with `NullProviderSelected`; every direct or frontend-routed service call
+fails with `platform.provider.null`, and required-service compositions fail activation.
+The contract-test-only `MockPlatformServicesBackend` scripts bounded typed results and
+errors, exposes a manually advanced logical clock, and dispatches delayed completions
+with stable provider/cancellation/timeout ordering. Its typed bounded diagnostics cover
+unexpected calls, missing expectations, invalid scripts, ignored duplicate/late
+completions and diagnostic overflow. The request store accepts completion evidence by
+request ID plus frontend generation, preserving type, generation and exactly-once
+terminal fencing without transferring the caller's move-only handle.
+
 Pre-admission validation, permission, lifecycle, capability, session and bounded-
 capacity failure returns `Result` with no request record or provider call. Once admitted,
 the frontend owns the request record independently of every handle and subscription.

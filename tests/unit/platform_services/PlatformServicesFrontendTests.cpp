@@ -241,6 +241,32 @@ namespace Horo::PlatformServices {
         CHECK(backend->TotalCalls() == 0);
     }
 
+    TEST_CASE("A Null frontend rejects every typed read and write before request admission", "[platform-services][frontend][null]") {
+        auto backend = std::make_shared<NullPlatformServicesBackend>(PlatformProviderGeneration{7});
+        PlatformServicesBackendConfig config;
+        auto activated = ActivatePlatformServicesBackend(*backend, config);
+        REQUIRE(activated.HasValue());
+
+        const auto session = Session();
+        auto created = PlatformServicesFrontend::Create(backend, std::move(activated).Value(), session);
+        REQUIRE(created.HasValue());
+        auto frontend = std::move(created).Value();
+        const auto subject = *session.Subject();
+
+        RequireError(frontend.UnlockAchievement({subject, {1}}), FrontendErrors::NullProvider);
+        RequireError(frontend.SubmitScore({subject, {1}, 5}), FrontendErrors::NullProvider);
+        RequireError(frontend.WriteStat({subject, {1}, 5}), FrontendErrors::NullProvider);
+        RequireError(frontend.ReadCloudObject({subject, {1}}), FrontendErrors::NullProvider);
+        RequireError(frontend.WriteCloudObject({subject, {1}, {}}), FrontendErrors::NullProvider);
+        RequireError(frontend.SetPresence({subject, {1}, ""}), FrontendErrors::NullProvider);
+        RequireError(frontend.ClearPresence(subject), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryFriends({subject, 1}), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryCurrentSession(), FrontendErrors::NullProvider);
+
+        CHECK(frontend.Close().HasValue());
+        CHECK_FALSE(frontend.IsOpen());
+    }
+
     TEST_CASE("Platform Services frontend rejects invalid or stale composition without request side effects",
               "[platform-services][frontend][composition]") {
         const auto session = Session();

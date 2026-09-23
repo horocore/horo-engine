@@ -202,4 +202,56 @@ namespace Horo::PlatformServices {
         REQUIRE(ActivatePlatformServicesBackend(backend, config).HasError());
         CHECK_FALSE(backend.activated);
     }
+
+    TEST_CASE("Explicit Null backend reports unavailable capabilities and rejects every remote operation",
+              "[platform-services][backend][null]") {
+        NullPlatformServicesBackend backend({7});
+        const auto inspected = backend.InspectCapabilities();
+        REQUIRE(inspected.HasValue());
+
+        PlatformServicesBackendConfig config;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(inspected.Value(), config).HasValue());
+        CHECK(backend.Activate(config).HasValue());
+        for (std::size_t index = 0; index < inspected.Value().services.size(); ++index) {
+            const auto &capability = inspected.Value().services[index];
+            CHECK(capability.service == static_cast<PlatformServiceKind>(index));
+            CHECK(capability.availability == PlatformServiceAvailability::Unavailable);
+            CHECK(capability.unavailableReason == PlatformServiceUnavailableReason::NullProviderSelected);
+            CHECK_FALSE(capability.binding.has_value());
+            CHECK(capability.limits.maxConcurrentRequests == 0);
+            CHECK(capability.limits.maxPageEntries == 0);
+            CHECK(capability.limits.maxPayloadBytes == 0);
+        }
+
+        const auto expectNullFailure = [](const auto &result) {
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == "platform.provider.null");
+        };
+        expectNullFailure(backend.UnlockAchievement({}));
+        expectNullFailure(backend.SubmitScore({}));
+        expectNullFailure(backend.WriteStat({}));
+        expectNullFailure(backend.ReadCloudObject({}));
+        expectNullFailure(backend.WriteCloudObject({}));
+        expectNullFailure(backend.SetPresence({}));
+        expectNullFailure(backend.ClearPresence({}));
+        expectNullFailure(backend.QueryFriends({}));
+        expectNullFailure(backend.QueryCurrentSession());
+
+        CHECK(backend.RequestCancel({}, {}).HasValue());
+        CHECK(backend.Shutdown().HasValue());
+        CHECK(backend.Shutdown().HasValue());
+
+        config.requiredServices[static_cast<std::size_t>(PlatformServiceKind::Cloud)] = true;
+        const auto rejectedActivation = backend.Activate(config);
+        REQUIRE(rejectedActivation.HasError());
+        CHECK(rejectedActivation.ErrorValue().code.Value() == BackendErrors::RequiredServiceUnavailable.code.Value());
+    }
+
+    TEST_CASE("Explicit Null backend rejects an invalid provider generation during inert inspection",
+              "[platform-services][backend][null]") {
+        NullPlatformServicesBackend backend({});
+        const auto inspected = backend.InspectCapabilities();
+        REQUIRE(inspected.HasError());
+        CHECK(inspected.ErrorValue().code.Value() == BackendErrors::InvalidCapabilitySnapshot.code.Value());
+    }
 }  // namespace Horo::PlatformServices
