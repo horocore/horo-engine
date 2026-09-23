@@ -1944,6 +1944,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
+        unit/extensions/EditorSurfaceRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp

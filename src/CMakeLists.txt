@@ -1605,6 +1605,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
+        extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorThemeTokensInternal.h
         extensions/host/EditorThemeTokensValidation.cpp
         extensions/host/EditorThemeTokensColor.cpp
