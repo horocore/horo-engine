@@ -242,6 +242,7 @@ namespace Horo::Editor {
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
         void ScheduleContentBrowserPreviews();
         void PollContentBrowserPreviews();
+        [[nodiscard]] bool PollContentBrowserPreview(PendingContentBrowserPreview &pending);
 
         struct NativeGameplayReloadTransaction {
             enum class Phase : std::uint8_t {
