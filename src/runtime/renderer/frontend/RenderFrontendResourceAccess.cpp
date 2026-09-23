@@ -3,8 +3,60 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
+#include "RenderResourceUploadQueue.h"
 
 namespace Horo::Render {
+    /** @copydoc RenderFrontend::UploadSnapshot */
+    RenderResourceUploadSnapshot RenderFrontend::UploadSnapshot() const noexcept {
+        return resourceUploadQueue_->Snapshot();
+    }
+
+    /** @copydoc RenderFrontend::ResourceState(RenderBufferHandle) */
+    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderBufferHandle buffer) const {
+        return resourceRegistry_->State(Detail::RenderResourceClass::Buffer, Identity(buffer));
+    }
+
+    /** @copydoc RenderFrontend::ResourceState(RenderMeshHandle) */
+    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderMeshHandle mesh) const {
+        return resourceRegistry_->State(Detail::RenderResourceClass::Mesh, Identity(mesh));
+    }
+
+    /** @copydoc RenderFrontend::ResourceState(RenderTextureHandle) */
+    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderTextureHandle texture) const {
+        return resourceRegistry_->State(Detail::RenderResourceClass::Texture, Identity(texture));
+    }
+
+    /** @copydoc RenderFrontend::ResourceState(RenderTextureViewHandle) */
+    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderTextureViewHandle view) const {
+        return resourceRegistry_->State(Detail::RenderResourceClass::TextureView, Identity(view));
+    }
+
+    /** @copydoc RenderFrontend::ResourceState(RenderTargetHandle) */
+    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderTargetHandle target) const {
+        return resourceRegistry_->State(Detail::RenderResourceClass::RenderTarget, Identity(target));
+    }
+
+    /** @copydoc RenderFrontend::ResourceOperationResult */
+    Result<void> RenderFrontend::ResourceOperationResult(const ResourceOperationId operation) const {
+        return resourceRegistry_->OperationResult(operation);
+    }
+
+    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderBufferHandle buffer) const {
+        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::Buffer, Identity(buffer));
+    }
+
+    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderMeshHandle mesh) const {
+        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::Mesh, Identity(mesh));
+    }
+
+    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderTextureViewHandle view) const {
+        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::TextureView, Identity(view));
+    }
+
+    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderTargetHandle target) const {
+        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::RenderTarget, Identity(target));
+    }
+
     Result<std::uint64_t> Detail::RenderFrontendResourceAccess::BackendInstance(const RenderFrontend &frontend,
                                                                                 const RenderBufferHandle buffer) {
         return frontend.BackendInstance(buffer);
