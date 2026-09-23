@@ -1,5 +1,7 @@
+#include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.h"
+#include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +14,11 @@
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
+
+    class TestViewportCaptureSink final : public IViewportCaptureCancellationSink {
+    public:
+        void OnViewportCaptureCancelled(const Input::CaptureCancellationReason) noexcept override {}
+    };
 
     [[nodiscard]] BeginTransformGizmoMathRequest MakeRequest() {
         return BeginTransformGizmoMathRequest{
@@ -27,6 +34,40 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Transform gizmo controller resolves selected objects before filtering inactive tools", "[unit][editor][viewport][gizmo]") {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::NewFrame();
+    ImGui::Begin("TransformGizmoControllerTest");
+
+    TestViewportCaptureSink sink;
+    ViewportInteractionCapture capture(sink);
+    TransformGizmoController controller;
+    Input::RawInputSnapshot input;
+    EditorWorkspaceViewModel viewModel;
+    EditorWorkspaceViewCommandData command;
+    viewModel.activeTransformTool = EditorTransformTool::Move;
+    TransformGizmoDrawContext context{.origin = {},
+                                      .width = 400.0F,
+                                      .height = 400.0F,
+                                      .hovered = false,
+                                      .input = input,
+                                      .viewModel = viewModel,
+                                      .command = command};
+
+    CHECK_FALSE(controller.Draw(*ImGui::GetWindowDrawList(), context, capture));
+
+    viewModel.objects.push_back(SceneObject{.id = SceneObjectId{1}, .name = "Selected"});
+    viewModel.primarySelection = SceneObjectId{1};
+    viewModel.activeTransformTool = EditorTransformTool::Select;
+    CHECK_FALSE(controller.Draw(*ImGui::GetWindowDrawList(), context, capture));
+    CHECK_FALSE(controller.IsActive());
+
+    ImGui::End();
+    ImGui::Render();
+    ImGui::DestroyContext();
+}
 
 TEST_CASE("Transform gizmo rejects singular parents before a drag begins", "[unit][editor][viewport][gizmo]") {
     BeginTransformGizmoMathRequest request = MakeRequest();
