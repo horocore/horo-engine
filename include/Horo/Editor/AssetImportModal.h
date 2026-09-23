@@ -242,6 +242,12 @@ namespace Horo::Editor {
         /** @brief Installs the requested preview state after normal modal initialization. */
         void LoadUiPreviewFixture(UiPreviewFixture fixture);
 
+        /** @brief Appends one deterministic file row to the in-memory preview fixture. */
+        void AppendUiPreviewFile(std::string_view name, std::string_view extension, std::uintmax_t size);
+
+        /** @brief Completes the shared preset and inclusion state for a populated preview fixture. */
+        void FinalizeUiPreviewFixture();
+
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;

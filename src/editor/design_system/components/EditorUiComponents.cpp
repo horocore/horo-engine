@@ -198,11 +198,18 @@ namespace Horo::Editor::Ui {
             float controlWidth{0.0F};
         };
 
+        [[nodiscard]] float InspectorControlHeight(const Theme::Fonts &fonts) {
+            const float baseFontSize = fonts.sans != nullptr ? fonts.sans->FontSize : ImGui::GetFontSize();
+            const float renderedFontSize = baseFontSize * Theme::Scale(InspectorTypography::Field(), Theme::FontPx::Sans);
+            const float verticalPadding = ScaledLayoutValue(7.0F);
+            return renderedFontSize + verticalPadding * 2.0F;
+        }
+
         [[nodiscard]] PropertyRowLayout BeginPropertyRow(const char *label, const Theme::Fonts &fonts) {
             const ImVec2 position = ImGui::GetCursorScreenPos();
             const float width = ImGui::GetContentRegionAvail().x;
             const auto &tokens = Theme::GetActiveTokens();
-            const float controlHeight = ScaledLayoutValue(28.0F);
+            const float controlHeight = InspectorControlHeight(fonts);
             const float height = controlHeight + tokens.spacing.propertyRowGap;
             const float horizontalPadding = ScaledLayoutValue(8.0F);
             const float minimumControlWidth = ScaledLayoutValue(90.0F);
