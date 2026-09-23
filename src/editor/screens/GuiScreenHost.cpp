@@ -456,8 +456,8 @@ namespace Horo::Editor {
 
     void GuiScreenHost::Draw() {
         if (!uiPreviewScenario_.empty()) {
-            if (const auto selected = DrawEditorUiPreviewGallery(uiPreviewScenario_, modalHost_->HasOpenModal(), context_->theme.fonts,
-                                                                  *localization_);
+            if (const auto selected =
+                    DrawEditorUiPreviewGallery(uiPreviewScenario_, modalHost_->HasOpenModal(), context_->theme.fonts, *localization_);
                 selected.has_value())
                 static_cast<void>(OpenUiPreview(*selected));
             return;
@@ -540,16 +540,17 @@ namespace Horo::Editor {
     }
 
     bool GuiScreenHost::OpenUiPreview(const std::string_view scenarioId) {
-        if (std::ranges::none_of(EditorUiPreviewScenarios, [scenarioId](const EditorUiPreviewScenario &scenario) {
-                return scenario.id == scenarioId;
-            }) ||
+        if (std::ranges::none_of(EditorUiPreviewScenarios,
+                                 [scenarioId](const EditorUiPreviewScenario &scenario) {
+            return scenario.id == scenarioId;
+        }) ||
             !context_ || !modalHost_ || modalHost_->HasOpenModal())
             return false;
         auto modal = std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
                                                         services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>(),
                                                         localization_);
         modal->RequestUiPreviewFixture(scenarioId == "asset-import-empty" ? AssetImportModal::UiPreviewFixture::Empty
-                                                                   : AssetImportModal::UiPreviewFixture::Populated);
+                                                                          : AssetImportModal::UiPreviewFixture::Populated);
         if (!modalHost_->OpenRoot(std::move(modal)).HasValue())
             return false;
         uiPreviewScenario_ = scenarioId;
