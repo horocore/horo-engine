@@ -248,6 +248,14 @@ namespace Horo::Editor {
         /** @brief Completes the shared preset and inclusion state for a populated preview fixture. */
         void FinalizeUiPreviewFixture();
 
+        /** @brief Appends files to the active import operation and refreshes its UI projection. */
+        [[nodiscard]] Result<void> AppendImportFiles(const std::vector<std::filesystem::path> &sourceFiles,
+                                                     const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
+
+        /** @brief Starts a new import operation and initializes its queue projection. */
+        [[nodiscard]] Result<void> StartImportOperation(const std::vector<std::filesystem::path> &sourceFiles,
+                                                        const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
+
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;

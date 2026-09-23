@@ -44,11 +44,10 @@ namespace Horo::Editor {
             std::optional<std::string_view> requestedScenario;
             for (const auto &scenario : EditorUiPreviewScenarios) {
                 ImGui::PushID(scenario.id.data(), scenario.id.data() + scenario.id.size());
-                const char *label = localization.Get("editor", scenario.titleKey).c_str();
-                if (Ui::Button({.label = label,
-                                .size = {sidebarWidth - 28.0f, 38.0f},
-                                .variant = Ui::ButtonVariant::Secondary,
-                                .enabled = !modalOpen}))
+                if (const auto label = localization.Get("editor", scenario.titleKey); Ui::Button({.label = label.c_str(),
+                                                                                                  .size = {sidebarWidth - 28.0f, 38.0f},
+                                                                                                  .variant = Ui::ButtonVariant::Secondary,
+                                                                                                  .enabled = !modalOpen}))
                     requestedScenario = scenario.id;
                 if (scenario.id == scenarioId)
                     drawList->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), Theme::U32(Theme::Accent()), 5.0f);
@@ -61,10 +60,14 @@ namespace Horo::Editor {
             constexpr float gridStep = 24.0f;
             const ImU32 gridColor = ImGui::ColorConvertFloat4ToU32({Theme::Border().x, Theme::Border().y, Theme::Border().z, 0.25f});
             drawList->PushClipRect(canvasMin, canvasMax, true);
-            for (float x = canvasMin.x; x < canvasMax.x; x += gridStep)
+            for (std::size_t index = 0; canvasMin.x + static_cast<float>(index) * gridStep < canvasMax.x; ++index) {
+                const float x = canvasMin.x + static_cast<float>(index) * gridStep;
                 drawList->AddLine({x, canvasMin.y}, {x, canvasMax.y}, gridColor);
-            for (float y = canvasMin.y; y < canvasMax.y; y += gridStep)
+            }
+            for (std::size_t index = 0; canvasMin.y + static_cast<float>(index) * gridStep < canvasMax.y; ++index) {
+                const float y = canvasMin.y + static_cast<float>(index) * gridStep;
                 drawList->AddLine({canvasMin.x, y}, {canvasMax.x, y}, gridColor);
+            }
             drawList->PopClipRect();
         }
     }  // namespace
