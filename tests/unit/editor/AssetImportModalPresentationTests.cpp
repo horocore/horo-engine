@@ -275,29 +275,30 @@ TEST_CASE("Editor UI preview gallery renders both interaction states", "[unit][e
 
     Tests::HeadlessEditorGuiFixture imgui;
     LocalizationService localization{LocaleTag{"en-US"}};
-    std::optional<std::string_view> requestedScenario;
 
     imgui.BeginFrame();
-    requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", true, imgui.Fonts(), localization);
+    const auto initialSelection = DrawEditorUiPreviewGallery("asset-import-empty", true, imgui.Fonts(), localization);
     imgui.EndFrame();
-    REQUIRE_FALSE(requestedScenario.has_value());
+    REQUIRE_FALSE(initialSelection.has_value());
 
     ImGuiIO &io = ImGui::GetIO();
     io.AddMousePosEvent(120.0F, 137.0F);
     imgui.BeginFrame();
-    requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
+    const auto hoveredSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
     imgui.EndFrame();
+    REQUIRE_FALSE(hoveredSelection.has_value());
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     imgui.BeginFrame();
-    requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
+    const auto clickedSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
     imgui.EndFrame();
+    REQUIRE(clickedSelection.has_value());
+    REQUIRE(*clickedSelection == "asset-import");
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     imgui.BeginFrame();
-    requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
+    const auto releasedSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
     imgui.EndFrame();
-
-    REQUIRE(requestedScenario.has_value());
-    REQUIRE(*requestedScenario == "asset-import");
+    REQUIRE(releasedSelection.has_value());
+    REQUIRE(*releasedSelection == "asset-import");
 }
 
 TEST_CASE("Asset import preview fixtures expose deterministic populated and empty states", "[unit][editor][gui][asset-import]") {
