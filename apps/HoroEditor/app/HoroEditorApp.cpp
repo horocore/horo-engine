@@ -1275,7 +1275,7 @@ namespace Horo::Editor {
         LoadEditorInputProfile(inputRouter);
     }
 
-    Subscription SubscribeToEditorSettings(EditorDataBus &editorEvents, EditorSettingsService &settings,
+    Subscription SubscribeToEditorSettings(EditorDataBus &editorEvents, const EditorSettingsService &settings,
                                            LocalizationService &localization) {
         return editorEvents.Subscribe<EditorSettingsChangedEvent>([&settings, &localization](const EditorSettingsChangedEvent &event) {
             if (event.phase == SettingsChangePhase::Committed || event.phase == SettingsChangePhase::Reverted) {

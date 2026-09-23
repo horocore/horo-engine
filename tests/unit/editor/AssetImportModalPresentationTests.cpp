@@ -135,6 +135,9 @@ TEST_CASE("Asset import presentation renders queue diagnostics settings destinat
     snapshot.items = {MakeItem()};
     snapshot.phase = AssetImportPhase::Selecting;
     snapshot.canCancel = true;
+    snapshot.items.front().settings["settings.lod-count"] = "invalid";
+    snapshot.items.front().settings["settings.scale"] = "invalid";
+    snapshot.items.front().settings["settings.normals"] = "invalid";
 
     DrawFrame(fixture.imgui, fixture.modal);
     ClickTab(fixture.imgui, fixture.modal, 1);
@@ -208,5 +211,45 @@ TEST_CASE("Asset import presentation renders retained history status variants", 
     modalHost.OnUpdate(0.016F);
     REQUIRE(modalPtr->ImportHistory().size() == states.size());
 
+    DrawFrame(imgui, *modalPtr);
+}
+
+TEST_CASE("Asset import preview fixtures expose deterministic populated and empty states", "[unit][editor][gui][asset-import]") {
+    using namespace Horo;
+    using namespace Horo::Assets;
+    using namespace Horo::Editor;
+
+    {
+        Tests::HeadlessEditorGuiFixture imgui;
+        Tests::ScopedJobSystem jobs;
+        EditorDataBus events;
+        Input::InputRouter inputRouter;
+        EditorModalHost modalHost{events, inputRouter};
+        auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+        auto *const modalPtr = modal.get();
+        modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Populated);
+        REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+        modalHost.OnUpdate(0.016F);
+
+        REQUIRE(modalPtr->IsUiPreview());
+        REQUIRE(modalPtr->Snapshot().items.size() == 4);
+        REQUIRE(modalPtr->Snapshot().items.front().displayName == "hero");
+        REQUIRE(modalPtr->Snapshot().items.back().diagnostics.size() == 1);
+        DrawFrame(imgui, *modalPtr);
+    }
+
+    Tests::HeadlessEditorGuiFixture imgui;
+    Tests::ScopedJobSystem jobs;
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+    auto *const modalPtr = modal.get();
+    modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Empty);
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+
+    REQUIRE(modalPtr->IsUiPreview());
+    REQUIRE(modalPtr->Snapshot().items.empty());
     DrawFrame(imgui, *modalPtr);
 }
