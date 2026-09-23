@@ -9,13 +9,16 @@
 #include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <portable-file-dialogs.h>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,9 +52,9 @@ namespace Horo::Editor {
 
         [[nodiscard]] std::string FileSize(const AssetImportModal &modal, std::size_t index) {
             const auto sourceSize = modal.SourceFileSize(index);
-            if (!sourceSize)
+            if (!sourceSize.has_value())
                 return "—";
-            const float bytes = static_cast<float>(*sourceSize);
+            const auto bytes = static_cast<float>(*sourceSize);
             if (bytes >= 1024.0f * 1024.0f)
                 return std::format("{:.1f} MB", bytes / (1024.0f * 1024.0f));
             if (bytes >= 1024.0f)
@@ -71,14 +74,15 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] UiIcon AssetIcon(const Assets::AssetImportItem &item) {
+            using enum UiIcon;
             if (item.sourceExtension == "fbx" || item.sourceExtension == "obj" || item.sourceExtension == "gltf" ||
                 item.sourceExtension == "glb")
-                return UiIcon::HierarchyMesh;
+                return HierarchyMesh;
             if (item.sourceExtension == "png" || item.sourceExtension == "jpg" || item.sourceExtension == "jpeg")
-                return UiIcon::Image;
+                return Image;
             if (item.sourceExtension == "wav" || item.sourceExtension == "mp3" || item.sourceExtension == "ogg")
-                return UiIcon::AudioFile;
-            return UiIcon::Package;
+                return AudioFile;
+            return Package;
         }
 
         [[nodiscard]] bool HasDiagnostic(const Assets::AssetImportItem &item, Assets::ImportDiagnostic::Severity severity) {
@@ -157,16 +161,17 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] const char *ImportTabLabel(const int tab) {
+            using enum ImportTab;
             switch (static_cast<ImportTab>(tab)) {
-                case ImportTab::Queue:
+                case Queue:
                     return "Overview";
-                case ImportTab::Diagnostics:
+                case Diagnostics:
                     return "Diagnostics";
-                case ImportTab::Settings:
+                case Settings:
                     return "Importer Settings";
-                case ImportTab::Destination:
+                case Destination:
                     return "Destination";
-                case ImportTab::Count:
+                case Count:
                 default:
                     return "";
             }
@@ -206,8 +211,7 @@ namespace Horo::Editor {
                                     ? std::string{modal.DefaultDestinationFolder()}
                                     : snapshot.items[snapshot.selectedItemIndex].destinationFolder;
             const std::string path = folder.empty() ? "assets" : folder;
-            const std::string projectName = modal.ProjectRoot().filename().string();
-            if (!projectName.empty()) {
+            if (const std::string projectName = modal.ProjectRoot().filename().string(); !projectName.empty()) {
                 ImGui::TextColored(Text(), "%s", projectName.c_str());
                 ImGui::SameLine(0.0f, 8.0f);
                 ImGui::TextColored(Dim(), ">");
@@ -272,11 +276,13 @@ namespace Horo::Editor {
         void DrawDashedBorder(ImDrawList *drawList, const ImVec2 &min, const ImVec2 &max, ImU32 color) {
             constexpr float dash = 6.0f;
             constexpr float step = 11.0f;
-            for (float x = min.x; x < max.x; x += step) {
+            for (std::size_t index = 0; min.x + static_cast<float>(index) * step < max.x; ++index) {
+                const float x = min.x + static_cast<float>(index) * step;
                 drawList->AddLine({x, min.y}, {std::min(x + dash, max.x), min.y}, color);
                 drawList->AddLine({x, max.y}, {std::min(x + dash, max.x), max.y}, color);
             }
-            for (float y = min.y; y < max.y; y += step) {
+            for (std::size_t index = 0; min.y + static_cast<float>(index) * step < max.y; ++index) {
+                const float y = min.y + static_cast<float>(index) * step;
                 drawList->AddLine({min.x, y}, {min.x, std::min(y + dash, max.y)}, color);
                 drawList->AddLine({max.x, y}, {max.x, std::min(y + dash, max.y)}, color);
             }
@@ -399,7 +405,7 @@ namespace Horo::Editor {
             const auto found = std::ranges::find_if(contribution.settings, [id](const auto &setting) {
                 return setting.id == id;
             });
-            return found == contribution.settings.end() ? nullptr : &*found;
+            return found == contribution.settings.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] std::string SettingLabel(const AssetImportModal &modal, const Assets::ImportSettingDescriptor &setting) {
@@ -421,6 +427,26 @@ namespace Horo::Editor {
                 item.settings[key] = value ? "true" : "false";
         }
 
+        [[nodiscard]] std::optional<int> ParseInteger(std::string_view value) {
+            try {
+                return std::stoi(std::string{value});
+            } catch (const std::invalid_argument &) {
+                return std::nullopt;
+            } catch (const std::out_of_range &) {
+                return std::nullopt;
+            }
+        }
+
+        [[nodiscard]] std::optional<float> ParseFloat(std::string_view value) {
+            try {
+                return std::stof(std::string{value});
+            } catch (const std::invalid_argument &) {
+                return std::nullopt;
+            } catch (const std::out_of_range &) {
+                return std::nullopt;
+            }
+        }
+
         void DrawChoiceSetting(const Assets::ImportSettingDescriptor &setting, Assets::AssetImportItem &item, const std::string &key,
                                const Fonts &fonts) {
             std::vector<const char *> choices;
@@ -428,13 +454,9 @@ namespace Horo::Editor {
             for (const auto &choice : setting.choices)
                 choices.push_back(choice.labelKey.c_str());
             int index = 0;
-            if (const auto found = item.settings.find(key); found != item.settings.end()) {
-                try {
-                    index = std::stoi(found->second);
-                } catch (...) {
-                    index = 0;
-                }
-            }
+            if (const auto found = item.settings.find(key); found != item.settings.end())
+                if (const auto parsed = ParseInteger(found->second))
+                    index = *parsed;
             index = std::clamp(index, 0, std::max(0, static_cast<int>(choices.size()) - 1));
             if (ComboControl(("##Setting_" + setting.id).c_str(), &index, choices.data(), static_cast<int>(choices.size()), fonts))
                 item.settings[key] = std::to_string(index);
@@ -444,12 +466,9 @@ namespace Horo::Editor {
                               const Fonts &fonts) {
             float value =
                 std::holds_alternative<double>(setting.defaultValue) ? static_cast<float>(std::get<double>(setting.defaultValue)) : 0.0f;
-            if (const auto found = item.settings.find(key); found != item.settings.end()) {
-                try {
-                    value = std::stof(found->second);
-                } catch (...) {
-                }
-            }
+            if (const auto found = item.settings.find(key); found != item.settings.end())
+                if (const auto parsed = ParseFloat(found->second))
+                    value = *parsed;
             if (setting.id == "unitScale")
                 static_cast<void>(InputFloatStepperControl(("##Setting_" + setting.id).c_str(), &value, fonts));
             else
@@ -462,12 +481,9 @@ namespace Horo::Editor {
             int value = std::holds_alternative<std::int64_t>(setting.defaultValue)
                             ? static_cast<int>(std::get<std::int64_t>(setting.defaultValue))
                             : 0;
-            if (const auto found = item.settings.find(key); found != item.settings.end()) {
-                try {
-                    value = std::stoi(found->second);
-                } catch (...) {
-                }
-            }
+            if (const auto found = item.settings.find(key); found != item.settings.end())
+                if (const auto parsed = ParseInteger(found->second))
+                    value = *parsed;
             InputIntControl(("##Setting_" + setting.id).c_str(), &value, fonts);
             item.settings[key] = std::to_string(value);
         }
@@ -481,6 +497,7 @@ namespace Horo::Editor {
 
         void DrawSetting(const AssetImportModal &modal, const Assets::ImportSettingDescriptor &setting, Assets::AssetImportItem &item,
                          const Fonts &fonts) {
+            using enum Assets::ImportSettingKind;
             const std::string key = "settings." + setting.id;
             PushFont(fonts.sansCompact);
             ImGui::AlignTextToFramePadding();
@@ -489,13 +506,13 @@ namespace Horo::Editor {
             PopFont(fonts.sansCompact);
             ImGui::SameLine(190.0f);
             ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
-            if (setting.kind == Assets::ImportSettingKind::Boolean)
+            if (setting.kind == Boolean)
                 DrawBooleanSetting(setting, item, key, fonts);
-            else if (setting.kind == Assets::ImportSettingKind::Choice)
+            else if (setting.kind == Choice)
                 DrawChoiceSetting(setting, item, key, fonts);
-            else if (setting.kind == Assets::ImportSettingKind::Float)
+            else if (setting.kind == Float)
                 DrawFloatSetting(setting, item, key, fonts);
-            else if (setting.kind == Assets::ImportSettingKind::Integer)
+            else if (setting.kind == Integer)
                 DrawIntegerSetting(setting, item, key, fonts);
             else
                 DrawTextSetting(setting, item, key, fonts);
@@ -522,7 +539,7 @@ namespace Horo::Editor {
                             &fonts);
         }
 
-        void DrawPreset(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
+        void DrawPreset(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
             const auto index = snapshot.selectedItemIndex;
             auto names = modal.PresetNames(index);
             std::vector<const char *> labels;
@@ -540,7 +557,7 @@ namespace Horo::Editor {
                 static_cast<void>(modal.ApplyPreset(index, names[selected]));
         }
 
-        void DrawCreatePresetAction(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
+        void DrawCreatePresetAction(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
             const auto index = snapshot.selectedItemIndex;
             const auto createPreset = Copy(modal.Localized("asset_import.create_preset", "Create preset from current settings"));
             const auto presetPopupTitle = Copy(modal.Localized("asset_import.create", "Create")) + " " +
@@ -582,10 +599,14 @@ namespace Horo::Editor {
             if (AssetIcon(item) == UiIcon::HierarchyMesh) {
                 const ImU32 grid = ImGui::ColorConvertFloat4ToU32(Border());
                 drawList->PushClipRect({preview.x + 1.0f, preview.y + 1.0f}, {preview.x + 135.0f, preview.y + 115.0f}, true);
-                for (float y = 78.0f; y <= 116.0f; y += 10.0f)
+                for (int index = 0; index <= 3; ++index) {
+                    const float y = 78.0f + static_cast<float>(index) * 10.0f;
                     drawList->AddLine({preview.x, preview.y + y}, {preview.x + 136.0f, preview.y + y}, grid);
-                for (float x = -24.0f; x <= 160.0f; x += 20.0f)
+                }
+                for (int index = 0; index < 10; ++index) {
+                    const float x = -24.0f + static_cast<float>(index) * 20.0f;
                     drawList->AddLine({preview.x + 68.0f, preview.y + 72.0f}, {preview.x + x, preview.y + 116.0f}, grid);
+                }
                 drawList->PopClipRect();
             }
             drawList->AddRect(preview, {preview.x + 136.0f, preview.y + 116.0f}, ImGui::ColorConvertFloat4ToU32(Border()), 5.0f);
@@ -613,7 +634,7 @@ namespace Horo::Editor {
             ImGui::EndGroup();
         }
 
-        void DrawMeshImporterSettings(AssetImportModal &modal, Assets::AssetImportItem &item,
+        void DrawMeshImporterSettings(const AssetImportModal &modal, Assets::AssetImportItem &item,
                                       const Assets::AssetImporterContribution &contribution, const Fonts &fonts) {
             const auto drawSetting = [&modal, &item, &contribution, &fonts](const std::string_view id, const std::string_view labelKey,
                                                                             const std::string_view fallback, const char *unavailableId,
@@ -656,10 +677,11 @@ namespace Horo::Editor {
             ImGui::TextColored(Muted(), "%s", Copy(modal.Localized("asset_import.asset_type", "Asset Type")).c_str());
             ImGui::SameLine(190.0f);
             const auto assetType = AssetKind(modal, item);
-            const char *assetTypes[]{assetType.c_str()};
+            const std::array assetTypes{assetType.c_str()};
             int selectedType = 0;
             ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
-            static_cast<void>(ComboControl("##ImportAssetType", &selectedType, assetTypes, 1, fonts));
+            static_cast<void>(
+                ComboControl("##ImportAssetType", &selectedType, assetTypes.data(), static_cast<int>(assetTypes.size()), fonts));
             DrawPreset(modal, snapshot, fonts);
             DrawImporterSettingRows(modal, item, *contribution, fonts);
             return contribution;
@@ -674,19 +696,19 @@ namespace Horo::Editor {
             const auto byType = Copy(modal.Localized("asset_import.folder.by_type", "By asset type"));
             const auto mirror = Copy(modal.Localized("asset_import.folder.mirror", "Mirror source"));
             const auto flat = Copy(modal.Localized("asset_import.folder.flat", "Flat"));
-            const char *folders[]{byType.c_str(), mirror.c_str(), flat.c_str()};
+            const std::array folders{byType.c_str(), mirror.c_str(), flat.c_str()};
             FieldLabel(Copy(modal.Localized("asset_import.folder_strategy", "Folder Strategy")).c_str(), fonts);
-            if (ComboControl("##ImportFolderStrategy", &subfolder, folders, 3, fonts))
+            if (ComboControl("##ImportFolderStrategy", &subfolder, folders.data(), static_cast<int>(folders.size()), fonts))
                 item.subfolderByType = subfolder;
             int idStrategy = item.assetIdStrategy;
             const auto newGuid = Copy(modal.Localized("asset_import.id.new_guid", "New GUID"));
             const auto stableHash = Copy(modal.Localized("asset_import.id.stable_hash", "Stable hash"));
-            const char *idStrategies[]{newGuid.c_str(), stableHash.c_str()};
+            const std::array idStrategies{newGuid.c_str(), stableHash.c_str()};
             FieldLabel(Copy(modal.Localized("asset_import.id_strategy", "Asset ID Strategy")).c_str(), fonts);
-            if (ComboControl("##ImportAssetIdStrategy", &idStrategy, idStrategies, 2, fonts))
+            if (ComboControl("##ImportAssetIdStrategy", &idStrategy, idStrategies.data(), static_cast<int>(idStrategies.size()), fonts))
                 item.assetIdStrategy = idStrategy;
-            bool sidecar = item.createMetaSidecar;
-            if (CheckboxControl(Copy(modal.Localized("asset_import.meta_sidecar", "Create .meta sidecar")).c_str(), &sidecar, fonts))
+            if (bool sidecar = item.createMetaSidecar;
+                CheckboxControl(Copy(modal.Localized("asset_import.meta_sidecar", "Create .meta sidecar")).c_str(), &sidecar, fonts))
                 item.createMetaSidecar = sidecar;
             bool overwrite = item.overwriteWithoutPrompt;
             if (CheckboxControl(Copy(modal.Localized("asset_import.overwrite", "Overwrite without prompt")).c_str(), &overwrite, fonts))
@@ -751,15 +773,15 @@ namespace Horo::Editor {
         };
 
         [[nodiscard]] DiagnosticSummary SummarizeDiagnostics(const Assets::AssetImportSnapshot &snapshot) {
+            using enum Assets::ImportDiagnostic::Severity;
             DiagnosticSummary summary;
             for (const auto &item : snapshot.items) {
-                summary.warnings += HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Warning) ? 1 : 0;
-                summary.errors += HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error) ? 1 : 0;
+                summary.warnings += HasDiagnostic(item, Warning) ? 1 : 0;
+                summary.errors += HasDiagnostic(item, Error) ? 1 : 0;
             }
             for (const auto &item : snapshot.items) {
                 for (const auto &diagnostic : item.diagnostics) {
-                    if ((summary.errors > 0 && diagnostic.severity == Assets::ImportDiagnostic::Severity::Error) ||
-                        (summary.errors == 0 && diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning)) {
+                    if ((summary.errors > 0 && diagnostic.severity == Error) || (summary.errors == 0 && diagnostic.severity == Warning)) {
                         summary.first = &diagnostic;
                         return summary;
                     }
@@ -801,14 +823,14 @@ namespace Horo::Editor {
             ImGui::TextColored(Dim(), "%.55s", summary.first->message.c_str());
         }
 
-        void DrawFooterActions(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts,
-                               const float actionHeight, ModalFrameResult &result) {
+        void DrawFooterActions(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const float actionHeight,
+                               ModalFrameResult &result) {
             constexpr float cancelWidth = 112.0f;
             constexpr float importWidth = 174.0f;
             ImGui::SameLine(ImGui::GetWindowWidth() - cancelWidth - importWidth - 38.0f);
             ImGui::SetCursorPosY((ImGui::GetWindowHeight() - actionHeight) * 0.5f);
-            const bool complete = modal.IsImportComplete();
-            if (Button({.label = Copy(modal.Localized(complete ? "asset_import.done" : "asset_import.cancel", complete ? "Done" : "Cancel"))
+            if (const bool complete = modal.IsImportComplete();
+                Button({.label = Copy(modal.Localized(complete ? "asset_import.done" : "asset_import.cancel", complete ? "Done" : "Cancel"))
                                      .c_str(),
                         .size = {cancelWidth, actionHeight},
                         .variant = ButtonVariant::Secondary}))
@@ -836,7 +858,7 @@ namespace Horo::Editor {
             ImGui::SetCursorPosY((ImGui::GetWindowHeight() - actionHeight) * 0.5f);
             const auto summary = SummarizeDiagnostics(snapshot);
             DrawFooterDiagnostics(modal, snapshot, fonts, summary);
-            DrawFooterActions(modal, snapshot, fonts, actionHeight, result);
+            DrawFooterActions(modal, snapshot, actionHeight, result);
             shell.EndFooter();
         }
     }  // namespace
@@ -871,7 +893,7 @@ namespace Horo::Editor {
                            Copy(modal.Localized("asset_import.subtitle", "Add files to your project and configure how they are imported."))
                                .c_str());
         ImGui::Dummy({0.0f, 4.0f});
-        static int activeTab = static_cast<int>(ImportTab::Queue);
+        static auto activeTab = static_cast<int>(ImportTab::Queue);
         DrawImportTabs(activeTab, fonts);
         ImGui::Dummy({0.0f, 6.0f});
         DrawDestination(modal, snapshot, fonts);
