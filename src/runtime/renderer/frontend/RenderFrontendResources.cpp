@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "RenderFrontendErrors.h"
 #include "RenderFrontendResourceAccess.h"
 #include "RenderResourceOperations.h"
@@ -215,11 +216,13 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be created during an active frame."));
         if (ValidateRenderBufferDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidBufferDescriptor, "The buffer descriptor is structurally invalid."));
+                MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
+                                  "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
         if (AdmitCurrentBufferDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
-                                  "The current renderer frontend does not implement this buffer usage combination."));
+                                  "The current renderer frontend does not implement this buffer usage combination: " +
+                                      DescribeRenderBufferRequest(descriptor)));
         if (!backend_->Capabilities().supportsBufferResources)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic buffers."));
@@ -311,11 +314,13 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be created during an active frame."));
         if (ValidateRenderTextureDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidTextureDescriptor, "The texture descriptor is structurally invalid."));
+                MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
+                                  "The texture descriptor is structurally invalid: " + DescribeRenderTextureRequest(descriptor)));
         if (AdmitCurrentTextureDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
-                                  "The current renderer frontend does not implement this texture descriptor combination."));
+                                  "The current renderer frontend does not implement this texture descriptor combination: " +
+                                      DescribeRenderTextureRequest(descriptor)));
         if (!backend_->Capabilities().supportsTextureResources)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic textures."));

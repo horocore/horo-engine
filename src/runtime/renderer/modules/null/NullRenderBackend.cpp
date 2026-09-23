@@ -93,7 +93,8 @@ namespace Horo::Render {
                 if (!capabilities_.support.Supports(descriptor))
                     return Result<RenderMemoryCostPlan>::Failure(
                         MakeBackendError(NullBackendErrors::UnsupportedResourceOperation,
-                                         "Null buffer request exceeds the advertised capability limit."));
+                                         "Null buffer memory-cost query failed: " +
+                                             DescribeRenderBufferAdmissionFailure(descriptor, capabilities_.support)));
                 return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
                                                               .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                                               .provenance = RenderMemoryCostProvenance::Exact,
@@ -112,7 +113,8 @@ namespace Horo::Render {
                 if (!capabilities_.support.Supports(descriptor))
                     return Result<RenderMemoryCostPlan>::Failure(
                         MakeBackendError(NullBackendErrors::UnsupportedResourceOperation,
-                                         "Null texture request exceeds the advertised capability limit."));
+                                         "Null texture memory-cost query failed: " +
+                                             DescribeRenderTextureAdmissionFailure(descriptor, capabilities_.support)));
                 return Result<RenderMemoryCostPlan>::Success({.memoryClass = RenderMemoryClass::PersistentDevice,
                                                               .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                                               .provenance = RenderMemoryCostProvenance::Exact,

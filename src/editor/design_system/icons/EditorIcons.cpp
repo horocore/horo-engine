@@ -26,6 +26,7 @@ namespace Horo::Editor::Ui {
         struct IconDescriptor {
             std::string_view token;
             IconRenderer renderer;
+            ImWchar materialGlyph{0};
         };
 
         void DrawNothing(const IconDrawContext &) {
@@ -297,18 +298,18 @@ namespace Horo::Editor::Ui {
         constexpr std::array kIconDescriptors{
             IconDescriptor{"", DrawNothing},
             IconDescriptor{"generic", DrawGenericIcon},
-            IconDescriptor{"status.info", DrawNothing},
-            IconDescriptor{"status.warning", DrawNothing},
-            IconDescriptor{"status.error", DrawNothing},
-            IconDescriptor{"action.create", DrawCreateIcon},
+            IconDescriptor{"status.info", DrawNothing, 0xE88E},
+            IconDescriptor{"status.warning", DrawNothing, 0xE002},
+            IconDescriptor{"status.error", DrawNothing, 0xE000},
+            IconDescriptor{"action.create", DrawCreateIcon, 0xE145},
             IconDescriptor{"action.rename", DrawRenameIcon},
             IconDescriptor{"action.duplicate", DrawDuplicateIcon},
-            IconDescriptor{"action.delete", DrawDeleteIcon},
-            IconDescriptor{"action.reset", DrawResetIcon},
-            IconDescriptor{"action.check", DrawCheckIcon},
-            IconDescriptor{"action.checkbox_unchecked", DrawUncheckedCheckboxIcon},
-            IconDescriptor{"action.settings", DrawSettingsIcon},
-            IconDescriptor{"action.more_vertical", DrawMoreVerticalIcon},
+            IconDescriptor{"action.delete", DrawDeleteIcon, 0xE872},
+            IconDescriptor{"action.reset", DrawResetIcon, 0xF053},
+            IconDescriptor{"action.check", DrawCheckIcon, 0xE834},
+            IconDescriptor{"action.checkbox_unchecked", DrawUncheckedCheckboxIcon, 0xE835},
+            IconDescriptor{"action.settings", DrawSettingsIcon, 0xE8B8},
+            IconDescriptor{"action.more_vertical", DrawMoreVerticalIcon, 0xE5D4},
             IconDescriptor{"action.visibility", DrawVisibilityOnIcon},
             IconDescriptor{"action.visibility_off", DrawVisibilityOffIcon},
             IconDescriptor{"action.lock", DrawLockIcon},
@@ -327,30 +328,34 @@ namespace Horo::Editor::Ui {
             IconDescriptor{"primitive.plane", DrawPlaneIcon},
             IconDescriptor{"primitive.quad", DrawQuadIcon},
             IconDescriptor{"primitive.trigger_volume", DrawQuadIcon},
-            IconDescriptor{"navigation.arrow_back", DrawNothing},
-            IconDescriptor{"navigation.arrow_forward", DrawNothing},
-            IconDescriptor{"navigation.arrow_upward", DrawNothing},
-            IconDescriptor{"action.search", DrawNothing},
-            IconDescriptor{"view.grid", DrawNothing},
-            IconDescriptor{"view.list", DrawNothing},
-            IconDescriptor{"action.create_new_folder", DrawCreateIcon},
-            IconDescriptor{"location.favorite", DrawNothing},
-            IconDescriptor{"location.history", DrawNothing},
-            IconDescriptor{"location.storage", DrawNothing},
-            IconDescriptor{"location.package", DrawNothing},
-            IconDescriptor{"location.account_tree", DrawNothing},
-            IconDescriptor{"location.tag", DrawNothing},
-            IconDescriptor{"asset.folder", DrawNothing},
-            IconDescriptor{"asset.image", DrawNothing},
-            IconDescriptor{"asset.audio_file", DrawAudioSourceIcon},
-            IconDescriptor{"asset.description", DrawGenericIcon},
-            IconDescriptor{"action.pause", DrawNothing},
-            IconDescriptor{"action.download", DrawNothing},
-            IconDescriptor{"action.stop", DrawNothing},
-            IconDescriptor{"action.play", DrawNothing},
-            IconDescriptor{"action.record", DrawNothing},
-            IconDescriptor{"action.volume_off", DrawNothing},
-            IconDescriptor{"action.clear_all", DrawNothing},
+            IconDescriptor{"navigation.arrow_back", DrawNothing, 0xE5C4},
+            IconDescriptor{"navigation.arrow_forward", DrawNothing, 0xE5C8},
+            IconDescriptor{"navigation.arrow_upward", DrawNothing, 0xE5D8},
+            IconDescriptor{"action.search", DrawNothing, 0xE8B6},
+            IconDescriptor{"view.grid", DrawNothing, 0xE9B0},
+            IconDescriptor{"view.list", DrawNothing, 0xE8EF},
+            IconDescriptor{"action.create_new_folder", DrawCreateIcon, 0xE2CC},
+            IconDescriptor{"location.favorite", DrawNothing, 0xE838},
+            IconDescriptor{"location.history", DrawNothing, 0xE889},
+            IconDescriptor{"location.storage", DrawNothing, 0xE1DB},
+            IconDescriptor{"location.package", DrawNothing, 0xE1A1},
+            IconDescriptor{"location.account_tree", DrawNothing, 0xE97A},
+            IconDescriptor{"location.tag", DrawNothing, 0xE892},
+            IconDescriptor{"asset.folder", DrawNothing, 0xE2C7},
+            IconDescriptor{"asset.image", DrawNothing, 0xE3F4},
+            IconDescriptor{"asset.audio_file", DrawAudioSourceIcon, 0xEB82},
+            IconDescriptor{"asset.description", DrawGenericIcon, 0xE873},
+            IconDescriptor{"action.pause", DrawNothing, 0xE034},
+            IconDescriptor{"action.download", DrawNothing, 0xE2C4},
+            IconDescriptor{"action.stop", DrawNothing, 0xE047},
+            IconDescriptor{"action.play", DrawNothing, 0xE037},
+            IconDescriptor{"action.record", DrawNothing, 0xE061},
+            IconDescriptor{"action.volume_off", DrawNothing, 0xE04F},
+            IconDescriptor{"action.clear_all", DrawNothing, 0xE0B8},
+            IconDescriptor{"scene.object", DrawGenericIcon, 0xE1A1},
+            IconDescriptor{"status.pending", DrawNothing, 0xEF4A},
+            IconDescriptor{"status.success", DrawCheckIcon, 0xE86C},
+            IconDescriptor{"status.cancelled", DrawNothing, 0xE5C9},
         };
 
         struct IconTokenAlias {
@@ -359,8 +364,8 @@ namespace Horo::Editor::Ui {
         };
 
         constexpr std::array kIconTokenAliases{
-            IconTokenAlias{"primitive.box", UiIcon::Generic},
-            IconTokenAlias{"primitive.empty", UiIcon::Generic},
+            IconTokenAlias{"primitive.box", UiIcon::SceneObject},
+            IconTokenAlias{"primitive.empty", UiIcon::SceneObject},
             IconTokenAlias{"primitive.collider.box", UiIcon::Generic},
             IconTokenAlias{"primitive.collider.sphere", UiIcon::Sphere},
             IconTokenAlias{"primitive.collider.capsule", UiIcon::Capsule},
@@ -379,52 +384,24 @@ namespace Horo::Editor::Ui {
             return index < kIconDescriptors.size() ? std::optional{index} : std::nullopt;
         }
 
-        struct MaterialSymbol {
-            UiIcon icon;
-            ImWchar glyph;
-        };
+        constexpr auto kMaterialSymbolGlyphRanges = [] {
+            std::array<ImWchar, kIconDescriptors.size()> glyphs{};
+            for (std::size_t index = 0; index < kIconDescriptors.size(); ++index)
+                glyphs[index] = kIconDescriptors[index].materialGlyph;
+            std::ranges::sort(glyphs);
 
-        constexpr std::array kMaterialSymbols{
-            MaterialSymbol{UiIcon::Info, 0xE88E},
-            MaterialSymbol{UiIcon::Warning, 0xE002},
-            MaterialSymbol{UiIcon::Error, 0xE000},
-            MaterialSymbol{UiIcon::Create, 0xE145},
-            MaterialSymbol{UiIcon::Delete, 0xE872},
-            MaterialSymbol{UiIcon::Reset, 0xF053},
-            MaterialSymbol{UiIcon::Check, 0xE834},
-            MaterialSymbol{UiIcon::CheckboxUnchecked, 0xE835},
-            MaterialSymbol{UiIcon::Settings, 0xE8B8},
-            MaterialSymbol{UiIcon::MoreVertical, 0xE5D4},
-            MaterialSymbol{UiIcon::ArrowBack, 0xE5C4},
-            MaterialSymbol{UiIcon::ArrowForward, 0xE5C8},
-            MaterialSymbol{UiIcon::ArrowUpward, 0xE5D8},
-            MaterialSymbol{UiIcon::Search, 0xE8B6},
-            MaterialSymbol{UiIcon::GridView, 0xE9B0},
-            MaterialSymbol{UiIcon::ViewList, 0xE8EF},
-            MaterialSymbol{UiIcon::CreateNewFolder, 0xE2CC},
-            MaterialSymbol{UiIcon::Favorite, 0xE838},
-            MaterialSymbol{UiIcon::History, 0xE889},
-            MaterialSymbol{UiIcon::Storage, 0xE1DB},
-            MaterialSymbol{UiIcon::Package, 0xE1A1},
-            MaterialSymbol{UiIcon::AccountTree, 0xE97A},
-            MaterialSymbol{UiIcon::Tag, 0xE892},
-            MaterialSymbol{UiIcon::Folder, 0xE2C7},
-            MaterialSymbol{UiIcon::Image, 0xE3F4},
-            MaterialSymbol{UiIcon::AudioFile, 0xEB82},
-            MaterialSymbol{UiIcon::Description, 0xE873},
-            MaterialSymbol{UiIcon::Pause, 0xE034},
-            MaterialSymbol{UiIcon::Download, 0xE2C4},
-            MaterialSymbol{UiIcon::Stop, 0xE047},
-            MaterialSymbol{UiIcon::Play, 0xE037},
-            MaterialSymbol{UiIcon::Record, 0xE061},
-            MaterialSymbol{UiIcon::VolumeOff, 0xE04F},
-            MaterialSymbol{UiIcon::ClearAll, 0xE0B8},
-        };
-
-        [[nodiscard]] constexpr ImWchar MaterialSymbolGlyph(const UiIcon icon) noexcept {
-            const auto match = std::ranges::find(kMaterialSymbols, icon, &MaterialSymbol::icon);
-            return match == kMaterialSymbols.end() ? 0 : match->glyph;
-        }
+            std::array<ImWchar, kIconDescriptors.size() * 2U + 1U> ranges{};
+            std::size_t next = 0;
+            ImWchar previous = 0;
+            for (const ImWchar glyph : glyphs) {
+                if (glyph == 0 || glyph == previous)
+                    continue;
+                ranges[next++] = glyph;
+                ranges[next++] = glyph;
+                previous = glyph;
+            }
+            return ranges;
+        }();
 
         [[nodiscard]] std::array<char, 4> EncodeBasicMultilingualPlaneGlyph(const ImWchar codepoint) noexcept {
             if (codepoint < 0x80)
@@ -469,32 +446,7 @@ namespace Horo::Editor::Ui {
 
     /** @copydoc UiIconRegistry::MaterialSymbolGlyphRanges */
     std::span<const ImWchar> UiIconRegistry::MaterialSymbolGlyphRanges() noexcept {
-        static constexpr std::array<ImWchar, 45> ranges{
-            0xE000, 0xE003,  // status icons
-            0xE034, 0xE061,  // media controls
-            0xE0B8, 0xE0B8,  // clear_all
-            0xE145, 0xE145,  // add
-            0xE1A1, 0xE1A1,  // inventory_2
-            0xE1DB, 0xE1DB,  // storage
-            0xE2C7, 0xE2C7,  // folder
-            0xE2CC, 0xE2CC,  // create_new_folder
-            0xE3F4, 0xE3F4,  // image
-            0xE5C4, 0xE5C4,  // arrow_back
-            0xE5C8, 0xE5C8,  // arrow_forward
-            0xE5D4, 0xE5D8,  // more_vert, arrow_upward
-            0xE834, 0xE838,  // check boxes, star
-            0xE86C, 0xE873,  // check_circle, description
-            0xE889, 0xE892,  // history, label
-            0xE8B6, 0xE8B8,  // search, settings
-            0xE8EF, 0xE8EF,  // view_list
-            0xE97A, 0xE97A,  // account_tree
-            0xE9B0, 0xE9B0,  // grid_view
-            0xEB82, 0xEB82,  // audio_file
-            0xEF4A, 0xEF4B,  // circle
-            0xF053, 0xF054,  // restart_alt
-            0,
-        };
-        return ranges;
+        return kMaterialSymbolGlyphRanges;
     }
 
     /** @copydoc DrawEditorIcon */
@@ -502,7 +454,12 @@ namespace Horo::Editor::Ui {
                         ImFont *const iconFont) {
         if (drawList == nullptr || icon == UiIcon::None)
             return;
-        if (const ImWchar glyph = MaterialSymbolGlyph(icon); glyph != 0 && iconFont != nullptr && iconFont->FindGlyphNoFallback(glyph)) {
+        const std::optional<std::size_t> index = IconIndex(icon);
+        if (!index.has_value())
+            return;
+        const IconDescriptor &descriptor = kIconDescriptors[*index];
+        if (const ImWchar glyph = descriptor.materialGlyph;
+            glyph != 0 && iconFont != nullptr && iconFont->FindGlyphNoFallback(glyph)) {
             const std::array utf8 = EncodeBasicMultilingualPlaneGlyph(glyph);
             const float glyphSize = std::min(size.x, size.y);
             const ImVec2 textSize = iconFont->CalcTextSizeA(glyphSize, FLT_MAX, 0.0F, utf8.data());
@@ -510,8 +467,6 @@ namespace Horo::Editor::Ui {
                               color, utf8.data());
             return;
         }
-        const std::optional<std::size_t> index = IconIndex(icon);
-        if (index.has_value())
-            kIconDescriptors[*index].renderer(IconDrawContext{*drawList, position, size, color});
+        descriptor.renderer(IconDrawContext{*drawList, position, size, color});
     }
 }  // namespace Horo::Editor::Ui

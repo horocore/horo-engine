@@ -184,17 +184,15 @@ namespace Horo::Editor {
     InspectorNameEdit InspectorPanel::DrawObjectTitleWidgets(const SceneObject &object, EditorWorkspaceViewCommandData &command,
                                                              const EditorGuiContext &context) {
         InspectorObjectDraft &draft = m_editSession.Draft();
-        const std::string &staticLabel = context.localization.Get("editor", "workspace.inspector.static");
         const std::string &optionsLabel = context.localization.Get("editor", "workspace.inspector.object_options");
-        const ObjectTitleLayout layout = ResolveObjectTitleLayout(staticLabel.c_str(), context.theme.fonts);
+        const ObjectTitleLayout layout = ResolveObjectTitleLayout();
         const ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
         const float rowWidth = ImGui::GetContentRegionAvail().x;
         const bool nameWasValid = IsValidSceneObjectName(draft.name);
         const Ui::TextEditResult edit =
             Ui::DrawEditableTitle("object_name", draft.name, MaximumSceneObjectNameBytes, context.theme.fonts,
-                                  {.leadingIcon = KindIcon(object.kind), .trailingWidth = layout.trailingWidth, .error = !nameWasValid});
+                                  {.leadingIcon = Ui::UiIcon::SceneObject, .trailingWidth = layout.trailingWidth, .error = !nameWasValid});
         const ImVec2 rowEnd = ImGui::GetCursorScreenPos();
-        DrawStaticObjectIndicator(staticLabel.c_str(), context.theme.fonts, layout, rowOrigin, rowWidth);
         DrawObjectOptions(object, command, context, layout, rowOrigin, rowWidth, optionsLabel.c_str());
         ImGui::SetCursorScreenPos({rowEnd.x, rowEnd.y + 5.0F * layout.uiScale});
 

@@ -47,8 +47,7 @@ HoroEditorApp
 
 `EditorWorkspaceScreen` may publish document and selection snapshots, but it
 does not draw or own the bar. On route exit, it marks workspace-scoped snapshots
-unavailable. Process-scoped items such as renderer backend and CPU frame time
-remain visible.
+unavailable. Process-scoped items such as the renderer backend remain visible.
 
 The host computes:
 
