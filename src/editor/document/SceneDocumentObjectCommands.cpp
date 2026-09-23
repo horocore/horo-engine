@@ -95,6 +95,15 @@ namespace Horo::Editor {
             std::optional<std::uint64_t> aiAgentId;
         };
 
+        struct DuplicatedIdentityCounters final {
+            std::uint64_t aiAgentId;
+            std::uint64_t behaviorInstanceId;
+            std::uint64_t navigationSurfaceId;
+            std::uint64_t navigationRegionId;
+            std::uint64_t navigationModifierId;
+            std::uint64_t navigationLinkId;
+        };
+
         /** @brief Copies, regenerates, and validates component identities for one duplicated scene object. */
         [[nodiscard]] Result<PreparedDuplicatedComponents> PrepareDuplicatedComponents(
             const std::span<const SceneObjectSnapshot> objects, const SceneObjectSnapshot &source, const std::uint64_t nextAiAgentId,
@@ -122,6 +131,29 @@ namespace Horo::Editor {
             if (Result<void> ai = ValidateSceneAiComponents(objects, std::nullopt, &prepared.components); ai.HasError())
                 return Result<PreparedDuplicatedComponents>::Failure(ai.ErrorValue());
             return Result<PreparedDuplicatedComponents>::Success(std::move(prepared));
+        }
+
+        /** @brief Regenerates all identity-bearing component values and returns their staged counters. */
+        [[nodiscard]] Result<DuplicatedIdentityCounters> PrepareDuplicatedIdentityCounters(
+            SceneObjectComponentSet &components, const std::optional<std::uint64_t> duplicatedAiAgentId, const std::uint64_t nextAiAgentId,
+            const std::uint64_t nextBehaviorInstanceId, const std::uint64_t nextNavigationSurfaceId,
+            const std::uint64_t nextNavigationRegionId, const std::uint64_t nextNavigationModifierId,
+            const std::uint64_t nextNavigationLinkId) {
+            DuplicatedIdentityCounters next{nextAiAgentId,          nextBehaviorInstanceId,   nextNavigationSurfaceId,
+                                            nextNavigationRegionId, nextNavigationModifierId, nextNavigationLinkId};
+            if (duplicatedAiAgentId.has_value())
+                next.aiAgentId = *duplicatedAiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicatedAiAgentId + 1;
+            for (Gameplay::BehaviorComponent &behavior : components.behaviors) {
+                if (next.behaviorInstanceId == 0)
+                    return Result<DuplicatedIdentityCounters>::Failure(
+                        MakeDocumentError(SceneDocumentErrors::InvalidBehavior, "Behavior instance identity space is exhausted."));
+                behavior.instanceId = Gameplay::BehaviorInstanceId{next.behaviorInstanceId};
+                next.behaviorInstanceId =
+                    next.behaviorInstanceId == std::numeric_limits<std::uint64_t>::max() ? 0 : next.behaviorInstanceId + 1;
+            }
+            ObserveNavigationComponentIds(components, next.navigationSurfaceId, next.navigationRegionId, next.navigationModifierId,
+                                          next.navigationLinkId);
+            return Result<DuplicatedIdentityCounters>::Success(next);
         }
     }  // namespace
 
@@ -269,23 +301,13 @@ namespace Horo::Editor {
             return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
         PreparedDuplicatedComponents duplicated = std::move(prepared).Value();
         SceneObjectComponentSet duplicatedComponents = std::move(duplicated.components);
-        std::uint64_t nextAiAgentId = m_document.m_nextAiAgentId;
-        if (duplicated.aiAgentId.has_value())
-            nextAiAgentId = *duplicated.aiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicated.aiAgentId + 1;
-        std::uint64_t nextBehaviorInstanceId = m_document.m_nextBehaviorInstanceId;
-        for (Gameplay::BehaviorComponent &behavior : duplicatedComponents.behaviors) {
-            if (nextBehaviorInstanceId == 0)
-                return Result<SceneCommandResult>::Failure(
-                    MakeDocumentError(SceneDocumentErrors::InvalidBehavior, "Behavior instance identity space is exhausted."));
-            behavior.instanceId = Gameplay::BehaviorInstanceId{nextBehaviorInstanceId};
-            nextBehaviorInstanceId = nextBehaviorInstanceId == std::numeric_limits<std::uint64_t>::max() ? 0 : nextBehaviorInstanceId + 1;
-        }
-        std::uint64_t nextNavigationSurfaceId = m_document.m_nextNavigationSurfaceId;
-        std::uint64_t nextNavigationRegionId = m_document.m_nextNavigationRegionId;
-        std::uint64_t nextNavigationModifierId = m_document.m_nextNavigationModifierId;
-        std::uint64_t nextNavigationLinkId = m_document.m_nextNavigationLinkId;
-        ObserveNavigationComponentIds(duplicatedComponents, nextNavigationSurfaceId, nextNavigationRegionId, nextNavigationModifierId,
-                                      nextNavigationLinkId);
+        auto identity = PrepareDuplicatedIdentityCounters(duplicatedComponents, duplicated.aiAgentId, m_document.m_nextAiAgentId,
+                                                          m_document.m_nextBehaviorInstanceId, m_document.m_nextNavigationSurfaceId,
+                                                          m_document.m_nextNavigationRegionId, m_document.m_nextNavigationModifierId,
+                                                          m_document.m_nextNavigationLinkId);
+        if (identity.HasError())
+            return Result<SceneCommandResult>::Failure(identity.ErrorValue());
+        const DuplicatedIdentityCounters next = std::move(identity).Value();
         SceneCommandDelta delta = CreatedObjectDelta{
             .object = SceneObjectSnapshot{.id = id,
                                           .parent = source->parent,
@@ -303,12 +325,12 @@ namespace Horo::Editor {
             return committed;
 
         ++m_document.m_nextObjectId;
-        m_document.m_nextAiAgentId = nextAiAgentId;
-        m_document.m_nextBehaviorInstanceId = nextBehaviorInstanceId;
-        m_document.m_nextNavigationSurfaceId = nextNavigationSurfaceId;
-        m_document.m_nextNavigationRegionId = nextNavigationRegionId;
-        m_document.m_nextNavigationModifierId = nextNavigationModifierId;
-        m_document.m_nextNavigationLinkId = nextNavigationLinkId;
+        m_document.m_nextAiAgentId = next.aiAgentId;
+        m_document.m_nextBehaviorInstanceId = next.behaviorInstanceId;
+        m_document.m_nextNavigationSurfaceId = next.navigationSurfaceId;
+        m_document.m_nextNavigationRegionId = next.navigationRegionId;
+        m_document.m_nextNavigationModifierId = next.navigationModifierId;
+        m_document.m_nextNavigationLinkId = next.navigationLinkId;
         return committed;
     }
 
