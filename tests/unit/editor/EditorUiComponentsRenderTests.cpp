@@ -2,6 +2,8 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/LocalizationService.h"
+#include "editor/ui_preview/EditorUiPreviewGallery.h"
 
 #include <array>
 #include <catch2/catch_approx.hpp>
@@ -241,6 +243,35 @@ TEST_CASE("Shared tooltip applies theme chrome and restores caller style", "[uni
     REQUIRE(snapshot.restoredPadding.y == Catch::Approx(snapshot.originalPadding.y));
     REQUIRE(snapshot.restoredRounding == Catch::Approx(snapshot.originalRounding));
     REQUIRE(snapshot.restoredBorderSize == Catch::Approx(snapshot.originalBorderSize));
+}
+
+TEST_CASE("Editor UI preview gallery renders chrome and handles scenario selection", "[unit][editor][gui][preview]") {
+    using namespace Horo::Editor;
+
+    ImGuiTestContext imgui{{1280.0F, 800.0F}};
+    LocalizationService localization{LocaleTag{"en-US"}};
+    std::optional<std::string_view> requestedScenario;
+
+    RenderImGuiFrame([&] {
+        requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", true, imgui.fonts, localization);
+    });
+    REQUIRE_FALSE(requestedScenario.has_value());
+
+    imgui.io->AddMousePosEvent(120.0F, 137.0F);
+    RenderImGuiFrame([&] {
+        requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.fonts, localization);
+    });
+    imgui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    RenderImGuiFrame([&] {
+        requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.fonts, localization);
+    });
+    imgui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    RenderImGuiFrame([&] {
+        requestedScenario = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.fonts, localization);
+    });
+
+    REQUIRE(requestedScenario.has_value());
+    REQUIRE(*requestedScenario == "asset-import");
 }
 
 TEST_CASE("Generic card title actions invoke caller-owned callbacks", "[unit][editor][gui][design-system]") {
