@@ -660,7 +660,8 @@ namespace Horo::Editor {
                 DrawSetting(modal, setting, item, fonts);
         }
 
-        const Assets::AssetImporterContribution *DrawImporterSettings(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot,
+        const Assets::AssetImporterContribution *DrawImporterSettings(const AssetImportModal &modal, AssetImportModal &actions,
+                                                                      const Assets::AssetImportSnapshot &snapshot,
                                                                       Assets::AssetImportItem &item, const Fonts &fonts) {
             {
                 ScopedTextStyle headingStyle(fonts.sansEmphasis, TextPx::CardTitle(), FontPx::SansEmphasis);
@@ -682,7 +683,7 @@ namespace Horo::Editor {
             ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x));
             static_cast<void>(
                 ComboControl("##ImportAssetType", &selectedType, assetTypes.data(), static_cast<int>(assetTypes.size()), fonts));
-            DrawPreset(modal, snapshot, fonts);
+            DrawPreset(actions, snapshot, fonts);
             DrawImporterSettingRows(modal, item, *contribution, fonts);
             return contribution;
         }
@@ -724,11 +725,12 @@ namespace Horo::Editor {
             }
         }
 
-        void DrawAdvancedSettings(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, Assets::AssetImportItem &item,
-                                  const Assets::AssetImporterContribution *contribution, const Fonts &fonts) {
+        void DrawAdvancedSettings(const AssetImportModal &modal, AssetImportModal &actions, const Assets::AssetImportSnapshot &snapshot,
+                                  Assets::AssetImportItem &item, const Assets::AssetImporterContribution *contribution,
+                                  const Fonts &fonts) {
             if (!ImGui::TreeNodeEx(Copy(modal.Localized("asset_import.advanced", "Advanced")).c_str()))
                 return;
-            DrawCreatePresetAction(modal, snapshot, fonts);
+            DrawCreatePresetAction(actions, snapshot, fonts);
             if (contribution && AssetIcon(item) == UiIcon::HierarchyMesh) {
                 for (const auto &setting : contribution->settings)
                     if (!IsPrimarySetting(setting.id))
@@ -757,10 +759,10 @@ namespace Horo::Editor {
             ImGui::Dummy({0.0f, 4.0f});
             ImGui::Separator();
             ImGui::Dummy({0.0f, 4.0f});
-            const auto *contribution = DrawImporterSettings(modal, snapshot, item, fonts);
+            const auto *contribution = DrawImporterSettings(modal, modal, snapshot, item, fonts);
             ImGui::Dummy({0.0f, 4.0f});
             ImGui::Separator();
-            DrawAdvancedSettings(modal, snapshot, item, contribution, fonts);
+            DrawAdvancedSettings(modal, modal, snapshot, item, contribution, fonts);
             ImGui::EndChild();
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor();
