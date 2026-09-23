@@ -458,8 +458,7 @@ namespace Horo::Editor::Ui {
         if (!index.has_value())
             return;
         const IconDescriptor &descriptor = kIconDescriptors[*index];
-        if (const ImWchar glyph = descriptor.materialGlyph;
-            glyph != 0 && iconFont != nullptr && iconFont->FindGlyphNoFallback(glyph)) {
+        if (const ImWchar glyph = descriptor.materialGlyph; glyph != 0 && iconFont != nullptr && iconFont->FindGlyphNoFallback(glyph)) {
             const std::array utf8 = EncodeBasicMultilingualPlaneGlyph(glyph);
             const float glyphSize = std::min(size.x, size.y);
             const ImVec2 textSize = iconFont->CalcTextSizeA(glyphSize, FLT_MAX, 0.0F, utf8.data());

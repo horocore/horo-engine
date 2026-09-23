@@ -254,10 +254,21 @@ namespace Horo::Editor {
             std::optional<int> endOnAxis;
         };
 
+        struct LinearAxisHandleContext {
+            int axis{};
+            ImU32 axisColor{};
+            const RotationScreenBasis &screenBasis;
+            float centerPixelsPerWorldUnit{};
+            LinearHandleHitState &hitState;
+        };
+
         [[nodiscard]] Result<void> DrawLinearAxisHandle(ImDrawList &drawList, const TransformGizmoGeometryRequest &request,
-                                                        TransformGizmoFrameGeometry &geometry, const int axis, const ImU32 axisColor,
-                                                        const RotationScreenBasis &screenBasis, const float centerPixelsPerWorldUnit,
-                                                        LinearHandleHitState &hitState) {
+                                                        TransformGizmoFrameGeometry &geometry, const LinearAxisHandleContext &context) {
+            const int axis = context.axis;
+            const ImU32 axisColor = context.axisColor;
+            const RotationScreenBasis &screenBasis = context.screenBasis;
+            const float centerPixelsPerWorldUnit = context.centerPixelsPerWorldUnit;
+            LinearHandleHitState &hitState = context.hitState;
             const Result<bool> directional = HasTransformGizmoLinearAxisScreenDirection(request.camera, geometry.worldAxes[axis]);
             if (directional.HasError())
                 return Result<void>::Failure(directional.ErrorValue());
@@ -292,8 +303,7 @@ namespace Horo::Editor {
             else
                 DrawScaleAxisHandle(drawList, *geometry.center, geometry.screenDirections[axis], axisLength, axisColor, active || hit);
             // A visible cube handle wins over another axis shaft crossing beneath it.
-            const float hitDistance = overScaleHandle ? -1.0F : distance;
-            if (hit && hitDistance < hitState.closestDistance) {
+            if (const float hitDistance = overScaleHandle ? -1.0F : distance; hit && hitDistance < hitState.closestDistance) {
                 hitState.closestDistance = hitDistance;
                 geometry.hoveredAxis = axis;
             }
@@ -310,8 +320,14 @@ namespace Horo::Editor {
                 return Result<void>::Failure(centerPixelsPerWorldUnit.ErrorValue());
             LinearHandleHitState hitState;
             for (int axis = 0; axis < 3; ++axis) {
-                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry, axis, axisColors[axis], screenBasis.Value(),
-                                                                centerPixelsPerWorldUnit.Value(), hitState);
+                const Result<void> drawn = DrawLinearAxisHandle(drawList, request, geometry,
+                                                                LinearAxisHandleContext{
+                                                                    .axis = axis,
+                                                                    .axisColor = axisColors[axis],
+                                                                    .screenBasis = screenBasis.Value(),
+                                                                    .centerPixelsPerWorldUnit = centerPixelsPerWorldUnit.Value(),
+                                                                    .hitState = hitState,
+                                                                });
                 if (drawn.HasError())
                     return drawn;
             }
