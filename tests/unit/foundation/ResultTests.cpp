@@ -1,12 +1,22 @@
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/ErrorCode.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Result.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <type_traits>
 
 namespace {
     static_assert(noexcept(Horo::Result<void>::Success()), "A successful void Result must not allocate or throw on renderer hot paths.");
+    static_assert(std::is_same_v<
+                  decltype(Horo::Log::Logger::Write(std::string_view{"test"}, Horo::Log::Level::Info, std::string_view{"record"})), void>);
+    static_assert(std::is_same_v<decltype(Horo::Log::Logger::WriteEmergency(std::string_view{"test"}, Horo::Log::Level::Critical,
+                                                                            std::string_view{"record"})),
+                                 void>);
 
     Horo::ErrorCodeDescriptor Descriptor(const std::string_view domain, const std::string_view code, const std::string_view summary) {
         return {
@@ -26,6 +36,47 @@ namespace {
         REQUIRE((result.HasValue()));
         REQUIRE((!result.HasError()));
         REQUIRE((result.Value() == 42));
+    }
+
+    TEST_CASE("Assertion helpers follow the build policy", "[unit][foundation]") {
+        // The counters deliberately verify that each helper evaluates its condition at most once.
+        int assertionEvaluations = 0;
+        HORO_ASSERT(++assertionEvaluations == 1);
+#if defined(NDEBUG)
+        REQUIRE_FALSE(Horo::AssertionPolicy::DebugAssertionsEnabled);
+        REQUIRE((assertionEvaluations == 0));
+#else
+        REQUIRE(Horo::AssertionPolicy::DebugAssertionsEnabled);
+        REQUIRE((assertionEvaluations == 1));
+#endif
+
+        int invariantEvaluations = 0;
+        HORO_INVARIANT(++invariantEvaluations == 1);
+        REQUIRE((invariantEvaluations == 1));
+    }
+
+    TEST_CASE("Emergency logging bypasses filters and carries no result", "[unit][foundation]") {
+        const Horo::Log::Level previousLevel = Horo::Log::Logger::GetLevel();
+        Horo::Log::Logger::SetLevel(Horo::Log::Level::Off);
+        const Horo::Log::LoggerStatistics before = Horo::Log::Logger::Statistics();
+        Horo::Log::Logger::WriteEmergency("foundation.tests.assertion", Horo::Log::Level::Critical, "emergency assertion probe");
+        const Horo::Log::LoggerStatistics after = Horo::Log::Logger::Statistics();
+        Horo::Log::Logger::SetLevel(previousLevel);
+
+        REQUIRE((after.emergencyRecords == before.emergencyRecords + 1));
+    }
+
+    TEST_CASE("Error severities map exactly to diagnostic severities", "[unit][foundation]") {
+        const auto matches = [](const Horo::ErrorSeverity error, const Horo::DiagnosticSeverity diagnostic) {
+            const std::optional<Horo::DiagnosticSeverity> mapped = Horo::DiagnosticSeverityForError(error);
+            return mapped.has_value() && *mapped == diagnostic;
+        };
+
+        REQUIRE(matches(Horo::ErrorSeverity::Info, Horo::DiagnosticSeverity::Note));
+        REQUIRE(matches(Horo::ErrorSeverity::Warning, Horo::DiagnosticSeverity::Warning));
+        REQUIRE(matches(Horo::ErrorSeverity::Error, Horo::DiagnosticSeverity::Error));
+        REQUIRE(matches(Horo::ErrorSeverity::Critical, Horo::DiagnosticSeverity::Fatal));
+        REQUIRE_FALSE(Horo::DiagnosticSeverityForError(static_cast<Horo::ErrorSeverity>(0xff)).has_value());
     }
 
     TEST_CASE("Result Preserves Typed Failure", "[unit][foundation]") {

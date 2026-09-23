@@ -1128,6 +1128,7 @@ add_executable(HoroFoundationResultTests
 
 target_compile_features(HoroFoundationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationResultTests PRIVATE HoroEngine::Foundation)
+horo_register_catch_test(HoroFoundationResultTests LABELS "unit;foundation;headless")
 add_executable(HoroCliCommandRegistryTests
         unit/cli/CliCommandRegistryTests.cpp
         unit/cli/CliDispatcherTests.cpp

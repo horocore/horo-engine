@@ -530,9 +530,14 @@ namespace Horo::Log {
         };
 
         void EmergencyWrite(const Level level, const std::string_view category, const std::string_view message) {
+            constexpr std::size_t kMaximumCategoryBytes = 128;
+            constexpr std::size_t kMaximumMessageBytes = 4096;
+            const std::string_view boundedCategory = category.substr(0, kMaximumCategoryBytes);
+            const std::string_view boundedMessage = message.substr(0, kMaximumMessageBytes);
             State().emergency.fetch_add(1);
-            std::fprintf(stderr, "[logger-emergency][%s] %.*s: %.*s\n", ToString(level), static_cast<int>(category.size()), category.data(),
-                         static_cast<int>(message.size()), message.data());
+            std::fprintf(stderr, "[logger-emergency][%s] %.*s: %.*s\n", ToString(level), static_cast<int>(boundedCategory.size()),
+                         boundedCategory.empty() ? "" : boundedCategory.data(), static_cast<int>(boundedMessage.size()),
+                         boundedMessage.empty() ? "" : boundedMessage.data());
         }
 
         Level ParseEnvironmentLevel(const Level fallback) {
@@ -742,6 +747,12 @@ namespace Horo::Log {
                                               .context = FormatPresentationContext(context)});
             State().written.fetch_add(1);
         }
+    }
+
+    /** @copydoc Logger::WriteEmergency */
+    void Logger::WriteEmergency(const std::string_view category, const Level level, const std::string_view message) noexcept {
+        EmergencyWrite(level, category, message);
+        static_cast<void>(std::fflush(stderr));
     }
 
     /** @copydoc Logger::DumpStartupInfo */

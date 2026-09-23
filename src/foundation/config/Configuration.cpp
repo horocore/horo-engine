@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Configuration.h"
 
 #include "../FoundationErrors.h"
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Platform.h"
 
 #include <algorithm>
@@ -472,7 +473,7 @@ namespace Horo {
     /** @copydoc ConfigurationSnapshot::Get */
     const SettingValue &ConfigurationSnapshot::Get(const SettingKey &key) const {
         const auto found = m_data->values.find(key);
-        assert(found != m_data->values.end());
+        HORO_INVARIANT_MSG(found != m_data->values.end(), "ConfigurationSnapshot::Get requires a registered key.");
         return found->second.value;
     }
 
@@ -644,9 +645,9 @@ namespace Horo {
     /** @copydoc ConfigurationService::ConfigurationService */
     ConfigurationService::ConfigurationService(ConfigurationSchema schema, EngineDataBus *events)
         : m_schema(std::move(schema)), m_events(events) {
-        assert(m_schema.m_sealed);
+        HORO_INVARIANT_MSG(m_schema.m_sealed, "ConfigurationService requires a sealed schema.");
         Result<ConfigurationSnapshot> initial = ConfigurationResolver::Resolve(m_schema, {});
-        assert(initial.HasValue());
+        HORO_INVARIANT_MSG(initial.HasValue(), "A sealed configuration schema must resolve its initial snapshot.");
         m_active = std::move(initial).Value().m_data;
     }
 
@@ -672,7 +673,7 @@ namespace Horo {
             auto candidate = std::make_shared<ConfigurationSnapshot::Data>(*m_active);
             for (const auto &[key, value] : draft.proposedValues) {
                 const SettingDescriptor *descriptor = m_schema.FindDescriptor(key);
-                assert(descriptor != nullptr);
+                HORO_INVARIANT_MSG(descriptor != nullptr, "Validated configuration drafts must reference registered settings.");
                 candidate->values[key] = {.value = value,
                                           .source = ConfigurationSource::Session,
                                           .location = std::nullopt,
