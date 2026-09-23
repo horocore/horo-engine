@@ -44,8 +44,10 @@ namespace Horo::PlatformServices::TestSupport {
         friendsResponse.payload = FriendsPage{.entries = {}, .hasMore = true};
         REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriends, std::move(friendsResponse)).HasValue());
 
+        const auto sessionSnapshot = BuildPlatformSessionSnapshot(PlatformSessionCandidate{});
+        REQUIRE(sessionSnapshot.HasValue());
         MockPlatformServicesResponse sessionResponse;
-        sessionResponse.payload = PlatformSessionSnapshot{};
+        sessionResponse.payload = std::move(sessionSnapshot).Value();
         REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryCurrentSession, std::move(sessionResponse)).HasValue());
 
         ActivateMock(backend);

@@ -150,15 +150,15 @@ namespace Horo::PlatformServices::TestSupport {
         [[nodiscard]] Result<void> RequestCancel(PlatformRequestId request, PlatformRequestGeneration generation) override;
         [[nodiscard]] Result<void> Shutdown() override;
 
-        [[nodiscard]] Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
-        [[nodiscard]] Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) override;
-        [[nodiscard]] Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery query) override;
         [[nodiscard]] Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() override;
+        [[nodiscard]] Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) override;
+        [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) override;
 
     private:
         struct Impl;
