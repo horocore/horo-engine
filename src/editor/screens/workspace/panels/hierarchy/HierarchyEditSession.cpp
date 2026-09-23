@@ -75,7 +75,7 @@ namespace Horo::Editor {
                     .hiddenByParent = object.hiddenByParent,
                     .lockedByParent = object.lockedByParent,
                 });
-                m_parentByNode.emplace(object.id.value, parent);
+                m_parentByNode.try_emplace(object.id.value, parent);
             }
             m_model.Replace(m_inputs);
             m_projectedRevision = viewModel.documentRevision;

@@ -446,6 +446,110 @@ namespace Horo::Editor {
             ImGui::PopStyleVar();
         }
 
+        void DrawImportQueueItem(AssetImportModal &modal, const Assets::AssetImportItem &item, const std::size_t index,
+                                 const std::size_t selectedItemIndex, const Fonts &fonts, ImDrawList &queueDrawList) {
+            bool hasError = false;
+            bool hasWarning = false;
+            for (const auto &diagnostic : item.diagnostics) {
+                hasError |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Error;
+                hasWarning |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning;
+            }
+
+            Ui::UiIcon icon = Ui::UiIcon::Pending;
+            if (item.result.has_value())
+                icon = Ui::UiIcon::Success;
+            if (hasWarning)
+                icon = Ui::UiIcon::Warning;
+            if (hasError)
+                icon = Ui::UiIcon::Error;
+
+            const bool selected = index == selectedItemIndex;
+            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            const float rowW = ImGui::GetContentRegionAvail().x;
+            constexpr float rowH = 38.0f;
+            if (ImGui::InvisibleButton(std::format("##QueueItem{}", index).c_str(), {rowW, rowH}))
+                modal.SelectItem(index);
+
+            const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
+            const ImU32 rowBg = U32(selected ? ImVec4{Accent().x, Accent().y, Accent().z, 0.12f} : Bg3());
+            queueDrawList.AddRectFilled(rowMin, rowMax, rowBg, 4.0f);
+            queueDrawList.AddRect(rowMin, rowMax, U32(selected ? Accent() : Border()), 4.0f);
+
+            const float rowCenter = rowMin.y + rowH * 0.5f;
+            const float iconY = rowCenter - fonts.icon->FontSize * 0.5f;
+            Ui::DrawEditorIcon(&queueDrawList, icon, {rowMin.x + 14.0f, iconY}, {fonts.icon->FontSize, fonts.icon->FontSize}, U32(Text()),
+                               fonts.icon);
+
+            PushFont(fonts.sansCompact);
+            const float textY = rowMin.y + (rowH - fonts.sansCompact->FontSize) * 0.5f;
+            const std::string displayName = DisplayFileName(std::filesystem::path{item.sourceFile.String()});
+            queueDrawList.AddText({rowMin.x + 36.0f, textY}, U32(Text()), displayName.c_str());
+            PopFont(fonts.sansCompact);
+        }
+
+        void DrawImportHistoryItem(const AssetImportModal &modal, const OperationRecord &operation, const Fonts &fonts,
+                                   ImDrawList &queueDrawList) {
+            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+            const float rowW = ImGui::GetContentRegionAvail().x;
+            constexpr float rowH = 46.0f;
+            ImGui::InvisibleButton(std::format("##ImportHistory{}", operation.id).c_str(), {rowW, rowH});
+
+            const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
+            queueDrawList.AddRectFilled(rowMin, rowMax, U32(Bg3()), 4.0f);
+            queueDrawList.AddRect(rowMin, rowMax, U32(Border()), 4.0f);
+
+            Ui::UiIcon icon = Ui::UiIcon::Success;
+            ImVec4 statusColor = Ok();
+            std::string_view status = modal.Localized("asset_import.history.succeeded", "Imported");
+            if (operation.state == OperationState::Failed) {
+                icon = Ui::UiIcon::Error;
+                statusColor = Err();
+                status = modal.Localized("asset_import.history.failed", "Failed");
+            } else if (operation.state == OperationState::Cancelled) {
+                icon = Ui::UiIcon::Cancelled;
+                statusColor = Dim();
+                status = modal.Localized("asset_import.history.cancelled", "Cancelled");
+            }
+
+            Ui::DrawEditorIcon(&queueDrawList, icon, {rowMin.x + 14.0f, rowMin.y + 14.0f}, {fonts.icon->FontSize, fonts.icon->FontSize},
+                               U32(statusColor), fonts.icon);
+            PushFont(fonts.sansCompact);
+            queueDrawList.AddText({rowMin.x + 36.0f, rowMin.y + 7.0f}, U32(Text()), operation.title.c_str());
+            queueDrawList.AddText({rowMin.x + 36.0f, rowMin.y + 25.0f}, U32(statusColor), status.data(), status.data() + status.size());
+            PopFont(fonts.sansCompact);
+        }
+
+        void DrawImportHistory(const AssetImportModal &modal, const Fonts &fonts, ImDrawList &queueDrawList) {
+            const auto history = modal.ImportHistory();
+            for (const OperationRecord &operation : history)
+                DrawImportHistoryItem(modal, operation, fonts, queueDrawList);
+            if (history.empty()) {
+                PushFont(fonts.sansCompact);
+                const std::string_view empty = modal.Localized("asset_import.history.empty", "No imports yet.");
+                ImGui::TextColored(Dim(), "%.*s", static_cast<int>(empty.size()), empty.data());
+                PopFont(fonts.sansCompact);
+            }
+        }
+
+        void DrawImportQueue(AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f, 0.0f});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{0.0f, 5.0f});
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg0());
+            ImGui::BeginChild("QueueList", ImVec2{0.0f, 0.0f}, false);
+            ImDrawList *queueDrawList = ImGui::GetWindowDrawList();
+
+            if (!snap.items.empty()) {
+                for (std::size_t i = 0; i < snap.items.size(); ++i)
+                    DrawImportQueueItem(modal, snap.items[i], i, snap.selectedItemIndex, fonts, *queueDrawList);
+            } else {
+                DrawImportHistory(modal, fonts, *queueDrawList);
+            }
+
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+            ImGui::PopStyleVar(2);
+        }
+
         void DrawSidebar(AssetImportModal &modal, const Assets::AssetImportSnapshot &snap, const Fonts &fonts, float bodyH) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{16.0f, 16.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{8.0f, 8.0f});
@@ -491,97 +595,7 @@ namespace Horo::Editor {
             LabeledSeparator(sectionLabel.c_str(), fonts);
             ImGui::Spacing();
 
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f, 0.0f});
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{0.0f, 5.0f});
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg0());
-            ImGui::BeginChild("QueueList", ImVec2{0.0f, 0.0f}, false);
-            ImDrawList *queueDrawList = ImGui::GetWindowDrawList();
-
-            for (std::size_t i = 0; i < snap.items.size(); ++i) {
-                const auto &item = snap.items[i];
-                bool hasError = false;
-                bool hasWarning = false;
-                for (const auto &diagnostic : item.diagnostics) {
-                    hasError |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Error;
-                    hasWarning |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning;
-                }
-
-                Ui::UiIcon icon = Ui::UiIcon::Pending;
-                if (item.result.has_value())
-                    icon = Ui::UiIcon::Success;
-                if (hasWarning)
-                    icon = Ui::UiIcon::Warning;
-                if (hasError)
-                    icon = Ui::UiIcon::Error;
-
-                const bool selected = i == snap.selectedItemIndex;
-                const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-                const float rowW = ImGui::GetContentRegionAvail().x;
-                constexpr float rowH = 38.0f;
-                if (ImGui::InvisibleButton(std::format("##QueueItem{}", i).c_str(), {rowW, rowH}))
-                    modal.SelectItem(i);
-
-                const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
-                const ImU32 rowBg = U32(selected ? ImVec4{Accent().x, Accent().y, Accent().z, 0.12f} : Bg3());
-                queueDrawList->AddRectFilled(rowMin, rowMax, rowBg, 4.0f);
-                queueDrawList->AddRect(rowMin, rowMax, U32(selected ? Accent() : Border()), 4.0f);
-
-                const float rowCenter = rowMin.y + rowH * 0.5f;
-                const float iconY = rowCenter - fonts.icon->FontSize * 0.5f;
-                const ImVec2 iconPos{rowMin.x + 14.0f, iconY};
-                Ui::DrawEditorIcon(queueDrawList, icon, iconPos, {fonts.icon->FontSize, fonts.icon->FontSize}, U32(Text()), fonts.icon);
-
-                PushFont(fonts.sansCompact);
-                const float textY = rowMin.y + (rowH - fonts.sansCompact->FontSize) * 0.5f;
-                queueDrawList->AddText({rowMin.x + 36.0f, textY}, U32(Text()),
-                                       DisplayFileName(std::filesystem::path{item.sourceFile.String()}).c_str());
-                PopFont(fonts.sansCompact);
-            }
-
-            if (snap.items.empty()) {
-                const auto history = modal.ImportHistory();
-                for (const OperationRecord &operation : history) {
-                    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-                    const float rowW = ImGui::GetContentRegionAvail().x;
-                    constexpr float rowH = 46.0f;
-                    ImGui::InvisibleButton(std::format("##ImportHistory{}", operation.id).c_str(), {rowW, rowH});
-
-                    const ImVec2 rowMax{rowMin.x + rowW, rowMin.y + rowH};
-                    queueDrawList->AddRectFilled(rowMin, rowMax, U32(Bg3()), 4.0f);
-                    queueDrawList->AddRect(rowMin, rowMax, U32(Border()), 4.0f);
-
-                    Ui::UiIcon icon = Ui::UiIcon::Success;
-                    ImVec4 statusColor = Ok();
-                    std::string_view status = modal.Localized("asset_import.history.succeeded", "Imported");
-                    if (operation.state == OperationState::Failed) {
-                        icon = Ui::UiIcon::Error;
-                        statusColor = Err();
-                        status = modal.Localized("asset_import.history.failed", "Failed");
-                    } else if (operation.state == OperationState::Cancelled) {
-                        icon = Ui::UiIcon::Cancelled;
-                        statusColor = Dim();
-                        status = modal.Localized("asset_import.history.cancelled", "Cancelled");
-                    }
-
-                    Ui::DrawEditorIcon(queueDrawList, icon, {rowMin.x + 14.0f, rowMin.y + 14.0f},
-                                       {fonts.icon->FontSize, fonts.icon->FontSize}, U32(statusColor), fonts.icon);
-                    PushFont(fonts.sansCompact);
-                    queueDrawList->AddText({rowMin.x + 36.0f, rowMin.y + 7.0f}, U32(Text()), operation.title.c_str());
-                    queueDrawList->AddText({rowMin.x + 36.0f, rowMin.y + 25.0f}, U32(statusColor), status.data(),
-                                           status.data() + status.size());
-                    PopFont(fonts.sansCompact);
-                }
-                if (history.empty()) {
-                    PushFont(fonts.sansCompact);
-                    const std::string_view empty = modal.Localized("asset_import.history.empty", "No imports yet.");
-                    ImGui::TextColored(Dim(), "%.*s", static_cast<int>(empty.size()), empty.data());
-                    PopFont(fonts.sansCompact);
-                }
-            }
-
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-            ImGui::PopStyleVar(2);
+            DrawImportQueue(modal, snap, fonts);
             ImGui::EndChild();
             ImGui::PopStyleColor();
             ImGui::PopStyleVar(2);

@@ -59,6 +59,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> TryBeginDrag(const TransformGizmoFrameGeometry &geometry, const Math::Mat4 &worldTransform,
                                                 const SceneObject &selectedObject, const TransformGizmoDrawContext &context,
                                                 ViewportInteractionCapture &capture);
+        [[nodiscard]] bool HasInvalidDrag(const SceneObject *selectedObject, const EditorWorkspaceViewModel &viewModel) const noexcept;
         void AdvanceDrag(const TransformGizmoDrawContext &context, ViewportInteractionCapture &capture);
 
         std::optional<DragSession> drag_;
