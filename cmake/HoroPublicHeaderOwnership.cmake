@@ -687,6 +687,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorThemeTokens.h
     Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/EditorSurfaceContext.h
+    Horo/Extensions/EditorCommandRegistry.h
     Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h

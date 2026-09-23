@@ -1605,6 +1605,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
+        extensions/host/EditorCommandRegistry.cpp
         extensions/host/EditorThemeTokensInternal.h
         extensions/host/EditorThemeTokensValidation.cpp
         extensions/host/EditorThemeTokensColor.cpp
@@ -1644,6 +1645,7 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/EditorSurfaceContextErrors.cpp
+        extensions/registry/EditorCommandErrors.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
         extensions/registry/ScriptInvocationErrors.cpp
