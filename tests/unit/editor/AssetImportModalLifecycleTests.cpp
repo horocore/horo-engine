@@ -367,7 +367,7 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
     REQUIRE((batchModal.BeginImport({firstSource, secondSource}, project.Path(), cancellation).HasValue()));
     const auto visibleOperations = operations.SnapshotIfChanged(0);
     REQUIRE(visibleOperations.has_value());
-    CHECK(visibleOperations->operations.front().title == "first +1");
+    CHECK(visibleOperations->operations.back().title == "first +1");
 }
 
 TEST_CASE("AssetImportModal rejects unresolved conflicts and invalid batch items", "[native]") {
