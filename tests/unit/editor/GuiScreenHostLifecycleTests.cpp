@@ -138,7 +138,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
         EditorModalHost modals{editorEvents, input};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        const Theme::Fonts &fonts = imgui.Fonts();
         ThemeContext theme{fonts};
         EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settings.Snapshot()};
         RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
