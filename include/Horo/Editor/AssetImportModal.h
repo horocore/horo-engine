@@ -256,6 +256,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> StartImportOperation(const std::vector<std::filesystem::path> &sourceFiles,
                                                         const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
 
+        /** @brief Publishes a newly started import in the shared operation history. */
+        void RegisterVisibleImportOperation();
+
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;
