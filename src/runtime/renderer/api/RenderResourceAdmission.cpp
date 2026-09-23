@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <initializer_list>
@@ -44,8 +45,8 @@ namespace Horo::Render {
             return "unknown";
         }
 
-        void AppendUsage(std::string &result, const std::uint8_t bits, const std::uint8_t flag, const std::string_view name) {
-            if ((bits & flag) == 0)
+        void AppendUsage(std::string &result, const std::byte bits, const std::byte flag, const std::string_view name) {
+            if ((bits & flag) == std::byte{0})
                 return;
             if (!result.empty())
                 result += '|';
@@ -53,26 +54,28 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] std::string TextureUsageName(const RenderTextureUsage usage) {
-            const auto bits = static_cast<std::uint8_t>(usage);
+            using enum RenderTextureUsage;
+            const auto bits = static_cast<std::byte>(static_cast<std::uint8_t>(usage));
             std::string result;
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderTextureUsage::Sampled), "sampled");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderTextureUsage::RenderAttachment), "attachment");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderTextureUsage::CopySource), "copy-source");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderTextureUsage::CopyDestination), "copy-destination");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderTextureUsage::Storage), "storage");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Sampled)), "sampled");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(RenderAttachment)), "attachment");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(CopySource)), "copy-source");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(CopyDestination)), "copy-destination");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Storage)), "storage");
             return result.empty() ? "none" : result;
         }
 
         [[nodiscard]] std::string BufferUsageName(const RenderBufferUsage usage) {
-            const auto bits = static_cast<std::uint8_t>(usage);
+            using enum RenderBufferUsage;
+            const auto bits = static_cast<std::byte>(static_cast<std::uint8_t>(usage));
             std::string result;
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::Vertex), "vertex");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::Index), "index");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::CopySource), "copy-source");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::CopyDestination), "copy-destination");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::Uniform), "uniform");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::Storage), "storage");
-            AppendUsage(result, bits, static_cast<std::uint8_t>(RenderBufferUsage::Indirect), "indirect");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Vertex)), "vertex");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Index)), "index");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(CopySource)), "copy-source");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(CopyDestination)), "copy-destination");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Uniform)), "uniform");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Storage)), "storage");
+            AppendUsage(result, bits, static_cast<std::byte>(static_cast<std::uint8_t>(Indirect)), "indirect");
             return result.empty() ? "none" : result;
         }
 
@@ -141,13 +144,13 @@ namespace Horo::Render {
                  descriptor.extent.height > capabilities.limits.maxTextureDimension2D)
             AppendReason(reasons, std::format("extent exceeds max {}", capabilities.limits.maxTextureDimension2D));
 
-        const auto formatIndex = static_cast<std::size_t>(descriptor.format);
-        if (formatIndex >= capabilities.formats.usages.size()) {
+        if (const auto formatIndex = static_cast<std::size_t>(descriptor.format); formatIndex >= capabilities.formats.usages.size()) {
             AppendReason(reasons, "format is unknown");
         } else {
             const RenderTextureUsage allowed = capabilities.formats.usages[formatIndex];
-            const auto missing =
-                static_cast<RenderTextureUsage>(static_cast<std::uint8_t>(descriptor.usage) & ~static_cast<std::uint8_t>(allowed));
+            const std::byte requestedUsage = static_cast<std::byte>(static_cast<std::uint8_t>(descriptor.usage));
+            const std::byte allowedUsage = static_cast<std::byte>(static_cast<std::uint8_t>(allowed));
+            const auto missing = static_cast<RenderTextureUsage>(static_cast<std::uint8_t>(requestedUsage & ~allowedUsage));
             if (allowed == RenderTextureUsage::None)
                 AppendReason(reasons, std::format("{} has no admitted usages", format));
             else if (missing != RenderTextureUsage::None)

@@ -797,7 +797,7 @@ namespace Horo::Editor {
 
     bool HierarchyPanel::AcceptRowAssetDrop(const HierarchyNodeId nodeId, const float normalizedRowY, const ImVec2 &rowMin,
                                             const ImVec2 &rowMax, const EditorWorkspaceViewModel &viewModel,
-                                            EditorWorkspaceViewCommandData &command, ImDrawList &drawList) {
+                                            EditorWorkspaceViewCommandData &command, ImDrawList &drawList) const {
         const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(nodeId);
         const std::optional<SceneObjectId> nodeParent =
             projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
@@ -816,7 +816,7 @@ namespace Horo::Editor {
     HierarchyPanel::RowFrame HierarchyPanel::BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &drawLayout,
                                                            const EditorWorkspaceViewModel &viewModel,
                                                            EditorWorkspaceViewCommandData &command, ImDrawList &drawList,
-                                                           const EditorGuiContext &context) {
+                                                           const EditorGuiContext &context) const {
         const HierarchyNode &node = *row.node;
         ImFont &nameFont = *ResolveFont(node.children.empty() ? context.theme.fonts.sans : context.theme.fonts.sansEmphasis);
         ImGui::PushID(&node.id);
