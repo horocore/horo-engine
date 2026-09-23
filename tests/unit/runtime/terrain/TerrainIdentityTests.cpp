@@ -207,7 +207,7 @@ namespace Horo::Terrain {
         TEST_CASE("Terrain errors expose one unique actionable registry contribution", "[unit][terrain][errors]") {
             std::set<std::string_view> codes;
             const auto descriptors = TerrainErrors::Descriptors();
-            REQUIRE(descriptors.size() == 22);
+            REQUIRE(descriptors.size() == 29);
             for (const ErrorCodeDescriptor *descriptor : descriptors) {
                 REQUIRE(descriptor->domain.Value() == "horo.terrain");
                 REQUIRE(codes.insert(descriptor->code.Value()).second);

@@ -520,6 +520,7 @@ horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 add_executable(HoroTerrainApiTests
         unit/runtime/terrain/FoliageDefinitionTests.cpp
         unit/runtime/terrain/TerrainDescriptorTests.cpp
+        unit/runtime/terrain/TerrainFoliageRegistryTests.cpp
         unit/runtime/terrain/TerrainIdentityTests.cpp
 )
 target_compile_features(HoroTerrainApiTests PRIVATE cxx_std_20)

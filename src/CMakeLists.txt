@@ -877,6 +877,7 @@ add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp
         runtime/terrain/api/TerrainDescriptor.cpp
         runtime/terrain/api/TerrainErrors.cpp
+        runtime/terrain/api/TerrainFoliageRegistry.cpp
         runtime/terrain/api/TerrainIdentity.cpp
 )
 add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
