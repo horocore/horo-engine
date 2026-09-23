@@ -155,6 +155,15 @@ namespace {
                            renderers,
                            ScreenRegistry{},
                            WorkspacePanelRegistry{}};
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::ImportAssets});
+        REQUIRE(modals.HasOpenModal());
+        REQUIRE(host.StartUiPreview("asset-import-empty").HasError());
+        const auto menuModalId = modals.TopModalId();
+        REQUIRE(menuModalId.has_value());
+        REQUIRE(modals.RequestClose(*menuModalId, ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.016F);
+        REQUIRE_FALSE(modals.HasOpenModal());
+
         const auto invalid = host.StartUiPreview("not-a-preview");
         REQUIRE(invalid.HasError());
         REQUIRE(host.StartUiPreview("asset-import-empty").HasValue());
@@ -165,7 +174,30 @@ namespace {
         imgui.BeginFrame();
         host.Draw();
         imgui.EndFrame();
+
+        const auto previewModalId = modals.TopModalId();
+        REQUIRE(previewModalId.has_value());
+        REQUIRE(modals.RequestClose(*previewModalId, ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.016F);
+        REQUIRE_FALSE(modals.HasOpenModal());
+
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddMousePosEvent(120.0F, 137.0F);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        REQUIRE(modals.HasOpenModal());
+
         host.Shutdown();
         CHECK(host.IsShutdown());
+        CHECK(host.StartUiPreview("asset-import-empty").HasError());
     }
 }  // namespace
