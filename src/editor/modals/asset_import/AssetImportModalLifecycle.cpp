@@ -564,6 +564,11 @@ namespace Horo::Editor {
         for (const auto &item : m_snapshot.items)
             m_defaultPresetValues.push_back(CapturePresetValues(item, *m_catalog, "Default"));
         LOG_INFO("editor.asset_import", "Import started: %zu files.", m_snapshot.items.size());
+        RegisterVisibleImportOperation();
+        return Result<void>::Success();
+    }
+
+    void AssetImportModal::RegisterVisibleImportOperation() {
         if (m_operationStore != nullptr) {
             std::string historyTitle = m_snapshot.items.front().displayName;
             if (m_snapshot.items.size() > 1)
@@ -588,8 +593,6 @@ namespace Horo::Editor {
                                                                                                   .message = "Importing assets",
                                                                                                   .progress = 0.0F}));
         }
-
-        return Result<void>::Success();
     }
 
     Result<void> AssetImportModal::PrepareImport(const CancellationToken &cancellation) const {
