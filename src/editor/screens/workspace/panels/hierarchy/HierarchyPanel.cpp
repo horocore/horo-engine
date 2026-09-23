@@ -738,9 +738,12 @@ namespace Horo::Editor {
         }
     }
 
-    bool HierarchyPanel::DrawRows(const std::vector<HierarchyVisibleRow> &rows, const float listWidth, const float outerPadding,
-                                  const float uiScale, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+    bool HierarchyPanel::DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
+                                  const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
+        const float listWidth = layout.listWidth;
+        const float outerPadding = layout.outerPadding;
+        const float uiScale = layout.uiScale;
         bool pendingDelete = false;
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const float nameFontSize = Theme::TextPx::Label();
@@ -871,7 +874,8 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         const float listWidth = std::max(1.0F, size.x - outerPadding * 2.0F);
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        bool pendingDelete = DrawRows(visibleRows, listWidth, outerPadding, uiScale, vm, cmd, ctx);
+        bool pendingDelete =
+            DrawRows(visibleRows, RowDrawLayout{.listWidth = listWidth, .outerPadding = outerPadding, .uiScale = uiScale}, vm, cmd, ctx);
 
         const ImVec2 remaining = ImGui::GetContentRegionAvail();
         const ImVec2 rootDropMin = ImGui::GetCursorScreenPos();

@@ -42,11 +42,17 @@ namespace Horo::Editor {
         struct RowControls;
         struct RowActionIcon;
 
+        struct RowDrawLayout {
+            float listWidth{0.0F};
+            float outerPadding{0.0F};
+            float uiScale{1.0F};
+        };
+
         void BeginRename(HierarchyNodeId id);
         [[nodiscard]] PanelInteractionState DrawSearch(float panelWidth, float uiScale, const EditorGuiContext &context);
         void UpdateFocusedInputContext(bool searchActive);
         void HandleRenameShortcut(const PanelInteractionState &interaction);
-        [[nodiscard]] bool DrawRows(const std::vector<HierarchyVisibleRow> &rows, float listWidth, float outerPadding, float uiScale,
+        [[nodiscard]] bool DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
                                     const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                     const EditorGuiContext &context);
         void DrawRowContextMenu(const RowFrame &frame, bool workspaceEligible, bool &pendingDelete, EditorWorkspaceViewCommandData &command,

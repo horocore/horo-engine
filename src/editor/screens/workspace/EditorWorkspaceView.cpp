@@ -1097,12 +1097,12 @@ namespace Horo::Editor {
         // Preserve panel rearrangement without adding visible host chrome. The
         // panel-owned top tab/title region doubles as the drag initiation area.
         const float dragRegionHeight = 28.0F * Theme::GetActiveTokens().sizes.uiScale;
-        const bool pointerInDragRegion = ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + dragRegionHeight), false);
-        if (!m_splitterInteraction.OwnsPrimaryPointer() && pointerInDragRegion && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        if (const bool pointerInDragRegion = ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + dragRegionHeight), false);
+            !m_splitterInteraction.OwnsPrimaryPointer() && pointerInDragRegion && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             m_panelDragCandidateId.assign(activePanelId);
         const ImGuiPayload *currentPayload = ImGui::GetDragDropPayload();
-        const bool payloadAllowsPanelDrag = currentPayload == nullptr || currentPayload->IsDataType("HORO_WORKSPACE_PANEL");
-        if (!m_splitterInteraction.OwnsPrimaryPointer() && m_panelDragCandidateId == activePanelId && payloadAllowsPanelDrag &&
+        if (const bool payloadAllowsPanelDrag = currentPayload == nullptr || currentPayload->IsDataType("HORO_WORKSPACE_PANEL");
+            !m_splitterInteraction.OwnsPrimaryPointer() && m_panelDragCandidateId == activePanelId && payloadAllowsPanelDrag &&
             ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceExtern)) {
             if (EnsurePanelDragCapture()) {
                 ImGui::SetDragDropPayload("HORO_WORKSPACE_PANEL", activePanelId.data(), activePanelId.size());
