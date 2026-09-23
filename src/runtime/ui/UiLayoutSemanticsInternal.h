@@ -23,5 +23,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                                                        std::span<UiLayoutConstraints> output);
     [[nodiscard]] Result<UiLayoutArrangement> Arrange(std::span<const UiLayoutElementDescriptor> descriptors,
                                                       const UiLayoutElementDescriptor &parent, const UiLayoutArrangeRequest &request,
-                                                      std::span<UiLogicalRect> childContent);
+                                                      std::span<UiLogicalRect> childContent,
+                                                      std::span<UiLayoutChildPlacement> placementScratch,
+                                                      std::span<UiLayoutLine> lineScratch);
 }  // namespace Horo::Runtime::Ui::LayoutInternal

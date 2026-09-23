@@ -323,6 +323,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLayoutClippingEngine.cpp
         runtime/ui/UiLayoutSemantics.cpp
         runtime/ui/UiLayoutArrangement.cpp
+        runtime/ui/UiLayoutArrangementInternal.h
+        runtime/ui/UiLayoutArrangementSupport.cpp
+        runtime/ui/UiLayoutFlowArrangement.cpp
+        runtime/ui/UiLayoutGridArrangement.cpp
         runtime/ui/UiLayoutTypes.cpp
         runtime/ui/UiTextLayoutErrors.cpp
         runtime/ui/UiTextLayout.cpp

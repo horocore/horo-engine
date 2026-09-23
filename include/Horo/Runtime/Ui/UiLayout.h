@@ -169,6 +169,120 @@ namespace Horo::Runtime::Ui {
         Stretch,
     };
 
+    /** @brief Container algorithm used for direct in-flow children. */
+    enum class UiLayoutContainerKind : std::uint8_t {
+        Stack,
+        Flex,
+        Grid,
+    };
+
+    /** @brief Main-axis direction used by stack and flex containers. */
+    enum class UiLayoutOrientation : std::uint8_t {
+        Horizontal,
+        Vertical,
+    };
+
+    /** @brief Whether a stack or flex container creates multiple main-axis lines. */
+    enum class UiLayoutWrapMode : std::uint8_t {
+        NoWrap,
+        Wrap,
+    };
+
+    /** @brief Distribution of free space along a container's main axis. */
+    enum class UiLayoutDistribution : std::uint8_t {
+        Start,
+        Center,
+        End,
+        SpaceBetween,
+        SpaceAround,
+        SpaceEvenly,
+    };
+
+    /** @brief Maximum number of explicitly authored rows or columns in one grid. */
+    inline constexpr std::uint16_t MaximumUiGridTracks = 16;
+
+    /** @brief Closed grid track sizing mode. */
+    enum class UiGridTrackKind : std::uint8_t {
+        Auto,
+        Dip,
+        Percent,
+        Fraction,
+    };
+
+    /** @brief One bounded grid track declaration in logical fixed-point units. */
+    struct UiGridTrack final {
+        UiGridTrackKind kind{UiGridTrackKind::Auto}; /**< Track sizing mode. */
+        UiScalar value{};                            /**< DIP/percent value or positive fractional weight. */
+        UiLength minimum{UiLength::Dip(0)};          /**< Inclusive resolved minimum track size. */
+        UiLength maximum{UiLength::Auto()};          /**< Inclusive resolved maximum; Auto means no maximum. */
+
+        /** @brief Creates an intrinsic auto track. @return Auto track declaration. */
+        [[nodiscard]] static constexpr UiGridTrack Auto() noexcept {
+            return {};
+        }
+
+        /** @brief Creates a fixed logical track. @param extent Non-negative logical extent. @return Fixed track declaration. */
+        [[nodiscard]] static constexpr UiGridTrack Dip(const UiScalar extent) noexcept {
+            return {UiGridTrackKind::Dip, extent, UiLength::Dip(extent), UiLength::Dip(extent)};
+        }
+
+        /** @brief Creates a percentage track. @param percent Normalized percentage; 64 is 100 percent. @return Percentage track. */
+        [[nodiscard]] static constexpr UiGridTrack Percent(const UiScalar percent) noexcept {
+            return {UiGridTrackKind::Percent, percent, UiLength::Dip(0), UiLength::Auto()};
+        }
+
+        /** @brief Creates a fractional track. @param weight Positive non-negative-space weight. @return Fractional track. */
+        [[nodiscard]] static constexpr UiGridTrack Fraction(const UiScalar weight) noexcept {
+            return {UiGridTrackKind::Fraction, weight, UiLength::Dip(0), UiLength::Auto()};
+        }
+
+        /** @brief Checks track kind, value, and min/max representations. @return Whether the declaration is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiGridTrack &) const noexcept = default;
+    };
+
+    /** @brief Bounded flex grow/shrink weights for one direct child. */
+    inline constexpr std::uint32_t MaximumUiFlexFactor = 65'535;
+
+    struct UiLayoutFlex final {
+        std::uint32_t grow{};    /**< Non-negative positive-free-space weight. */
+        std::uint32_t shrink{1}; /**< Non-negative negative-free-space weight. */
+
+        /** @brief Checks the closed non-negative factor representation. @return Whether the factors are valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutFlex &) const noexcept = default;
+    };
+
+    /** @brief One-based authored grid placement; zero row/column requests deterministic auto-placement. */
+    struct UiLayoutGridPlacement final {
+        std::uint16_t column{};      /**< One-based column; zero means next auto-placement slot. */
+        std::uint16_t row{};         /**< One-based row; zero means next auto-placement slot. */
+        std::uint16_t columnSpan{1}; /**< Positive column span. */
+        std::uint16_t rowSpan{1};    /**< Positive row span. */
+
+        /** @brief Checks span and bounded authored coordinates. @return Whether placement is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutGridPlacement &) const noexcept = default;
+    };
+
+    /** @brief Typed, bounded policy for one element's direct children. */
+    struct UiLayoutContainerStyle final {
+        UiLayoutContainerKind kind{UiLayoutContainerKind::Stack};
+        UiLayoutOrientation orientation{UiLayoutOrientation::Vertical};
+        UiLayoutWrapMode wrap{UiLayoutWrapMode::NoWrap};
+        UiScalar gap{}; /**< Non-negative logical space inserted between adjacent items/tracks. */
+        UiLayoutDistribution mainAlignment{UiLayoutDistribution::Start};
+        UiLayoutAlignment crossAlignment{UiLayoutAlignment::Start};
+        std::array<UiGridTrack, MaximumUiGridTracks> columns{};
+        std::array<UiGridTrack, MaximumUiGridTracks> rows{};
+        std::uint16_t columnCount{}; /**< Zero infers a single column plus implicit rows. */
+        std::uint16_t rowCount{};    /**< Zero infers enough rows for authored children. */
+
+        /** @brief Checks policy enums, gap, and bounded grid declarations. @return Whether the policy is valid. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiLayoutContainerStyle &) const noexcept = default;
+    };
+
     /** @brief Four logical edge values used by margin, padding, border, and offsets. */
     struct UiLayoutEdges final {
         UiScalar left{};   /**< Horizontal start edge. */
@@ -229,6 +343,9 @@ namespace Horo::Runtime::Ui {
         UiLayoutAlignment horizontalAlignment{UiLayoutAlignment::Start}; /**< Flow horizontal alignment. */
         UiLayoutAlignment verticalAlignment{UiLayoutAlignment::Start};   /**< Flow vertical alignment. */
         UiLayoutPositioning positioning{UiLayoutPositioning::Flow};      /**< Flow or absolute placement. */
+        UiLayoutContainerStyle container;                                /**< Direct-child layout policy. */
+        UiLayoutFlex flex;                                               /**< Flex weights when this element is a flex item. */
+        UiLayoutGridPlacement grid;                                      /**< Grid cell when this element is a grid item. */
 
         /** @brief Checks all typed size, box, anchor, and alignment fields. @return Whether the style can enter layout. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -326,6 +443,24 @@ namespace Horo::Runtime::Ui {
         UiLayoutMeasurement measurement; /**< Cached child contribution. */
     };
 
+    /** @brief Caller-owned placement scratch for one direct child during container arrangement. */
+    struct UiLayoutChildPlacement final {
+        std::uint32_t line{};        /**< Stable wrap line or grid row. */
+        std::uint32_t slot{};        /**< Stable authored slot or grid column. */
+        std::uint32_t rowSpan{1};    /**< Resolved grid row span. */
+        std::uint32_t columnSpan{1}; /**< Resolved grid column span. */
+        UiScalar mainExtent{};       /**< Resolved main-axis content extent. */
+        UiScalar crossExtent{};      /**< Resolved cross-axis content extent. */
+    };
+
+    /** @brief Caller-owned aggregate scratch for one stack/flex wrap line or grid track line. */
+    struct UiLayoutLine final {
+        std::uint32_t firstChild{}; /**< Authored child offset of the first item. */
+        std::uint32_t childCount{}; /**< Number of items in this line. */
+        UiScalar mainExtent{};      /**< Used main-axis extent including item gaps. */
+        UiScalar crossExtent{};     /**< Maximum cross-axis extent of the line. */
+    };
+
     /** @brief Input for resolving direct-child measure constraints. */
     struct UiLayoutChildConstraintRequest final {
         UiElementHandle element;                   /**< Exact parent. */
@@ -363,6 +498,8 @@ namespace Horo::Runtime::Ui {
         UiLayoutMeasurement measurement;                    /**< Current element measurement. */
         std::span<const UiLayoutChildMeasurement> children; /**< Authored-order child measurements. */
         bool remeasure{};                                   /**< True only after the bounded retry. */
+        std::span<UiLayoutChildPlacement> childScratch{};   /**< Preallocated placement scratch, matching children when supplied. */
+        std::span<UiLayoutLine> lineScratch{};              /**< Preallocated line scratch, matching the bounded child capacity. */
     };
 
     /**
@@ -398,8 +535,8 @@ namespace Horo::Runtime::Ui {
     /**
      * @brief Backend-neutral absolute/anchor/intrinsic evaluator used by headless and rendered Runtime UI compositions.
      * @details The descriptor and provider spans are borrowed for the evaluator lifetime. Descriptors must be sorted by exact
-     *          element handle so lookup is bounded and deterministic. Container flow is the intentionally small vertical stack
-     *          baseline owned by this ticket; flex and grid policies remain separate container work.
+     *          element handle so lookup is bounded and deterministic. Stack, flex, and grid placement is deterministic and uses only
+     *          caller-owned bounded scratch during arrange.
      */
     class UiDeclarativeLayoutEvaluator final : public UiLayoutEvaluator {
     public:
