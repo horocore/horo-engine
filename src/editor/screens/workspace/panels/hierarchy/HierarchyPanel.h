@@ -54,13 +54,13 @@ namespace Horo::Editor {
         void HandleRenameShortcut(const PanelInteractionState &interaction);
         [[nodiscard]] bool AcceptRowAssetDrop(HierarchyNodeId nodeId, float normalizedRowY, const ImVec2 &rowMin, const ImVec2 &rowMax,
                                               const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                                              ImDrawList &drawList);
+                                              ImDrawList &drawList) const;
         [[nodiscard]] bool DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
                                     const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                     const EditorGuiContext &context);
         [[nodiscard]] RowFrame BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &layout,
                                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                                             ImDrawList &drawList, const EditorGuiContext &context);
+                                             ImDrawList &drawList, const EditorGuiContext &context) const;
         void DrawRowContextMenu(const RowFrame &frame, bool workspaceEligible, bool &pendingDelete, EditorWorkspaceViewCommandData &command,
                                 const EditorGuiContext &context);
         [[nodiscard]] RowControls DrawRowControls(const RowFrame &frame, bool workspaceEligible, const EditorGuiContext &context);
