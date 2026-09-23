@@ -6,6 +6,7 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Runtime/Input.h"
+#include "editor/ui_preview/EditorUiPreviewGallery.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <array>
@@ -212,6 +213,78 @@ TEST_CASE("Asset import presentation renders retained history status variants", 
     REQUIRE(modalPtr->ImportHistory().size() == states.size());
 
     DrawFrame(imgui, *modalPtr);
+}
+
+TEST_CASE("Asset import preview fixtures render populated and empty workflow states", "[unit][editor][gui][asset-import]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+
+    Tests::HeadlessEditorGuiFixture imgui;
+    Tests::ScopedJobSystem jobs;
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+    auto *const modalPtr = modal.get();
+    modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Populated);
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+
+    REQUIRE(modalPtr->IsUiPreview());
+    REQUIRE(modalPtr->Snapshot().items.size() == 4);
+    REQUIRE(modalPtr->SourceFileSize(0).value() == 12'400'000);
+    DrawFrame(imgui, *modalPtr);
+
+    for (std::size_t index = 0; index < modalPtr->Snapshot().items.size(); ++index) {
+        modalPtr->SelectItem(index);
+        ClickTab(imgui, *modalPtr, 1);
+        ClickTab(imgui, *modalPtr, 2);
+        ClickTab(imgui, *modalPtr, 3);
+    }
+
+    REQUIRE(modalPtr->Snapshot().items[0].sourceExtension == "fbx");
+    REQUIRE(modalPtr->Snapshot().items[1].sourceExtension == "png");
+    REQUIRE(modalPtr->Snapshot().items[3].diagnostics.size() == 1);
+}
+
+TEST_CASE("Asset import preview fixture renders an empty queue", "[unit][editor][gui][asset-import]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+
+    Tests::HeadlessEditorGuiFixture imgui;
+    Tests::ScopedJobSystem jobs;
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+    auto *const modalPtr = modal.get();
+    modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Empty);
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+    DrawFrame(imgui, *modalPtr);
+
+    REQUIRE(modalPtr->IsUiPreview());
+    REQUIRE(modalPtr->Snapshot().items.empty());
+}
+
+TEST_CASE("Editor UI preview gallery renders both interaction states", "[unit][editor][gui][ui-preview]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+
+    Tests::HeadlessEditorGuiFixture imgui;
+    LocalizationService localization{LocaleTag{"en-US"}};
+
+    imgui.BeginFrame();
+    const auto initialSelection = DrawEditorUiPreviewGallery("asset-import", false, imgui.Fonts(), localization);
+    imgui.EndFrame();
+    REQUIRE_FALSE(initialSelection.has_value());
+
+    imgui.BeginFrame();
+    const auto modalSelection = DrawEditorUiPreviewGallery("mesh-preview", true, imgui.Fonts(), localization);
+    imgui.EndFrame();
+    REQUIRE_FALSE(modalSelection.has_value());
 }
 
 TEST_CASE("Asset import preview fixtures expose deterministic populated and empty states", "[unit][editor][gui][asset-import]") {
