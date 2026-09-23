@@ -14,7 +14,6 @@
 #include "editor/modals/build/BuildWorkflowPreviewModal.h"
 #include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/project_model/RendererAvailability.h"
-#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <imgui_internal.h>
