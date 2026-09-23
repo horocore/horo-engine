@@ -1,6 +1,7 @@
 #include "RenderFrontendResourceAccess.h"
 
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 
 namespace Horo::Render {

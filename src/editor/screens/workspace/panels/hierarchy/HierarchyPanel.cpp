@@ -279,10 +279,18 @@ namespace Horo::Editor {
             return result;
         }
 
-        [[nodiscard]] bool AcceptAssetDrop(const std::optional<SceneObjectId> parent, const AssetSceneDropTarget target,
-                                           const ImVec2 minimum, const ImVec2 maximum, const DocumentRevision revision,
-                                           EditorWorkspaceViewCommandData &command, ImDrawList &drawList,
-                                           const HierarchyAssetDropZone zone = HierarchyAssetDropZone::Child) {
+        struct AssetDropRequest {
+            std::optional<SceneObjectId> parent;
+            AssetSceneDropTarget target;
+            ImVec2 minimum;
+            ImVec2 maximum;
+            DocumentRevision revision;
+            EditorWorkspaceViewCommandData &command;
+            ImDrawList &drawList;
+            HierarchyAssetDropZone zone{HierarchyAssetDropZone::Child};
+        };
+
+        [[nodiscard]] bool AcceptAssetDrop(const AssetDropRequest &request) {
             if (!ImGui::BeginDragDropTarget())
                 return false;
             bool delivered = false;
@@ -292,23 +300,23 @@ namespace Horo::Editor {
             if (const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted); payload.has_value()) {
                 const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
                 const ImU32 targetColor = Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err());
-                if (zone == HierarchyAssetDropZone::Child) {
-                    drawList.AddRect(minimum, maximum, targetColor, Theme::Layout::Radius, 0, 2.0F);
+                if (request.zone == HierarchyAssetDropZone::Child) {
+                    request.drawList.AddRect(request.minimum, request.maximum, targetColor, Theme::Layout::Radius, 0, 2.0F);
                 } else {
-                    const float y = zone == HierarchyAssetDropZone::BeforeSibling ? minimum.y : maximum.y;
-                    drawList.AddLine({minimum.x, y}, {maximum.x, y}, targetColor, 3.0F);
-                    drawList.AddCircleFilled({minimum.x + 2.0F, y}, 3.0F, targetColor);
+                    const float y = request.zone == HierarchyAssetDropZone::BeforeSibling ? request.minimum.y : request.maximum.y;
+                    request.drawList.AddLine({request.minimum.x, y}, {request.maximum.x, y}, targetColor, 3.0F);
+                    request.drawList.AddCircleFilled({request.minimum.x + 2.0F, y}, 3.0F, targetColor);
                 }
                 if (policy.canInstantiate && accepted->IsDelivery()) {
                     delivered = true;
-                    command.command = EditorWorkspaceViewCommand::InstantiateAsset;
-                    command.assetSceneDrop = AssetSceneDropRequest{
+                    request.command.command = EditorWorkspaceViewCommand::InstantiateAsset;
+                    request.command.assetSceneDrop = AssetSceneDropRequest{
                         .assetId = payload->assetId.data(),
                         .assetType = payload->assetType.data(),
                         .absoluteAssetPath = payload->absolutePath.data(),
-                        .parent = parent,
-                        .target = target,
-                        .documentRevision = revision,
+                        .parent = request.parent,
+                        .target = request.target,
+                        .documentRevision = request.revision,
                     };
                 }
             }
@@ -361,7 +369,28 @@ namespace Horo::Editor {
         ImVec2 nextRowCursor{};
     };
 
+    struct HierarchyRowFrameState {
+        HierarchyRowGeometry geometry;
+        float uiScale{1.0F};
+        float nameFontSize{0.0F};
+        bool rowHovered{false};
+        bool rowFocused{false};
+        bool rowLeftClicked{false};
+        bool rowRightClicked{false};
+        bool selected{false};
+        bool pointerInActions{false};
+        bool assetDropDelivered{false};
+        bool searching{false};
+    };
+
     struct HierarchyPanel::RowFrame {
+        RowFrame(const HierarchyVisibleRow &row, const HierarchyNode &node, ImDrawList &drawList, ImFont &nameFont,
+                 const HierarchyRowFrameState &state)
+            : row(row), node(node), drawList(drawList), nameFont(nameFont), geometry(state.geometry), uiScale(state.uiScale),
+              nameFontSize(state.nameFontSize), rowHovered(state.rowHovered), rowFocused(state.rowFocused),
+              rowLeftClicked(state.rowLeftClicked), rowRightClicked(state.rowRightClicked), selected(state.selected),
+              pointerInActions(state.pointerInActions), assetDropDelivered(state.assetDropDelivered), searching(state.searching) {}
+
         const HierarchyVisibleRow &row;
         const HierarchyNode &node;
         ImDrawList &drawList;
@@ -400,6 +429,34 @@ namespace Horo::Editor {
         bool active{false};
         bool inherited{false};
     };
+
+    namespace {
+        [[nodiscard]] HierarchyRowGeometry BuildRowGeometry(const ImVec2 rowMin, const float listWidth, const std::uint32_t depth,
+                                                            const float uiScale) {
+            const HierarchyRowLayout rowLayout = CalculateHierarchyRowLayout(listWidth, depth, uiScale, kRowActionsWidth * uiScale);
+            const ImVec2 rowMax{rowMin.x + listWidth, rowMin.y + rowLayout.height};
+            const ImVec2 actionsMin{rowMin.x + rowLayout.actions.minimum, rowMin.y};
+            const ImVec2 actionsMax{rowMin.x + rowLayout.actions.maximum, rowMax.y};
+            return {
+                .layout = rowLayout,
+                .rowMin = rowMin,
+                .rowMax = rowMax,
+                .chevronMin = {rowMin.x + rowLayout.chevron.minimum, rowMin.y},
+                .chevronMax = {rowMin.x + rowLayout.chevron.maximum, rowMax.y},
+                .typeIconMin = {rowMin.x + rowLayout.typeIcon.minimum, rowMin.y},
+                .typeIconMax = {rowMin.x + rowLayout.typeIcon.maximum, rowMax.y},
+                .labelMin = {rowMin.x + rowLayout.label.minimum, rowMin.y},
+                .labelMax = {rowMin.x + rowLayout.label.maximum, rowMax.y},
+                .actionsMin = actionsMin,
+                .actionsMax = actionsMax,
+                .visibilityMin = {rowMin.x + rowLayout.visibilityAction.minimum, rowMin.y},
+                .visibilityMax = {rowMin.x + rowLayout.visibilityAction.maximum, rowMax.y},
+                .lockMin = {rowMin.x + rowLayout.lockAction.minimum, rowMin.y},
+                .lockMax = {rowMin.x + rowLayout.lockAction.maximum, rowMax.y},
+                .nextRowCursor = ImVec2{rowMin.x, rowMax.y},
+            };
+        }
+    }  // namespace
 
     void HierarchyPanel::OnAttach(PanelContext &context) {
         inputRouter_ = context.inputRouter;
@@ -738,6 +795,24 @@ namespace Horo::Editor {
         }
     }
 
+    bool HierarchyPanel::AcceptRowAssetDrop(const HierarchyNodeId nodeId, const float normalizedRowY, const ImVec2 &rowMin,
+                                            const ImVec2 &rowMax, const EditorWorkspaceViewModel &viewModel,
+                                            EditorWorkspaceViewCommandData &command, ImDrawList &drawList) {
+        const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(nodeId);
+        const std::optional<SceneObjectId> nodeParent =
+            projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
+        const HierarchyAssetDropPlacement assetPlacement =
+            ResolveHierarchyAssetDropPlacement(normalizedRowY, SceneObjectId{nodeId}, nodeParent);
+        return AcceptAssetDrop({.parent = assetPlacement.parent,
+                                .target = assetPlacement.target,
+                                .minimum = rowMin,
+                                .maximum = rowMax,
+                                .revision = viewModel.documentRevision,
+                                .command = command,
+                                .drawList = drawList,
+                                .zone = assetPlacement.zone});
+    }
+
     HierarchyPanel::RowFrame HierarchyPanel::BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &drawLayout,
                                                            const EditorWorkspaceViewModel &viewModel,
                                                            EditorWorkspaceViewCommandData &command, ImDrawList &drawList,
@@ -747,62 +822,35 @@ namespace Horo::Editor {
         ImGui::PushID(&node.id);
         ImGui::SetCursorPosX(drawLayout.outerPadding);
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-        const HierarchyRowLayout rowLayout =
-            CalculateHierarchyRowLayout(drawLayout.listWidth, row.depth, drawLayout.uiScale, kRowActionsWidth * drawLayout.uiScale);
-        const ImVec2 rowMax{rowMin.x + drawLayout.listWidth, rowMin.y + rowLayout.height};
-        const ImVec2 actionsMin{rowMin.x + rowLayout.actions.minimum, rowMin.y};
-        const ImVec2 actionsMax{rowMin.x + rowLayout.actions.maximum, rowMax.y};
+        const HierarchyRowGeometry geometry = BuildRowGeometry(rowMin, drawLayout.listWidth, row.depth, drawLayout.uiScale);
         ImGui::SetNextItemAllowOverlap();
-        ImGui::InvisibleButton("##hierarchy_object_row", {drawLayout.listWidth, rowLayout.height});
+        ImGui::InvisibleButton("##hierarchy_object_row", {drawLayout.listWidth, geometry.layout.height});
         const ImVec2 nextRowCursor = ImGui::GetCursorScreenPos();
         const bool rowHovered = ImGui::IsItemHovered();
         const bool rowFocused = ImGui::IsItemFocused();
         const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
         const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-        const bool pointerInActions = ImGui::IsMouseHoveringRect(actionsMin, actionsMax);
-        const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - rowMin.y) / rowLayout.height, 0.0F, 1.0F);
-        const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(node.id);
-        const std::optional<SceneObjectId> nodeParent =
-            projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
-        const HierarchyAssetDropPlacement assetPlacement =
-            ResolveHierarchyAssetDropPlacement(normalizedRowY, SceneObjectId{node.id}, nodeParent);
-        const bool assetDropDelivered = AcceptAssetDrop(assetPlacement.parent, assetPlacement.target, rowMin, rowMax,
-                                                        viewModel.documentRevision, command, drawList, assetPlacement.zone);
-        return {
-            .row = row,
-            .node = node,
-            .drawList = drawList,
-            .nameFont = nameFont,
-            .geometry =
-                {
-                    .layout = rowLayout,
-                    .rowMin = rowMin,
-                    .rowMax = rowMax,
-                    .chevronMin = {rowMin.x + rowLayout.chevron.minimum, rowMin.y},
-                    .chevronMax = {rowMin.x + rowLayout.chevron.maximum, rowMax.y},
-                    .typeIconMin = {rowMin.x + rowLayout.typeIcon.minimum, rowMin.y},
-                    .typeIconMax = {rowMin.x + rowLayout.typeIcon.maximum, rowMax.y},
-                    .labelMin = {rowMin.x + rowLayout.label.minimum, rowMin.y},
-                    .labelMax = {rowMin.x + rowLayout.label.maximum, rowMax.y},
-                    .actionsMin = actionsMin,
-                    .actionsMax = actionsMax,
-                    .visibilityMin = {rowMin.x + rowLayout.visibilityAction.minimum, rowMin.y},
-                    .visibilityMax = {rowMin.x + rowLayout.visibilityAction.maximum, rowMax.y},
-                    .lockMin = {rowMin.x + rowLayout.lockAction.minimum, rowMin.y},
-                    .lockMax = {rowMin.x + rowLayout.lockAction.maximum, rowMax.y},
-                    .nextRowCursor = nextRowCursor,
-                },
-            .uiScale = drawLayout.uiScale,
-            .nameFontSize = Theme::TextPx::Label(),
-            .rowHovered = rowHovered,
-            .rowFocused = rowFocused,
-            .rowLeftClicked = rowLeftClicked,
-            .rowRightClicked = rowRightClicked,
-            .selected = editSession_.IsSelected(node.id),
-            .pointerInActions = pointerInActions,
-            .assetDropDelivered = assetDropDelivered,
-            .searching = searchBuffer_[0] != '\0',
-        };
+        const bool pointerInActions = ImGui::IsMouseHoveringRect(geometry.actionsMin, geometry.actionsMax);
+        const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - geometry.rowMin.y) / geometry.layout.height, 0.0F, 1.0F);
+        const bool assetDropDelivered =
+            AcceptRowAssetDrop(node.id, normalizedRowY, geometry.rowMin, geometry.rowMax, viewModel, command, drawList);
+        HierarchyRowGeometry frameGeometry = geometry;
+        frameGeometry.nextRowCursor = nextRowCursor;
+        return RowFrame{row,
+                        node,
+                        drawList,
+                        nameFont,
+                        {.geometry = frameGeometry,
+                         .uiScale = drawLayout.uiScale,
+                         .nameFontSize = Theme::TextPx::Label(),
+                         .rowHovered = rowHovered,
+                         .rowFocused = rowFocused,
+                         .rowLeftClicked = rowLeftClicked,
+                         .rowRightClicked = rowRightClicked,
+                         .selected = editSession_.IsSelected(node.id),
+                         .pointerInActions = pointerInActions,
+                         .assetDropDelivered = assetDropDelivered,
+                         .searching = searchBuffer_[0] != '\0'}};
     }
 
     bool HierarchyPanel::DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
@@ -884,8 +932,13 @@ namespace Horo::Editor {
         const ImVec2 rootDropMin = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##HierarchyRootDrop", ImVec2(std::max(1.0F, remaining.x), std::max(32.0F, remaining.y)));
         const ImVec2 rootDropMax{rootDropMin.x + std::max(1.0F, remaining.x), rootDropMin.y + std::max(32.0F, remaining.y)};
-        static_cast<void>(AcceptAssetDrop(std::nullopt, AssetSceneDropTarget::HierarchyRoot, rootDropMin, rootDropMax, vm.documentRevision,
-                                          cmd, *drawList));
+        static_cast<void>(AcceptAssetDrop({.parent = std::nullopt,
+                                           .target = AssetSceneDropTarget::HierarchyRoot,
+                                           .minimum = rootDropMin,
+                                           .maximum = rootDropMax,
+                                           .revision = vm.documentRevision,
+                                           .command = cmd,
+                                           .drawList = *drawList}));
         if (remaining.y >= 64.0F * uiScale) {
             const ImVec2 zoneMin{rootDropMin.x + 12.0F * uiScale, rootDropMax.y - 64.0F * uiScale};
             const ImVec2 zoneMax{rootDropMax.x - 12.0F * uiScale, rootDropMax.y - 10.0F * uiScale};
