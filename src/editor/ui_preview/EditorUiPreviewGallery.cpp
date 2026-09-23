@@ -44,10 +44,10 @@ namespace Horo::Editor {
             std::optional<std::string_view> requestedScenario;
             for (const auto &scenario : EditorUiPreviewScenarios) {
                 ImGui::PushID(scenario.id.data(), scenario.id.data() + scenario.id.size());
-                if (const auto label = localization.Get("editor", scenario.titleKey); Ui::Button({.label = label.c_str(),
-                                                                                                  .size = {sidebarWidth - 28.0f, 38.0f},
-                                                                                                  .variant = Ui::ButtonVariant::Secondary,
-                                                                                                  .enabled = !modalOpen}))
+                if (const auto &label = localization.Get("editor", scenario.titleKey); Ui::Button({.label = label.c_str(),
+                                                                                                   .size = {sidebarWidth - 28.0f, 38.0f},
+                                                                                                   .variant = Ui::ButtonVariant::Secondary,
+                                                                                                   .enabled = !modalOpen}))
                     requestedScenario = scenario.id;
                 if (scenario.id == scenarioId)
                     drawList->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), Theme::U32(Theme::Accent()), 5.0f);
