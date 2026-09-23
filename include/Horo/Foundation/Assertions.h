@@ -44,9 +44,16 @@ namespace Horo::AssertionPolicy {
 #if defined(NDEBUG)
 #define HORO_ASSERT(condition)                                                                                                             \
     do {                                                                                                                                   \
+        if (false) {                                                                                                                       \
+            (void)(condition);                                                                                                             \
+        }                                                                                                                                  \
     } while (false)
 #define HORO_ASSERT_MSG(condition, message)                                                                                                \
     do {                                                                                                                                   \
+        if (false) {                                                                                                                       \
+            (void)(condition);                                                                                                             \
+            (void)(message);                                                                                                               \
+        }                                                                                                                                  \
     } while (false)
 #else
 #define HORO_ASSERT(condition)                                                                                                             \

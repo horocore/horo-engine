@@ -538,6 +538,7 @@ namespace Horo::Log {
             std::fprintf(stderr, "[logger-emergency][%s] %.*s: %.*s\n", ToString(level), static_cast<int>(boundedCategory.size()),
                          boundedCategory.empty() ? "" : boundedCategory.data(), static_cast<int>(boundedMessage.size()),
                          boundedMessage.empty() ? "" : boundedMessage.data());
+            static_cast<void>(std::fflush(stderr));
         }
 
         Level ParseEnvironmentLevel(const Level fallback) {
@@ -752,7 +753,6 @@ namespace Horo::Log {
     /** @copydoc Logger::WriteEmergency */
     void Logger::WriteEmergency(const std::string_view category, const Level level, const std::string_view message) noexcept {
         EmergencyWrite(level, category, message);
-        static_cast<void>(std::fflush(stderr));
     }
 
     /** @copydoc Logger::DumpStartupInfo */
