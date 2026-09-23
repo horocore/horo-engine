@@ -19,6 +19,45 @@
 #include <memory>
 
 namespace {
+    std::vector<Horo::Assets::ImportSettingDescriptor> MakeCatalogSettings() {
+        using namespace Horo::Assets;
+        return {
+            {.id = "optimize",
+             .labelKey = "Optimize",
+             .descriptionKey = "Optimize mesh data",
+             .kind = ImportSettingKind::Boolean,
+             .defaultValue = true},
+            {.id = "importMaterials",
+             .labelKey = "Generate Materials",
+             .descriptionKey = "Generate material assets",
+             .kind = ImportSettingKind::Boolean,
+             .defaultValue = true},
+            {.id = "importAnimations",
+             .labelKey = "Animation Import",
+             .descriptionKey = "Import animation tracks",
+             .kind = ImportSettingKind::Boolean,
+             .defaultValue = false},
+            {.id = "lod-count",
+             .labelKey = "LOD count",
+             .descriptionKey = "Generated detail levels",
+             .kind = ImportSettingKind::Integer,
+             .defaultValue = std::int64_t{3}},
+            {.id = "scale", .labelKey = "Scale", .descriptionKey = "Import scale", .kind = ImportSettingKind::Float, .defaultValue = 1.0},
+            {.id = "tag",
+             .labelKey = "Tag",
+             .descriptionKey = "Source tag",
+             .kind = ImportSettingKind::Text,
+             .defaultValue = std::string{"environment"}},
+            {.id = "normals",
+             .labelKey = "Normals",
+             .descriptionKey = "Normal generation policy",
+             .kind = ImportSettingKind::Choice,
+             .defaultValue = std::size_t{0},
+             .choices = {{.id = "source", .labelKey = "Source", .value = std::size_t{0}},
+                         {.id = "generate", .labelKey = "Generate", .value = std::size_t{1}}}},
+        };
+    }
+
     std::shared_ptr<const Horo::Assets::AssetImporterCatalogSnapshot> MakeCatalog() {
         using namespace Horo::Assets;
 
@@ -30,46 +69,7 @@ namespace {
             .version = "1.0.0",
             .fileExtensions = {"obj", "fbx", "png", "wav"},
             .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
-            .settings =
-                {
-                    {.id = "optimize",
-                     .labelKey = "Optimize",
-                     .descriptionKey = "Optimize mesh data",
-                     .kind = ImportSettingKind::Boolean,
-                     .defaultValue = true},
-                    {.id = "importMaterials",
-                     .labelKey = "Generate Materials",
-                     .descriptionKey = "Generate material assets",
-                     .kind = ImportSettingKind::Boolean,
-                     .defaultValue = true},
-                    {.id = "importAnimations",
-                     .labelKey = "Animation Import",
-                     .descriptionKey = "Import animation tracks",
-                     .kind = ImportSettingKind::Boolean,
-                     .defaultValue = false},
-                    {.id = "lod-count",
-                     .labelKey = "LOD count",
-                     .descriptionKey = "Generated detail levels",
-                     .kind = ImportSettingKind::Integer,
-                     .defaultValue = std::int64_t{3}},
-                    {.id = "scale",
-                     .labelKey = "Scale",
-                     .descriptionKey = "Import scale",
-                     .kind = ImportSettingKind::Float,
-                     .defaultValue = 1.0},
-                    {.id = "tag",
-                     .labelKey = "Tag",
-                     .descriptionKey = "Source tag",
-                     .kind = ImportSettingKind::Text,
-                     .defaultValue = std::string{"environment"}},
-                    {.id = "normals",
-                     .labelKey = "Normals",
-                     .descriptionKey = "Normal generation policy",
-                     .kind = ImportSettingKind::Choice,
-                     .defaultValue = std::size_t{0},
-                     .choices = {{.id = "source", .labelKey = "Source", .value = std::size_t{0}},
-                                 {.id = "generate", .labelKey = "Generate", .value = std::size_t{1}}}},
-                },
+            .settings = MakeCatalogSettings(),
             .builtIn = true,
         };
         return std::make_shared<const AssetImporterCatalogSnapshot>(std::vector<AssetImporterContribution>{std::move(contribution)});
