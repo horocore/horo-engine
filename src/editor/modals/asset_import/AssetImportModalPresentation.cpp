@@ -30,6 +30,14 @@ namespace Horo::Editor {
         constexpr float PanelGap = 14.0f;
         constexpr float PanelPadding = 16.0f;
 
+        enum class ImportTab : int {
+            Queue = 0,
+            Diagnostics,
+            Settings,
+            Destination,
+            Count,
+        };
+
         [[nodiscard]] std::string Copy(std::string_view text) {
             return std::string{text};
         }
@@ -148,6 +156,51 @@ namespace Horo::Editor {
                 static_cast<void>(modal.BeginImport(paths, modal.ProjectRoot(), cancellation));
         }
 
+        [[nodiscard]] const char *ImportTabLabel(const int tab) {
+            switch (static_cast<ImportTab>(tab)) {
+                case ImportTab::Queue:
+                    return "Overview";
+                case ImportTab::Diagnostics:
+                    return "Diagnostics";
+                case ImportTab::Settings:
+                    return "Importer Settings";
+                case ImportTab::Destination:
+                    return "Destination";
+                case ImportTab::Count:
+                default:
+                    return "";
+            }
+        }
+
+        void DrawImportTabs(int &activeTab, const Fonts &fonts) {
+            constexpr float tabHeight = 42.0f;
+            constexpr float tabPadding = 14.0f;
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, Bg0());
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
+            ImGui::BeginChild("ImportTabs", {0.0f, tabHeight}, true, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            ImDrawList *drawList = ImGui::GetWindowDrawList();
+            float cursorX = 18.0f;
+            PushFont(fonts.sansCompact);
+            for (int tab = 0; tab < static_cast<int>(ImportTab::Count); ++tab) {
+                const char *label = ImportTabLabel(tab);
+                const float width = ImGui::CalcTextSize(label).x + tabPadding * 2.0f;
+                ImGui::SetCursorPos({cursorX, 0.0f});
+                if (ImGui::InvisibleButton(std::format("##ImportTab{}", tab).c_str(), {width, tabHeight - 2.0f}))
+                    activeTab = tab;
+                const ImVec2 minimum = ImGui::GetItemRectMin();
+                const ImVec2 maximum = ImGui::GetItemRectMax();
+                drawList->AddText({minimum.x + tabPadding, minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f},
+                                  ImGui::ColorConvertFloat4ToU32(tab == activeTab ? Text() : Dim()), label);
+                if (tab == activeTab)
+                    drawList->AddRectFilled({minimum.x, maximum.y - 2.0f}, maximum, ImGui::ColorConvertFloat4ToU32(Accent()));
+                cursorX += width + 2.0f;
+            }
+            PopFont(fonts.sansCompact);
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
+        }
+
         void DrawDestinationBreadcrumb(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot) {
             const auto folder = snapshot.items.empty() || snapshot.selectedItemIndex >= snapshot.items.size()
                                     ? std::string{modal.DefaultDestinationFolder()}
@@ -261,7 +314,7 @@ namespace Horo::Editor {
             const ImVec2 rowMin = ImGui::GetCursorScreenPos();
             const float rowWidth = ImGui::GetContentRegionAvail().x;
             constexpr float rowHeight = 56.0f;
-            if (ImGui::InvisibleButton(std::format("##ImportFile{}", index).c_str(), {rowWidth, rowHeight}))
+            if (ImGui::InvisibleButton(std::format("##QueueItem{}", index).c_str(), {rowWidth, rowHeight}))
                 modal.SelectItem(index);
             const ImVec2 rowMax{rowMin.x + rowWidth, rowMin.y + rowHeight};
             auto *drawList = ImGui::GetWindowDrawList();
@@ -818,6 +871,9 @@ namespace Horo::Editor {
                            Copy(modal.Localized("asset_import.subtitle", "Add files to your project and configure how they are imported."))
                                .c_str());
         ImGui::Dummy({0.0f, 4.0f});
+        static int activeTab = static_cast<int>(ImportTab::Queue);
+        DrawImportTabs(activeTab, fonts);
+        ImGui::Dummy({0.0f, 6.0f});
         DrawDestination(modal, snapshot, fonts);
         ImGui::Dummy({0.0f, 6.0f});
         const float width = ImGui::GetContentRegionAvail().x;
