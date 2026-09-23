@@ -476,4 +476,82 @@ namespace {
         REQUIRE_FALSE((document.Objects().back().editorState.locked));
     }
 
+    TEST_CASE("Scene object history accounts for opaque gameplay payloads", "[unit][editor][history]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        std::vector<Gameplay::SerializedComponent> largeComponents;
+        largeComponents.reserve(5);
+        for (std::size_t index = 0; index < 5; ++index) {
+            auto typeId = Gameplay::ComponentTypeId::Parse("game.audit.component_" + std::to_string(index));
+            REQUIRE((typeId.HasValue()));
+            largeComponents.push_back(Gameplay::SerializedComponent{
+                .typeId = std::move(typeId).Value(),
+                .payload = std::vector<std::byte>(Gameplay::MaximumSerializedComponentBytes),
+            });
+        }
+
+        SceneObjectComponentSet largeComponentSet;
+        largeComponentSet.gameplayComponents = largeComponents;
+        std::vector<SceneObjectSnapshot> loadedObjects;
+        loadedObjects.push_back(SceneObjectSnapshot{.id = SceneObjectId{1}, .name = "Large Source", .components = largeComponentSet});
+
+        SceneDocument document;
+        REQUIRE((document.LoadSaved(std::move(loadedObjects)).HasValue()));
+        const SceneDocumentSnapshot beforeRejectedEdits = document.Snapshot();
+        EditorHistory history;
+        SceneDocumentCommandExecutor commands{document, history};
+
+        const auto oversizedCreate = commands.Execute(CreateSceneObjectCommand{.name = "Oversized", .components = largeComponentSet});
+        REQUIRE((oversizedCreate.HasError()));
+        const auto oversizedDuplicate = commands.Execute(DuplicateSceneObjectCommand{SceneObjectId{1}, "Large Copy"});
+        REQUIRE((oversizedDuplicate.HasError()));
+        REQUIRE((document.Revision() == beforeRejectedEdits.revision));
+        REQUIRE((document.State() == beforeRejectedEdits.state));
+        REQUIRE((document.Objects().size() == 1));
+        REQUIRE((document.Objects().front().components.gameplayComponents == largeComponents));
+        REQUIRE_FALSE((history.CanUndo()));
+        REQUIRE_FALSE((history.CanRedo()));
+
+        const auto created = commands.Execute(CreateSceneObjectCommand{.name = "Small"});
+        REQUIRE((created.HasValue()));
+        REQUIRE((created.Value().object == SceneObjectId{2}));
+        const DocumentRevision committedRevision = document.Revision();
+        const auto noOpRename = commands.Execute(RenameSceneObjectCommand{created.Value().object, "Small"});
+        REQUIRE((noOpRename.HasValue()));
+        REQUIRE_FALSE((noOpRename.Value().committed));
+        REQUIRE((document.Revision() == committedRevision));
+
+        REQUIRE((commands.Undo().HasValue()));
+        REQUIRE((document.Objects().size() == 1));
+        REQUIRE((commands.Redo().HasValue()));
+        REQUIRE((document.Objects().size() == 2));
+    }
+
+    TEST_CASE("Scene document load rejects duplicate identities and missing parents atomically", "[unit][editor][persistence]") {
+        using namespace Horo::Editor;
+
+        SceneDocument document;
+        REQUIRE((document.LoadSaved({SceneObjectSnapshot{.id = SceneObjectId{1}, .name = "Baseline"}}).HasValue()));
+        const DocumentRevision revision = document.Revision();
+        const DocumentStateId state = document.State();
+
+        std::vector<SceneObjectSnapshot> duplicateIds{
+            SceneObjectSnapshot{.id = SceneObjectId{2}, .name = "First"},
+            SceneObjectSnapshot{.id = SceneObjectId{2}, .name = "Second"},
+        };
+        REQUIRE((document.LoadSaved(std::move(duplicateIds)).HasError()));
+
+        std::vector<SceneObjectSnapshot> missingParent{
+            SceneObjectSnapshot{.id = SceneObjectId{2}, .parent = SceneObjectId{99}, .name = "Orphan"},
+        };
+        REQUIRE((document.LoadSaved(std::move(missingParent)).HasError()));
+        REQUIRE((document.Revision() == revision));
+        REQUIRE((document.State() == state));
+        REQUIRE_FALSE((document.IsDirty()));
+        REQUIRE((document.Objects().size() == 1));
+        REQUIRE((document.Objects().front().id == SceneObjectId{1}));
+        REQUIRE((document.Objects().front().name == "Baseline"));
+    }
+
 }  // namespace

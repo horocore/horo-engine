@@ -362,6 +362,12 @@ TEST_CASE("Project Scene Loader Rejects Unknown Schema Versions", "[unit][editor
     REQUIRE((LoadProjectDefaultScene(project.Root()).HasError()));
 }
 
+TEST_CASE("Project Scene Loader Rejects Partial Object Snapshots", "[unit][editor][persistence]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene(R"({"schemaVersion":1,"objects":[{"id":1,"parent":null,"name":"Partial"}]})");
+    REQUIRE((LoadProjectDefaultScene(project.Root()).HasError()));
+}
+
 TEST_CASE("Project Scene Loader Rejects Malformed Prefab Instance Records", "[unit][editor][persistence][prefab]") {
     TemporaryProject project;
     project.PrepareEmptyScene(R"({"schemaVersion":1,"objects":[],"prefabInstances":{}})");
@@ -552,6 +558,25 @@ TEST_CASE("Scene Recovery Rejects Payload Whose Checksum No Longer Matches", "[u
     {
         std::ofstream output(project.RecoveryPath(), std::ios::binary | std::ios::trunc);
         output << corrupted;
+    }
+
+    REQUIRE((InspectProjectSceneRecovery(project.Root(), project.ScenePath()).HasError()));
+}
+
+TEST_CASE("Scene Recovery Rejects Unsupported Record Versions", "[unit][editor][persistence][recovery]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    REQUIRE((WriteRecoveryForTest(project, AuthoredScene()).HasValue()));
+
+    std::ifstream input(project.RecoveryPath(), std::ios::binary);
+    std::string recovery{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    const std::string supportedVersion = "\"recordVersion\": 1";
+    const std::size_t versionPosition = recovery.find(supportedVersion);
+    REQUIRE((versionPosition != std::string::npos));
+    recovery.replace(versionPosition, supportedVersion.size(), "\"recordVersion\": 2");
+    {
+        std::ofstream output(project.RecoveryPath(), std::ios::binary | std::ios::trunc);
+        output << recovery;
     }
 
     REQUIRE((InspectProjectSceneRecovery(project.Root(), project.ScenePath()).HasError()));

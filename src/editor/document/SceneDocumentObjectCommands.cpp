@@ -269,12 +269,23 @@ namespace Horo::Editor {
             return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
         PreparedDuplicatedComponents duplicated = std::move(prepared).Value();
         SceneObjectComponentSet duplicatedComponents = std::move(duplicated.components);
+        std::uint64_t nextAiAgentId = m_document.m_nextAiAgentId;
         if (duplicated.aiAgentId.has_value())
-            m_document.m_nextAiAgentId = *duplicated.aiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicated.aiAgentId + 1;
-        for (Gameplay::BehaviorComponent &behavior : duplicatedComponents.behaviors)
-            behavior.instanceId = Gameplay::BehaviorInstanceId{m_document.m_nextBehaviorInstanceId++};
-        ObserveNavigationComponentIds(duplicatedComponents, m_document.m_nextNavigationSurfaceId, m_document.m_nextNavigationRegionId,
-                                      m_document.m_nextNavigationModifierId, m_document.m_nextNavigationLinkId);
+            nextAiAgentId = *duplicated.aiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicated.aiAgentId + 1;
+        std::uint64_t nextBehaviorInstanceId = m_document.m_nextBehaviorInstanceId;
+        for (Gameplay::BehaviorComponent &behavior : duplicatedComponents.behaviors) {
+            if (nextBehaviorInstanceId == 0)
+                return Result<SceneCommandResult>::Failure(
+                    MakeDocumentError(SceneDocumentErrors::InvalidBehavior, "Behavior instance identity space is exhausted."));
+            behavior.instanceId = Gameplay::BehaviorInstanceId{nextBehaviorInstanceId};
+            nextBehaviorInstanceId = nextBehaviorInstanceId == std::numeric_limits<std::uint64_t>::max() ? 0 : nextBehaviorInstanceId + 1;
+        }
+        std::uint64_t nextNavigationSurfaceId = m_document.m_nextNavigationSurfaceId;
+        std::uint64_t nextNavigationRegionId = m_document.m_nextNavigationRegionId;
+        std::uint64_t nextNavigationModifierId = m_document.m_nextNavigationModifierId;
+        std::uint64_t nextNavigationLinkId = m_document.m_nextNavigationLinkId;
+        ObserveNavigationComponentIds(duplicatedComponents, nextNavigationSurfaceId, nextNavigationRegionId, nextNavigationModifierId,
+                                      nextNavigationLinkId);
         SceneCommandDelta delta = CreatedObjectDelta{
             .object = SceneObjectSnapshot{.id = id,
                                           .parent = source->parent,
@@ -287,8 +298,18 @@ namespace Horo::Editor {
             .index = m_document.m_objects.size(),
             .kind = DocumentChangeKind::Duplicated,
         };
+        auto committed = CommitObject({std::move(delta), id, DocumentChangeKind::Duplicated});
+        if (committed.HasError())
+            return committed;
+
         ++m_document.m_nextObjectId;
-        return CommitObject({std::move(delta), id, DocumentChangeKind::Duplicated});
+        m_document.m_nextAiAgentId = nextAiAgentId;
+        m_document.m_nextBehaviorInstanceId = nextBehaviorInstanceId;
+        m_document.m_nextNavigationSurfaceId = nextNavigationSurfaceId;
+        m_document.m_nextNavigationRegionId = nextNavigationRegionId;
+        m_document.m_nextNavigationModifierId = nextNavigationModifierId;
+        m_document.m_nextNavigationLinkId = nextNavigationLinkId;
+        return committed;
     }
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const DeleteSceneObjectCommand&) */
