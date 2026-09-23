@@ -365,7 +365,7 @@ namespace Horo::Editor {
     std::size_t AssetImportModal::IncludedItemCount() const noexcept {
         std::size_t count = 0;
         for (std::size_t index = 0; index < m_includedItems.size(); ++index) {
-            if (m_includedItems[index] && index < m_itemCompleted.size() && !m_itemCompleted[index])
+            if (index < m_itemCompleted.size() && m_includedItems[index] && !m_itemCompleted[index])
                 ++count;
         }
         return count;

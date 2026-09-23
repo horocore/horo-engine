@@ -8,21 +8,23 @@
 #include <array>
 
 namespace Horo::Editor {
-    /** @copydoc AssetImportModal::LoadUiPreviewFixture */
-    void AssetImportModal::LoadUiPreviewFixture(const UiPreviewFixture fixture) {
+    namespace {
         struct PreviewFile {
-            const char *name;
-            const char *extension;
+            std::string_view name;
+            std::string_view extension;
             std::uintmax_t size;
         };
 
-        static constexpr std::array files{
+        constexpr std::array PreviewFiles{
             PreviewFile{"hero.fbx", "fbx", 12'400'000},
             PreviewFile{"hero_albedo.png", "png", 2'100'000},
             PreviewFile{"hero_normal.png", "png", 2'000'000},
             PreviewFile{"hero_theme.wav", "wav", 4'800'000},
         };
+    }  // namespace
 
+    /** @copydoc AssetImportModal::LoadUiPreviewFixture */
+    void AssetImportModal::LoadUiPreviewFixture(const UiPreviewFixture fixture) {
         m_uiPreviewMode = true;
         m_projectRoot = "Game";
         m_defaultDestinationFolder = "assets/Characters/Hero";
@@ -31,46 +33,54 @@ namespace Horo::Editor {
             .phase = Assets::AssetImportPhase::Selecting,
             .selectedItemIndex = 0,
         };
+        m_itemCompleted.clear();
+        m_includedItems.clear();
+        m_activePresetNames.clear();
         m_sourceFileSizes.clear();
         m_defaultPresetValues.clear();
-        m_sourceFileSizes.reserve(files.size());
-        m_defaultPresetValues.reserve(files.size());
+        m_sourceFileSizes.reserve(PreviewFiles.size());
+        m_defaultPresetValues.reserve(PreviewFiles.size());
 
         if (fixture == UiPreviewFixture::Empty)
             return;
 
-        for (const auto &file : files) {
-            const auto source = std::string{"assets/Characters/Hero/"} + file.name;
-            Assets::AssetImportItem item{
-                .sourceFile = ProjectPath::Parse(source).Value(),
-                .absoluteSourcePath = source,
-                .sourceExtension = file.extension,
-                .displayName = std::filesystem::path{file.name}.stem().string(),
-                .destinationFolder = m_defaultDestinationFolder,
-                .sourceByteSize = file.size,
-            };
-            if (const auto *contribution = m_catalog->FindContributionByExtension(file.extension)) {
-                item.importerContributionId = contribution->contributionId;
-                item.importerVersion = contribution->version;
-            }
-            if (item.sourceExtension == "fbx") {
-                item.settings["settings.importMaterials"] = "true";
-                item.settings["settings.importAnimations"] = "true";
-            }
-            if (item.sourceExtension == "wav") {
-                item.diagnostics.push_back(Assets::ImportDiagnostic{
-                    .severity = Assets::ImportDiagnostic::Severity::Warning,
-                    .code = "ui-preview.sample-rate",
-                    .message = "Audio sample rate will be converted.",
-                });
-            }
-            m_snapshot.items.push_back(std::move(item));
-            m_sourceFileSizes.push_back(file.size);
-        }
+        for (const auto &file : PreviewFiles)
+            AppendUiPreviewFile(file.name, file.extension, file.size);
+        FinalizeUiPreviewFixture();
+    }
 
-        m_itemCompleted.assign(files.size(), false);
-        m_includedItems.assign(files.size(), true);
-        m_activePresetNames.assign(files.size(), "Default");
+    void AssetImportModal::AppendUiPreviewFile(const std::string_view name, const std::string_view extension, const std::uintmax_t size) {
+        const auto source = std::string{"assets/Characters/Hero/"} + std::string{name};
+        Assets::AssetImportItem item{
+            .sourceFile = ProjectPath::Parse(source).Value(),
+            .absoluteSourcePath = source,
+            .sourceExtension = extension,
+            .displayName = std::filesystem::path{std::string{name}}.stem().string(),
+            .destinationFolder = m_defaultDestinationFolder,
+            .sourceByteSize = size,
+        };
+        if (const auto *contribution = m_catalog->FindContributionByExtension(extension)) {
+            item.importerContributionId = contribution->contributionId;
+            item.importerVersion = contribution->version;
+        }
+        if (extension == "fbx") {
+            item.settings["settings.importMaterials"] = "true";
+            item.settings["settings.importAnimations"] = "true";
+        }
+        if (extension == "wav")
+            item.diagnostics.push_back(Assets::ImportDiagnostic{
+                .severity = Assets::ImportDiagnostic::Severity::Warning,
+                .code = "ui-preview.sample-rate",
+                .message = "Audio sample rate will be converted.",
+            });
+        m_snapshot.items.push_back(std::move(item));
+        m_sourceFileSizes.push_back(size);
+    }
+
+    void AssetImportModal::FinalizeUiPreviewFixture() {
+        m_itemCompleted.assign(m_snapshot.items.size(), false);
+        m_includedItems.assign(m_snapshot.items.size(), true);
+        m_activePresetNames.assign(m_snapshot.items.size(), "Default");
         for (const auto &item : m_snapshot.items) {
             m_defaultPresetValues.push_back(ImportPreset{
                 .name = "Default",
