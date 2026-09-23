@@ -1277,16 +1277,16 @@ namespace Horo::Editor::Ui {
             changed = true;
         }
         const ImU32 upColor = Theme::U32(ImGui::IsItemHovered() ? Theme::Text() : Theme::Dim());
-        drawList->AddTriangleFilled({centerX - 5.0F, middleY - 5.0F}, {centerX + 5.0F, middleY - 5.0F},
-                                    {centerX, middleY - 10.0F}, upColor);
+        drawList->AddTriangleFilled({centerX - 5.0F, middleY - 5.0F}, {centerX + 5.0F, middleY - 5.0F}, {centerX, middleY - 10.0F},
+                                    upColor);
         ImGui::SetCursorScreenPos({fieldMax.x - 26.0F, middleY});
         if (ImGui::InvisibleButton("##decrease", {25.0F, std::max(1.0F, fieldMax.y - middleY - 1.0F)})) {
             *value -= step;
             changed = true;
         }
         const ImU32 downColor = Theme::U32(ImGui::IsItemHovered() ? Theme::Text() : Theme::Dim());
-        drawList->AddTriangleFilled({centerX - 5.0F, middleY + 5.0F}, {centerX + 5.0F, middleY + 5.0F},
-                                    {centerX, middleY + 10.0F}, downColor);
+        drawList->AddTriangleFilled({centerX - 5.0F, middleY + 5.0F}, {centerX + 5.0F, middleY + 5.0F}, {centerX, middleY + 10.0F},
+                                    downColor);
         ImGui::SetCursorScreenPos(nextCursor);
         ImGui::PopID();
         return changed;
