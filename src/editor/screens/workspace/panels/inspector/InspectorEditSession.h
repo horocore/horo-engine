@@ -181,12 +181,6 @@ namespace Horo::Editor {
         [[nodiscard]] static SceneObjectId ResolvePrimaryId(std::span<const ObjectTransformBaseline> baselines,
                                                             std::optional<SceneObjectId> primary) noexcept;
 
-        [[nodiscard]] static std::optional<Math::Transform> CalculateUpdatedTransform(
-            const Math::Transform &baselineTransform, const std::array<float, 3> &baselineRotationDegrees,
-            const InspectorObjectDraft &draft, const std::array<float, 3> &referencePosition,
-            const std::array<float, 3> &referenceRotationDegrees, const std::array<float, 3> &referenceScale,
-            const InspectorTransformAxisMask &editedAxes, const InspectorTransformAxisMask &relativeAxes);
-
         void SynchronizeDraft(std::span<const SceneObject> objects, std::span<const SceneObjectId> selectedObjects,
                               std::optional<SceneObjectId> primary, DocumentRevision revision);
         void ResetTransformDraft();

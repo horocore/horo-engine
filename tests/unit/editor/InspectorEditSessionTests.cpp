@@ -77,7 +77,11 @@ TEST_CASE("Inspector edit session owns transform preview lifecycle", "[unit][edi
     REQUIRE((committed.transformUpdates->front().localTransform.translation.y == 6.0F));
 
     const EditorWorkspaceViewCommandData reset = session.ApplyTransformEdit(InspectorTransformEdit{.resetRequested = true}, true);
-    REQUIRE((reset.command == EditorWorkspaceViewCommand::None));
+    REQUIRE((reset.command == EditorWorkspaceViewCommand::CommitObjectTransform));
+    REQUIRE((reset.transformUpdates->size() == 1));
+    REQUIRE((reset.transformUpdates->front().localTransform.translation == Horo::Math::Vec3{}));
+    REQUIRE((reset.transformUpdates->front().localTransform.rotation == object.localTransform.rotation));
+    REQUIRE((reset.transformUpdates->front().localTransform.scale == Horo::Math::Vec3{1.0F, 1.0F, 1.0F}));
 }
 
 TEST_CASE("Inspector edit session validates Camera edits and selection reconciliation", "[unit][editor]") {

@@ -11,6 +11,17 @@ namespace Horo::Editor {
         constexpr float DegreesToRadians = std::numbers::pi_v<float> / 180.0F;
         constexpr float MixedValueTolerance = 0.0001F;
 
+        struct TransformUpdateContext {
+            const Math::Transform &baselineTransform;
+            const std::array<float, 3> &baselineRotationDegrees;
+            const InspectorObjectDraft &draft;
+            const std::array<float, 3> &referencePosition;
+            const std::array<float, 3> &referenceRotationDegrees;
+            const std::array<float, 3> &referenceScale;
+            const InspectorTransformAxisMask &editedAxes;
+            const InspectorTransformAxisMask &relativeAxes;
+        };
+
         [[nodiscard]] std::array<float, 3> ToArray(const Math::Vec3 value) noexcept {
             return {value.x, value.y, value.z};
         }
@@ -32,6 +43,50 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool Differs(const float left, const float right) noexcept {
             return std::fabs(left - right) > MixedValueTolerance;
+        }
+
+        /**
+         * @brief Applies the active Inspector transform edit to one selected baseline.
+         * @param context Baseline, draft, and axis state used to calculate the updated transform.
+         * @return The updated transform, or no value when the edited rotation is invalid.
+         */
+        [[nodiscard]] std::optional<Math::Transform> CalculateUpdatedTransform(const TransformUpdateContext &context) {
+            std::array position = ToArray(context.baselineTransform.translation);
+            std::array rotation = context.baselineRotationDegrees;
+            std::array scale = ToArray(context.baselineTransform.scale);
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                if (context.editedAxes.position[axis])
+                    position[axis] = context.relativeAxes.position[axis]
+                                         ? position[axis] + (context.draft.position[axis] - context.referencePosition[axis])
+                                         : context.draft.position[axis];
+                if (context.editedAxes.rotation[axis])
+                    rotation[axis] = context.relativeAxes.rotation[axis]
+                                         ? rotation[axis] + (context.draft.rotationDegrees[axis] - context.referenceRotationDegrees[axis])
+                                         : context.draft.rotationDegrees[axis];
+                if (context.editedAxes.scale[axis])
+                    scale[axis] = context.relativeAxes.scale[axis]
+                                      ? scale[axis] + (context.draft.scale[axis] - context.referenceScale[axis])
+                                      : context.draft.scale[axis];
+            }
+            Math::Quaternion updatedRotation = context.baselineTransform.rotation;
+            bool rotationChanged = false;
+            for (std::size_t axis = 0; axis < context.editedAxes.rotation.size(); ++axis) {
+                rotationChanged = rotationChanged ||
+                                  (context.editedAxes.rotation[axis] && Differs(rotation[axis], context.baselineRotationDegrees[axis]));
+            }
+            if (rotationChanged) {
+                const Math::Vec3 rotationRadians{rotation[0] * DegreesToRadians, rotation[1] * DegreesToRadians,
+                                                 rotation[2] * DegreesToRadians};
+                const Result<Math::Quaternion> quaternion = Math::Quaternion::TryFromEulerRadians(rotationRadians);
+                if (quaternion.HasError())
+                    return std::nullopt;
+                updatedRotation = quaternion.Value();
+            }
+            return Math::Transform{
+                .translation = ToVec3(position),
+                .rotation = updatedRotation,
+                .scale = ToVec3(scale),
+            };
         }
 
         void MergeAxisMask(std::array<bool, 3> &destination, const std::array<bool, 3> &source) noexcept {
@@ -68,45 +123,6 @@ namespace Horo::Editor {
         if (primary.has_value() && std::ranges::find(baselines, *primary, &ObjectTransformBaseline::object) != baselines.end())
             return *primary;
         return baselines.empty() ? SceneObjectId{} : baselines.front().object;
-    }
-
-    std::optional<Math::Transform> InspectorEditSession::CalculateUpdatedTransform(
-        const Math::Transform &baselineTransform, const std::array<float, 3> &baselineRotationDegrees, const InspectorObjectDraft &draft,
-        const std::array<float, 3> &referencePosition, const std::array<float, 3> &referenceRotationDegrees,
-        const std::array<float, 3> &referenceScale, const InspectorTransformAxisMask &editedAxes,
-        const InspectorTransformAxisMask &relativeAxes) {
-        std::array position = ToArray(baselineTransform.translation);
-        std::array rotation = baselineRotationDegrees;
-        std::array scale = ToArray(baselineTransform.scale);
-        for (std::size_t axis = 0; axis < 3; ++axis) {
-            if (editedAxes.position[axis])
-                position[axis] =
-                    relativeAxes.position[axis] ? position[axis] + (draft.position[axis] - referencePosition[axis]) : draft.position[axis];
-            if (editedAxes.rotation[axis])
-                rotation[axis] = relativeAxes.rotation[axis]
-                                     ? rotation[axis] + (draft.rotationDegrees[axis] - referenceRotationDegrees[axis])
-                                     : draft.rotationDegrees[axis];
-            if (editedAxes.scale[axis])
-                scale[axis] = relativeAxes.scale[axis] ? scale[axis] + (draft.scale[axis] - referenceScale[axis]) : draft.scale[axis];
-        }
-        Math::Quaternion updatedRotation = baselineTransform.rotation;
-        bool rotationChanged = false;
-        for (std::size_t axis = 0; axis < editedAxes.rotation.size(); ++axis) {
-            rotationChanged = rotationChanged || (editedAxes.rotation[axis] && Differs(rotation[axis], baselineRotationDegrees[axis]));
-        }
-        if (rotationChanged) {
-            const Math::Vec3 rotationRadians{rotation[0] * DegreesToRadians, rotation[1] * DegreesToRadians,
-                                             rotation[2] * DegreesToRadians};
-            const Result<Math::Quaternion> quaternion = Math::Quaternion::TryFromEulerRadians(rotationRadians);
-            if (quaternion.HasError())
-                return std::nullopt;
-            updatedRotation = quaternion.Value();
-        }
-        return Math::Transform{
-            .translation = ToVec3(position),
-            .rotation = updatedRotation,
-            .scale = ToVec3(scale),
-        };
     }
 
     bool InspectorTransformAxisMask::Any() const noexcept {
@@ -255,7 +271,7 @@ namespace Horo::Editor {
         }
 
         const bool hadPreview = m_hasTransformPreview;
-        const std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
+        std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
         ClearTransformInteraction();
         if (!updates.has_value() || updates->empty()) {
             ResetTransformDraft();
@@ -270,7 +286,7 @@ namespace Horo::Editor {
     }
 
     EditorWorkspaceViewCommandData InspectorEditSession::PreviewTransformDraft() {
-        const std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
+        std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
         if (!updates.has_value() || updates->empty()) {
             const bool hadPreview = m_hasTransformPreview;
             ResetTransformDraft();
@@ -541,8 +557,17 @@ namespace Horo::Editor {
         std::vector<SceneObjectTransformUpdate> updates;
         updates.reserve(m_baselines.size());
         for (const ObjectTransformBaseline &baseline : m_baselines) {
-            const auto updated = CalculateUpdatedTransform(baseline.localTransform, baseline.rotationDegrees, m_draft, m_referencePosition,
-                                                           m_referenceRotationDegrees, m_referenceScale, m_editedAxes, m_relativeAxes);
+            const TransformUpdateContext context{
+                .baselineTransform = baseline.localTransform,
+                .baselineRotationDegrees = baseline.rotationDegrees,
+                .draft = m_draft,
+                .referencePosition = m_referencePosition,
+                .referenceRotationDegrees = m_referenceRotationDegrees,
+                .referenceScale = m_referenceScale,
+                .editedAxes = m_editedAxes,
+                .relativeAxes = m_relativeAxes,
+            };
+            const auto updated = CalculateUpdatedTransform(context);
             if (!updated.has_value())
                 return std::nullopt;
             if (*updated != baseline.localTransform)
