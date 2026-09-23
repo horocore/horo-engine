@@ -69,6 +69,11 @@ namespace Horo::Editor::InspectorPanelDetail {
         bool canRemove{true};
     };
 
+    /** @brief Reports Escape only when the Inspector card child window owns focus. */
+    [[nodiscard]] inline bool IsInspectorCardEscapeRequested() noexcept {
+        return ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    }
+
     /** @brief Localized labels consumed while composing one component title bar. */
     struct ComponentTitleBarLabels {
         const char *reset;

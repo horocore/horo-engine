@@ -11,6 +11,17 @@ namespace Horo::Editor {
         constexpr float DegreesToRadians = std::numbers::pi_v<float> / 180.0F;
         constexpr float MixedValueTolerance = 0.0001F;
 
+        struct TransformUpdateContext {
+            const Math::Transform &baselineTransform;
+            const std::array<float, 3> &baselineRotationDegrees;
+            const InspectorObjectDraft &draft;
+            const std::array<float, 3> &referencePosition;
+            const std::array<float, 3> &referenceRotationDegrees;
+            const std::array<float, 3> &referenceScale;
+            const InspectorTransformAxisMask &editedAxes;
+            const InspectorTransformAxisMask &relativeAxes;
+        };
+
         [[nodiscard]] std::array<float, 3> ToArray(const Math::Vec3 value) noexcept {
             return {value.x, value.y, value.z};
         }
@@ -32,6 +43,50 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool Differs(const float left, const float right) noexcept {
             return std::fabs(left - right) > MixedValueTolerance;
+        }
+
+        /**
+         * @brief Applies the active Inspector transform edit to one selected baseline.
+         * @param context Baseline, draft, and axis state used to calculate the updated transform.
+         * @return The updated transform, or no value when the edited rotation is invalid.
+         */
+        [[nodiscard]] std::optional<Math::Transform> CalculateUpdatedTransform(const TransformUpdateContext &context) {
+            std::array position = ToArray(context.baselineTransform.translation);
+            std::array rotation = context.baselineRotationDegrees;
+            std::array scale = ToArray(context.baselineTransform.scale);
+            for (std::size_t axis = 0; axis < 3; ++axis) {
+                if (context.editedAxes.position[axis])
+                    position[axis] = context.relativeAxes.position[axis]
+                                         ? position[axis] + (context.draft.position[axis] - context.referencePosition[axis])
+                                         : context.draft.position[axis];
+                if (context.editedAxes.rotation[axis])
+                    rotation[axis] = context.relativeAxes.rotation[axis]
+                                         ? rotation[axis] + (context.draft.rotationDegrees[axis] - context.referenceRotationDegrees[axis])
+                                         : context.draft.rotationDegrees[axis];
+                if (context.editedAxes.scale[axis])
+                    scale[axis] = context.relativeAxes.scale[axis]
+                                      ? scale[axis] + (context.draft.scale[axis] - context.referenceScale[axis])
+                                      : context.draft.scale[axis];
+            }
+            Math::Quaternion updatedRotation = context.baselineTransform.rotation;
+            bool rotationChanged = false;
+            for (std::size_t axis = 0; axis < context.editedAxes.rotation.size(); ++axis) {
+                rotationChanged = rotationChanged ||
+                                  (context.editedAxes.rotation[axis] && Differs(rotation[axis], context.baselineRotationDegrees[axis]));
+            }
+            if (rotationChanged) {
+                const Math::Vec3 rotationRadians{rotation[0] * DegreesToRadians, rotation[1] * DegreesToRadians,
+                                                 rotation[2] * DegreesToRadians};
+                const Result<Math::Quaternion> quaternion = Math::Quaternion::TryFromEulerRadians(rotationRadians);
+                if (quaternion.HasError())
+                    return std::nullopt;
+                updatedRotation = quaternion.Value();
+            }
+            return Math::Transform{
+                .translation = ToVec3(position),
+                .rotation = updatedRotation,
+                .scale = ToVec3(scale),
+            };
         }
 
         void MergeAxisMask(std::array<bool, 3> &destination, const std::array<bool, 3> &source) noexcept {
@@ -68,35 +123,6 @@ namespace Horo::Editor {
         if (primary.has_value() && std::ranges::find(baselines, *primary, &ObjectTransformBaseline::object) != baselines.end())
             return *primary;
         return baselines.empty() ? SceneObjectId{} : baselines.front().object;
-    }
-
-    std::optional<Math::Transform> InspectorEditSession::CalculateUpdatedTransform(
-        const Math::Transform &baselineTransform, const InspectorObjectDraft &draft, const std::array<float, 3> &referencePosition,
-        const std::array<float, 3> &referenceRotationDegrees, const std::array<float, 3> &referenceScale,
-        const InspectorTransformAxisMask &editedAxes, const InspectorTransformAxisMask &relativeAxes) {
-        std::array position = ToArray(baselineTransform.translation);
-        std::array rotation = ToEulerDegrees(baselineTransform.rotation);
-        std::array scale = ToArray(baselineTransform.scale);
-        for (std::size_t axis = 0; axis < 3; ++axis) {
-            if (editedAxes.position[axis])
-                position[axis] =
-                    relativeAxes.position[axis] ? position[axis] + (draft.position[axis] - referencePosition[axis]) : draft.position[axis];
-            if (editedAxes.rotation[axis])
-                rotation[axis] = relativeAxes.rotation[axis]
-                                     ? rotation[axis] + (draft.rotationDegrees[axis] - referenceRotationDegrees[axis])
-                                     : draft.rotationDegrees[axis];
-            if (editedAxes.scale[axis])
-                scale[axis] = relativeAxes.scale[axis] ? scale[axis] + (draft.scale[axis] - referenceScale[axis]) : draft.scale[axis];
-        }
-        const Math::Vec3 rotationRadians{rotation[0] * DegreesToRadians, rotation[1] * DegreesToRadians, rotation[2] * DegreesToRadians};
-        const Result<Math::Quaternion> quaternion = Math::Quaternion::TryFromEulerRadians(rotationRadians);
-        if (quaternion.HasError())
-            return std::nullopt;
-        return Math::Transform{
-            .translation = ToVec3(position),
-            .rotation = quaternion.Value(),
-            .scale = ToVec3(scale),
-        };
     }
 
     bool InspectorTransformAxisMask::Any() const noexcept {
@@ -164,13 +190,13 @@ namespace Horo::Editor {
     /** @copydoc InspectorEditSession::ApplyNameEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyNameEdit(const InspectorNameEdit &edit, const SceneObject &object,
                                                                        const bool allowCommands) {
-        if (!allowCommands || m_baselines.size() != 1)
+        if (m_baselines.size() != 1 || m_draft.object != object.id)
             return {};
         if (edit.cancelled) {
             m_draft.name = object.name;
             return {};
         }
-        if (!edit.committed || !IsValidSceneObjectName(m_draft.name) || m_draft.name == object.name)
+        if (!allowCommands || !edit.committed || !IsValidSceneObjectName(m_draft.name) || m_draft.name == object.name)
             return {};
 
         EditorWorkspaceViewCommandData command = MakeObjectCommand(EditorWorkspaceViewCommand::UpdateObjectName, object.id);
@@ -183,28 +209,12 @@ namespace Horo::Editor {
         if (!allowCommands || m_baselines.empty())
             return {};
 
-        if (edit.resetRequested) {
-            m_draft.position = {};
-            m_draft.rotationDegrees = {};
-            m_draft.scale = {1.0F, 1.0F, 1.0F};
-            m_draft.mixed = {};
-            m_editedAxes = {
-                .position = {true, true, true},
-                .rotation = {true, true, true},
-                .scale = {true, true, true},
-            };
-            m_relativeAxes = {};
-            EditorWorkspaceViewCommandData command;
-            command.command = EditorWorkspaceViewCommand::CommitObjectTransform;
-            command.transformUpdates = BuildTransformUpdates();
-            m_hasTransformPreview = false;
-            m_editedAxes = {};
-            return command;
-        }
+        if (edit.resetRequested)
+            return ResetTransformToIdentity();
 
         if (edit.cancelRequested && m_hasTransformPreview) {
             ResetTransformDraft();
-            m_hasTransformPreview = false;
+            ClearTransformInteraction();
             return MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object);
         }
 
@@ -221,44 +231,89 @@ namespace Horo::Editor {
         }
 
         if (!IsTransformValid()) {
-            if (edit.committed && m_hasTransformPreview) {
-                ResetTransformDraft();
-                m_hasTransformPreview = false;
-                return MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object);
-            }
-            return {};
+            return RejectInvalidTransform(edit.committed);
         }
 
-        if (edit.committed) {
-            if (!m_editedAxes.Any()) {
-                m_hasTransformPreview = false;
-                return {};
-            }
-            EditorWorkspaceViewCommandData command;
-            command.command = EditorWorkspaceViewCommand::CommitObjectTransform;
-            command.transformUpdates = BuildTransformUpdates();
-            m_hasTransformPreview = false;
-            m_editedAxes = {};
-            m_relativeAxes = {};
-            return command;
-        }
+        if (edit.committed)
+            return CommitTransformDraft();
         if (!edit.changed || !m_editedAxes.Any())
             return {};
 
+        return PreviewTransformDraft();
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::ResetTransformToIdentity() {
+        m_draft.position = {};
+        m_draft.rotationDegrees = {};
+        m_draft.scale = {1.0F, 1.0F, 1.0F};
+        m_draft.mixed = {};
+        m_editedAxes = {
+            .position = {true, true, true},
+            .rotation = {true, true, true},
+            .scale = {true, true, true},
+        };
+        m_relativeAxes = {};
+        return CommitTransformDraft();
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::RejectInvalidTransform(const bool committed) {
+        if (!committed || !m_hasTransformPreview)
+            return {};
+        ResetTransformDraft();
+        ClearTransformInteraction();
+        return MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object);
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::CommitTransformDraft() {
+        if (!m_editedAxes.Any()) {
+            ClearTransformInteraction();
+            return {};
+        }
+
+        const bool hadPreview = m_hasTransformPreview;
+        std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
+        ClearTransformInteraction();
+        if (!updates.has_value() || updates->empty()) {
+            ResetTransformDraft();
+            return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object)
+                              : EditorWorkspaceViewCommandData{};
+        }
+
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CommitObjectTransform;
+        command.transformUpdates = std::move(*updates);
+        return command;
+    }
+
+    EditorWorkspaceViewCommandData InspectorEditSession::PreviewTransformDraft() {
+        std::optional<std::vector<SceneObjectTransformUpdate>> updates = BuildTransformUpdates();
+        if (!updates.has_value() || updates->empty()) {
+            const bool hadPreview = m_hasTransformPreview;
+            ResetTransformDraft();
+            ClearTransformInteraction();
+            return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelObjectTransformPreview, m_baselines.front().object)
+                              : EditorWorkspaceViewCommandData{};
+        }
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::PreviewObjectTransform;
-        command.transformUpdates = BuildTransformUpdates();
+        command.transformUpdates = std::move(*updates);
         m_hasTransformPreview = true;
         return command;
     }
 
     /** @copydoc InspectorEditSession::ApplyCameraEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyCameraEdit(const InspectorCameraEdit &edit, const SceneObject &object,
-                                                                         const bool allowCommands) const {
-        if (!allowCommands || m_baselines.size() != 1 || !edit.committed || !object.components.camera.has_value() ||
-            !m_draft.camera.has_value() || !IsValidCameraComponent(*m_draft.camera) || *m_draft.camera == *object.components.camera) {
+                                                                         const bool allowCommands) {
+        if (m_baselines.size() != 1 || m_draft.object != object.id || !object.components.camera.has_value() ||
+            !m_draft.camera.has_value()) {
             return {};
         }
+        if (edit.cancelRequested) {
+            ResetCameraDraft(object);
+            return {};
+        }
+        if (!allowCommands || !edit.committed || !IsValidCameraComponent(*m_draft.camera) || *m_draft.camera == *object.components.camera)
+            return {};
 
         EditorWorkspaceViewCommandData command = MakeObjectCommand(EditorWorkspaceViewCommand::UpdateCameraComponent, object.id);
         command.cameraPayload = *m_draft.camera;
@@ -268,14 +323,19 @@ namespace Horo::Editor {
     /** @copydoc InspectorEditSession::ApplyLightEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyLightEdit(const InspectorLightEdit &edit, const SceneObject &object,
                                                                         const bool allowCommands) {
-        if (!allowCommands || m_baselines.size() != 1 || !object.components.light.has_value() || !m_draft.light.has_value())
+        if (m_baselines.size() != 1 || m_draft.object != object.id || !object.components.light.has_value() || !m_draft.light.has_value())
             return {};
 
-        if (edit.cancelRequested && m_hasLightPreview) {
+        if (edit.cancelRequested) {
+            const bool hadPreview = m_hasLightPreview;
             ResetLightDraft(object);
             m_hasLightPreview = false;
-            return MakeObjectCommand(EditorWorkspaceViewCommand::CancelLightComponentPreview, object.id);
+            return hadPreview ? MakeObjectCommand(EditorWorkspaceViewCommand::CancelLightComponentPreview, object.id)
+                              : EditorWorkspaceViewCommandData{};
         }
+
+        if (!allowCommands)
+            return {};
 
         if (!IsValidLightComponent(*m_draft.light)) {
             if (edit.committed && m_hasLightPreview) {
@@ -349,11 +409,17 @@ namespace Horo::Editor {
 
     /** @copydoc InspectorEditSession::ApplyTriggerVolumeEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyTriggerVolumeEdit(const InspectorTriggerVolumeEdit &edit,
-                                                                                const SceneObject &object, const bool allowCommands) const {
-        if (!allowCommands || m_baselines.size() != 1 || !edit.committed || !object.components.triggerVolume.has_value() ||
-            !m_draft.triggerVolume.has_value() || *m_draft.triggerVolume == *object.components.triggerVolume) {
+                                                                                const SceneObject &object, const bool allowCommands) {
+        if (m_baselines.size() != 1 || m_draft.object != object.id || !object.components.triggerVolume.has_value() ||
+            !m_draft.triggerVolume.has_value()) {
             return {};
         }
+        if (edit.cancelRequested) {
+            ResetTriggerVolumeDraft(object);
+            return {};
+        }
+        if (!allowCommands || !edit.committed || *m_draft.triggerVolume == *object.components.triggerVolume)
+            return {};
 
         EditorWorkspaceViewCommandData command = MakeObjectCommand(EditorWorkspaceViewCommand::UpdateTriggerVolumeComponent, object.id);
         command.triggerVolumePayload = *m_draft.triggerVolume;
@@ -362,16 +428,28 @@ namespace Horo::Editor {
 
     /** @copydoc InspectorEditSession::ApplyAudioSourceEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit,
-                                                                              const SceneObject &object, const bool allowCommands) const {
-        if (!allowCommands || m_baselines.size() != 1 || !edit.committed || !object.components.audioSource.has_value() ||
-            !m_draft.audioSource.has_value() || !IsValidAudioSourceComponent(*m_draft.audioSource) ||
-            *m_draft.audioSource == *object.components.audioSource) {
+                                                                              const SceneObject &object, const bool allowCommands) {
+        if (m_baselines.size() != 1 || m_draft.object != object.id || !object.components.audioSource.has_value() ||
+            !m_draft.audioSource.has_value()) {
             return {};
         }
+        if (edit.cancelRequested) {
+            ResetAudioSourceDraft(object);
+            return {};
+        }
+        if (!allowCommands || !edit.committed || !IsValidAudioSourceComponent(*m_draft.audioSource) ||
+            *m_draft.audioSource == *object.components.audioSource)
+            return {};
 
         EditorWorkspaceViewCommandData command = MakeObjectCommand(EditorWorkspaceViewCommand::UpdateAudioSourceComponent, object.id);
         command.audioSourcePayload = *m_draft.audioSource;
         return command;
+    }
+
+    void InspectorEditSession::ResetCameraDraft(const SceneObject &object) {
+        m_draft.camera = object.components.camera;
+        if (m_draft.camera.has_value())
+            m_draft.cameraFieldOfViewDegrees = m_draft.camera->verticalFieldOfViewRadians * RadiansToDegrees;
     }
 
     void InspectorEditSession::ResetLightDraft(const SceneObject &object) {
@@ -380,6 +458,20 @@ namespace Horo::Editor {
             return;
         m_draft.lightInnerConeDegrees = m_draft.light->innerConeRadians * RadiansToDegrees;
         m_draft.lightOuterConeDegrees = m_draft.light->outerConeRadians * RadiansToDegrees;
+    }
+
+    void InspectorEditSession::ResetTriggerVolumeDraft(const SceneObject &object) {
+        m_draft.triggerVolume = object.components.triggerVolume;
+    }
+
+    void InspectorEditSession::ResetAudioSourceDraft(const SceneObject &object) {
+        m_draft.audioSource = object.components.audioSource;
+    }
+
+    void InspectorEditSession::ClearTransformInteraction() noexcept {
+        m_hasTransformPreview = false;
+        m_editedAxes = {};
+        m_relativeAxes = {};
     }
 
     void InspectorEditSession::SynchronizeDraft(const std::span<const SceneObject> objects,
@@ -398,7 +490,7 @@ namespace Horo::Editor {
         for (const SceneObjectId selected : selectedObjects) {
             const auto object = std::ranges::find(objects, selected, &SceneObject::id);
             if (object != objects.end())
-                m_baselines.emplace_back(object->id, object->localTransform);
+                m_baselines.emplace_back(object->id, object->localTransform, ToEulerDegrees(object->localTransform.rotation));
         }
 
         m_editedAxes = {};
@@ -437,8 +529,10 @@ namespace Horo::Editor {
         const auto primary = std::ranges::find(m_baselines, targetId, &ObjectTransformBaseline::object);
         const Math::Transform &primaryTransform =
             primary != m_baselines.end() ? primary->localTransform : m_baselines.front().localTransform;
+        const std::array<float, 3> &primaryRotation =
+            primary != m_baselines.end() ? primary->rotationDegrees : m_baselines.front().rotationDegrees;
         m_draft.position = ToArray(primaryTransform.translation);
-        m_draft.rotationDegrees = ToEulerDegrees(primaryTransform.rotation);
+        m_draft.rotationDegrees = primaryRotation;
         m_draft.scale = ToArray(primaryTransform.scale);
         m_referencePosition = m_draft.position;
         m_referenceRotationDegrees = m_draft.rotationDegrees;
@@ -447,11 +541,11 @@ namespace Horo::Editor {
 
         for (const ObjectTransformBaseline &baseline : m_baselines) {
             const std::array position = ToArray(baseline.localTransform.translation);
-            const std::array rotation = ToEulerDegrees(baseline.localTransform.rotation);
             const std::array scale = ToArray(baseline.localTransform.scale);
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 m_draft.mixed.position[axis] = m_draft.mixed.position[axis] || Differs(position[axis], m_draft.position[axis]);
-                m_draft.mixed.rotation[axis] = m_draft.mixed.rotation[axis] || Differs(rotation[axis], m_draft.rotationDegrees[axis]);
+                m_draft.mixed.rotation[axis] =
+                    m_draft.mixed.rotation[axis] || Differs(baseline.rotationDegrees[axis], m_draft.rotationDegrees[axis]);
                 m_draft.mixed.scale[axis] = m_draft.mixed.scale[axis] || Differs(scale[axis], m_draft.scale[axis]);
             }
         }
@@ -459,15 +553,25 @@ namespace Horo::Editor {
         m_relativeAxes = {};
     }
 
-    std::vector<SceneObjectTransformUpdate> InspectorEditSession::BuildTransformUpdates() const {
+    std::optional<std::vector<SceneObjectTransformUpdate>> InspectorEditSession::BuildTransformUpdates() const {
         std::vector<SceneObjectTransformUpdate> updates;
         updates.reserve(m_baselines.size());
         for (const ObjectTransformBaseline &baseline : m_baselines) {
-            const auto updated = CalculateUpdatedTransform(baseline.localTransform, m_draft, m_referencePosition,
-                                                           m_referenceRotationDegrees, m_referenceScale, m_editedAxes, m_relativeAxes);
+            const TransformUpdateContext context{
+                .baselineTransform = baseline.localTransform,
+                .baselineRotationDegrees = baseline.rotationDegrees,
+                .draft = m_draft,
+                .referencePosition = m_referencePosition,
+                .referenceRotationDegrees = m_referenceRotationDegrees,
+                .referenceScale = m_referenceScale,
+                .editedAxes = m_editedAxes,
+                .relativeAxes = m_relativeAxes,
+            };
+            const auto updated = CalculateUpdatedTransform(context);
             if (!updated.has_value())
-                return {};
-            updates.emplace_back(baseline.object, *updated);
+                return std::nullopt;
+            if (*updated != baseline.localTransform)
+                updates.emplace_back(baseline.object, *updated);
         }
         return updates;
     }

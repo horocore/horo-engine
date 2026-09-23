@@ -56,14 +56,13 @@ namespace Horo::Editor {
         void ApplyNameEdit(const InspectorNameEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command);
         void ApplyTransformEdit(const InspectorTransformEdit &edit, EditorWorkspaceViewCommandData &command);
 
-        void ApplyCameraEdit(const InspectorCameraEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command) const;
+        void ApplyCameraEdit(const InspectorCameraEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command);
 
         void ApplyLightEdit(const InspectorLightEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command);
         void ApplyTriggerVolumeEdit(const InspectorTriggerVolumeEdit &edit, const SceneObject &object,
-                                    EditorWorkspaceViewCommandData &command) const;
+                                    EditorWorkspaceViewCommandData &command);
 
-        void ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object,
-                                  EditorWorkspaceViewCommandData &command) const;
+        void ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command);
 
         void DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         static void AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source);
