@@ -1082,9 +1082,6 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
-    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE
-            ${PROJECT_SOURCE_DIR}/src
-    )
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE
             HoroEngine::Gui
