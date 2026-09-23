@@ -140,6 +140,7 @@ TEST_CASE("Asset import presentation renders queue diagnostics settings destinat
     snapshot.items.front().settings["settings.scale"] = "invalid";
     snapshot.items.front().settings["settings.normals"] = "invalid";
 
+    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     DrawFrame(fixture.imgui, fixture.modal);
     ClickTab(fixture.imgui, fixture.modal, 1);
     ClickTab(fixture.imgui, fixture.modal, 2);
