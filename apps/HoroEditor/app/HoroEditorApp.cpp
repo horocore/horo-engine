@@ -537,8 +537,7 @@ namespace Horo::Editor {
             return 1;
         }
 
-        [[nodiscard]] bool InitializeSdlAndCreateWindow(SDL_Window *&window,
-                                                        const Render::RenderHostWindowRequirements &windowRequirements,
+        [[nodiscard]] bool InitializeSdlAndCreateWindow(SDL_Window *&window, const Render::RenderHostWindowRequirements &windowRequirements,
                                                         const bool uiPreview) {
             SDL_WindowFlags rendererWindowFlag = 0;
             switch (windowRequirements.presentation) {
@@ -1138,8 +1137,8 @@ namespace Horo::Editor {
             screenHost.Services().Register<OperationStore>(p.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationStore);
             screenHost.Services().Register<IOperationControl>(p.operationStore);
-            const Result<void> started = p.uiPreview.empty() ? screenHost.Start(std::move(p.initialRoute))
-                                                             : screenHost.StartUiPreview(p.uiPreview);
+            const Result<void> started =
+                p.uiPreview.empty() ? screenHost.Start(std::move(p.initialRoute)) : screenHost.StartUiPreview(p.uiPreview);
             if (started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
