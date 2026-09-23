@@ -11,8 +11,7 @@ namespace Horo::Editor {
         [[nodiscard]] std::filesystem::path ResolveAssetSourcePath(const EditorWorkspaceViewModel &viewModel,
                                                                    const AssetSceneDropRequest &request,
                                                                    const Assets::AssetRecord &record) {
-            const std::filesystem::path draggedPath{request.absoluteAssetPath};
-            if (draggedPath.is_absolute())
+            if (const std::filesystem::path draggedPath{request.absoluteAssetPath}; draggedPath.is_absolute())
                 return draggedPath;
             return std::filesystem::path{viewModel.projectRoot} / record.sourcePath.String();
         }
@@ -104,9 +103,9 @@ namespace Horo::Editor {
         Math::Transform transform;
         if (!ApplyAssetViewportPlacement(request, loaded.Value().mesh->localBounds, transform, false))
             return;
-        const Result<void> applied = ApplyAssetViewportPlacementPreview(m_viewportScene, loaded.Value(),
-                                                                        AssetViewportPlacement{.worldPosition = transform.translation});
-        if (applied.HasError()) {
+        if (const Result<void> applied = ApplyAssetViewportPlacementPreview(m_viewportScene, loaded.Value(),
+                                                                            AssetViewportPlacement{.worldPosition = transform.translation});
+            applied.HasError()) {
             LOG_ERROR("editor.viewport", "Asset placement preview failed: %s", applied.ErrorValue().message.c_str());
             return;
         }

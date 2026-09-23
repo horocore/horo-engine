@@ -108,11 +108,13 @@ namespace Horo::Editor {
     HierarchyAssetDropPlacement ResolveHierarchyAssetDropPlacement(const float normalizedRowY, const SceneObjectId hoveredObject,
                                                                    const std::optional<SceneObjectId> hoveredParent) noexcept {
         constexpr float siblingEdgeRatio = 0.25F;
+        using enum AssetSceneDropTarget;
+        using enum HierarchyAssetDropZone;
         if (normalizedRowY <= siblingEdgeRatio)
-            return {hoveredParent, AssetSceneDropTarget::HierarchySibling, HierarchyAssetDropZone::BeforeSibling};
+            return {hoveredParent, HierarchySibling, BeforeSibling};
         if (normalizedRowY >= 1.0F - siblingEdgeRatio)
-            return {hoveredParent, AssetSceneDropTarget::HierarchySibling, HierarchyAssetDropZone::AfterSibling};
-        return {hoveredObject, AssetSceneDropTarget::HierarchyChild, HierarchyAssetDropZone::Child};
+            return {hoveredParent, HierarchySibling, AfterSibling};
+        return {hoveredObject, HierarchyChild, Child};
     }
 
     bool ClearAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene) noexcept {
@@ -133,10 +135,11 @@ namespace Horo::Editor {
         }
         if (!previewMesh.has_value())
             return removed;
-        const bool resourceInUse = std::ranges::any_of(scene.instances, [previewMesh](const EditorViewportInstance &instance) {
+        if (const bool resourceInUse = std::ranges::any_of(scene.instances,
+                                                           [previewMesh](const EditorViewportInstance &instance) {
             return instance.mesh == *previewMesh;
         });
-        if (!resourceInUse) {
+            !resourceInUse) {
             std::erase_if(scene.meshResources, [previewMesh](const EditorViewportMeshResourceView &resource) {
                 return resource.handle == *previewMesh;
             });
@@ -156,12 +159,11 @@ namespace Horo::Editor {
             scene.meshResources.emplace_back(mesh.handle, mesh.mesh->vertices, mesh.mesh->indices, mesh.mesh->localBounds);
         }
         const Math::Transform transform{.translation = placement.worldPosition};
-        scene.instances.push_back(EditorViewportInstance{mesh.handle, transform.ToMatrix(), mesh.mesh->localBounds,
-                                                         Render::CoreDefaultMaterial,
-                                                         Render::RenderInstancePresentation{
-                                                             .tint = {0.10F, 0.72F, 1.0F},
-                                                             .tintStrength = 0.62F,
-                                                         }});
+        scene.instances.emplace_back(mesh.handle, transform.ToMatrix(), mesh.mesh->localBounds, Render::CoreDefaultMaterial,
+                                     Render::RenderInstancePresentation{
+                                         .tint = {0.10F, 0.72F, 1.0F},
+                                         .tintStrength = 0.62F,
+                                     });
         scene.instanceObjects.push_back(AssetPlacementPreviewObject);
         scene.instancePickable.push_back(0U);
         return Result<void>::Success();
