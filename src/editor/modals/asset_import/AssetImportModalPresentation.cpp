@@ -660,8 +660,7 @@ namespace Horo::Editor {
                 DrawSetting(modal, setting, item, fonts);
         }
 
-        const Assets::AssetImporterContribution *DrawImporterSettings(const AssetImportModal &modal,
-                                                                      const Assets::AssetImportSnapshot &snapshot,
+        const Assets::AssetImporterContribution *DrawImporterSettings(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot,
                                                                       Assets::AssetImportItem &item, const Fonts &fonts) {
             {
                 ScopedTextStyle headingStyle(fonts.sansEmphasis, TextPx::CardTitle(), FontPx::SansEmphasis);
@@ -725,7 +724,7 @@ namespace Horo::Editor {
             }
         }
 
-        void DrawAdvancedSettings(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, Assets::AssetImportItem &item,
+        void DrawAdvancedSettings(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, Assets::AssetImportItem &item,
                                   const Assets::AssetImporterContribution *contribution, const Fonts &fonts) {
             if (!ImGui::TreeNodeEx(Copy(modal.Localized("asset_import.advanced", "Advanced")).c_str()))
                 return;
