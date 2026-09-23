@@ -6,6 +6,7 @@
 #include "Horo/Editor/AssetImportModal.h"
 
 #include <array>
+#include <filesystem>
 
 namespace Horo::Editor {
     namespace {
@@ -50,9 +51,9 @@ namespace Horo::Editor {
     }
 
     void AssetImportModal::AppendUiPreviewFile(const std::string_view name, const std::string_view extension, const std::uintmax_t size) {
-        const auto source = std::string{"assets/Characters/Hero/"} + std::string{name};
+        const std::filesystem::path source = std::filesystem::path{"assets/Characters/Hero"} / std::string{name};
         Assets::AssetImportItem item{
-            .sourceFile = ProjectPath::Parse(source).Value(),
+            .sourceFile = ProjectPath::Parse(source.generic_string()).Value(),
             .absoluteSourcePath = source,
             .sourceExtension = std::string{extension},
             .displayName = std::filesystem::path{std::string{name}}.stem().string(),

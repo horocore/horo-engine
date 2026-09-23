@@ -500,32 +500,38 @@ namespace Horo::Editor {
         m_projectRoot = projectRoot;
         m_committer = Assets::MakeProjectCommitter(m_assetRegistry);
 
-        // If operation already exists, append files; otherwise start a new one.
-        if (m_operation) {
-            const std::size_t previousItemCount = m_snapshot.items.size();
-            auto result = m_operation->AddFiles(sourceFiles, projectRoot, cancellation);
-            if (result.HasError())
-                return Result<void>::Failure(result.ErrorValue());
-            m_snapshot = result.Value();
-            m_itemCompleted.resize(m_snapshot.items.size(), false);
-            m_includedItems.resize(m_snapshot.items.size(), true);
-            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index) {
-                std::error_code error;
-                const auto size = std::filesystem::file_size(m_snapshot.items[index].absoluteSourcePath, error);
-                m_sourceFileSizes.push_back(error ? std::nullopt : std::optional{size});
-            }
-            if (!m_defaultDestinationFolder.empty()) {
-                for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
-                    m_snapshot.items[index].destinationFolder = m_defaultDestinationFolder;
-            }
-            m_activePresetNames.resize(m_snapshot.items.size(), "Default");
-            m_defaultPresetValues.reserve(m_snapshot.items.size());
-            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
-                m_defaultPresetValues.push_back(CapturePresetValues(m_snapshot.items[index], *m_catalog, "Default"));
-            LOG_INFO("editor.asset_import", "Added %zu files to queue: %zu total.", sourceFiles.size(), m_snapshot.items.size());
-            return Result<void>::Success();
-        }
+        return m_operation ? AppendImportFiles(sourceFiles, projectRoot, cancellation)
+                           : StartImportOperation(sourceFiles, projectRoot, cancellation);
+    }
 
+    Result<void> AssetImportModal::AppendImportFiles(const std::vector<std::filesystem::path> &sourceFiles,
+                                                     const std::filesystem::path &projectRoot, const CancellationToken &cancellation) {
+        const std::size_t previousItemCount = m_snapshot.items.size();
+        auto result = m_operation->AddFiles(sourceFiles, projectRoot, cancellation);
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        m_snapshot = result.Value();
+        m_itemCompleted.resize(m_snapshot.items.size(), false);
+        m_includedItems.resize(m_snapshot.items.size(), true);
+        for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index) {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(m_snapshot.items[index].absoluteSourcePath, error);
+            m_sourceFileSizes.push_back(error ? std::nullopt : std::optional{size});
+        }
+        if (!m_defaultDestinationFolder.empty()) {
+            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
+                m_snapshot.items[index].destinationFolder = m_defaultDestinationFolder;
+        }
+        m_activePresetNames.resize(m_snapshot.items.size(), "Default");
+        m_defaultPresetValues.reserve(m_snapshot.items.size());
+        for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
+            m_defaultPresetValues.push_back(CapturePresetValues(m_snapshot.items[index], *m_catalog, "Default"));
+        LOG_INFO("editor.asset_import", "Added %zu files to queue: %zu total.", sourceFiles.size(), m_snapshot.items.size());
+        return Result<void>::Success();
+    }
+
+    Result<void> AssetImportModal::StartImportOperation(const std::vector<std::filesystem::path> &sourceFiles,
+                                                        const std::filesystem::path &projectRoot, const CancellationToken &cancellation) {
         m_operation = std::make_unique<Assets::AssetImportOperation>(m_jobs, m_catalog);
 
         Assets::AssetImportRequest request{

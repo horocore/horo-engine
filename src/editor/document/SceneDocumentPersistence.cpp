@@ -327,12 +327,12 @@ namespace Horo::Editor {
         if (!IsSafeProjectRelativePath(relativeScene))
             return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Default scene path is not a safe project-relative path."));
 
-        const Result<ProjectMutationLease> lease = mutations.TryAcquire(ProjectMutationRequest{
-            .projectRoot = projectRoot,
-            .owner = ProjectMutationOwner::Save,
-            .operationId = "set-project-default-scene",
-        });
-        if (lease.HasError())
+        if (const auto lease = mutations.TryAcquire(ProjectMutationRequest{
+                .projectRoot = projectRoot,
+                .owner = ProjectMutationOwner::Save,
+                .operationId = "set-project-default-scene",
+            });
+            lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
 
         const std::filesystem::path metadataPath = projectRoot / ".horo/project.json";
