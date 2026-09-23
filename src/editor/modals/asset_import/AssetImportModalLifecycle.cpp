@@ -2,13 +2,11 @@
  * @copydoc AssetImportModal.h
  */
 
-#include "AssetImportSourcePreview.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/Logging/Logger.h"
-#include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Sha256.h"
 #include "runtime/assets/importer/ProjectAssetImportCommitter.h"
 
@@ -65,7 +63,7 @@ namespace Horo::Editor {
         [[nodiscard]] std::string ResolveDestinationFolder(const Assets::AssetImportItem &item,
                                                            const Assets::AssetImporterCatalogSnapshot *catalog) {
             std::filesystem::path destination =
-                item.destinationFolder.empty() ? std::filesystem::path{"Assets"} : std::filesystem::path{item.destinationFolder};
+                item.destinationFolder.empty() ? std::filesystem::path{"assets"} : std::filesystem::path{item.destinationFolder};
             destination = destination.lexically_normal();
             if (item.subfolderByType != 0 || catalog == nullptr)
                 return destination.generic_string();
@@ -90,7 +88,7 @@ namespace Horo::Editor {
             const auto &pendingItem = snapshot.items[index];
             if (!IsValidAssetName(pendingItem.displayName))
                 return Result<void>::Failure(Error{ErrorCode{"editor.asset_import.invalid_asset_name"}, ErrorDomainId{"horo.editor"}});
-            if (const std::string pendingDestination = pendingItem.destinationFolder.empty() ? "Assets" : pendingItem.destinationFolder;
+            if (const std::string pendingDestination = pendingItem.destinationFolder.empty() ? "assets" : pendingItem.destinationFolder;
                 !ProjectPath::Parse(pendingDestination).HasValue()) {
                 return Result<void>::Failure(Error{ErrorCode{"editor.asset_import.invalid_destination"}, ErrorDomainId{"horo.editor"}});
             }
@@ -159,25 +157,12 @@ namespace Horo::Editor {
     AssetImportModal::AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs,
                                        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
                                        Assets::AssetRegistry *assetRegistry, OperationStore *operationStore,
-                                       const ILocalizationService *localization, NativeDialogs *nativeDialogs,
-                                       Input::InputRouter *inputRouter) noexcept
+                                       const ILocalizationService *localization) noexcept
         : m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(assetRegistry), m_operationStore(operationStore),
-          m_localization(localization), m_nativeDialogs(nativeDialogs), m_inputRouter(inputRouter) {}
+          m_localization(localization) {}
 
     /** @copydoc AssetImportModal::~AssetImportModal */
     AssetImportModal::~AssetImportModal() = default;
-
-    /** @copydoc AssetImportModal::SetPreviewRenderer */
-    void AssetImportModal::SetPreviewRenderer(IEditorGuiRenderer *renderer) {
-        m_sourcePreview.reset();
-        if (renderer != nullptr)
-            m_sourcePreview = std::make_unique<AssetImportSourcePreview>(m_jobs, *renderer);
-    }
-
-    /** @copydoc AssetImportModal::SelectedPreviewTexture */
-    std::uintptr_t AssetImportModal::SelectedPreviewTexture() const noexcept {
-        return m_sourcePreview ? m_sourcePreview->TextureId() : 0;
-    }
 
     ModalId AssetImportModal::Id() const {
         return ModalId{kModalId};
@@ -197,6 +182,9 @@ namespace Horo::Editor {
     }
 
     Result<void> AssetImportModal::OnOpen(EditorModalContext &context) {
+        const bool loadUiPreview = m_pendingUiPreviewFixture;
+        const UiPreviewFixture previewFixture = m_pendingUiPreviewKind;
+        m_pendingUiPreviewFixture = false;
         m_events = &context.events;
         m_prepared = false;
         m_queuedFiles.clear();
@@ -206,13 +194,8 @@ namespace Horo::Editor {
         m_snapshot = Assets::AssetImportSnapshot{};
         m_itemCompleted.clear();
         m_includedItems.clear();
-        m_itemVisible.clear();
         m_sourceFileSizes.clear();
-        m_readOnlyPresentation = false;
-        m_presentationCanvasInsets = {};
-        m_initialAdvancedStatePending = false;
-        m_initialAdvancedOpen = false;
-        m_initialScrollResetPending = false;
+        m_uiPreviewMode = false;
         m_visibleOperationId.reset();
         m_operationCancellation.reset();
         m_historyRevision = 0;
@@ -224,40 +207,10 @@ namespace Horo::Editor {
         m_logCtx = std::make_unique<Log::LogContext>("modal", "asset_import", "modal_id", std::to_string(kModalId));
         LOG_INFO("editor.asset_import", "AssetImportModal opened.");
 
-        return Result<void>::Success();
-    }
+        if (loadUiPreview)
+            LoadUiPreviewFixture(previewFixture);
 
-    /** @copydoc AssetImportModal::PresentReadOnlySnapshot */
-    void AssetImportModal::PresentReadOnlySnapshot(Assets::AssetImportSnapshot snapshot,
-                                                   std::vector<std::optional<std::uintmax_t>> sourceFileSizes,
-                                                   std::filesystem::path projectRoot, std::string defaultDestinationFolder,
-                                                   const std::pair<float, float> canvasInsets, const bool advancedOpen) {
-        m_readOnlyPresentation = true;
-        m_presentationCanvasInsets = canvasInsets;
-        m_initialAdvancedStatePending = true;
-        m_initialAdvancedOpen = advancedOpen;
-        m_initialScrollResetPending = advancedOpen;
-        m_projectRoot = std::move(projectRoot);
-        m_defaultDestinationFolder = std::move(defaultDestinationFolder);
-        m_snapshot = std::move(snapshot);
-        sourceFileSizes.resize(m_snapshot.items.size());
-        m_sourceFileSizes = std::move(sourceFileSizes);
-        m_itemCompleted.assign(m_snapshot.items.size(), false);
-        m_includedItems.assign(m_snapshot.items.size(), true);
-        m_itemVisible.assign(m_snapshot.items.size(), true);
-        m_activePresetNames.assign(m_snapshot.items.size(), "Default");
-        m_defaultPresetValues.clear();
-        m_defaultPresetValues.reserve(m_snapshot.items.size());
-        for (const auto &item : m_snapshot.items) {
-            m_defaultPresetValues.push_back(ImportPreset{
-                .name = "Default",
-                .destinationFolder = item.destinationFolder,
-                .subfolderByType = item.subfolderByType,
-                .assetIdStrategy = item.assetIdStrategy,
-                .createMetaSidecar = item.createMetaSidecar,
-                .overwriteWithoutPrompt = item.overwriteWithoutPrompt,
-            });
-        }
+        return Result<void>::Success();
     }
 
     CloseDecision AssetImportModal::CanClose(const ModalCloseReason reason) {
@@ -265,9 +218,8 @@ namespace Horo::Editor {
         if (reason == ModalCloseReason::ApplicationShutdown)
             return Allow;
 
-        // Preparing also describes an idle queue after an importer failure. Only
-        // project storage commit must keep this modal alive.
-        if (m_snapshot.phase == Assets::AssetImportPhase::Committing) {
+        // Prevent close while import is in progress
+        if (m_snapshot.phase == Assets::AssetImportPhase::Preparing || m_snapshot.phase == Assets::AssetImportPhase::Committing) {
             return Deny;
         }
 
@@ -334,10 +286,7 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::Localized */
     std::string_view AssetImportModal::Localized(const std::string_view key, const std::string_view fallback) const {
-        if (m_localization == nullptr)
-            return fallback;
-        const std::string_view translated = m_localization->Get("editor", key);
-        return translated.starts_with("[missing:") ? fallback : translated;
+        return m_localization != nullptr ? std::string_view{m_localization->Get("editor", key)} : fallback;
     }
 
     /** @copydoc AssetImportModal::RefreshImportHistory */
@@ -369,8 +318,6 @@ namespace Horo::Editor {
 
     void AssetImportModal::SetProjectRoot(const std::filesystem::path &root) noexcept {
         m_projectRoot = root;
-        if (!root.empty())
-            m_defaultDestinationFolder = ProjectLayout::AssetRoot(root).filename().string();
     }
 
     /** @copydoc AssetImportModal::SetDefaultDestination */
@@ -392,8 +339,7 @@ namespace Horo::Editor {
                 return;
         }
         const std::string candidate = relative.generic_string();
-        const std::string assetRootName = ProjectLayout::AssetRoot(m_projectRoot).filename().string();
-        if (ProjectPath::Parse(candidate).HasValue() && (candidate == assetRootName || candidate.starts_with(assetRootName + "/"))) {
+        if (ProjectPath::Parse(candidate).HasValue() && (candidate == "assets" || candidate.starts_with("assets/"))) {
             m_defaultDestinationFolder = candidate;
         }
     }
@@ -403,7 +349,7 @@ namespace Horo::Editor {
     }
 
     void AssetImportModal::SelectItem(std::size_t index) {
-        if (IsItemVisible(index))
+        if (index < m_snapshot.items.size())
             m_snapshot.selectedItemIndex = index;
     }
 
@@ -412,61 +358,14 @@ namespace Horo::Editor {
     }
 
     void AssetImportModal::SetItemIncluded(const std::size_t index, const bool included) noexcept {
-        if (IsItemVisible(index) && index < m_includedItems.size() && index < m_itemCompleted.size() && !m_itemCompleted[index])
+        if (index < m_includedItems.size() && index < m_itemCompleted.size() && !m_itemCompleted[index])
             m_includedItems[index] = included;
-    }
-
-    /** @copydoc AssetImportModal::IsItemVisible */
-    bool AssetImportModal::IsItemVisible(const std::size_t index) const noexcept {
-        return index < m_snapshot.items.size() && (index >= m_itemVisible.size() || m_itemVisible[index]);
-    }
-
-    /** @copydoc AssetImportModal::VisibleItemCount */
-    std::size_t AssetImportModal::VisibleItemCount() const noexcept {
-        std::size_t count = 0;
-        for (std::size_t index = 0; index < m_snapshot.items.size(); ++index)
-            count += IsItemVisible(index) ? 1U : 0U;
-        return count;
-    }
-
-    /** @copydoc AssetImportModal::HideItem */
-    void AssetImportModal::HideItem(const std::size_t index) {
-        if (!IsItemVisible(index))
-            return;
-        m_itemVisible.resize(m_snapshot.items.size(), true);
-        m_itemVisible[index] = false;
-        if (m_snapshot.selectedItemIndex != index)
-            return;
-        for (std::size_t candidate = index + 1; candidate < m_itemVisible.size(); ++candidate) {
-            if (IsItemVisible(candidate)) {
-                m_snapshot.selectedItemIndex = candidate;
-                return;
-            }
-        }
-        for (std::size_t candidate = index; candidate > 0;) {
-            if (IsItemVisible(--candidate)) {
-                m_snapshot.selectedItemIndex = candidate;
-                return;
-            }
-        }
-        m_snapshot.selectedItemIndex = m_snapshot.items.size();
-    }
-
-    /** @copydoc AssetImportModal::RemoveItem */
-    void AssetImportModal::RemoveItem(const std::size_t index) {
-        if (m_readOnlyPresentation || HasPendingConflicts() || !IsItemVisible(index) || index >= m_itemCompleted.size() ||
-            index >= m_includedItems.size())
-            return;
-        m_includedItems[index] = false;
-        if (!m_itemCompleted[index])
-            MarkItemCompleted(index);
-        HideItem(index);
     }
 
     std::size_t AssetImportModal::IncludedItemCount() const noexcept {
         std::size_t count = 0;
         for (std::size_t index = 0; index < m_includedItems.size(); ++index) {
-            if (m_includedItems[index] && IsItemVisible(index) && index < m_itemCompleted.size() && !m_itemCompleted[index])
+            if (index < m_itemCompleted.size() && m_includedItems[index] && !m_itemCompleted[index])
                 ++count;
         }
         return count;
@@ -486,43 +385,23 @@ namespace Horo::Editor {
         }
 
         for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
-            if (IsItemIncluded(index) && !m_itemCompleted[index]) {
-                if (const auto validation = ValidateImportItem(m_snapshot, index, m_operation != nullptr); validation.HasError())
-                    return validation;
-            }
+            if (index >= m_itemCompleted.size() || !IsItemIncluded(index) || m_itemCompleted[index])
+                continue;
+            if (const auto validation = ValidateImportItem(m_snapshot, index, m_operation != nullptr); validation.HasError())
+                return validation;
         }
 
-        if (m_operationStore != nullptr && m_visibleOperationId.has_value())
-            static_cast<void>(m_operationStore->Update(*m_visibleOperationId, OperationUpdate{.state = OperationState::Running,
-                                                                                              .phase = "import",
-                                                                                              .message = "Importing selected assets"}));
-
         for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
-            if (m_itemCompleted[index])
+            if (index >= m_itemCompleted.size() || m_itemCompleted[index])
                 continue;
-            if (!IsItemIncluded(index))
+            if (!IsItemIncluded(index)) {
+                MarkItemCompleted(index);
                 continue;
+            }
             if (auto result = ImportSingleItem(index, cancellation); result.HasError())
                 return result;
         }
-        if (m_operationStore != nullptr && m_visibleOperationId.has_value() && !HasPendingConflicts() && !IsImportComplete())
-            static_cast<void>(m_operationStore->Update(*m_visibleOperationId, OperationUpdate{.state = OperationState::Waiting,
-                                                                                              .phase = "selection",
-                                                                                              .message = "Waiting for file selection"}));
         return Result<void>::Success();
-    }
-
-    /** @copydoc AssetImportModal::CanImportIncludedItems */
-    bool AssetImportModal::CanImportIncludedItems() const noexcept {
-        if (m_readOnlyPresentation || m_operation == nullptr || HasPendingConflicts() || IncludedItemCount() == 0)
-            return false;
-        for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
-            if (!IsItemIncluded(index) || m_itemCompleted[index])
-                continue;
-            if (ImporterFor(index) == nullptr || ValidateImportItem(m_snapshot, index, true).HasError())
-                return false;
-        }
-        return true;
     }
 
     std::vector<std::string> AssetImportModal::PresetNames(const std::size_t index) const {
@@ -621,35 +500,38 @@ namespace Horo::Editor {
         m_projectRoot = projectRoot;
         m_committer = Assets::MakeProjectCommitter(m_assetRegistry);
 
-        // If operation already exists, append files; otherwise start a new one.
-        if (m_operation) {
-            const std::size_t previousItemCount = m_snapshot.items.size();
-            auto result = m_operation->AddFiles(sourceFiles, projectRoot, cancellation);
-            if (result.HasError())
-                return Result<void>::Failure(result.ErrorValue());
-            m_snapshot = result.Value();
-            m_itemCompleted.resize(m_snapshot.items.size(), false);
-            m_includedItems.resize(m_snapshot.items.size(), true);
-            m_itemVisible.resize(m_snapshot.items.size(), true);
-            if (!IsItemVisible(m_snapshot.selectedItemIndex))
-                SelectItem(previousItemCount);
-            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index) {
-                std::error_code error;
-                const auto size = std::filesystem::file_size(m_snapshot.items[index].absoluteSourcePath, error);
-                m_sourceFileSizes.push_back(error ? std::nullopt : std::optional{size});
-            }
-            if (!m_defaultDestinationFolder.empty()) {
-                for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
-                    m_snapshot.items[index].destinationFolder = m_defaultDestinationFolder;
-            }
-            m_activePresetNames.resize(m_snapshot.items.size(), "Default");
-            m_defaultPresetValues.reserve(m_snapshot.items.size());
-            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
-                m_defaultPresetValues.push_back(CapturePresetValues(m_snapshot.items[index], *m_catalog, "Default"));
-            LOG_INFO("editor.asset_import", "Added %zu files to queue: %zu total.", sourceFiles.size(), m_snapshot.items.size());
-            return Result<void>::Success();
-        }
+        return m_operation ? AppendImportFiles(sourceFiles, projectRoot, cancellation)
+                           : StartImportOperation(sourceFiles, projectRoot, cancellation);
+    }
 
+    Result<void> AssetImportModal::AppendImportFiles(const std::vector<std::filesystem::path> &sourceFiles,
+                                                     const std::filesystem::path &projectRoot, const CancellationToken &cancellation) {
+        const std::size_t previousItemCount = m_snapshot.items.size();
+        auto result = m_operation->AddFiles(sourceFiles, projectRoot, cancellation);
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        m_snapshot = result.Value();
+        m_itemCompleted.resize(m_snapshot.items.size(), false);
+        m_includedItems.resize(m_snapshot.items.size(), true);
+        for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index) {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(m_snapshot.items[index].absoluteSourcePath, error);
+            m_sourceFileSizes.push_back(error ? std::nullopt : std::optional{size});
+        }
+        if (!m_defaultDestinationFolder.empty()) {
+            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
+                m_snapshot.items[index].destinationFolder = m_defaultDestinationFolder;
+        }
+        m_activePresetNames.resize(m_snapshot.items.size(), "Default");
+        m_defaultPresetValues.reserve(m_snapshot.items.size());
+        for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
+            m_defaultPresetValues.push_back(CapturePresetValues(m_snapshot.items[index], *m_catalog, "Default"));
+        LOG_INFO("editor.asset_import", "Added %zu files to queue: %zu total.", sourceFiles.size(), m_snapshot.items.size());
+        return Result<void>::Success();
+    }
+
+    Result<void> AssetImportModal::StartImportOperation(const std::vector<std::filesystem::path> &sourceFiles,
+                                                        const std::filesystem::path &projectRoot, const CancellationToken &cancellation) {
         m_operation = std::make_unique<Assets::AssetImportOperation>(m_jobs, m_catalog);
 
         Assets::AssetImportRequest request{
@@ -665,7 +547,6 @@ namespace Horo::Editor {
         m_snapshot = result.Value();
         m_itemCompleted.assign(m_snapshot.items.size(), false);
         m_includedItems.assign(m_snapshot.items.size(), true);
-        m_itemVisible.assign(m_snapshot.items.size(), true);
         m_sourceFileSizes.clear();
         m_sourceFileSizes.reserve(m_snapshot.items.size());
         for (const auto &item : m_snapshot.items) {
@@ -761,6 +642,7 @@ namespace Horo::Editor {
         // Skip items that failed to import (no result payload)
         if (!commitItem.result.has_value()) {
             LOG_INFO("editor.asset_import", "Skipping commit for %s — import produced no result.", commitItem.displayName.c_str());
+            MarkItemCompleted(index);
             return Result<void>::Success();
         }
 
@@ -818,7 +700,6 @@ namespace Horo::Editor {
                 }
             }
             MarkItemCompleted(index);
-            HideItem(index);
         }
 
         return Result<void>::Success();
@@ -864,6 +745,10 @@ namespace Horo::Editor {
                                                                                           .error = error}));
         m_visibleOperationId.reset();
     }
+
+    // -------------------------------------------------------------------------
+    // Conflict resolution
+    // -------------------------------------------------------------------------
 
     bool AssetImportModal::WouldConflict(const Assets::AssetImportItem &item) const {
         if (m_projectRoot.empty() || !m_catalog)
@@ -950,9 +835,7 @@ namespace Horo::Editor {
             m_conflictQueue.clear();
             m_conflictCursor = 0;
         }
-        if (resolved) {
+        if (resolved)
             MarkItemCompleted(completedIndex);
-            HideItem(completedIndex);
-        }
     }
 }  // namespace Horo::Editor
