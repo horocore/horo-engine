@@ -337,9 +337,9 @@ namespace Horo::Editor {
             drawList->AddText({rowMin.x + 64.0f, rowMin.y + 8.0f}, ImGui::ColorConvertFloat4ToU32(Text()), name.c_str());
             drawList->AddText({rowMin.x + 64.0f, rowMin.y + 29.0f}, ImGui::ColorConvertFloat4ToU32(Dim()), details.c_str());
             drawList->PopClipRect();
-            const bool hasWarning = HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Warning);
-            const bool hasError = HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error);
-            if (hasWarning || hasError) {
+            if (const bool hasWarning = HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Warning),
+                hasError = HasDiagnostic(item, Assets::ImportDiagnostic::Severity::Error);
+                hasWarning || hasError) {
                 const auto tone = hasError ? ErrorColor : WarningColor;
                 DrawEditorIcon(drawList, hasError ? UiIcon::Error : UiIcon::Warning, {rowMax.x - 57.0f, rowMin.y + 19.0f}, {17.0f, 17.0f},
                                ImGui::ColorConvertFloat4ToU32(tone), fonts.icon);
@@ -455,7 +455,7 @@ namespace Horo::Editor {
                 choices.push_back(choice.labelKey.c_str());
             int index = 0;
             if (const auto found = item.settings.find(key); found != item.settings.end())
-                if (const auto parsed = ParseInteger(found->second))
+                if (const auto parsed = ParseInteger(found->second); parsed.has_value())
                     index = *parsed;
             index = std::clamp(index, 0, std::max(0, static_cast<int>(choices.size()) - 1));
             if (ComboControl(("##Setting_" + setting.id).c_str(), &index, choices.data(), static_cast<int>(choices.size()), fonts))
@@ -467,7 +467,7 @@ namespace Horo::Editor {
             float value =
                 std::holds_alternative<double>(setting.defaultValue) ? static_cast<float>(std::get<double>(setting.defaultValue)) : 0.0f;
             if (const auto found = item.settings.find(key); found != item.settings.end())
-                if (const auto parsed = ParseFloat(found->second))
+                if (const auto parsed = ParseFloat(found->second); parsed.has_value())
                     value = *parsed;
             if (setting.id == "unitScale")
                 static_cast<void>(InputFloatStepperControl(("##Setting_" + setting.id).c_str(), &value, fonts));
@@ -482,7 +482,7 @@ namespace Horo::Editor {
                             ? static_cast<int>(std::get<std::int64_t>(setting.defaultValue))
                             : 0;
             if (const auto found = item.settings.find(key); found != item.settings.end())
-                if (const auto parsed = ParseInteger(found->second))
+                if (const auto parsed = ParseInteger(found->second); parsed.has_value())
                     value = *parsed;
             InputIntControl(("##Setting_" + setting.id).c_str(), &value, fonts);
             item.settings[key] = std::to_string(value);
@@ -650,7 +650,7 @@ namespace Horo::Editor {
             drawSetting("importAnimations", "asset_import.animation_import", "Animation Import", "##UnavailableAnimation", false);
         }
 
-        void DrawImporterSettingRows(AssetImportModal &modal, Assets::AssetImportItem &item,
+        void DrawImporterSettingRows(const AssetImportModal &modal, Assets::AssetImportItem &item,
                                      const Assets::AssetImporterContribution &contribution, const Fonts &fonts) {
             if (AssetIcon(item) == UiIcon::HierarchyMesh) {
                 DrawMeshImporterSettings(modal, item, contribution, fonts);
@@ -660,7 +660,8 @@ namespace Horo::Editor {
                 DrawSetting(modal, setting, item, fonts);
         }
 
-        const Assets::AssetImporterContribution *DrawImporterSettings(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot,
+        const Assets::AssetImporterContribution *DrawImporterSettings(const AssetImportModal &modal,
+                                                                      const Assets::AssetImportSnapshot &snapshot,
                                                                       Assets::AssetImportItem &item, const Fonts &fonts) {
             {
                 ScopedTextStyle headingStyle(fonts.sansEmphasis, TextPx::CardTitle(), FontPx::SansEmphasis);
@@ -724,7 +725,7 @@ namespace Horo::Editor {
             }
         }
 
-        void DrawAdvancedSettings(AssetImportModal &modal, Assets::AssetImportSnapshot &snapshot, Assets::AssetImportItem &item,
+        void DrawAdvancedSettings(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, Assets::AssetImportItem &item,
                                   const Assets::AssetImporterContribution *contribution, const Fonts &fonts) {
             if (!ImGui::TreeNodeEx(Copy(modal.Localized("asset_import.advanced", "Advanced")).c_str()))
                 return;
