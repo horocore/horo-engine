@@ -93,6 +93,9 @@ namespace Horo::Editor {
          */
         void SetDefaultDestination(const std::filesystem::path &absoluteDirectory) noexcept;
 
+        /** @brief Returns the default project-relative destination for newly added files. */
+        [[nodiscard]] std::string_view DefaultDestinationFolder() const noexcept;
+
         /** @brief Returns the stored project root (empty if not set). */
         [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept;
 
@@ -113,6 +116,35 @@ namespace Horo::Editor {
 
         /** @brief Selects an item by index for the settings panel. */
         void SelectItem(std::size_t index);
+
+        /** @brief Returns whether a queued item is selected for the batch import. */
+        [[nodiscard]] bool IsItemIncluded(std::size_t index) const noexcept;
+
+        /** @brief Includes or excludes a queued item before it has been imported. */
+        void SetItemIncluded(std::size_t index, bool included) noexcept;
+
+        /** @brief Returns the number of selected items still available to import. */
+        [[nodiscard]] std::size_t IncludedItemCount() const noexcept;
+
+        /** @brief Returns the source file size captured when a queued item was added. */
+        [[nodiscard]] std::optional<std::uintmax_t> SourceFileSize(std::size_t index) const noexcept;
+
+        /** @brief Representative, in-memory states exposed by the native UI gallery. */
+        enum class UiPreviewFixture { Populated, Empty };
+
+        /** @brief Requests an inert representative UI state when the modal opens. */
+        void RequestUiPreviewFixture(UiPreviewFixture fixture) noexcept {
+            m_pendingUiPreviewFixture = true;
+            m_pendingUiPreviewKind = fixture;
+        }
+
+        /** @brief Returns whether this modal is displaying an inert UI preview. */
+        [[nodiscard]] bool IsUiPreview() const noexcept {
+            return m_uiPreviewMode;
+        }
+
+        /** @brief Imports selected pending items in queue order. */
+        [[nodiscard]] Result<void> ImportIncludedItems(const CancellationToken &cancellation);
 
         /** @brief Named importer-settings snapshot scoped to one importer contribution. */
         struct ImportPreset {
@@ -204,6 +236,9 @@ namespace Horo::Editor {
         /** @brief Refreshes the retained import-operation projection from the process store. */
         void RefreshImportHistory();
 
+        /** @brief Installs the requested preview state after normal modal initialization. */
+        void LoadUiPreviewFixture(UiPreviewFixture fixture);
+
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;
@@ -224,6 +259,11 @@ namespace Horo::Editor {
         std::unique_ptr<Assets::ProjectAssetImportCommitter> m_committer;
         Assets::AssetImportSnapshot m_snapshot;
         std::vector<bool> m_itemCompleted;
+        std::vector<bool> m_includedItems;
+        std::vector<std::optional<std::uintmax_t>> m_sourceFileSizes;
+        bool m_uiPreviewMode{false};
+        bool m_pendingUiPreviewFixture{false};
+        UiPreviewFixture m_pendingUiPreviewKind{UiPreviewFixture::Populated};
         bool m_prepared{false};
 
         // Conflict resolution popup state

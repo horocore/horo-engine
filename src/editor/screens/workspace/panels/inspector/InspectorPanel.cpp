@@ -173,7 +173,8 @@ namespace Horo::Editor {
         const std::string label =
             std::format("{} {}", selectedObjectCount, context.localization.Get("editor", "workspace.inspector.objects_selected"));
         {
-            Theme::ScopedTextStyle textStyle(context.theme.fonts.sansEmphasis, Theme::TextPx::Title(), Theme::FontPx::SansEmphasis);
+            Theme::ScopedTextStyle textStyle(context.theme.fonts.sansEmphasis, std::max(14.0F, Theme::TextPx::Title() * 0.92F),
+                                             Theme::FontPx::SansEmphasis);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
             ImGui::TextUnformatted(label.c_str());
             ImGui::PopStyleColor();

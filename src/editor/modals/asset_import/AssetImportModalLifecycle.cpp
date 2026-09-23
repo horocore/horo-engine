@@ -182,6 +182,9 @@ namespace Horo::Editor {
     }
 
     Result<void> AssetImportModal::OnOpen(EditorModalContext &context) {
+        const bool loadUiPreview = m_pendingUiPreviewFixture;
+        const UiPreviewFixture previewFixture = m_pendingUiPreviewKind;
+        m_pendingUiPreviewFixture = false;
         m_events = &context.events;
         m_prepared = false;
         m_queuedFiles.clear();
@@ -190,6 +193,9 @@ namespace Horo::Editor {
         m_defaultPresetValues.clear();
         m_snapshot = Assets::AssetImportSnapshot{};
         m_itemCompleted.clear();
+        m_includedItems.clear();
+        m_sourceFileSizes.clear();
+        m_uiPreviewMode = false;
         m_visibleOperationId.reset();
         m_operationCancellation.reset();
         m_historyRevision = 0;
@@ -200,6 +206,9 @@ namespace Horo::Editor {
 
         m_logCtx = std::make_unique<Log::LogContext>("modal", "asset_import", "modal_id", std::to_string(kModalId));
         LOG_INFO("editor.asset_import", "AssetImportModal opened.");
+
+        if (loadUiPreview)
+            LoadUiPreviewFixture(previewFixture);
 
         return Result<void>::Success();
     }
@@ -335,9 +344,64 @@ namespace Horo::Editor {
         }
     }
 
+    std::string_view AssetImportModal::DefaultDestinationFolder() const noexcept {
+        return m_defaultDestinationFolder;
+    }
+
     void AssetImportModal::SelectItem(std::size_t index) {
         if (index < m_snapshot.items.size())
             m_snapshot.selectedItemIndex = index;
+    }
+
+    bool AssetImportModal::IsItemIncluded(const std::size_t index) const noexcept {
+        return index < m_includedItems.size() && m_includedItems[index];
+    }
+
+    void AssetImportModal::SetItemIncluded(const std::size_t index, const bool included) noexcept {
+        if (index < m_includedItems.size() && index < m_itemCompleted.size() && !m_itemCompleted[index])
+            m_includedItems[index] = included;
+    }
+
+    std::size_t AssetImportModal::IncludedItemCount() const noexcept {
+        std::size_t count = 0;
+        for (std::size_t index = 0; index < m_includedItems.size(); ++index) {
+            if (m_includedItems[index] && index < m_itemCompleted.size() && !m_itemCompleted[index])
+                ++count;
+        }
+        return count;
+    }
+
+    std::optional<std::uintmax_t> AssetImportModal::SourceFileSize(const std::size_t index) const noexcept {
+        return index < m_sourceFileSizes.size() ? m_sourceFileSizes[index] : std::nullopt;
+    }
+
+    Result<void> AssetImportModal::ImportIncludedItems(const CancellationToken &cancellation) {
+        if (HasPendingConflicts()) {
+            Error error;
+            error.code = ErrorCode{"editor.asset_import.conflict_pending"};
+            error.domain = ErrorDomainId{"horo.editor"};
+            error.message = "Resolve the pending asset conflict before continuing.";
+            return Result<void>::Failure(std::move(error));
+        }
+
+        for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
+            if (IsItemIncluded(index) && !m_itemCompleted[index]) {
+                if (const auto validation = ValidateImportItem(m_snapshot, index, m_operation != nullptr); validation.HasError())
+                    return validation;
+            }
+        }
+
+        for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
+            if (m_itemCompleted[index])
+                continue;
+            if (!IsItemIncluded(index)) {
+                MarkItemCompleted(index);
+                continue;
+            }
+            if (auto result = ImportSingleItem(index, cancellation); result.HasError())
+                return result;
+        }
+        return Result<void>::Success();
     }
 
     std::vector<std::string> AssetImportModal::PresetNames(const std::size_t index) const {
@@ -444,6 +508,12 @@ namespace Horo::Editor {
                 return Result<void>::Failure(result.ErrorValue());
             m_snapshot = result.Value();
             m_itemCompleted.resize(m_snapshot.items.size(), false);
+            m_includedItems.resize(m_snapshot.items.size(), true);
+            for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index) {
+                std::error_code error;
+                const auto size = std::filesystem::file_size(m_snapshot.items[index].absoluteSourcePath, error);
+                m_sourceFileSizes.push_back(error ? std::nullopt : std::optional{size});
+            }
             if (!m_defaultDestinationFolder.empty()) {
                 for (std::size_t index = previousItemCount; index < m_snapshot.items.size(); ++index)
                     m_snapshot.items[index].destinationFolder = m_defaultDestinationFolder;
@@ -470,6 +540,14 @@ namespace Horo::Editor {
 
         m_snapshot = result.Value();
         m_itemCompleted.assign(m_snapshot.items.size(), false);
+        m_includedItems.assign(m_snapshot.items.size(), true);
+        m_sourceFileSizes.clear();
+        m_sourceFileSizes.reserve(m_snapshot.items.size());
+        for (const auto &item : m_snapshot.items) {
+            std::error_code error;
+            const auto size = std::filesystem::file_size(item.absoluteSourcePath, error);
+            m_sourceFileSizes.push_back(error ? std::nullopt : std::optional{size});
+        }
         if (!m_defaultDestinationFolder.empty()) {
             for (auto &item : m_snapshot.items)
                 item.destinationFolder = m_defaultDestinationFolder;

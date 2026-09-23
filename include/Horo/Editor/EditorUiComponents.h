@@ -478,6 +478,16 @@ namespace Horo::Editor::Ui {
     void InputFloatControl(const char *id, float *value, const Theme::Fonts &fonts);
 
     /**
+     * @brief Draws a single numeric field with compact in-field increment and decrement actions.
+     * @param id Stable control identity.
+     * @param value Edited value.
+     * @param fonts Editor font handles.
+     * @param step Amount applied by each arrow action.
+     * @return True when typing or an arrow action changed the value.
+     */
+    [[nodiscard]] bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, float step = 0.1F);
+
+    /**
      * @brief Custom slider imitating an HTML <input type="range">.
      *
      * @param format Typed format for the value label.
@@ -537,6 +547,12 @@ namespace Horo::Editor::Ui {
 
     // ── Modal layout primitives ──────────────────────────────────────────
 
+    /** @brief Optional screen-space region in which a modal is centered and dragged. */
+    struct ModalPlacementRegion {
+        ImVec2 position{};
+        ImVec2 size{};
+    };
+
     /** @brief Shared geometry and chrome configuration for an editor workflow modal. */
     struct ModalShellProps {
         const char *id = "EditorModal"; /**< Stable ImGui window identity. */
@@ -547,6 +563,7 @@ namespace Horo::Editor::Ui {
         float minimumHeight = 360.0F;
         float headerHeight = Theme::Layout::HeaderH;
         float footerHeight = Theme::Layout::FooterH;
+        std::optional<ModalPlacementRegion> placementRegion; /**< Defaults to the main viewport's usable area. */
         ImTextureID logo = 0;
         bool showBrandMark = false;
         bool showClose = true;

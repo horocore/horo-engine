@@ -50,6 +50,7 @@
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 #include "runtime/input/sdl/SdlInputBackend.h"
 
 #if defined(HORO_HAS_RENDER_OPENGL)
@@ -164,6 +165,7 @@ namespace Horo::Editor {
             std::uint64_t exitAfterFrames = 0;
             std::string rendererBackend;
             std::string projectRoot;
+            std::string uiPreview;
         };
 
         struct EditorTextures {
@@ -442,6 +444,11 @@ namespace Horo::Editor {
                 pendingValue.reset();
                 continue;
             }
+            if (pendingValue == "ui-preview") {
+                opts.uiPreview = a;
+                pendingValue.reset();
+                continue;
+            }
             if (pendingValue == "exit-after-frames") {
                 if (const auto parsed = std::from_chars(a.data(), a.data() + a.size(), opts.exitAfterFrames);
                     parsed.ec != std::errc{} || parsed.ptr != a.data() + a.size())
@@ -461,6 +468,10 @@ namespace Horo::Editor {
                 pendingValue = "renderer";
             else if (a == "--project")
                 pendingValue = "project";
+            else if (a.starts_with("--ui-preview="))
+                opts.uiPreview = std::string{a.substr(std::string_view{"--ui-preview="}.size())};
+            else if (a == "--ui-preview")
+                pendingValue = "ui-preview";
         }
         return opts;
     }
@@ -527,7 +538,8 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] bool InitializeSdlAndCreateWindow(SDL_Window *&window,
-                                                        const Render::RenderHostWindowRequirements &windowRequirements) {
+                                                        const Render::RenderHostWindowRequirements &windowRequirements,
+                                                        const bool uiPreview) {
             SDL_WindowFlags rendererWindowFlag = 0;
             switch (windowRequirements.presentation) {
                 case Render::RenderPresentationKind::OpenGL:
@@ -561,7 +573,7 @@ namespace Horo::Editor {
                 windowFlags |= SDL_WINDOW_RESIZABLE;
             if (windowRequirements.highPixelDensity)
                 windowFlags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
-            window = SDL_CreateWindow("Horo Editor", 1000, 760, windowFlags);
+            window = SDL_CreateWindow("Horo Editor", uiPreview ? 1440 : 1000, uiPreview ? 900 : 760, windowFlags);
             if (!window) {
                 LOG_CRITICAL("platform.sdl", "SDL_CreateWindow failed: %s", SDL_GetError());
                 SDL_Quit();
@@ -735,6 +747,7 @@ namespace Horo::Editor {
         struct RunEditorMainLoopParams {
             bool exitAfterFirstFrame;
             std::uint64_t exitAfterFrames;
+            std::string uiPreview;
             EditorTelemetry &telemetry;
             EditorPresentationPorts presentation;
             const Fonts &fonts;
@@ -1125,7 +1138,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<OperationStore>(p.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationStore);
             screenHost.Services().Register<IOperationControl>(p.operationStore);
-            if (const Result<void> started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
+            const Result<void> started = p.uiPreview.empty() ? screenHost.Start(std::move(p.initialRoute))
+                                                             : screenHost.StartUiPreview(p.uiPreview);
+            if (started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
@@ -1210,6 +1225,20 @@ namespace Horo::Editor {
         Log::Logger::DumpStartupInfo();
 
         auto opts = ParseOptions(std::span{argv, static_cast<std::size_t>(argc)});
+        if (opts.uiPreview == "list") {
+            for (const auto &scenario : EditorUiPreviewScenarios)
+                std::printf("%.*s — %.*s\n", static_cast<int>(scenario.id.size()), scenario.id.data(),
+                            static_cast<int>(scenario.description.size()), scenario.description.data());
+            return 0;
+        }
+        if (!opts.uiPreview.empty() && std::ranges::none_of(EditorUiPreviewScenarios, [&opts](const EditorUiPreviewScenario &scenario) {
+            return scenario.id == opts.uiPreview;
+        })) {
+            std::fprintf(stderr, "Unknown UI preview scenario '%s'. Use --ui-preview=list.\n", opts.uiPreview.c_str());
+            return 1;
+        }
+        if (!opts.uiPreview.empty())
+            opts.projectRoot.clear();
         std::vector<RecentProjectEntry> recentProjects = LoadRecentProjectsFromDisk();
         WelcomeScreenController ctrl{recentProjects};
         auto vm = ctrl.BuildViewModel();
@@ -1256,7 +1285,7 @@ namespace Horo::Editor {
         std::unique_ptr<ModuleHost> moduleHost = std::move(composedModules).Value();
 
         SDL_Window *w = nullptr;
-        if (!InitializeSdlAndCreateWindow(w, moduleInfo->windowRequirements))
+        if (!InitializeSdlAndCreateWindow(w, moduleInfo->windowRequirements, !opts.uiPreview.empty()))
             return 1;
 
         IMGUI_CHECKVERSION();
@@ -1325,11 +1354,13 @@ namespace Horo::Editor {
                           editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
         }
         EditorModalHost modalHost{editorEvents, inputRouter};
-        GuiRoute initialRoute = opts.projectRoot.empty() ? GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}
-                                                         : GuiRoute{GuiRouteKind::ProjectLoading,
-                                                                    ProjectLoadingRouteParameters{opts.projectRoot, startupProjectName}};
+        GuiRoute initialRoute =
+            opts.projectRoot.empty() || !opts.uiPreview.empty()
+                ? GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}
+                : GuiRoute{GuiRouteKind::ProjectLoading, ProjectLoadingRouteParameters{opts.projectRoot, startupProjectName}};
         RunEditorMainLoopParams loopParams{opts.exitAfterFirstFrame,
                                            opts.exitAfterFrames,
+                                           opts.uiPreview,
                                            editorTelemetry,
                                            {w, io, *composition.frontend, *composition.guiRenderer, *composition.viewportRenderer,
                                             composition.viewportTarget},

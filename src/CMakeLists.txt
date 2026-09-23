@@ -1492,7 +1492,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalState.cpp
             editor/modals/asset_import/AssetImportModal.cpp
             editor/modals/asset_import/AssetImportModalLifecycle.cpp
+            editor/modals/asset_import/AssetImportModalPreview.cpp
             editor/modals/asset_import/AssetImportModalPresentation.cpp
+            editor/ui_preview/EditorUiPreviewGallery.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/screens/welcome/WelcomeView.cpp

@@ -99,6 +99,13 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> Start(GuiRoute initialRoute);
 
+        /**
+         * @brief Starts the isolated UI gallery without entering a normal editor route.
+         * @param scenarioId Registered scenario to open.
+         * @return Success when the preview surface was admitted.
+         */
+        [[nodiscard]] Result<void> StartUiPreview(std::string_view scenarioId);
+
         /** @brief Leaves and destroys the active screen exactly once, then revokes borrowed services. */
         void Shutdown() noexcept;
 
@@ -162,6 +169,9 @@ namespace Horo::Editor {
          */
         void DispatchMenuInvocation(const EditorMenuInvocation &invocation);
 
+        /** @brief Opens one inert editor UI preview scenario by its catalog identity. */
+        [[nodiscard]] bool OpenUiPreview(std::string_view scenarioId);
+
         /** @brief Returns mutable service registry used for dependency injection. */
         [[nodiscard]] EditorServiceRegistry &Services() noexcept;
 
@@ -214,6 +224,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 
         GuiRoute activeRoute_{GuiRouteKind::Welcome, WelcomeRouteParameters{}};
+        std::string uiPreviewScenario_;
         GuiRouteRevision activeRevision_{0};
 
         std::unique_ptr<GuiScreen> activeScreen_;

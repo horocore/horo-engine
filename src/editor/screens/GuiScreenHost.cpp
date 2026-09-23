@@ -17,6 +17,8 @@
 #include "NavigationErrors.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
+#include "editor/ui_preview/EditorUiPreviewGallery.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <algorithm>
@@ -187,6 +189,18 @@ namespace Horo::Editor {
         activeRoute_ = std::move(initialRoute);
         activeRevision_ = GuiRouteRevision{1};
         activeScreen_ = std::move(initialScreen);
+        started_ = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GuiScreenHost::StartUiPreview */
+    Result<void> GuiScreenHost::StartUiPreview(const std::string_view scenarioId) {
+        if (shutdown_)
+            return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
+        if (started_)
+            return Result<void>::Failure(MakeError(NavigationErrors::HostAlreadyStarted));
+        if (!OpenUiPreview(scenarioId))
+            return Result<void>::Failure(MakeError(NavigationErrors::ScreenCreationFailed, "UI preview scenario could not open."));
         started_ = true;
         return Result<void>::Success();
     }
@@ -441,6 +455,13 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::Draw() {
+        if (!uiPreviewScenario_.empty()) {
+            if (const auto selected = DrawEditorUiPreviewGallery(uiPreviewScenario_, modalHost_->HasOpenModal(), context_->theme.fonts,
+                                                                  *localization_);
+                selected.has_value())
+                static_cast<void>(OpenUiPreview(*selected));
+            return;
+        }
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         const float contentHeight = std::max(0.0F, viewport->WorkSize.y - EditorStatusBar::Height);
         const GuiContentRegion contentRegion{viewport->WorkPos.x, viewport->WorkPos.y, viewport->WorkSize.x, contentHeight};
@@ -516,6 +537,24 @@ namespace Horo::Editor {
             case None:
                 return;
         }
+    }
+
+    bool GuiScreenHost::OpenUiPreview(const std::string_view scenarioId) {
+        if (std::ranges::none_of(EditorUiPreviewScenarios, [scenarioId](const EditorUiPreviewScenario &scenario) {
+                return scenario.id == scenarioId;
+            }) ||
+            !context_ || !modalHost_ || modalHost_->HasOpenModal())
+            return false;
+        auto modal = std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
+                                                        services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>(),
+                                                        localization_);
+        modal->RequestUiPreviewFixture(scenarioId == "asset-import-empty" ? AssetImportModal::UiPreviewFixture::Empty
+                                                                   : AssetImportModal::UiPreviewFixture::Populated);
+        if (!modalHost_->OpenRoot(std::move(modal)).HasValue())
+            return false;
+        uiPreviewScenario_ = scenarioId;
+        LOG_INFO("editor.ui_preview", "Opened UI preview scenario '%.*s'.", static_cast<int>(scenarioId.size()), scenarioId.data());
+        return true;
     }
 
     void GuiScreenHost::HandleDropFiles(const std::vector<std::filesystem::path> &files) {
