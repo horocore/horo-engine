@@ -54,7 +54,7 @@ namespace Horo::Editor {
         Assets::AssetImportItem item{
             .sourceFile = ProjectPath::Parse(source).Value(),
             .absoluteSourcePath = source,
-            .sourceExtension = extension,
+            .sourceExtension = std::string{extension},
             .displayName = std::filesystem::path{std::string{name}}.stem().string(),
             .destinationFolder = m_defaultDestinationFolder,
             .sourceByteSize = size,
