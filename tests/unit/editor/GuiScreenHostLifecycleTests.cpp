@@ -109,7 +109,7 @@ namespace {
         GuiScreenHost host{gui,  modals, settings,  localization,       engineEvents,     creation,
                            jobs, input,  renderers, std::move(screens), std::move(panels)};
         REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
-        REQUIRE((host.StatusItems().Find("horo.status.cpu") != nullptr));
+        REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
         REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
         REQUIRE((stats.enters == 0));
         REQUIRE((host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasError()));

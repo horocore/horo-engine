@@ -79,32 +79,6 @@ namespace Horo::Editor {
             ImGui::SetCursorPos({columns.startX, endY});
         }
 
-        /**
-         * @brief Converts a Unicode codepoint to a UTF-8 string and renders it
-         *        using the icon font at @p pos with the given @p color.
-         */
-        void DrawIcon(ImDrawList *dl, ImVec2 pos, ImU32 codepoint, ImU32 color, const Fonts &fonts) {
-            if (!fonts.icon || !dl)
-                return;
-            std::string utf8;
-            if (codepoint < 0x80) {
-                utf8 += static_cast<char>(codepoint);
-            } else if (codepoint < 0x800) {
-                utf8 += static_cast<char>(0xC0 | (codepoint >> 6));
-                utf8 += static_cast<char>(0x80 | (codepoint & 0x3F));
-            } else if (codepoint < 0x10000) {
-                utf8 += static_cast<char>(0xE0 | (codepoint >> 12));
-                utf8 += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-                utf8 += static_cast<char>(0x80 | (codepoint & 0x3F));
-            } else {
-                utf8 += static_cast<char>(0xF0 | (codepoint >> 18));
-                utf8 += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
-                utf8 += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-                utf8 += static_cast<char>(0x80 | (codepoint & 0x3F));
-            }
-            dl->AddText(fonts.icon, fonts.icon->FontSize, pos, color, utf8.c_str());
-        }
-
         [[nodiscard]] bool StartsWithInsensitive(std::string_view text, std::string_view prefix) {
             if (prefix.size() > text.size())
                 return false;
@@ -532,13 +506,13 @@ namespace Horo::Editor {
                     hasWarning |= diagnostic.severity == Assets::ImportDiagnostic::Severity::Warning;
                 }
 
-                ImU32 icon = 0xEF4A;
+                Ui::UiIcon icon = Ui::UiIcon::Pending;
                 if (item.result.has_value())
-                    icon = 0xE86C;
+                    icon = Ui::UiIcon::Success;
                 if (hasWarning)
-                    icon = 0xE002;
+                    icon = Ui::UiIcon::Warning;
                 if (hasError)
-                    icon = 0xE000;
+                    icon = Ui::UiIcon::Error;
 
                 const bool selected = i == snap.selectedItemIndex;
                 const ImVec2 rowMin = ImGui::GetCursorScreenPos();
@@ -555,7 +529,7 @@ namespace Horo::Editor {
                 const float rowCenter = rowMin.y + rowH * 0.5f;
                 const float iconY = rowCenter - fonts.icon->FontSize * 0.5f;
                 const ImVec2 iconPos{rowMin.x + 14.0f, iconY};
-                DrawIcon(queueDrawList, iconPos, icon, U32(Text()), fonts);
+                Ui::DrawEditorIcon(queueDrawList, icon, iconPos, {fonts.icon->FontSize, fonts.icon->FontSize}, U32(Text()), fonts.icon);
 
                 PushFont(fonts.sansCompact);
                 const float textY = rowMin.y + (rowH - fonts.sansCompact->FontSize) * 0.5f;
@@ -576,20 +550,21 @@ namespace Horo::Editor {
                     queueDrawList->AddRectFilled(rowMin, rowMax, U32(Bg3()), 4.0f);
                     queueDrawList->AddRect(rowMin, rowMax, U32(Border()), 4.0f);
 
-                    ImU32 icon = 0xE86C;
+                    Ui::UiIcon icon = Ui::UiIcon::Success;
                     ImVec4 statusColor = Ok();
                     std::string_view status = modal.Localized("asset_import.history.succeeded", "Imported");
                     if (operation.state == OperationState::Failed) {
-                        icon = 0xE000;
+                        icon = Ui::UiIcon::Error;
                         statusColor = Err();
                         status = modal.Localized("asset_import.history.failed", "Failed");
                     } else if (operation.state == OperationState::Cancelled) {
-                        icon = 0xE5C9;
+                        icon = Ui::UiIcon::Cancelled;
                         statusColor = Dim();
                         status = modal.Localized("asset_import.history.cancelled", "Cancelled");
                     }
 
-                    DrawIcon(queueDrawList, {rowMin.x + 14.0f, rowMin.y + 14.0f}, icon, U32(statusColor), fonts);
+                    Ui::DrawEditorIcon(queueDrawList, icon, {rowMin.x + 14.0f, rowMin.y + 14.0f},
+                                       {fonts.icon->FontSize, fonts.icon->FontSize}, U32(statusColor), fonts.icon);
                     PushFont(fonts.sansCompact);
                     queueDrawList->AddText({rowMin.x + 36.0f, rowMin.y + 7.0f}, U32(Text()), operation.title.c_str());
                     queueDrawList->AddText({rowMin.x + 36.0f, rowMin.y + 25.0f}, U32(statusColor), status.data(),

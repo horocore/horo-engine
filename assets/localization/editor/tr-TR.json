@@ -819,7 +819,6 @@
     "workspace.inspector.component.enable": {"text": "Bileşeni Etkinleştir"},
     "workspace.inspector.component.disable": {"text": "Bileşeni Devre Dışı Bırak"},
 "workspace.inspector.component.settings": {"text": "Bileşen Ayarları"},
-"workspace.inspector.static": {"text": "Statik"},
 "workspace.inspector.object_options": {"text": "Nesne seçenekleri"},
     "workspace.inspector.scene_unavailable": {"text": "Sahne ayarları henüz kullanılamıyor."},
     "workspace.inspector.behavior_missing": {"text": "Eksik Behavior"},

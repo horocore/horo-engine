@@ -188,14 +188,14 @@ namespace Horo::Editor {
         }
 
         struct HierarchyIconPresentation {
-            Ui::UiIcon icon{Ui::UiIcon::Package};
+            Ui::UiIcon icon{Ui::UiIcon::SceneObject};
             const char *tooltipKey{nullptr};
             ImVec4 color{};
         };
 
-        /** @brief Builds the temporary Material-symbol presentation shared by scene objects. */
+        /** @brief Builds the shared icon presentation for scene objects. */
         [[nodiscard]] HierarchyIconPresentation SceneObjectIconPresentation(const char *tooltipKey) {
-            return {.icon = Ui::UiIcon::Package, .tooltipKey = tooltipKey, .color = Theme::Muted()};
+            return {.icon = Ui::UiIcon::SceneObject, .tooltipKey = tooltipKey, .color = Theme::Muted()};
         }
 
         [[nodiscard]] HierarchyIconPresentation GetIconPresentation(const HierarchyNodeType type) {

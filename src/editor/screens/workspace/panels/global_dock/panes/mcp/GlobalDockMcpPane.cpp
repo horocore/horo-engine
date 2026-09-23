@@ -265,13 +265,14 @@ namespace Horo::Editor {
             return;
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
+        const float rowHeight = 26.0F * scale;
         ImGui::PushID(static_cast<int>(index));
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##audit-row", {width, metrics.tableRowHeight});
-        DrawGlobalDockTableRowSurface(rowMin, width, metrics.tableRowHeight, ImGui::IsItemHovered());
+        ImGui::InvisibleButton("##audit-row", {width, rowHeight});
+        DrawGlobalDockTableRowSurface(rowMin, width, rowHeight, ImGui::IsItemHovered());
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
-        const float bottom = rowMin.y + metrics.tableRowHeight;
+        const float textY = rowMin.y + (rowHeight - Theme::TextPx::Label()) * 0.5F;
+        const float bottom = rowMin.y + rowHeight;
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.time, textY},
                                   {layout.tool - metrics.columnGap, bottom}, Theme::Muted(), row.time);
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.tool, textY},
@@ -282,7 +283,7 @@ namespace Horo::Editor {
                                   {layout.request - metrics.columnGap, bottom}, permissionColor, permission);
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.request, textY},
                                   {layout.status - metrics.columnGap, bottom}, Theme::Text(), request);
-        static_cast<void>(DrawGlobalDockStatePill({layout.status, rowMin.y + (metrics.tableRowHeight - 22.0F * scale) * 0.5F}, status,
+        static_cast<void>(DrawGlobalDockStatePill({layout.status, rowMin.y + (rowHeight - 22.0F * scale) * 0.5F}, status,
                                                   StatusTone(row.status), context.theme.fonts));
         ImGui::PopID();
     }

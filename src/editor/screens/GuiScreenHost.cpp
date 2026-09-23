@@ -20,7 +20,6 @@
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <algorithm>
-#include <format>
 #include <imgui.h>
 
 namespace Horo::Editor {
@@ -143,13 +142,6 @@ namespace Horo::Editor {
                                              .label = rendererAvailability.Find(rendererAvailability.ActiveBackendId()) != nullptr
                                                           ? rendererAvailability.Find(rendererAvailability.ActiveBackendId())->displayName
                                                           : std::string{rendererAvailability.ActiveBackendId()}}));
-        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.cpu",
-                                                                                  .labelKey = "status.cpu.label",
-                                                                                  .alignment = EditorStatusBarAlignment::Right,
-                                                                                  .priority = 90,
-                                                                                  .order = 20,
-                                                                                  .maxWidth = 112.0F},
-                                                       EditorStatusItemContent{.value = "0.0 ms"}));
         static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.document",
                                                                                   .alignment = EditorStatusBarAlignment::Left,
                                                                                   .priority = 100,
@@ -419,9 +411,6 @@ namespace Horo::Editor {
                                                                                                              ? "status.navigation.busy"
                                                                                                              : "status.navigation.idle")}));
         }
-        const std::string cpuFrameTime = std::format("{:.1f} ms", static_cast<double>(dt * 1000.0F));
-        static_cast<void>(statusItemRegistry_.Update("horo.status.cpu", EditorStatusItemContent{.value = cpuFrameTime}));
-
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
             activeScreen_->OnUpdate(dt);
