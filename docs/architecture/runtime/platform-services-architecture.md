@@ -965,6 +965,14 @@ generation/revision; stale completion evidence cannot publish into the replaceme
 
 ## Offline And Degraded Behavior
 
+PLS-007.4 adds a bounded `PlatformOfflineQueue` policy core with typed logical
+operations, deterministic per-lane sequence order, operation-specific coalescing,
+per-receipt expiry, explicit terminal outcomes and retention-gated compaction. The
+core is in-memory policy state: it does not report durable acceptance or schedule a
+provider. A durable owner must atomically persist its transitions before publishing
+durable receipts or dispatching work. Expired, superseded and compacted identities
+remain observable as non-success outcomes.
+
 The ADR-136 `PlatformOfflineQueue` is the only durable owner for replay-eligible
 progression and explicitly opted-in presence desired state. It stores canonical Horo
 logical intent, not ADR-130 requests or provider calls. `DurableUntilTerminal` commits

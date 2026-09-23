@@ -120,6 +120,8 @@ target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Sec
 
 add_library(HoroPlatformServices STATIC
         platform_services/AchievementDefinitionRegistry.cpp
+        platform_services/PlatformOfflineQueue.cpp
+        platform_services/PlatformOfflineQueueErrors.cpp
         platform_services/PlatformDefinitionErrors.cpp
         platform_services/PlatformDefinitionRegistries.cpp
         platform_services/PlatformProjectConfiguration.cpp
