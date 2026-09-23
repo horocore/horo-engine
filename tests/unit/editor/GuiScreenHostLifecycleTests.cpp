@@ -11,6 +11,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "editor/project_model/RendererAvailability.h"
+#include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
@@ -124,5 +125,47 @@ namespace {
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
 
         ShutdownAndCheckGuiScreenHost(host, stats, jobs);
+    }
+
+    TEST_CASE("Gui Screen Host admits only known isolated UI preview scenarios", "[unit][editor][gui]") {
+        Tests::HeadlessEditorGuiFixture imgui;
+        EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        Input::InputRouter input;
+        Tests::ScopedJobSystem jobs;
+        ProjectCreationService creation{jobs.Get(), engineEvents};
+        LocalizationService localization{LocaleTag{"en-US"}};
+        ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+        EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+        EditorModalHost modals{editorEvents, input};
+        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        ThemeContext theme{fonts};
+        EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settings.Snapshot()};
+        RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                               "opengl"};
+
+        GuiScreenHost host{gui,
+                           modals,
+                           settings,
+                           localization,
+                           engineEvents,
+                           creation,
+                           jobs.Get(),
+                           input,
+                           renderers,
+                           ScreenRegistry{},
+                           WorkspacePanelRegistry{}};
+        const auto invalid = host.StartUiPreview("not-a-preview");
+        REQUIRE(invalid.HasError());
+        REQUIRE(host.StartUiPreview("asset-import-empty").HasValue());
+        const auto duplicate = host.StartUiPreview("asset-import-empty");
+        REQUIRE(duplicate.HasError());
+        CHECK(duplicate.ErrorValue().code.Value() == "navigation.host_already_started");
+
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        host.Shutdown();
+        CHECK(host.IsShutdown());
     }
 }  // namespace
