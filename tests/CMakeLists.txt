@@ -2015,6 +2015,13 @@ if(TARGET HoroAssetImporterBasicExample)
 endif()
 add_test(NAME HoroExtensionManagerTests COMMAND HoroExtensionManagerTests)
 
+add_executable(HoroEditorThemeTokenTests
+        unit/extensions/EditorThemeTokenTests.cpp
+)
+target_compile_features(HoroEditorThemeTokenTests PRIVATE cxx_std_20)
+target_link_libraries(HoroEditorThemeTokenTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroEditorThemeTokenTests COMMAND HoroEditorThemeTokenTests)
+
 add_executable(HoroProjectValidatorRegistryTests
         unit/extensions/ProjectValidatorRegistryTests.cpp
 )

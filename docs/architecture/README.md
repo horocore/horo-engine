@@ -559,6 +559,9 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Extension Declarative Form Kit](./extensions/editor-ui-form-kit.md): bounded
   standard components, typed form composition, semantic theme roles, and the
   shared GUI/headless render projection.
+- [Extension Theme Token Contract](./extensions/editor-theme-token-contract.md):
+  versioned frame-scoped semantic colors, typography, geometry, interaction,
+  motion, font, icon, accessibility, DPI, and live-update evidence.
 
 ## Packages
 

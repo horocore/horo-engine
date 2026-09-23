@@ -90,7 +90,13 @@ store callbacks, raw colors, ImGui objects, renderer handles, or persistence
 logic in the form. `BuildEditorUiRenderSnapshot` is the shared deterministic
 projection consumed by GUI and headless adapters. See the
 [Extension Declarative Form Kit](../architecture/extensions/editor-ui-form-kit.md)
-and the copyable `examples/extensions/gui-form-basic` fixture.
+and the [Extension Theme Token Contract](../architecture/extensions/editor-theme-token-contract.md).
+For a surface that needs the complete resolved theme evidence, include
+`Horo/Extensions/EditorThemeTokens.h` and consume an `EditorThemeFrame` from
+the host's current frame projection. Use semantic role accessors; do not cache
+colors, metrics, font resources, or icon glyphs between frame revisions. The
+copyable `examples/extensions/gui-form-basic` fixture exercises the public form
+boundary.
 
 ### Backend operation lifecycle
 

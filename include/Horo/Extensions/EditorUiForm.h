@@ -5,6 +5,7 @@
  * @brief Backend-neutral standard components and declarative editor forms for extensions.
  */
 
+#include "Horo/Extensions/EditorThemeTokens.h"
 #include "Horo/Foundation/Result.h"
 
 #include <array>
@@ -412,50 +413,18 @@ namespace Horo::Extensions {
         EditorUiFormLimits limits_;
     };
 
-    /** @brief Semantic token roles resolved by the host theme; no token stores a color literal. */
-    enum class EditorUiThemeToken : std::uint8_t {
-        None,
-        Surface,
-        SurfaceSubtle,
-        TextPrimary,
-        TextSecondary,
-        TextDisabled,
-        Border,
-        Accent,
-        Focus,
-        Positive,
-        Warning,
-        Critical,
-    };
+    /** @brief Compatibility alias for the color roles used by standard editor forms. */
+    using EditorUiThemeToken = EditorThemeColorRole;
 
-    /** @brief Host-resolved geometry metrics consumed by all form adapters. */
-    struct EditorUiThemeMetrics final {
-        float smallControlHeight{24.0F};
-        float mediumControlHeight{32.0F};
-        float largeControlHeight{40.0F};
-        float textLineHeight{20.0F};
-        float rowGap{8.0F};
-        float defaultWidth{480.0F};
-    };
+    /** @brief Compatibility alias for the shared DPI-aware geometry token set. */
+    using EditorUiThemeMetrics = EditorThemeSizeTokens;
 
-    /**
-     * @brief Immutable frame input shared by GUI and non-GUI form projections.
-     *
-     * The host replaces this value at a frame boundary when theme, accessibility,
-     * or UI scale changes. Extensions retain neither this value nor resolved colors.
-     */
-    struct EditorUiThemeFrame final {
-        std::uint32_t schemaVersion{EditorUiFormSchemaVersion};
-        std::uint64_t revision{1};
-        float uiScale{1.0F};
-        std::uint32_t supportedTokenMask{0x7FFU};
-        EditorUiThemeMetrics metrics;
-    };
+    /** @brief Compatibility alias for the complete versioned frame-scoped theme contract. */
+    using EditorUiThemeFrame = EditorThemeFrame;
 
-    /** @brief Returns the semantic token bit used by EditorUiThemeFrame::supportedTokenMask. */
-    [[nodiscard]] constexpr std::uint32_t EditorUiThemeTokenBit(const EditorUiThemeToken token) noexcept {
-        const auto value = static_cast<std::uint8_t>(token);
-        return value == 0 ? 0U : (1U << (value - 1U));
+    /** @brief Returns the semantic color-role bit used by EditorUiThemeFrame::supportedTokenMask. */
+    [[nodiscard]] constexpr std::uint64_t EditorUiThemeTokenBit(const EditorUiThemeToken token) noexcept {
+        return EditorThemeColorRoleBit(token);
     }
 
     /**
@@ -493,6 +462,7 @@ namespace Horo::Extensions {
         std::uint64_t themeRevision{};
         float uiScale{1.0F};
         float availableWidth{};
+        EditorThemeFrame theme;
         std::vector<EditorUiRenderNode> nodes;
     };
 
