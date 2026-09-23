@@ -23,6 +23,52 @@ namespace {
     [[nodiscard]] bool Register(Horo::Telemetry::InstrumentDescriptor descriptor) {
         return static_cast<bool>(Horo::Telemetry::Runtime::RegisterCounter(std::move(descriptor)));
     }
+
+    [[nodiscard]] Horo::Telemetry::InstrumentDescriptor MakeMaximumDescriptor() {
+        using namespace Horo::Telemetry;
+        auto maximum = MakeDescriptor(std::string(MaximumMetricNameBytes, 'a'));
+        maximum.subsystem = std::string(MaximumMetricSubsystemBytes, 's');
+        maximum.description = std::string(MaximumMetricDescriptionBytes, 'd');
+        maximum.maxSeries = MaximumMetricSeries;
+        for (std::size_t dimensionIndex = 0; dimensionIndex < MaximumMetricDimensions; ++dimensionIndex) {
+            DimensionDescriptor dimension{.key = std::string(MaximumMetricDimensionKeyBytes - 1, 'd') +
+                                                 static_cast<char>('0' + dimensionIndex)};
+            for (std::size_t valueIndex = 0; valueIndex < MaximumMetricDimensionValues; ++valueIndex)
+                dimension.allowedValues.push_back(std::string(MaximumMetricDimensionValueBytes - 1, 'v') +
+                                                  static_cast<char>('a' + valueIndex));
+            maximum.dimensions.push_back(std::move(dimension));
+        }
+        return maximum;
+    }
+
+    [[nodiscard]] std::array<Horo::Telemetry::InstrumentDescriptor, 10> MakeRejectedDescriptors() {
+        using namespace Horo::Telemetry;
+        auto longName = MakeDescriptor(std::string(MaximumMetricNameBytes + 1, 'n'));
+        auto longSubsystem = MakeDescriptor("reject.subsystem");
+        longSubsystem.subsystem = std::string(MaximumMetricSubsystemBytes + 1, 's');
+        auto longDescription = MakeDescriptor("reject.description");
+        longDescription.description = std::string(MaximumMetricDescriptionBytes + 1, 'd');
+        auto invalidUnit = MakeDescriptor("reject.unit");
+        invalidUnit.unit = static_cast<MetricUnit>(255);
+        auto tooManySeries = MakeDescriptor("reject.series");
+        tooManySeries.maxSeries = MaximumMetricSeries + 1;
+        auto zeroSeries = MakeDescriptor("reject.zero_series");
+        zeroSeries.maxSeries = 0;
+        auto tooManyDimensions = MakeDescriptor("reject.dimensions");
+        tooManyDimensions.dimensions.resize(MaximumMetricDimensions + 1, DimensionDescriptor{.key = "kind", .allowedValues = {"a"}});
+        auto longDimensionKey = MakeDescriptor("reject.dimension_key");
+        longDimensionKey.dimensions.push_back({.key = std::string(MaximumMetricDimensionKeyBytes + 1, 'k'), .allowedValues = {"value"}});
+        auto tooManyValues = MakeDescriptor("reject.dimension_values");
+        DimensionDescriptor tooManyAllowedValues{.key = "kind"};
+        for (std::size_t index = 0; index <= MaximumMetricDimensionValues; ++index)
+            tooManyAllowedValues.allowedValues.push_back("value" + std::to_string(index));
+        tooManyValues.dimensions.push_back(std::move(tooManyAllowedValues));
+        auto longDimensionValue = MakeDescriptor("reject.dimension_value");
+        longDimensionValue.dimensions.push_back({.key = "kind", .allowedValues = {std::string(MaximumMetricDimensionValueBytes + 1, 'v')}});
+        return {std::move(longName),      std::move(longSubsystem),     std::move(longDescription),   std::move(invalidUnit),
+                std::move(tooManySeries), std::move(zeroSeries),        std::move(tooManyDimensions), std::move(longDimensionKey),
+                std::move(tooManyValues), std::move(longDimensionValue)};
+    }
 }  // namespace
 
 TEST_CASE("Metric descriptors enforce typed units and hard admission bounds", "[foundation][observability][telemetry][contract]") {
@@ -31,17 +77,7 @@ TEST_CASE("Metric descriptors enforce typed units and hard admission bounds", "[
     REQUIRE(Runtime::Initialize({.queueCapacity = 64, .enabled = true}, std::make_shared<NullSink>()));
     const std::uint64_t invalidBefore = Runtime::GetStatistics().invalidInstrumentRegistrations;
 
-    auto maximum = MakeDescriptor(std::string(MaximumMetricNameBytes, 'a'));
-    maximum.subsystem = std::string(MaximumMetricSubsystemBytes, 's');
-    maximum.description = std::string(MaximumMetricDescriptionBytes, 'd');
-    maximum.maxSeries = MaximumMetricSeries;
-    for (std::size_t dimensionIndex = 0; dimensionIndex < MaximumMetricDimensions; ++dimensionIndex) {
-        DimensionDescriptor dimension{.key =
-                                          std::string(MaximumMetricDimensionKeyBytes - 1, 'd') + static_cast<char>('0' + dimensionIndex)};
-        for (std::size_t valueIndex = 0; valueIndex < MaximumMetricDimensionValues; ++valueIndex)
-            dimension.allowedValues.push_back(std::string(MaximumMetricDimensionValueBytes - 1, 'v') + static_cast<char>('a' + valueIndex));
-        maximum.dimensions.push_back(std::move(dimension));
-    }
+    auto maximum = MakeMaximumDescriptor();
     static_cast<void>(Runtime::RegisterCounter(std::move(maximum)));
     REQUIRE(Runtime::GetDiagnosticSnapshot().availabilityCount == 1);
     for (const auto &[name, unit] : std::array{
@@ -57,41 +93,10 @@ TEST_CASE("Metric descriptors enforce typed units and hard admission bounds", "[
     const auto rejects = [](InstrumentDescriptor descriptor) {
         return !Register(std::move(descriptor));
     };
-    auto longName = MakeDescriptor(std::string(MaximumMetricNameBytes + 1, 'n'));
-    auto longSubsystem = MakeDescriptor("reject.subsystem");
-    longSubsystem.subsystem = std::string(MaximumMetricSubsystemBytes + 1, 's');
-    auto longDescription = MakeDescriptor("reject.description");
-    longDescription.description = std::string(MaximumMetricDescriptionBytes + 1, 'd');
-    auto invalidUnit = MakeDescriptor("reject.unit");
-    invalidUnit.unit = static_cast<MetricUnit>(255);
-    auto tooManySeries = MakeDescriptor("reject.series");
-    tooManySeries.maxSeries = MaximumMetricSeries + 1;
-    auto zeroSeries = MakeDescriptor("reject.zero_series");
-    zeroSeries.maxSeries = 0;
-    auto tooManyDimensions = MakeDescriptor("reject.dimensions");
-    tooManyDimensions.dimensions.resize(MaximumMetricDimensions + 1, DimensionDescriptor{.key = "kind", .allowedValues = {"a"}});
-    auto longDimensionKey = MakeDescriptor("reject.dimension_key");
-    longDimensionKey.dimensions.push_back({.key = std::string(MaximumMetricDimensionKeyBytes + 1, 'k'), .allowedValues = {"value"}});
-    auto tooManyValues = MakeDescriptor("reject.dimension_values");
-    DimensionDescriptor tooManyAllowedValues{.key = "kind"};
-    for (std::size_t index = 0; index <= MaximumMetricDimensionValues; ++index)
-        tooManyAllowedValues.allowedValues.push_back("value" + std::to_string(index));
-    tooManyValues.dimensions.push_back(std::move(tooManyAllowedValues));
-    auto longDimensionValue = MakeDescriptor("reject.dimension_value");
-    longDimensionValue.dimensions.push_back({.key = "kind", .allowedValues = {std::string(MaximumMetricDimensionValueBytes + 1, 'v')}});
+    for (auto descriptor : MakeRejectedDescriptors())
+        CHECK(rejects(std::move(descriptor)));
     auto invalidTimingUnit = MakeDescriptor("reject.timing_unit");
     invalidTimingUnit.unit = static_cast<MetricUnit>(255);
-
-    CHECK(rejects(std::move(longName)));
-    CHECK(rejects(std::move(longSubsystem)));
-    CHECK(rejects(std::move(longDescription)));
-    CHECK(rejects(std::move(invalidUnit)));
-    CHECK(rejects(std::move(tooManySeries)));
-    CHECK(rejects(std::move(zeroSeries)));
-    CHECK(rejects(std::move(tooManyDimensions)));
-    CHECK(rejects(std::move(longDimensionKey)));
-    CHECK(rejects(std::move(tooManyValues)));
-    CHECK(rejects(std::move(longDimensionValue)));
     CHECK_FALSE(static_cast<bool>(Runtime::RegisterTiming(std::move(invalidTimingUnit))));
 
     const DiagnosticSnapshot snapshot = Runtime::GetDiagnosticSnapshot();

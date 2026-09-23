@@ -133,6 +133,13 @@ namespace {
             throw std::runtime_error{"flush failed"};
         }
     };
+
+    template <typename Recorder> [[nodiscard]] bool RecordTelemetryEventually(Recorder &&recorder) {
+        const std::uint64_t acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
+        for (int attempt = 0; attempt < 1000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt)
+            recorder();
+        return Horo::Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore;
+    }
 }  // namespace
 
 TEST_CASE("Asynchronous logger writes structured severity category timestamp and forwarded context",
@@ -383,19 +390,13 @@ TEST_CASE("Telemetry exports typed instruments and context-forwarded events asyn
     REQUIRE(static_cast<bool>(counter));
     REQUIRE(static_cast<bool>(gauge));
     REQUIRE(static_cast<bool>(histogram));
-    const auto recordEventually = [](const auto &record) {
-        const std::uint64_t acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
-        for (int attempt = 0; attempt < 1000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt)
-            record();
-        return Horo::Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore;
-    };
-    REQUIRE(recordEventually([&counter] {
+    REQUIRE(RecordTelemetryEventually([&counter] {
         counter.Add(2);
     }));
-    REQUIRE(recordEventually([&gauge] {
+    REQUIRE(RecordTelemetryEventually([&gauge] {
         gauge.Set(3.0);
     }));
-    REQUIRE(recordEventually([&histogram] {
+    REQUIRE(RecordTelemetryEventually([&histogram] {
         histogram.Observe(16.5);
     }));
     const auto context = Horo::Log::LogContextSnapshot{{{"correlation.id", "job-9"}}};
