@@ -76,6 +76,9 @@ TEST_CASE("Inspector edit session owns transform preview lifecycle", "[unit][edi
     REQUIRE((committed.command == EditorWorkspaceViewCommand::CommitObjectTransform));
     REQUIRE((committed.transformUpdates->front().localTransform.translation.y == 6.0F));
 
+    SceneObject committedObject = object;
+    committedObject.localTransform.translation.y = 6.0F;
+    static_cast<void>(session.BeginObject(committedObject, DocumentRevision{2}));
     const EditorWorkspaceViewCommandData reset = session.ApplyTransformEdit(InspectorTransformEdit{.resetRequested = true}, true);
     REQUIRE((reset.command == EditorWorkspaceViewCommand::CommitObjectTransform));
     REQUIRE((reset.transformUpdates->size() == 1));
