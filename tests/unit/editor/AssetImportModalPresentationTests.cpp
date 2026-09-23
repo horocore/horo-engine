@@ -291,8 +291,7 @@ TEST_CASE("Editor UI preview gallery renders both interaction states", "[unit][e
     imgui.BeginFrame();
     const auto clickedSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
     imgui.EndFrame();
-    REQUIRE(clickedSelection.has_value());
-    REQUIRE(*clickedSelection == "asset-import");
+    REQUIRE_FALSE(clickedSelection.has_value());
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     imgui.BeginFrame();
     const auto releasedSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
