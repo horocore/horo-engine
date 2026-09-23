@@ -38,6 +38,11 @@ namespace {
 TEST_CASE("Transform gizmo controller resolves selected objects before filtering inactive tools", "[unit][editor][viewport][gizmo]") {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = {400.0F, 400.0F};
+    io.DeltaTime = 1.0F / 60.0F;
+    io.Fonts->AddFontDefault();
+    static_cast<void>(io.Fonts->Build());
     ImGui::NewFrame();
     ImGui::Begin("TransformGizmoControllerTest");
 
