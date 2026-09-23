@@ -22,7 +22,7 @@ namespace {
     using namespace Horo::Editor;
     using namespace Horo::Assets;
 
-    using ScopedTempDirectory = Tests::ScopedAssetImportTempDirectory;
+    using ScopedTempDirectory = ::Horo::Tests::ScopedAssetImportTempDirectory;
 
     /** @brief Test double that overrides Draw for headless testing. */
     class TestAssetImportModal : public AssetImportModal {
@@ -42,7 +42,7 @@ namespace {
     };
 
     [[nodiscard]] AssetImporterContribution BasicContribution() {
-        return Tests::BasicAssetImporterContribution();
+        return ::Horo::Tests::BasicAssetImporterContribution();
     }
 
     [[nodiscard]] AssetImporterContribution PresetContribution() {
@@ -68,7 +68,7 @@ namespace {
     }
 
     [[nodiscard]] std::shared_ptr<const AssetImporterCatalogSnapshot> PublishCatalog(AssetImporterContribution contribution) {
-        auto published = Tests::PublishAssetImporterCatalog(std::move(contribution));
+        auto published = ::Horo::Tests::PublishAssetImporterCatalog(std::move(contribution));
         REQUIRE(published != nullptr);
         return published;
     }
@@ -293,7 +293,7 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
                      .fileExtensions = {"fbx"},
                      .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
                      .subfolderCategory = "Meshes",
-                     .strategy = std::make_shared<const Tests::BasicAssetImporter>(),
+                     .strategy = std::make_shared<const ::Horo::Tests::BasicAssetImporter>(),
                  })
                  .HasValue()));
     auto catalogSnapshot = catalog.Publish();
@@ -363,11 +363,11 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
 }
 
 TEST_CASE("AssetImportModal projects terminal import history while ignoring other operations", "[native]") {
-    Tests::HeadlessEditorGuiFixture imgui;
+    ::Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
-    Tests::ScopedJobSystem jobs;
+    ::Horo::Editor::Tests::ScopedJobSystem jobs;
     OperationStore operations{8, 8};
 
     const auto build = operations.Begin(OperationDescriptor{

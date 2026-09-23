@@ -128,11 +128,11 @@ namespace {
     }
 
     TEST_CASE("Gui Screen Host admits only known isolated UI preview scenarios", "[unit][editor][gui]") {
-        Tests::HeadlessEditorGuiFixture imgui;
+        ::Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
         Input::InputRouter input;
-        Tests::ScopedJobSystem jobs;
+        ::Horo::Editor::Tests::ScopedJobSystem jobs;
         ProjectCreationService creation{jobs.Get(), engineEvents};
         LocalizationService localization{LocaleTag{"en-US"}};
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
