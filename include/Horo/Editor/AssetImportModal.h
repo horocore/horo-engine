@@ -130,7 +130,10 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<std::uintmax_t> SourceFileSize(std::size_t index) const noexcept;
 
         /** @brief Representative, in-memory states exposed by the native UI gallery. */
-        enum class UiPreviewFixture { Populated, Empty };
+        enum class UiPreviewFixture {
+            Populated,
+            Empty
+        };
 
         /** @brief Requests an inert representative UI state when the modal opens. */
         void RequestUiPreviewFixture(UiPreviewFixture fixture) noexcept {
