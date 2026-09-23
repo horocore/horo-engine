@@ -1,3 +1,4 @@
+#include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "../support/AssetImportTestSupport.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
@@ -6,7 +7,6 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Input.h"
-#include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>

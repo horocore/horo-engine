@@ -1,3 +1,4 @@
+#include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -11,7 +12,6 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "editor/project_model/RendererAvailability.h"
-#include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
