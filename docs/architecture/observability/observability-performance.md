@@ -158,6 +158,18 @@ MetricDescriptor{
 Allowed dimensions and `maxSeries` prevent high-cardinality time series from
 growing without bound.
 
+The host validates descriptors through the process-owned Foundation Telemetry
+registry. Units are the typed `Count`, `Bytes`, `Seconds`, or `Ratio` values.
+This replaces free-form unit strings: count-like instruments map to `Count`,
+byte totals to `Bytes`, and elapsed durations to `Seconds`; callers update the
+descriptor initializer, while the OpenTelemetry adapter emits the corresponding
+unit symbol.
+Admission is capped at 256 registered instruments, 96 bytes per metric name,
+64 bytes per subsystem, 256 bytes per description, four dimensions per
+instrument, 48 bytes per dimension key, 16 allowed values per dimension, 32
+bytes per allowed value, and 256 series per instrument. Invalid descriptors,
+including unknown unit values, are rejected before registration.
+
 ### Metric Dimensions
 
 Metrics support a small fixed set of low-cardinality dimensions:
@@ -359,6 +371,9 @@ runtime condition.
 Rules:
 
 - unavailable metrics are represented as unavailable, not as zero;
+- host diagnostic snapshots have fixed capacity and carry only telemetry
+  counters, process-local instrument indices, and availability enums; they do
+  not copy descriptor text, dimension values, log fields, or record payloads;
 - UI surfaces show the reason when useful;
 - startup records the effective metric availability set;
 - repeated sampler failures are rate-limited and summarized;

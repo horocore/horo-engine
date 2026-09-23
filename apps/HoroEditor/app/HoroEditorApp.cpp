@@ -413,13 +413,15 @@ namespace Horo::Editor {
         [[nodiscard]] EditorTelemetry RegisterEditorTelemetry() {
             return {
                 .frameNumber = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.editor.frame.number", .subsystem = "Editor.Runtime", .unit = "frames"}),
+                    {.name = "horo.editor.frame.number", .subsystem = "Editor.Runtime", .unit = Telemetry::MetricUnit::Count}),
                 .frameDuration = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.editor.frame.duration", .subsystem = "Editor.Runtime", .unit = "seconds"}),
-                .droppedRecords = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = "records"}),
-                .sinkFailures = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = "failures"}),
+                    {.name = "horo.editor.frame.duration", .subsystem = "Editor.Runtime", .unit = Telemetry::MetricUnit::Seconds}),
+                .droppedRecords = Telemetry::Runtime::RegisterGauge({.name = "horo.observability.records.dropped",
+                                                                     .subsystem = "Foundation.Observability",
+                                                                     .unit = Telemetry::MetricUnit::Count}),
+                .sinkFailures = Telemetry::Runtime::RegisterGauge({.name = "horo.observability.sink.failures",
+                                                                   .subsystem = "Foundation.Observability",
+                                                                   .unit = Telemetry::MetricUnit::Count}),
             };
         }
 

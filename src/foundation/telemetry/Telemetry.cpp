@@ -55,6 +55,7 @@ namespace Horo::Telemetry {
         struct RegisteredInstrument {
             InstrumentDescriptor descriptor;
             std::vector<std::array<std::uint16_t, MaximumMetricDimensions>> series;
+            MetricAvailabilityState availability{MetricAvailabilityState::Available};
         };
 
         /** @brief Queue data protected by one admission/consumer mutex. */
@@ -100,6 +101,14 @@ namespace Horo::Telemetry {
             return true;
         }
 
+        [[nodiscard]] bool IsValidMetricUnit(const MetricUnit unit) noexcept {
+            return unit >= MetricUnit::Count && unit <= MetricUnit::Ratio;
+        }
+
+        [[nodiscard]] bool IsValidAvailabilityState(const MetricAvailabilityState state) noexcept {
+            return state >= MetricAvailabilityState::Available && state <= MetricAvailabilityState::SamplerFailed;
+        }
+
         [[nodiscard]] bool IsSensitiveKey(std::string_view key) {
             std::string normalized{key};
             std::ranges::transform(normalized, normalized.begin(), [](const unsigned char character) {
@@ -137,12 +146,16 @@ namespace Horo::Telemetry {
         }
 
         [[nodiscard]] bool IsValidDescriptor(const InstrumentDescriptor &descriptor) noexcept {
-            if (!IsCanonicalMetricName(descriptor.name) || descriptor.subsystem.empty() || descriptor.unit.empty() ||
-                descriptor.maxSeries == 0 || descriptor.dimensions.size() > MaximumMetricDimensions)
+            if (descriptor.name.size() > MaximumMetricNameBytes || !IsCanonicalMetricName(descriptor.name) ||
+                descriptor.subsystem.empty() || descriptor.subsystem.size() > MaximumMetricSubsystemBytes ||
+                descriptor.description.size() > MaximumMetricDescriptionBytes || !IsValidMetricUnit(descriptor.unit) ||
+                descriptor.maxSeries == 0 || descriptor.maxSeries > MaximumMetricSeries ||
+                descriptor.dimensions.size() > MaximumMetricDimensions)
                 return false;
             for (std::size_t index = 0; index < descriptor.dimensions.size(); ++index) {
                 const DimensionDescriptor &dimension = descriptor.dimensions[index];
-                if (!IsCanonicalMetricName(dimension.key) || dimension.allowedValues.empty() || dimension.allowedValues.size() > UINT16_MAX)
+                if (dimension.key.size() > MaximumMetricDimensionKeyBytes || !IsCanonicalMetricName(dimension.key) ||
+                    dimension.allowedValues.empty() || dimension.allowedValues.size() > MaximumMetricDimensionValues)
                     return false;
                 if (std::find_if(descriptor.dimensions.begin(), descriptor.dimensions.begin() + static_cast<std::ptrdiff_t>(index),
                                  [&dimension](const DimensionDescriptor &candidate) {
@@ -151,6 +164,7 @@ namespace Horo::Telemetry {
                     return false;
                 for (std::size_t valueIndex = 0; valueIndex < dimension.allowedValues.size(); ++valueIndex) {
                     if (dimension.allowedValues[valueIndex].empty() ||
+                        dimension.allowedValues[valueIndex].size() > MaximumMetricDimensionValueBytes ||
                         std::find(dimension.allowedValues.begin(),
                                   dimension.allowedValues.begin() + static_cast<std::ptrdiff_t>(valueIndex),
                                   dimension.allowedValues[valueIndex]) !=
@@ -195,9 +209,34 @@ namespace Horo::Telemetry {
                 return exit_.writerExited.load();
             }
 
+            [[nodiscard]] bool SetAvailability(const std::uint32_t instrumentId, const MetricAvailabilityState state) noexcept {
+                if (!IsValidAvailabilityState(state))
+                    return false;
+                std::lock_guard lock(descriptorMutex_);
+                if (instrumentId == 0 || instrumentId > descriptors_.size())
+                    return false;
+                RegisteredInstrument &registered = descriptors_[instrumentId - 1U];
+                if (registered.availability != state) {
+                    registered.availability = state;
+                    ++availabilityRevision_;
+                }
+                return true;
+            }
+
+            void FillDiagnosticSnapshot(DiagnosticSnapshot &snapshot) {
+                std::lock_guard lock(descriptorMutex_);
+                snapshot.runtimeGeneration = generation_;
+                snapshot.availabilityRevision = availabilityRevision_;
+                snapshot.availabilityCount = static_cast<std::uint16_t>(descriptors_.size());
+                for (std::size_t index = 0; index < descriptors_.size(); ++index) {
+                    snapshot.availability[index] = MetricAvailabilityRecord{.instrumentId = static_cast<std::uint32_t>(index + 1U),
+                                                                            .state = descriptors_[index].availability};
+                }
+            }
+
             [[nodiscard]] std::optional<InstrumentRegistration> Register(InstrumentDescriptor descriptor) {
                 std::lock_guard lock(descriptorMutex_);
-                if (!IsValidDescriptor(descriptor) ||
+                if (descriptors_.size() >= MaximumMetricInstruments || !IsValidDescriptor(descriptor) ||
                     std::ranges::any_of(descriptors_, [&descriptor](const RegisteredInstrument &registered) {
                     return registered.descriptor.name == descriptor.name;
                 })) {
@@ -205,9 +244,11 @@ namespace Horo::Telemetry {
                     return std::nullopt;
                 }
                 RegisteredInstrument registered{.descriptor = std::move(descriptor)};
+                registered.series.reserve(registered.descriptor.dimensions.empty() ? 1U : registered.descriptor.maxSeries);
                 if (registered.descriptor.dimensions.empty())
                     registered.series.push_back({});
                 descriptors_.push_back(std::move(registered));
+                ++availabilityRevision_;
                 return InstrumentRegistration{.id = static_cast<std::uint32_t>(descriptors_.size()),
                                               .dimensionCount =
                                                   static_cast<std::uint8_t>(descriptors_.back().descriptor.dimensions.size())};
@@ -441,6 +482,7 @@ namespace Horo::Telemetry {
             TelemetryFlushState flush_;
             std::mutex descriptorMutex_;
             std::vector<RegisteredInstrument> descriptors_;
+            std::uint64_t availabilityRevision_{};
             std::vector<std::shared_ptr<ISink>> sinks_;
             const std::uint32_t generation_;
             std::atomic<bool> stopping_{};
@@ -643,11 +685,15 @@ namespace Horo::Telemetry {
         static_cast<void>(descriptor);
         return {};
 #else
-        descriptor.kind = InstrumentKind::Timing;
-        descriptor.unit = "seconds";
         const auto state = Globals().LoadState();
         if (state == nullptr || !state->AllowsMetric(descriptor))
             return {};
+        if (!IsValidMetricUnit(descriptor.unit)) {
+            Health().invalidInstrumentRegistrations.fetch_add(1);
+            return {};
+        }
+        descriptor.kind = InstrumentKind::Timing;
+        descriptor.unit = MetricUnit::Seconds;
         const auto registration = state->Register(std::move(descriptor));
         return registration ? Timing{registration->id, state->Generation(), registration->dimensionCount} : Timing{};
 #endif
@@ -714,6 +760,43 @@ namespace Horo::Telemetry {
                 .shutdownTimeouts = health.shutdownTimeouts.load(),
                 .invalidInstrumentRegistrations = health.invalidInstrumentRegistrations.load(),
                 .rejectedMetricSeries = health.rejectedMetricSeries.load()};
+    }
+
+    /** @copydoc Runtime::GetDiagnosticSnapshot */
+    DiagnosticSnapshot Runtime::GetDiagnosticSnapshot() noexcept {
+        DiagnosticSnapshot snapshot{.statistics = GetStatistics()};
+        const auto state = Globals().LoadState();
+        if (state != nullptr) {
+            snapshot.runtimeEnabled = IsEnabled();
+            state->FillDiagnosticSnapshot(snapshot);
+        }
+        return snapshot;
+    }
+
+    /** @copydoc Runtime::SetAvailability */
+    bool Runtime::SetAvailability(const Counter &instrument, const MetricAvailabilityState state) noexcept {
+        return SetAvailability(instrument.instrumentId_, instrument.generation_, state);
+    }
+
+    /** @copydoc Runtime::SetAvailability */
+    bool Runtime::SetAvailability(const Gauge &instrument, const MetricAvailabilityState state) noexcept {
+        return SetAvailability(instrument.instrumentId_, instrument.generation_, state);
+    }
+
+    /** @copydoc Runtime::SetAvailability */
+    bool Runtime::SetAvailability(const Histogram &instrument, const MetricAvailabilityState state) noexcept {
+        return SetAvailability(instrument.instrumentId_, instrument.generation_, state);
+    }
+
+    /** @copydoc Runtime::SetAvailability */
+    bool Runtime::SetAvailability(const Timing &instrument, const MetricAvailabilityState state) noexcept {
+        return SetAvailability(instrument.instrumentId_, instrument.generation_, state);
+    }
+
+    bool Runtime::SetAvailability(const std::uint32_t instrumentId, const std::uint32_t generation,
+                                  const MetricAvailabilityState state) noexcept {
+        const auto runtime = Globals().LoadState();
+        return runtime != nullptr && runtime->Generation() == generation && runtime->SetAvailability(instrumentId, state);
     }
 
     bool Runtime::BindMetric(const std::uint32_t instrumentId, const std::uint32_t generation, const InstrumentKind kind,

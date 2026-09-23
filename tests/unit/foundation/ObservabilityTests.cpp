@@ -374,9 +374,12 @@ TEST_CASE("Telemetry exports typed instruments and context-forwarded events asyn
     Horo::Telemetry::Runtime::Shutdown();
     auto sink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 256, .enabled = true}, sink));
-    const auto counter = Horo::Telemetry::Runtime::RegisterCounter({.name = "jobs.completed", .subsystem = "jobs", .unit = "operations"});
-    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge({.name = "render.queue_depth", .subsystem = "render", .unit = "items"});
-    const auto histogram = Horo::Telemetry::Runtime::RegisterHistogram({.name = "frame.duration", .subsystem = "runtime", .unit = "ms"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "jobs.completed", .subsystem = "jobs", .unit = Horo::Telemetry::MetricUnit::Count});
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "render.queue_depth", .subsystem = "render", .unit = Horo::Telemetry::MetricUnit::Count});
+    const auto histogram = Horo::Telemetry::Runtime::RegisterHistogram(
+        {.name = "frame.duration", .subsystem = "runtime", .unit = Horo::Telemetry::MetricUnit::Seconds});
     REQUIRE(static_cast<bool>(counter));
     REQUIRE(static_cast<bool>(gauge));
     REQUIRE(static_cast<bool>(histogram));
@@ -429,7 +432,7 @@ TEST_CASE("Metric descriptors bind only allowlisted bounded dimension series", "
     const auto counter = Horo::Telemetry::Runtime::RegisterCounter({
         .name = "asset.import.completed",
         .subsystem = "Assets.Import",
-        .unit = "operations",
+        .unit = Horo::Telemetry::MetricUnit::Count,
         .description = "Completed asset imports by terminal outcome.",
         .dimensions = {{.key = "outcome", .allowedValues = {"success", "failed", "cancelled"}}},
         .maxSeries = 2,
@@ -473,12 +476,12 @@ TEST_CASE("Metric registration rejects duplicate and unsafe descriptors determin
     auto sink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 16, .enabled = true}, sink));
     const auto before = Horo::Telemetry::Runtime::GetStatistics();
-    REQUIRE(static_cast<bool>(
-        Horo::Telemetry::Runtime::RegisterGauge({.name = "renderer.queue.depth", .subsystem = "Renderer", .unit = "items"})));
-    REQUIRE_FALSE(static_cast<bool>(
-        Horo::Telemetry::Runtime::RegisterGauge({.name = "renderer.queue.depth", .subsystem = "Renderer", .unit = "items"})));
-    REQUIRE_FALSE(static_cast<bool>(
-        Horo::Telemetry::Runtime::RegisterHistogram({.name = "Renderer Unsafe Id", .subsystem = "Renderer", .unit = "seconds"})));
+    REQUIRE(static_cast<bool>(Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "renderer.queue.depth", .subsystem = "Renderer", .unit = Horo::Telemetry::MetricUnit::Count})));
+    REQUIRE_FALSE(static_cast<bool>(Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "renderer.queue.depth", .subsystem = "Renderer", .unit = Horo::Telemetry::MetricUnit::Count})));
+    REQUIRE_FALSE(static_cast<bool>(Horo::Telemetry::Runtime::RegisterHistogram(
+        {.name = "Renderer Unsafe Id", .subsystem = "Renderer", .unit = Horo::Telemetry::MetricUnit::Seconds})));
     REQUIRE(Horo::Telemetry::Runtime::Shutdown());
     const auto after = Horo::Telemetry::Runtime::GetStatistics();
     REQUIRE(after.invalidInstrumentRegistrations == before.invalidInstrumentRegistrations + 2U);
@@ -488,11 +491,12 @@ TEST_CASE("Gauge histogram and timing records preserve their instrument semantic
     static_cast<void>(Horo::Telemetry::Runtime::Shutdown());
     auto sink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 64, .enabled = true}, sink));
-    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge({.name = "renderer.queue.depth", .subsystem = "Renderer", .unit = "items"});
-    const auto histogram =
-        Horo::Telemetry::Runtime::RegisterHistogram({.name = "renderer.frame.duration", .subsystem = "Renderer", .unit = "seconds"});
-    const auto timing =
-        Horo::Telemetry::Runtime::RegisterTiming({.name = "asset.import.duration", .subsystem = "Assets", .unit = "seconds"});
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "renderer.queue.depth", .subsystem = "Renderer", .unit = Horo::Telemetry::MetricUnit::Count});
+    const auto histogram = Horo::Telemetry::Runtime::RegisterHistogram(
+        {.name = "renderer.frame.duration", .subsystem = "Renderer", .unit = Horo::Telemetry::MetricUnit::Seconds});
+    const auto timing = Horo::Telemetry::Runtime::RegisterTiming(
+        {.name = "asset.import.duration", .subsystem = "Assets", .unit = Horo::Telemetry::MetricUnit::Seconds});
     REQUIRE(static_cast<bool>(gauge));
     REQUIRE(static_cast<bool>(histogram));
     REQUIRE(static_cast<bool>(timing));
@@ -791,8 +795,8 @@ TEST_CASE("Unified observability records fan out identically to every sink", "[f
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 64, .enabled = true},
                                                  std::vector<std::shared_ptr<Horo::Telemetry::ISink>>{firstSink, secondSink}));
 
-    const auto counter =
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "jobs.completed", .subsystem = "Foundation.Jobs", .unit = "operations"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "jobs.completed", .subsystem = "Foundation.Jobs", .unit = Horo::Telemetry::MetricUnit::Count});
     const auto acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
     while (Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore)
         counter.Add();
@@ -898,10 +902,10 @@ TEST_CASE("Telemetry severity and hierarchical subsystem filters run before reco
     REQUIRE_FALSE(Horo::Telemetry::Runtime::IsEventEnabled("Renderer.OpenGL", Horo::Log::Level::Debug));
     REQUIRE(Horo::Telemetry::Runtime::IsEventEnabled("Renderer.OpenGL", Horo::Log::Level::Warn));
     REQUIRE_FALSE(Horo::Telemetry::Runtime::IsEventEnabled("Editor.Viewport", Horo::Log::Level::Critical));
-    REQUIRE_FALSE(
-        static_cast<bool>(Horo::Telemetry::Runtime::RegisterCounter({.name = "editor.frames", .subsystem = "Editor", .unit = "frames"})));
-    REQUIRE(static_cast<bool>(
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "renderer.frames", .subsystem = "Renderer", .unit = "frames"})));
+    REQUIRE_FALSE(static_cast<bool>(Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "editor.frames", .subsystem = "Editor", .unit = Horo::Telemetry::MetricUnit::Count})));
+    REQUIRE(static_cast<bool>(Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "renderer.frames", .subsystem = "Renderer", .unit = Horo::Telemetry::MetricUnit::Count})));
 
     const auto before = Horo::Telemetry::Runtime::GetStatistics();
     REQUIRE_FALSE(
@@ -933,12 +937,12 @@ TEST_CASE("Typed metric collection levels reject detailed instruments before han
                                                   .metricCollectionLevel = Horo::Telemetry::MetricCollectionLevel::Core,
                                                   .enabled = true},
                                                  sink));
-    const auto core =
-        Horo::Telemetry::Runtime::RegisterGauge({.name = "process.thread.count", .subsystem = "Foundation.Process", .unit = "threads"});
+    const auto core = Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "process.thread.count", .subsystem = "Foundation.Process", .unit = Horo::Telemetry::MetricUnit::Count});
     const auto detailed =
         Horo::Telemetry::Runtime::RegisterHistogram({.name = "renderer.command.duration",
                                                      .subsystem = "Renderer.Frontend",
-                                                     .unit = "seconds",
+                                                     .unit = Horo::Telemetry::MetricUnit::Seconds,
                                                      .minimumCollectionLevel = Horo::Telemetry::MetricCollectionLevel::Detailed});
     REQUIRE(core);
     REQUIRE_FALSE(detailed);
@@ -948,8 +952,8 @@ TEST_CASE("Typed metric collection levels reject detailed instruments before han
                                                   .metricCollectionLevel = Horo::Telemetry::MetricCollectionLevel::Off,
                                                   .enabled = true},
                                                  sink));
-    REQUIRE_FALSE(
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "jobs.completed", .subsystem = "Foundation.Jobs", .unit = "operations"}));
+    REQUIRE_FALSE(Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "jobs.completed", .subsystem = "Foundation.Jobs", .unit = Horo::Telemetry::MetricUnit::Count}));
     REQUIRE(Horo::Telemetry::Runtime::IsEventEnabled("Foundation.Jobs", Horo::Log::Level::Info));
     REQUIRE(Horo::Telemetry::Runtime::Shutdown());
 }
@@ -960,8 +964,8 @@ TEST_CASE("Telemetry shutdown reports a bounded timeout for a blocked sink",
     auto sink = std::make_shared<BlockingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 4, .shutdownTimeout = std::chrono::milliseconds{25}, .enabled = true},
                                                  sink));
-    const auto counter =
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "shutdown.blocked", .subsystem = "Foundation.Telemetry", .unit = "records"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "shutdown.blocked", .subsystem = "Foundation.Telemetry", .unit = Horo::Telemetry::MetricUnit::Count});
     const auto acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
     while (Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore)
         counter.Add();
@@ -987,8 +991,8 @@ TEST_CASE("DropOldest overflow retains new records without growing the bounded q
                                                   .shutdownTimeout = std::chrono::seconds{1},
                                                   .enabled = true},
                                                  sink));
-    const auto counter =
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "queue.drop_oldest", .subsystem = "Foundation.Telemetry", .unit = "records"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "queue.drop_oldest", .subsystem = "Foundation.Telemetry", .unit = Horo::Telemetry::MetricUnit::Count});
     const auto acceptedBeforeBlocking = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
     while (Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBeforeBlocking)
         counter.Add();
@@ -1012,7 +1016,8 @@ TEST_CASE("Disabled telemetry handles do not enqueue or drop samples", "[foundat
     Horo::Telemetry::Runtime::Shutdown();
     auto sink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 16, .enabled = true}, sink));
-    const auto counter = Horo::Telemetry::Runtime::RegisterCounter({.name = "disabled.counter", .subsystem = "test", .unit = "items"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "disabled.counter", .subsystem = "test", .unit = Horo::Telemetry::MetricUnit::Count});
     Horo::Telemetry::Runtime::SetEnabled(false);
     const Horo::Telemetry::Statistics before = Horo::Telemetry::Runtime::GetStatistics();
     for (int index = 0; index < 10000; ++index)
@@ -1028,12 +1033,14 @@ TEST_CASE("Telemetry handles cannot alias instruments from a later runtime gener
     Horo::Telemetry::Runtime::Shutdown();
     auto firstSink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 16, .enabled = true}, firstSink));
-    const auto staleCounter = Horo::Telemetry::Runtime::RegisterCounter({.name = "first.counter", .subsystem = "test", .unit = "items"});
+    const auto staleCounter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "first.counter", .subsystem = "test", .unit = Horo::Telemetry::MetricUnit::Count});
     Horo::Telemetry::Runtime::Shutdown();
 
     auto secondSink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 16, .enabled = true}, secondSink));
-    const auto currentCounter = Horo::Telemetry::Runtime::RegisterCounter({.name = "second.counter", .subsystem = "test", .unit = "items"});
+    const auto currentCounter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "second.counter", .subsystem = "test", .unit = Horo::Telemetry::MetricUnit::Count});
     staleCounter.Add();
     for (int attempt = 0; attempt < 100; ++attempt)
         currentCounter.Add();
@@ -1051,7 +1058,8 @@ TEST_CASE("Telemetry producers drop from a full bounded queue without waiting fo
     Horo::Telemetry::Runtime::Shutdown();
     auto sink = std::make_shared<BlockingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 1, .enabled = true}, sink));
-    const auto counter = Horo::Telemetry::Runtime::RegisterCounter({.name = "queue.pressure", .subsystem = "test", .unit = "items"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "queue.pressure", .subsystem = "test", .unit = Horo::Telemetry::MetricUnit::Count});
     const auto acceptedBeforeBlocking = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
     while (Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBeforeBlocking)
         counter.Add();
@@ -1069,7 +1077,8 @@ TEST_CASE("Telemetry accepts concurrent metric producers safely", "[foundation][
     Horo::Telemetry::Runtime::Shutdown();
     auto sink = std::make_shared<CollectingSink>();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 4096, .enabled = true}, sink));
-    const auto histogram = Horo::Telemetry::Runtime::RegisterHistogram({.name = "job.duration", .subsystem = "jobs", .unit = "ms"});
+    const auto histogram = Horo::Telemetry::Runtime::RegisterHistogram(
+        {.name = "job.duration", .subsystem = "jobs", .unit = Horo::Telemetry::MetricUnit::Seconds});
     const Horo::Telemetry::Statistics before = Horo::Telemetry::Runtime::GetStatistics();
     std::vector<std::thread> producers;
     for (int producer = 0; producer < 4; ++producer) {
@@ -1094,8 +1103,8 @@ TEST_CASE("Concurrent producers and shutdown race without blocking or retaining 
     auto sink = std::make_shared<CollectingSink>();
     REQUIRE(
         Horo::Telemetry::Runtime::Initialize({.queueCapacity = 256, .shutdownTimeout = std::chrono::seconds{1}, .enabled = true}, sink));
-    const auto counter =
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "shutdown.race", .subsystem = "Foundation.Telemetry", .unit = "records"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "shutdown.race", .subsystem = "Foundation.Telemetry", .unit = Horo::Telemetry::MetricUnit::Count});
     REQUIRE(counter);
 
     std::atomic<bool> start{};
@@ -1126,8 +1135,8 @@ TEST_CASE("Compile-time disabled telemetry remains inert", "[foundation][observa
     const auto before = Horo::Telemetry::Runtime::GetStatistics();
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 8, .enabled = true}, sink));
     REQUIRE(Horo::Telemetry::Runtime::IsEnabled());
-    const auto counter =
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "disabled.counter", .subsystem = "Foundation.Telemetry", .unit = "records"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "disabled.counter", .subsystem = "Foundation.Telemetry", .unit = Horo::Telemetry::MetricUnit::Count});
     REQUIRE_FALSE(static_cast<bool>(counter));
     for (int index = 0; index < 10000; ++index)
         counter.Add();

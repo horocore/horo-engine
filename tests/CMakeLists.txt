@@ -687,6 +687,7 @@ target_compile_features(HoroStructuredLogStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroStructuredLogStoreTests PRIVATE HoroEngine::Foundation Threads::Threads)
 add_executable(HoroObservabilityTests
         unit/foundation/ObservabilityTests.cpp
+        unit/foundation/TelemetryContractTests.cpp
 )
 target_compile_features(HoroObservabilityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroObservabilityTests PRIVATE HoroEngine::Foundation Threads::Threads miniz)
