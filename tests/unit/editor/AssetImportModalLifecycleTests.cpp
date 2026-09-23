@@ -409,8 +409,7 @@ TEST_CASE("AssetImportModal rejects unresolved conflicts and invalid batch items
     REQUIRE((cancelledModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
     const auto visibleOperations = operations.SnapshotIfChanged(0);
     REQUIRE(visibleOperations.has_value());
-    REQUIRE(visibleOperations->operations.front().requestCancel);
-    visibleOperations->operations.front().requestCancel();
+    REQUIRE(operations.RequestCancel(visibleOperations->operations.front().id));
     CHECK(cancelledModal.ImportIncludedItems(cancellation).HasError());
 }
 
