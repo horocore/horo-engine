@@ -5,19 +5,21 @@
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.h"
 
 #include <algorithm>
+#include <memory>
 #include <ranges>
 
 namespace Horo::Editor {
     namespace {
         [[nodiscard]] bool IsTransformTool(const EditorTransformTool tool) noexcept {
-            return tool == EditorTransformTool::Move || tool == EditorTransformTool::Rotate || tool == EditorTransformTool::Scale;
+            using enum EditorTransformTool;
+            return tool == Move || tool == Rotate || tool == Scale;
         }
 
         [[nodiscard]] const SceneObject *FindSelectedObject(const EditorWorkspaceViewModel &viewModel) noexcept {
             if (!viewModel.primarySelection.has_value())
                 return nullptr;
             const auto selected = std::ranges::find(viewModel.objects, *viewModel.primarySelection, &SceneObject::id);
-            return selected == viewModel.objects.end() ? nullptr : &*selected;
+            return selected == viewModel.objects.end() ? nullptr : std::to_address(selected);
         }
 
         [[nodiscard]] bool CanDrawTransformGizmo(const EditorWorkspaceViewModel &viewModel, const SceneObject *selectedObject) noexcept {
