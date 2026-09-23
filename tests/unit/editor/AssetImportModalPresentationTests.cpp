@@ -140,7 +140,6 @@ TEST_CASE("Asset import presentation renders queue diagnostics settings destinat
     snapshot.items.front().settings["settings.scale"] = "invalid";
     snapshot.items.front().settings["settings.normals"] = "invalid";
 
-    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     DrawFrame(fixture.imgui, fixture.modal);
     ClickTab(fixture.imgui, fixture.modal, 1);
     ClickTab(fixture.imgui, fixture.modal, 2);
@@ -235,6 +234,7 @@ TEST_CASE("Asset import preview fixtures render populated and empty workflow sta
     REQUIRE(modalPtr->IsUiPreview());
     REQUIRE(modalPtr->Snapshot().items.size() == 4);
     REQUIRE(modalPtr->SourceFileSize(0).value() == 12'400'000);
+    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     DrawFrame(imgui, *modalPtr);
 
     for (std::size_t index = 0; index < modalPtr->Snapshot().items.size(); ++index) {
