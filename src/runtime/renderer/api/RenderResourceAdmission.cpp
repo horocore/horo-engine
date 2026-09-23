@@ -148,8 +148,8 @@ namespace Horo::Render {
             AppendReason(reasons, "format is unknown");
         } else {
             const RenderTextureUsage allowed = capabilities.formats.usages[formatIndex];
-            const std::byte requestedUsage = static_cast<std::byte>(static_cast<std::uint8_t>(descriptor.usage));
-            const std::byte allowedUsage = static_cast<std::byte>(static_cast<std::uint8_t>(allowed));
+            const auto requestedUsage = static_cast<std::byte>(static_cast<std::uint8_t>(descriptor.usage));
+            const auto allowedUsage = static_cast<std::byte>(static_cast<std::uint8_t>(allowed));
             const auto missing = static_cast<RenderTextureUsage>(static_cast<std::uint8_t>(requestedUsage & ~allowedUsage));
             if (allowed == RenderTextureUsage::None)
                 AppendReason(reasons, std::format("{} has no admitted usages", format));
