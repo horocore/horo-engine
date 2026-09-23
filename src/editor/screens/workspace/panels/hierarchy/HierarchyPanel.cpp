@@ -877,7 +877,7 @@ namespace Horo::Editor {
         }
 
         if (rows.empty()) {
-            ImGui::SetCursorPosX(outerPadding + 8.0F * uiScale);
+            ImGui::SetCursorPosX(layout.outerPadding + 8.0F * layout.uiScale);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
             ImGui::TextUnformatted(
                 context.localization
