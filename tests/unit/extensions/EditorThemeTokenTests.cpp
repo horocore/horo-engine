@@ -15,6 +15,12 @@ namespace Horo::Extensions::Tests {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == code);
         }
+
+        template <typename Mutator> void RequireInvalidThemeFrame(const Mutator &mutate) {
+            EditorThemeFrame frame;
+            mutate(frame);
+            RequireErrorCode(ValidateEditorThemeFrame(frame), "editor_theme_token_invalid");
+        }
     }  // namespace
 
     TEST_CASE("Theme token frame validates as one complete immutable contract", "[Extensions][EditorThemeTokens]") {
@@ -73,7 +79,7 @@ namespace Horo::Extensions::Tests {
         CHECK(ResolveEditorThemeIconRole(EditorThemeIconRole::Delete, frame) == EditorThemeIconRole::Generic);
     }
 
-    TEST_CASE("Theme token accessors map every supported semantic role", "[Extensions][EditorThemeTokens]") {
+    TEST_CASE("Theme token color accessors map every supported role", "[Extensions][EditorThemeTokens]") {
         const EditorThemeFrame frame;
 
         CHECK(ColorFor(frame, EditorThemeColorRole::Surface).red == Catch::Approx(frame.colors.surface.red));
@@ -94,7 +100,10 @@ namespace Horo::Extensions::Tests {
         CHECK(ColorFor(frame, EditorThemeColorRole::AccentActive).red == Catch::Approx(frame.colors.accentActive.red));
         CHECK(ColorFor(frame, EditorThemeColorRole::OnAccent).red == Catch::Approx(frame.colors.onAccent.red));
         CHECK(ColorFor(frame, EditorThemeColorRole::Overlay).red == Catch::Approx(frame.colors.overlay.red));
+    }
 
+    TEST_CASE("Theme token typography accessors map every supported role", "[Extensions][EditorThemeTokens]") {
+        const EditorThemeFrame frame;
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Caption) == Catch::Approx(frame.typography.caption));
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Label) == Catch::Approx(frame.typography.label));
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Body) == Catch::Approx(frame.typography.body));
@@ -102,7 +111,10 @@ namespace Horo::Extensions::Tests {
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Title) == Catch::Approx(frame.typography.title));
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Heading) == Catch::Approx(frame.typography.heading));
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Display) == Catch::Approx(frame.typography.display));
+    }
 
+    TEST_CASE("Theme token spacing accessors map every supported role", "[Extensions][EditorThemeTokens]") {
+        const EditorThemeFrame frame;
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::XS) == Catch::Approx(frame.spacing.xs));
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::Small) == Catch::Approx(frame.spacing.small));
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::Medium) == Catch::Approx(frame.spacing.medium));
@@ -116,7 +128,10 @@ namespace Horo::Extensions::Tests {
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::SidebarPaddingY) == Catch::Approx(frame.spacing.sidebarPaddingY));
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::PropertyRowGap) == Catch::Approx(frame.spacing.propertyRowGap));
         CHECK(SpacingFor(frame, EditorThemeSpacingRole::ControlGap) == Catch::Approx(frame.spacing.controlGap));
+    }
 
+    TEST_CASE("Theme token size accessors map every supported role", "[Extensions][EditorThemeTokens]") {
+        const EditorThemeFrame frame;
         CHECK(SizeFor(frame, EditorThemeSizeRole::SmallControlHeight) == Catch::Approx(frame.metrics.smallControlHeight));
         CHECK(SizeFor(frame, EditorThemeSizeRole::MediumControlHeight) == Catch::Approx(frame.metrics.mediumControlHeight));
         CHECK(SizeFor(frame, EditorThemeSizeRole::LargeControlHeight) == Catch::Approx(frame.metrics.largeControlHeight));
@@ -136,7 +151,10 @@ namespace Horo::Extensions::Tests {
         CHECK(SizeFor(frame, EditorThemeSizeRole::IconMedium) == Catch::Approx(frame.metrics.iconMedium));
         CHECK(SizeFor(frame, EditorThemeSizeRole::IconLarge) == Catch::Approx(frame.metrics.iconLarge));
         CHECK(SizeFor(frame, EditorThemeSizeRole::MinimumInteractiveTarget) == Catch::Approx(frame.metrics.minimumInteractiveTarget));
+    }
 
+    TEST_CASE("Theme token radius and motion accessors map every supported role", "[Extensions][EditorThemeTokens]") {
+        const EditorThemeFrame frame;
         CHECK(RadiusFor(frame, EditorThemeRadiusRole::Control) == Catch::Approx(frame.radii.control));
         CHECK(RadiusFor(frame, EditorThemeRadiusRole::Card) == Catch::Approx(frame.radii.card));
         CHECK(RadiusFor(frame, EditorThemeRadiusRole::Modal) == Catch::Approx(frame.radii.modal));
@@ -151,7 +169,10 @@ namespace Horo::Extensions::Tests {
         CHECK(MotionFor(frame, EditorThemeMotionRole::Press) == Catch::Approx(frame.motion.pressSeconds));
         CHECK(MotionFor(frame, EditorThemeMotionRole::Focus) == Catch::Approx(frame.motion.focusSeconds));
         CHECK(MotionFor(frame, EditorThemeMotionRole::Modal) == Catch::Approx(frame.motion.modalSeconds));
+    }
 
+    TEST_CASE("Theme token font accessors map every supported role", "[Extensions][EditorThemeTokens]") {
+        const EditorThemeFrame frame;
         CHECK(FontSizeFor(frame, EditorThemeFontRole::Sans) == Catch::Approx(frame.fonts.sansBase));
         CHECK(FontSizeFor(frame, EditorThemeFontRole::SansCompact) == Catch::Approx(frame.fonts.sansCompactBase));
         CHECK(FontSizeFor(frame, EditorThemeFontRole::SansEmphasis) == Catch::Approx(frame.fonts.sansEmphasisBase));
@@ -159,9 +180,8 @@ namespace Horo::Extensions::Tests {
         CHECK(FontSizeFor(frame, EditorThemeFontRole::Icon) == Catch::Approx(frame.fonts.iconBase));
     }
 
-    TEST_CASE("Theme token resolvers cover invalid roles and deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
-        EditorThemeFrame frame;
-
+    TEST_CASE("Theme token resolvers reject empty and sentinel roles", "[Extensions][EditorThemeTokens]") {
+        const EditorThemeFrame frame;
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::None, frame) == EditorThemeColorRole::None);
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::Count, frame) == EditorThemeColorRole::None);
         CHECK(ResolveEditorThemeTypographyRole(EditorThemeTypographyRole::None, frame) == EditorThemeTypographyRole::None);
@@ -180,7 +200,10 @@ namespace Horo::Extensions::Tests {
         CHECK(ResolveEditorThemeFontRole(EditorThemeFontRole::Count, frame) == EditorThemeFontRole::None);
         CHECK(ResolveEditorThemeIconRole(EditorThemeIconRole::None, frame) == EditorThemeIconRole::None);
         CHECK(ResolveEditorThemeIconRole(EditorThemeIconRole::Count, frame) == EditorThemeIconRole::None);
+    }
 
+    TEST_CASE("Theme token color resolvers return none without supported roles", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedTokenMask = 0U;
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::SurfaceSubtle, frame) == EditorThemeColorRole::None);
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::SurfaceRaised, frame) == EditorThemeColorRole::None);
@@ -202,28 +225,40 @@ namespace Horo::Extensions::Tests {
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::TextPrimary, frame) == EditorThemeColorRole::None);
         CHECK(ColorFor(frame, EditorThemeColorRole::Surface).red == Catch::Approx(0.0F));
         CHECK(ColorFor(frame, EditorThemeColorRole::Count).red == Catch::Approx(0.0F));
+    }
 
+    TEST_CASE("Theme token color resolvers use deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedTokenMask =
             EditorThemeColorRoleBit(EditorThemeColorRole::Surface) | EditorThemeColorRoleBit(EditorThemeColorRole::TextPrimary);
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::SurfaceSubtle, frame) == EditorThemeColorRole::Surface);
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::Critical, frame) == EditorThemeColorRole::TextPrimary);
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::TextDisabled, frame) == EditorThemeColorRole::TextPrimary);
         CHECK(ResolveEditorThemeColorRole(EditorThemeColorRole::Overlay, frame) == EditorThemeColorRole::Surface);
+    }
 
+    TEST_CASE("Theme token typography resolvers use deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedTypographyMask = EditorThemeTypographyRoleBit(EditorThemeTypographyRole::CardTitle);
         CHECK(ResolveEditorThemeTypographyRole(EditorThemeTypographyRole::Caption, frame) == EditorThemeTypographyRole::CardTitle);
         frame.supportedTypographyMask = EditorThemeTypographyRoleBit(EditorThemeTypographyRole::Label);
         CHECK(ResolveEditorThemeTypographyRole(EditorThemeTypographyRole::Display, frame) == EditorThemeTypographyRole::Label);
         frame.supportedTypographyMask = 0U;
         CHECK(ResolveEditorThemeTypographyRole(EditorThemeTypographyRole::Display, frame) == EditorThemeTypographyRole::None);
+    }
 
+    TEST_CASE("Theme token spacing resolvers use deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedSpacingMask = EditorThemeSpacingRoleBit(EditorThemeSpacingRole::Large);
         CHECK(ResolveEditorThemeSpacingRole(EditorThemeSpacingRole::XS, frame) == EditorThemeSpacingRole::Large);
         frame.supportedSpacingMask = EditorThemeSpacingRoleBit(EditorThemeSpacingRole::Medium);
         CHECK(ResolveEditorThemeSpacingRole(EditorThemeSpacingRole::XL, frame) == EditorThemeSpacingRole::Medium);
         frame.supportedSpacingMask = 0U;
         CHECK(ResolveEditorThemeSpacingRole(EditorThemeSpacingRole::XL, frame) == EditorThemeSpacingRole::None);
+    }
 
+    TEST_CASE("Theme token size and radius resolvers use deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedSizeMask = EditorThemeSizeRoleBit(EditorThemeSizeRole::MediumControlHeight);
         CHECK(ResolveEditorThemeSizeRole(EditorThemeSizeRole::ModalWidth, frame) == EditorThemeSizeRole::MediumControlHeight);
         frame.supportedSizeMask = 0U;
@@ -233,14 +268,20 @@ namespace Horo::Extensions::Tests {
         CHECK(ResolveEditorThemeRadiusRole(EditorThemeRadiusRole::Modal, frame) == EditorThemeRadiusRole::Control);
         frame.supportedRadiusMask = 0U;
         CHECK(ResolveEditorThemeRadiusRole(EditorThemeRadiusRole::Modal, frame) == EditorThemeRadiusRole::None);
+    }
 
+    TEST_CASE("Theme token interaction resolver uses deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedInteractionMask = EditorThemeInteractionRoleBit(EditorThemeInteractionRole::Default);
         CHECK(ResolveEditorThemeInteractionRole(EditorThemeInteractionRole::Selected, frame) == EditorThemeInteractionRole::Default);
         frame.supportedInteractionMask = EditorThemeInteractionRoleBit(EditorThemeInteractionRole::Hover);
         CHECK(ResolveEditorThemeInteractionRole(EditorThemeInteractionRole::Hover, frame) == EditorThemeInteractionRole::Hover);
         frame.supportedInteractionMask = 0U;
         CHECK(ResolveEditorThemeInteractionRole(EditorThemeInteractionRole::Selected, frame) == EditorThemeInteractionRole::None);
+    }
 
+    TEST_CASE("Theme token motion resolver honors reduced motion and fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedMotionMask = EditorThemeMotionRoleBit(EditorThemeMotionRole::Instant);
         frame.accessibility.reduceMotion = true;
         CHECK(ResolveEditorThemeMotionRole(EditorThemeMotionRole::Modal, frame) == EditorThemeMotionRole::Instant);
@@ -255,7 +296,10 @@ namespace Horo::Extensions::Tests {
         frame.supportedMotionMask = 0U;
         CHECK(ResolveEditorThemeMotionRole(EditorThemeMotionRole::Modal, frame) == EditorThemeMotionRole::None);
         CHECK(MotionFor(frame, EditorThemeMotionRole::Modal) == Catch::Approx(0.0F));
+    }
 
+    TEST_CASE("Theme token font and icon resolvers use deterministic fallbacks", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedFontMask = EditorThemeFontRoleBit(EditorThemeFontRole::Sans);
         CHECK(ResolveEditorThemeFontRole(EditorThemeFontRole::Monospace, frame) == EditorThemeFontRole::Sans);
         frame.supportedFontMask = 0U;
@@ -266,7 +310,10 @@ namespace Horo::Extensions::Tests {
         CHECK(ResolveEditorThemeIconRole(EditorThemeIconRole::Delete, frame) == EditorThemeIconRole::Generic);
         frame.supportedIconMask = 0U;
         CHECK(ResolveEditorThemeIconRole(EditorThemeIconRole::Delete, frame) == EditorThemeIconRole::None);
+    }
 
+    TEST_CASE("Theme token accessors return zero for unsupported roles", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
         frame.supportedTypographyMask = 0U;
         CHECK(TypographyFor(frame, EditorThemeTypographyRole::Display) == Catch::Approx(0.0F));
         frame.supportedSpacingMask = 0U;
@@ -330,83 +377,86 @@ namespace Horo::Extensions::Tests {
         RequireErrorCode(ValidateEditorThemeFrame(frame), "editor_theme_token_invalid");
     }
 
-    TEST_CASE("Theme token validation rejects each unsafe value category", "[Extensions][EditorThemeTokens]") {
-        const auto expectInvalid = [](const auto &mutate) {
-            EditorThemeFrame frame;
-            mutate(frame);
-            RequireErrorCode(ValidateEditorThemeFrame(frame), "editor_theme_token_invalid");
-        };
-
-        expectInvalid([](EditorThemeFrame &frame) {
+    TEST_CASE("Theme token validation rejects invalid metadata and colors", "[Extensions][EditorThemeTokens]") {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.revision = 0U;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.uiScale = 0.25F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.changeMask = 1U << 31U;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.colors.surface.red = -0.1F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+    }
+
+    TEST_CASE("Theme token validation rejects invalid typography and spacing", "[Extensions][EditorThemeTokens]") {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.typography.caption = 13.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.typography.body = 20.0F;
             frame.typography.cardTitle = 18.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.spacing.xs = -1.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.spacing.xs = 10.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+    }
+
+    TEST_CASE("Theme token validation rejects invalid metrics, radii, interaction, and motion", "[Extensions][EditorThemeTokens]") {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.metrics.smallControlHeight = 0.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.metrics.rowGap = -1.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.metrics.smallControlHeight = 36.0F;
             frame.metrics.mediumControlHeight = 32.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.radii.control = -1.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.interaction.hoverOpacity = 2.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.interaction.focusRingWidth = -1.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.motion.modalSeconds = 61.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.motion.fastSeconds = 0.2F;
             frame.motion.normalSeconds = 0.1F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+    }
+
+    TEST_CASE("Theme token validation rejects invalid fonts, icons, and accessibility", "[Extensions][EditorThemeTokens]") {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.fonts.body = EditorThemeFontRole::None;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.fonts.sansBase = 0.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.icons.smallSize = 0.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.icons.strokeWidth = 0.0F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.accessibility.colorVision = EditorThemeColorVisionMode::Count;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.accessibility.textContrastMultiplier = 0.5F;
         });
-        expectInvalid([](EditorThemeFrame &frame) {
+        RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.accessibility.colorVisionSeverity = 2.0F;
         });
     }
