@@ -186,12 +186,20 @@ TEST_CASE("Editor icon registry resolves canonical and catalog tokens", "[unit][
     REQUIRE(UiIconRegistry::Resolve("action.checkbox_unchecked") == UiIcon::CheckboxUnchecked);
     REQUIRE(UiIconRegistry::Resolve("primitive.light.directional") == UiIcon::DirectionalLight);
     REQUIRE(UiIconRegistry::Resolve("primitive.collider.sphere") == UiIcon::Sphere);
+    REQUIRE(UiIconRegistry::Resolve("primitive.box") == UiIcon::SceneObject);
     REQUIRE(UiIconRegistry::Resolve("asset.folder") == UiIcon::Folder);
     REQUIRE(UiIconRegistry::Resolve("location.package") == UiIcon::Package);
     REQUIRE(UiIconRegistry::Resolve("navigation.arrow_back") == UiIcon::ArrowBack);
     REQUIRE_FALSE(UiIconRegistry::Resolve("unknown.icon").has_value());
     REQUIRE(std::string(UiIconRegistry::Token(UiIcon::VisibilityOff)) == "action.visibility_off");
+    REQUIRE(UiIconRegistry::Token(UiIcon::SceneObject) == "scene.object");
     REQUIRE(UiIconRegistry::Token(UiIcon::None).empty());
+    for (std::uint8_t value = 1; value < static_cast<std::uint8_t>(UiIcon::Count); ++value) {
+        const UiIcon icon = static_cast<UiIcon>(value);
+        const std::string_view token = UiIconRegistry::Token(icon);
+        REQUIRE_FALSE(token.empty());
+        REQUIRE(UiIconRegistry::Resolve(token) == icon);
+    }
 
     const std::span glyphRanges = UiIconRegistry::MaterialSymbolGlyphRanges();
     REQUIRE(glyphRanges.size() >= 3U);
@@ -207,7 +215,9 @@ TEST_CASE("Editor icon registry resolves canonical and catalog tokens", "[unit][
     REQUIRE(containsGlyph(0xE8B8));
     REQUIRE(containsGlyph(0xE2C7));
     REQUIRE(containsGlyph(0xE5C4));
+    REQUIRE(containsGlyph(0xE5C9));
     REQUIRE(containsGlyph(0xE9B0));
+    REQUIRE(containsGlyph(0xEF4A));
     REQUIRE(containsGlyph(0xE145));
     REQUIRE(containsGlyph(0xE1A1));
     REQUIRE(containsGlyph(0xE88E));

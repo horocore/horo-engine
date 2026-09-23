@@ -819,7 +819,6 @@
     "workspace.inspector.component.enable": {"text": "Enable Component"},
     "workspace.inspector.component.disable": {"text": "Disable Component"},
 "workspace.inspector.component.settings": {"text": "Component Settings"},
-"workspace.inspector.static": {"text": "Static"},
 "workspace.inspector.object_options": {"text": "Object options"},
     "workspace.inspector.scene_unavailable": {"text": "Scene settings are not available yet."},
     "workspace.inspector.behavior_missing": {"text": "Missing Behavior"},

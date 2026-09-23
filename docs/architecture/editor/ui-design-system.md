@@ -297,6 +297,25 @@ Component rules:
   explicit accessible label and tooltip.
 - Optional icons do not change the meaning of a semantic variant. Icon
   placement is explicit and layout remains stable when an icon appears.
+
+### Icon ownership
+
+Editor controls use `UiIcon` identities or resolve stable tokens through
+`UiIconRegistry` at catalog and serialized boundaries. The registry is a fixed,
+editor-owned table: each identity has one canonical token and one drawing
+definition. Aliases map legacy or catalog tokens to an existing identity.
+
+The drawing definition may use the editor's Material Symbols font, a Horo-owned
+ImGui drawing routine, or a font glyph with a custom fallback. The font atlas is
+built before the editor UI runs, so ordinary panel drawing cannot register new
+glyphs or replace icon providers. Atlas glyph ranges are derived from the
+registry's font-backed definitions. A runtime extension that needs custom artwork
+must use a separate, explicitly owned asset and lifetime contract; it cannot
+mutate the built-in icon table.
+
+Panels select icons by meaning rather than by the visual source. The selected
+scene object uses `UiIcon::SceneObject` in both Hierarchy and Inspector; the
+package icon has its own identity even when it currently uses the same glyph.
 - Primitive components remain feature-independent.
 - Composite components are built by composing primitives.
 - Screens, panels, and modal workflows orchestrate components and application
