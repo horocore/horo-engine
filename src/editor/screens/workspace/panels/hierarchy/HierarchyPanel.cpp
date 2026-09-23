@@ -738,90 +738,93 @@ namespace Horo::Editor {
         }
     }
 
+    HierarchyPanel::RowFrame HierarchyPanel::BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &drawLayout,
+                                                           const EditorWorkspaceViewModel &viewModel,
+                                                           EditorWorkspaceViewCommandData &command, ImDrawList &drawList,
+                                                           const EditorGuiContext &context) {
+        const HierarchyNode &node = *row.node;
+        ImFont &nameFont = *ResolveFont(node.children.empty() ? context.theme.fonts.sans : context.theme.fonts.sansEmphasis);
+        ImGui::PushID(&node.id);
+        ImGui::SetCursorPosX(drawLayout.outerPadding);
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        const HierarchyRowLayout rowLayout =
+            CalculateHierarchyRowLayout(drawLayout.listWidth, row.depth, drawLayout.uiScale, kRowActionsWidth * drawLayout.uiScale);
+        const ImVec2 rowMax{rowMin.x + drawLayout.listWidth, rowMin.y + rowLayout.height};
+        const ImVec2 actionsMin{rowMin.x + rowLayout.actions.minimum, rowMin.y};
+        const ImVec2 actionsMax{rowMin.x + rowLayout.actions.maximum, rowMax.y};
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::InvisibleButton("##hierarchy_object_row", {drawLayout.listWidth, rowLayout.height});
+        const ImVec2 nextRowCursor = ImGui::GetCursorScreenPos();
+        const bool rowHovered = ImGui::IsItemHovered();
+        const bool rowFocused = ImGui::IsItemFocused();
+        const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+        const bool pointerInActions = ImGui::IsMouseHoveringRect(actionsMin, actionsMax);
+        const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - rowMin.y) / rowLayout.height, 0.0F, 1.0F);
+        const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(node.id);
+        const std::optional<SceneObjectId> nodeParent =
+            projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
+        const HierarchyAssetDropPlacement assetPlacement =
+            ResolveHierarchyAssetDropPlacement(normalizedRowY, SceneObjectId{node.id}, nodeParent);
+        const bool assetDropDelivered = AcceptAssetDrop(assetPlacement.parent, assetPlacement.target, rowMin, rowMax,
+                                                        viewModel.documentRevision, command, drawList, assetPlacement.zone);
+        return {
+            .row = row,
+            .node = node,
+            .drawList = drawList,
+            .nameFont = nameFont,
+            .geometry =
+                {
+                    .layout = rowLayout,
+                    .rowMin = rowMin,
+                    .rowMax = rowMax,
+                    .chevronMin = {rowMin.x + rowLayout.chevron.minimum, rowMin.y},
+                    .chevronMax = {rowMin.x + rowLayout.chevron.maximum, rowMax.y},
+                    .typeIconMin = {rowMin.x + rowLayout.typeIcon.minimum, rowMin.y},
+                    .typeIconMax = {rowMin.x + rowLayout.typeIcon.maximum, rowMax.y},
+                    .labelMin = {rowMin.x + rowLayout.label.minimum, rowMin.y},
+                    .labelMax = {rowMin.x + rowLayout.label.maximum, rowMax.y},
+                    .actionsMin = actionsMin,
+                    .actionsMax = actionsMax,
+                    .visibilityMin = {rowMin.x + rowLayout.visibilityAction.minimum, rowMin.y},
+                    .visibilityMax = {rowMin.x + rowLayout.visibilityAction.maximum, rowMax.y},
+                    .lockMin = {rowMin.x + rowLayout.lockAction.minimum, rowMin.y},
+                    .lockMax = {rowMin.x + rowLayout.lockAction.maximum, rowMax.y},
+                    .nextRowCursor = nextRowCursor,
+                },
+            .uiScale = drawLayout.uiScale,
+            .nameFontSize = Theme::TextPx::Label(),
+            .rowHovered = rowHovered,
+            .rowFocused = rowFocused,
+            .rowLeftClicked = rowLeftClicked,
+            .rowRightClicked = rowRightClicked,
+            .selected = editSession_.IsSelected(node.id),
+            .pointerInActions = pointerInActions,
+            .assetDropDelivered = assetDropDelivered,
+            .searching = searchBuffer_[0] != '\0',
+        };
+    }
+
     bool HierarchyPanel::DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
                                   const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
-        const float listWidth = layout.listWidth;
-        const float outerPadding = layout.outerPadding;
-        const float uiScale = layout.uiScale;
         bool pendingDelete = false;
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
-        const float nameFontSize = Theme::TextPx::Label();
         const bool workspaceEligible =
             inputRouter_ != nullptr && workspaceInputContext_ != nullptr && inputRouter_->IsContextActive(*workspaceInputContext_);
 
         for (const HierarchyVisibleRow &row : rows) {
-            const HierarchyNode &node = *row.node;
-            ImFont &nameFont = *ResolveFont(node.children.empty() ? context.theme.fonts.sans : context.theme.fonts.sansEmphasis);
-            ImGui::PushID(&node.id);
-            ImGui::SetCursorPosX(outerPadding);
-            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-            const HierarchyRowLayout layout = CalculateHierarchyRowLayout(listWidth, row.depth, uiScale, kRowActionsWidth * uiScale);
-            const ImVec2 rowMax{rowMin.x + listWidth, rowMin.y + layout.height};
-            const ImVec2 actionsMin{rowMin.x + layout.actions.minimum, rowMin.y};
-            const ImVec2 actionsMax{rowMin.x + layout.actions.maximum, rowMax.y};
-            ImGui::SetNextItemAllowOverlap();
-            ImGui::InvisibleButton("##hierarchy_object_row", {listWidth, layout.height});
-            const ImVec2 nextRowCursor = ImGui::GetCursorScreenPos();
-            const bool rowHovered = ImGui::IsItemHovered();
-            const bool rowFocused = ImGui::IsItemFocused();
-            const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-            const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-            const bool pointerInActions = ImGui::IsMouseHoveringRect(actionsMin, actionsMax);
-            const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - rowMin.y) / layout.height, 0.0F, 1.0F);
-            const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(node.id);
-            const std::optional<SceneObjectId> nodeParent =
-                projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
-            const HierarchyAssetDropPlacement assetPlacement =
-                ResolveHierarchyAssetDropPlacement(normalizedRowY, SceneObjectId{node.id}, nodeParent);
-            const bool assetDropDelivered = AcceptAssetDrop(assetPlacement.parent, assetPlacement.target, rowMin, rowMax,
-                                                            viewModel.documentRevision, command, drawList, assetPlacement.zone);
-            const RowFrame frame{
-                .row = row,
-                .node = node,
-                .drawList = drawList,
-                .nameFont = nameFont,
-                .geometry =
-                    {
-                        .layout = layout,
-                        .rowMin = rowMin,
-                        .rowMax = rowMax,
-                        .chevronMin = {rowMin.x + layout.chevron.minimum, rowMin.y},
-                        .chevronMax = {rowMin.x + layout.chevron.maximum, rowMax.y},
-                        .typeIconMin = {rowMin.x + layout.typeIcon.minimum, rowMin.y},
-                        .typeIconMax = {rowMin.x + layout.typeIcon.maximum, rowMax.y},
-                        .labelMin = {rowMin.x + layout.label.minimum, rowMin.y},
-                        .labelMax = {rowMin.x + layout.label.maximum, rowMax.y},
-                        .actionsMin = actionsMin,
-                        .actionsMax = actionsMax,
-                        .visibilityMin = {rowMin.x + layout.visibilityAction.minimum, rowMin.y},
-                        .visibilityMax = {rowMin.x + layout.visibilityAction.maximum, rowMax.y},
-                        .lockMin = {rowMin.x + layout.lockAction.minimum, rowMin.y},
-                        .lockMax = {rowMin.x + layout.lockAction.maximum, rowMax.y},
-                        .nextRowCursor = nextRowCursor,
-                    },
-                .uiScale = uiScale,
-                .nameFontSize = nameFontSize,
-                .rowHovered = rowHovered,
-                .rowFocused = rowFocused,
-                .rowLeftClicked = rowLeftClicked,
-                .rowRightClicked = rowRightClicked,
-                .selected = editSession_.IsSelected(node.id),
-                .pointerInActions = pointerInActions,
-                .assetDropDelivered = assetDropDelivered,
-                .searching = searchBuffer_[0] != '\0',
-            };
-
+            const RowFrame frame = BuildRowFrame(row, layout, viewModel, command, drawList, context);
             if (workspaceEligible && frame.rowRightClicked && !frame.pointerInActions && !frame.selected) {
-                editSession_.Select(node.id);
-                command = editSession_.SelectCommand(node.id, HierarchySelectionGesture::Replace);
+                editSession_.Select(frame.node.id);
+                command = editSession_.SelectCommand(frame.node.id, HierarchySelectionGesture::Replace);
             }
             DrawRowContextMenu(frame, workspaceEligible, pendingDelete, command, context);
             const RowControls controls = DrawRowControls(frame, workspaceEligible, context);
             DrawRowPresentation(frame, controls, context);
             ApplyRowInteraction(frame, controls, workspaceEligible, command);
             DrawRowLabel(frame, command);
-            ImGui::SetCursorScreenPos(nextRowCursor);
+            ImGui::SetCursorScreenPos(frame.geometry.nextRowCursor);
             ImGui::PopID();
         }
 
