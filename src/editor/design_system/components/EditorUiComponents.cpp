@@ -17,20 +17,26 @@
 namespace Horo::Editor::Ui {
     namespace {
         namespace InspectorTypography {
+            constexpr float Scale = 0.92F;
+
+            [[nodiscard]] float ReadableSize(const float size) {
+                return std::max(14.0F, size * Scale);
+            }
+
             [[nodiscard]] float Label() {
-                return Theme::TextPx::Label();
+                return ReadableSize(Theme::TextPx::Label());
             }
 
             [[nodiscard]] float Field() {
-                return Theme::TextPx::Body();
+                return ReadableSize(Theme::TextPx::Body());
             }
 
             [[nodiscard]] float Axis() {
-                return Theme::TextPx::Label();
+                return ReadableSize(Theme::TextPx::Label());
             }
 
             [[nodiscard]] float ObjectTitle() {
-                return Theme::TextPx::Title();
+                return ReadableSize(Theme::TextPx::Title());
             }
 
             [[nodiscard]] float ObjectMeta() {
@@ -40,7 +46,7 @@ namespace Horo::Editor::Ui {
 
         namespace CardTypography {
             [[nodiscard]] float Title() {
-                return Theme::TextPx::CardTitle();
+                return std::max(14.0F, Theme::TextPx::CardTitle() * 0.92F);
             }
         }  // namespace CardTypography
 
@@ -1246,6 +1252,46 @@ namespace Horo::Editor::Ui {
         PopControlStyle();
     }
 
+    /** @copydoc InputFloatStepperControl */
+    bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, const float step) {
+        ImGui::PushID(id);
+        PushControlStyle();
+        ImGui::PushItemWidth(-1.0F);
+        bool changed = false;
+        {
+            Theme::ScopedTextStyle textStyle(fonts.sansCompact, Theme::TextPx::Body(), Theme::FontPx::SansCompact);
+            changed = ImGui::InputFloat("##value", value, 0.0F, 0.0F, "%.2f");
+        }
+        ImGui::PopItemWidth();
+        PopControlStyle();
+
+        const ImVec2 fieldMin = ImGui::GetItemRectMin();
+        const ImVec2 fieldMax = ImGui::GetItemRectMax();
+        const ImVec2 nextCursor = ImGui::GetCursorScreenPos();
+        const float centerX = fieldMax.x - 13.0F;
+        const float middleY = (fieldMin.y + fieldMax.y) * 0.5F;
+        ImDrawList *drawList = ImGui::GetWindowDrawList();
+        ImGui::SetCursorScreenPos({fieldMax.x - 26.0F, fieldMin.y + 1.0F});
+        if (ImGui::InvisibleButton("##increase", {25.0F, std::max(1.0F, middleY - fieldMin.y - 1.0F)})) {
+            *value += step;
+            changed = true;
+        }
+        const ImU32 upColor = Theme::U32(ImGui::IsItemHovered() ? Theme::Text() : Theme::Dim());
+        drawList->AddTriangleFilled({centerX - 5.0F, middleY - 5.0F}, {centerX + 5.0F, middleY - 5.0F},
+                                    {centerX, middleY - 10.0F}, upColor);
+        ImGui::SetCursorScreenPos({fieldMax.x - 26.0F, middleY});
+        if (ImGui::InvisibleButton("##decrease", {25.0F, std::max(1.0F, fieldMax.y - middleY - 1.0F)})) {
+            *value -= step;
+            changed = true;
+        }
+        const ImU32 downColor = Theme::U32(ImGui::IsItemHovered() ? Theme::Text() : Theme::Dim());
+        drawList->AddTriangleFilled({centerX - 5.0F, middleY + 5.0F}, {centerX + 5.0F, middleY + 5.0F},
+                                    {centerX, middleY + 10.0F}, downColor);
+        ImGui::SetCursorScreenPos(nextCursor);
+        ImGui::PopID();
+        return changed;
+    }
+
     // ── SliderIntControl ─────────────────────────────────────────────────
 
     void SliderIntControl(const char *id, int *value, const int minValue, const int maxValue, const SliderValueFormat format,
@@ -1665,15 +1711,17 @@ namespace Horo::Editor::Ui {
     ScopedModalShell::ScopedModalShell(const ModalShellProps &props, const Theme::Fonts &fonts)
         : footerHeight_(ScaledLayoutValue(props.footerHeight)) {
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
+        const ImVec2 regionPosition = props.placementRegion ? props.placementRegion->position : viewport->WorkPos;
+        const ImVec2 regionSize = props.placementRegion ? props.placementRegion->size : viewport->WorkSize;
         const float width =
             std::min(ScaledLayoutValue(props.requestedSize.x),
-                     std::max(ScaledLayoutValue(props.minimumWidth), viewport->WorkSize.x - ScaledLayoutValue(props.viewportPadding)));
+                     std::max(ScaledLayoutValue(props.minimumWidth), regionSize.x - ScaledLayoutValue(props.viewportPadding)));
         const float height =
             std::min(ScaledLayoutValue(props.requestedSize.y),
-                     std::max(ScaledLayoutValue(props.minimumHeight), viewport->WorkSize.y - ScaledLayoutValue(props.viewportPadding)));
+                     std::max(ScaledLayoutValue(props.minimumHeight), regionSize.y - ScaledLayoutValue(props.viewportPadding)));
         const ImVec2 position{
-            viewport->WorkPos.x + (viewport->WorkSize.x - width) * 0.5F,
-            viewport->WorkPos.y + (viewport->WorkSize.y - height) * 0.5F,
+            regionPosition.x + (regionSize.x - width) * 0.5F,
+            regionPosition.y + (regionSize.y - height) * 0.5F,
         };
 
         ImGui::SetNextWindowPos(position, ImGuiCond_Appearing);
@@ -1740,11 +1788,11 @@ namespace Horo::Editor::Ui {
             windowStorage->SetBool(draggingStateId, false);
         if (windowStorage->GetBool(draggingStateId)) {
             const ImVec2 delta = ImGui::GetIO().MouseDelta;
-            const float maximumX = viewport->WorkPos.x + viewport->WorkSize.x - width;
-            const float maximumY = viewport->WorkPos.y + viewport->WorkSize.y - height;
+            const float maximumX = regionPosition.x + regionSize.x - width;
+            const float maximumY = regionPosition.y + regionSize.y - height;
             const ImVec2 draggedPosition{
-                std::clamp(modalPosition.x + delta.x, viewport->WorkPos.x, maximumX),
-                std::clamp(modalPosition.y + delta.y, viewport->WorkPos.y, maximumY),
+                std::clamp(modalPosition.x + delta.x, regionPosition.x, maximumX),
+                std::clamp(modalPosition.y + delta.y, regionPosition.y, maximumY),
             };
             ImGui::SetWindowPos(draggedPosition, ImGuiCond_Always);
         }

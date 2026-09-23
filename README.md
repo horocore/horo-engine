@@ -44,6 +44,9 @@ full target structure.
 
 ## Build Status
 
+For quick native UI inspection, use the [Editor UI Preview](./docs/guides/editor-ui-preview.md)
+entry point to open supported modal scenarios without navigating through a project.
+
 Configure and build the canonical local development matrix from the repository
 root:
 

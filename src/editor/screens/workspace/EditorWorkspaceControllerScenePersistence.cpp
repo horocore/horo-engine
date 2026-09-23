@@ -183,6 +183,14 @@ namespace Horo::Editor {
             return;
         }
 
+        const std::filesystem::path projectRoot{m_viewModel.projectRoot};
+        if (const Result<void> defaultSceneUpdated = SetProjectDefaultScenePath(projectRoot, *destination, *m_mutations, *m_durableFiles);
+            defaultSceneUpdated.HasError()) {
+            LOG_ERROR("editor.scene_document", "Scene was written to '%s', but the project's default scene could not be updated: %s",
+                      destination->string().c_str(), defaultSceneUpdated.ErrorValue().message.c_str());
+            return;
+        }
+
         if (!CommitSceneSave(snapshot, saved.Value().fingerprint, *destination))
             return;
         LOG_INFO("editor.scene_document", "Saved scene revision %llu as '%s'; active document identity was updated.",
