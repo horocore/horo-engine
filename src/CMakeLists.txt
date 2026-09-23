@@ -1432,6 +1432,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
         runtime/renderer/frontend/RenderFrontend.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
+        runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
         runtime/renderer/frontend/RenderMemoryBudget.cpp

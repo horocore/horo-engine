@@ -52,6 +52,9 @@ namespace Horo::Editor {
         [[nodiscard]] PanelInteractionState DrawSearch(float panelWidth, float uiScale, const EditorGuiContext &context);
         void UpdateFocusedInputContext(bool searchActive);
         void HandleRenameShortcut(const PanelInteractionState &interaction);
+        [[nodiscard]] bool AcceptRowAssetDrop(HierarchyNodeId nodeId, float normalizedRowY, const ImVec2 &rowMin, const ImVec2 &rowMax,
+                                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                              ImDrawList &drawList);
         [[nodiscard]] bool DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
                                     const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                     const EditorGuiContext &context);
