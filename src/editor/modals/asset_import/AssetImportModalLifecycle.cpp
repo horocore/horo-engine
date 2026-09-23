@@ -385,14 +385,14 @@ namespace Horo::Editor {
         }
 
         for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
-            if (IsItemIncluded(index) && !m_itemCompleted[index]) {
-                if (const auto validation = ValidateImportItem(m_snapshot, index, m_operation != nullptr); validation.HasError())
-                    return validation;
-            }
+            if (index >= m_itemCompleted.size() || !IsItemIncluded(index) || m_itemCompleted[index])
+                continue;
+            if (const auto validation = ValidateImportItem(m_snapshot, index, m_operation != nullptr); validation.HasError())
+                return validation;
         }
 
         for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
-            if (m_itemCompleted[index])
+            if (index >= m_itemCompleted.size() || m_itemCompleted[index])
                 continue;
             if (!IsItemIncluded(index)) {
                 MarkItemCompleted(index);
