@@ -88,7 +88,8 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc IPresenceService::ClearPresence */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::ClearPresence(PlatformSubjectHandle) {
+    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::ClearPresence(
+        PlatformSubjectHandle) {  // NOSONAR: preserves the by-value interface override
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
