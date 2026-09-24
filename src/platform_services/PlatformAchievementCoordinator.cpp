@@ -124,14 +124,20 @@ namespace Horo::PlatformServices {
             config.maximumLedgerEntries > MaximumPlatformAchievementMutationLedger ||
             config.maximumPendingMutations > config.maximumLedgerEntries)
             return Result<PlatformAchievementCoordinator>::Failure(MakeError(AchievementCoordinatorErrors::InvalidConfiguration));
-        return Result<PlatformAchievementCoordinator>::Success(
-            PlatformAchievementCoordinator{std::move(registry), std::move(session), config});
+        try {
+            return Result<PlatformAchievementCoordinator>::Success(
+                PlatformAchievementCoordinator{std::move(registry), std::move(session), config});
+        } catch (const std::bad_alloc &) {
+            return Result<PlatformAchievementCoordinator>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
+        }
     }
 
     PlatformAchievementCoordinator::PlatformAchievementCoordinator(std::shared_ptr<const AchievementDefinitionRegistry> registry,
                                                                    PlatformSessionSnapshot session,
-                                                                   const PlatformAchievementCoordinatorConfig config) noexcept
-        : registry_(std::move(registry)), session_(std::move(session)), config_(config) {}
+                                                                   const PlatformAchievementCoordinatorConfig config)
+        : registry_(std::move(registry)), session_(std::move(session)), config_(config) {
+        ledger_.reserve(config_.maximumLedgerEntries);
+    }
 
     PlatformAchievementCoordinator::~PlatformAchievementCoordinator() {
         static_cast<void>(Close());
@@ -243,15 +249,11 @@ namespace Horo::PlatformServices {
         const PlatformAchievementMutationPublication publication{.request = request,
                                                                  .sessionGeneration = session_.Generation(),
                                                                  .sequence = sequence};
+        ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
         try {
-            ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
-            try {
-                pending_.push_back(publication);
-            } catch (const std::bad_alloc &) {
-                ledger_.pop_back();
-                return Result<PlatformAchievementMutationAdmission>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
-            }
+            pending_.push_back(publication);
         } catch (const std::bad_alloc &) {
+            ledger_.pop_back();
             return Result<PlatformAchievementMutationAdmission>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
         }
         return Result<PlatformAchievementMutationAdmission>::Success(PlatformAchievementMutationAdmission::Queued);
@@ -265,7 +267,7 @@ namespace Horo::PlatformServices {
             return Result<std::optional<PlatformAchievementMutationPublication>>::Success(std::nullopt);
 
         inFlight_ = std::move(pending_.front());
-        pending_.erase(pending_.begin());
+        pending_.pop_front();
         if (auto *entry = FindLedger(inFlight_->request.mutation); entry != nullptr)
             entry->state = LedgerState::InFlight;
         return Result<std::optional<PlatformAchievementMutationPublication>>::Success(*inFlight_);

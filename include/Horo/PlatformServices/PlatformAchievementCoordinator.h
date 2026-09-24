@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -204,7 +205,7 @@ namespace Horo::PlatformServices {
         struct LedgerEntry;
 
         PlatformAchievementCoordinator(std::shared_ptr<const AchievementDefinitionRegistry> registry, PlatformSessionSnapshot session,
-                                       PlatformAchievementCoordinatorConfig config) noexcept;
+                                       PlatformAchievementCoordinatorConfig config);
 
         [[nodiscard]] Result<const AchievementDefinition *> FindDefinition(AchievementId id) const;
         [[nodiscard]] Result<void> ValidateRequest(const PlatformAchievementMutationRequest &request) const;
@@ -218,7 +219,7 @@ namespace Horo::PlatformServices {
         PlatformSessionSnapshot session_;
         PlatformAchievementCoordinatorConfig config_;
         std::vector<LedgerEntry> ledger_;
-        std::vector<PlatformAchievementMutationPublication> pending_;
+        std::deque<PlatformAchievementMutationPublication> pending_;
         std::optional<PlatformAchievementMutationPublication> inFlight_;
         std::uint64_t nextSequence_{1};
         std::uint64_t nextQuerySequence_{1};
