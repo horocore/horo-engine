@@ -215,8 +215,7 @@ namespace Horo::Telemetry {
                 std::lock_guard lock(descriptorMutex_);
                 if (instrumentId == 0 || instrumentId > descriptors_.size())
                     return false;
-                RegisteredInstrument &registered = descriptors_[instrumentId - 1U];
-                if (registered.availability != state) {
+                if (RegisteredInstrument &registered = descriptors_[instrumentId - 1U]; registered.availability != state) {
                     registered.availability = state;
                     ++availabilityRevision_;
                 }
@@ -765,8 +764,7 @@ namespace Horo::Telemetry {
     /** @copydoc Runtime::GetDiagnosticSnapshot */
     DiagnosticSnapshot Runtime::GetDiagnosticSnapshot() noexcept {
         DiagnosticSnapshot snapshot{.statistics = GetStatistics()};
-        const auto state = Globals().LoadState();
-        if (state != nullptr) {
+        if (const auto state = Globals().LoadState(); state != nullptr) {
             snapshot.runtimeEnabled = IsEnabled();
             state->FillDiagnosticSnapshot(snapshot);
         }

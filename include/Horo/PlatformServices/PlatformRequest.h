@@ -290,6 +290,26 @@ namespace Horo::PlatformServices {
             return RequestCancelErased(handle.Id(), handle.Generation(), typeid(T));
         }
 
+        /**
+         * @brief Records that the owning retry policy scheduled another attempt for an admitted request.
+         * @param handle Current typed request handle.
+         * @return Success when the request is current and nonterminal, or a typed stale/lifecycle failure.
+         * @note This publishes one bounded counter only; it does not schedule or authorize a retry.
+         */
+        template <typename T> [[nodiscard]] Result<void> RecordRetryScheduled(const PlatformRequestHandle<T> &handle) {
+            return RecordObservationErased(handle.Id(), handle.Generation(), typeid(T), Observation::RetryScheduled);
+        }
+
+        /**
+         * @brief Records normalized provider throttling evidence for an admitted request.
+         * @param handle Current typed request handle.
+         * @return Success when the request is current and nonterminal, or a typed stale/lifecycle failure.
+         * @note No provider text, retry-after value, account identity, or payload is copied into telemetry.
+         */
+        template <typename T> [[nodiscard]] Result<void> RecordThrottled(const PlatformRequestHandle<T> &handle) {
+            return RecordObservationErased(handle.Id(), handle.Generation(), typeid(T), Observation::Throttled);
+        }
+
         /** @brief Returns the current owned snapshot or a typed stale/expired failure. */
         template <typename T> [[nodiscard]] Result<PlatformRequestSnapshot<T>> Query(const PlatformRequestHandle<T> &handle) const {
             auto queried = QueryErased(handle.Id(), handle.Generation(), typeid(T));
@@ -330,6 +350,11 @@ namespace Horo::PlatformServices {
     private:
         friend struct PlatformRequestSubscription::Slot;
 
+        enum class Observation : std::uint8_t {
+            RetryScheduled,
+            Throttled
+        };
+
         struct ErasedSnapshot final {
             PlatformRequestId id;
             PlatformRequestGeneration generation;
@@ -349,6 +374,9 @@ namespace Horo::PlatformServices {
                                                                         std::type_index type);
         [[nodiscard]] Result<PlatformRequestMutation> RequestCancelErased(PlatformRequestId id, PlatformRequestGeneration generation,
                                                                           std::type_index type);
+        /** @brief Validates a current nonterminal request before recording one bounded retry or throttle observation. */
+        [[nodiscard]] Result<void> RecordObservationErased(PlatformRequestId id, PlatformRequestGeneration generation, std::type_index type,
+                                                           Observation observation);
         [[nodiscard]] Result<PlatformRequestMutation> CompleteErased(PlatformRequestId id, PlatformRequestGeneration generation,
                                                                      std::type_index type, PlatformRequestState terminalState,
                                                                      std::shared_ptr<const void> value, std::optional<Error> error);

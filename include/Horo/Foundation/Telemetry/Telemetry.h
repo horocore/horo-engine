@@ -239,7 +239,11 @@ namespace Horo::Telemetry {
         SamplerFailed
     };
 
-    /** @brief Privacy-safe availability row containing no descriptor text or producer payload. */
+    /**
+     * @brief Privacy-safe availability row containing no descriptor text or producer payload.
+     * @details The process-local instrument index correlates with a handle's InstrumentId only while the snapshot and handle
+     *          RuntimeGeneration values match.
+     */
     struct MetricAvailabilityRecord {
         std::uint32_t instrumentId{}; /**< Process-local registration index; never an account or user identity. */
         MetricAvailabilityState state{MetricAvailabilityState::Available}; /**< Current host-reported state. */
@@ -464,6 +468,22 @@ namespace Horo::Telemetry {
         }
 
         /**
+         * @brief Returns the process-local instrument index used by diagnostic availability rows.
+         * @return Registration index, or zero when this handle is empty.
+         */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /**
+         * @brief Returns the telemetry runtime generation that owns this handle.
+         * @return Runtime generation, or zero when this handle is empty.
+         */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
+        }
+
+        /**
          * @brief Resolves one bounded low-cardinality series outside the update fast path.
          * @param dimensions Exact descriptor-declared dimension keys and allowlisted values.
          * @return Bound handle, or an empty handle when validation or the series budget fails.
@@ -503,6 +523,16 @@ namespace Horo::Telemetry {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
         }
 
+        /** @brief Returns the process-local availability-row index, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /** @brief Returns the owning telemetry runtime generation, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
+        }
+
         /** @brief Resolves one bounded low-cardinality series outside the update fast path. */
         [[nodiscard]] Gauge WithDimensions(std::span<const DimensionValue> dimensions) const;
 
@@ -539,6 +569,16 @@ namespace Horo::Telemetry {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
         }
 
+        /** @brief Returns the process-local availability-row index, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /** @brief Returns the owning telemetry runtime generation, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
+        }
+
         /** @brief Resolves one bounded low-cardinality series outside the update fast path. */
         [[nodiscard]] Histogram WithDimensions(std::span<const DimensionValue> dimensions) const;
 
@@ -566,6 +606,16 @@ namespace Horo::Telemetry {
 #endif
         [[nodiscard]] explicit operator bool() const noexcept {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
+        }
+
+        /** @brief Returns the process-local availability-row index, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /** @brief Returns the owning telemetry runtime generation, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
         }
 
         /** @brief Resolves one bounded low-cardinality series outside the update fast path. */

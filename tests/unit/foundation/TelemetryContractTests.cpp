@@ -127,6 +127,8 @@ TEST_CASE("Telemetry diagnostic snapshots are bounded, private, and generation s
     REQUIRE(available.runtimeEnabled);
     REQUIRE(available.availabilityCount == 1);
     CHECK(available.availability[0].instrumentId == 1);
+    CHECK(root.InstrumentId() == available.availability[0].instrumentId);
+    CHECK(root.RuntimeGeneration() == available.runtimeGeneration);
     CHECK(available.availability[0].state == MetricAvailabilityState::Available);
     CHECK(available.availabilityRevision == 1);
 
@@ -149,6 +151,10 @@ TEST_CASE("Telemetry diagnostic snapshots are bounded, private, and generation s
     const DiagnosticSnapshot restarted = Runtime::GetDiagnosticSnapshot();
     CHECK(restarted.runtimeGeneration != available.runtimeGeneration);
     CHECK(restarted.availabilityCount == 1);
+    CHECK(current.InstrumentId() == restarted.availability[0].instrumentId);
+    CHECK(current.RuntimeGeneration() == restarted.runtimeGeneration);
+    CHECK(current.InstrumentId() == root.InstrumentId());
+    CHECK(current.RuntimeGeneration() != root.RuntimeGeneration());
     CHECK(restarted.availability[0].state == MetricAvailabilityState::Available);
     CHECK(Runtime::Shutdown());
 }

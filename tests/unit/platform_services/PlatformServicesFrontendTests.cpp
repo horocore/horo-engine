@@ -1,10 +1,17 @@
+#include "Horo/Foundation/Telemetry/Telemetry.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "PlatformServicesTestSupport.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace Horo::PlatformServices {
     using TestSupport::AvailableCapabilities;
@@ -40,6 +47,7 @@ namespace Horo::PlatformServices {
 
             Result<void> Shutdown() override {
                 ++shutdownCalls;
+                requests.Shutdown();
                 if (shutdownThrows)
                     throw std::runtime_error("test backend shutdown failure");
                 if (shutdownThrowsNonStandard)
@@ -98,6 +106,36 @@ namespace Horo::PlatformServices {
                 if (malformedHandle)
                     return Result<PlatformRequestHandle<T>>::Success({});
                 return requests.Admit<T>();
+            }
+        };
+
+        class MetricCaptureSink final : public Telemetry::ISink {
+        public:
+            void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
+                if (record.Kind() != Telemetry::RecordKind::Metric || descriptor == nullptr)
+                    return;
+                std::lock_guard lock(mutex_);
+                names_.push_back(descriptor->name);
+            }
+
+            void Flush() override {}
+
+            [[nodiscard]] std::size_t Count(const std::string_view name) const {
+                std::lock_guard lock(mutex_);
+                const auto count = std::ranges::count_if(names_, [name](const std::string &candidate) {
+                    return std::string_view(candidate) == name;
+                });
+                return static_cast<std::size_t>(count);
+            }
+
+        private:
+            mutable std::mutex mutex_;
+            std::vector<std::string> names_;
+        };
+
+        struct TelemetryShutdown final {
+            ~TelemetryShutdown() {
+                static_cast<void>(Telemetry::Runtime::Shutdown());
             }
         };
 
@@ -331,5 +369,45 @@ namespace Horo::PlatformServices {
         RequireError(frontend.QueryCurrentSession(), FrontendErrors::InvalidDispatchResult);
         CHECK(backend->TotalCalls() == 1);
         CHECK(backend->requests.RecordCount() == 0);
+    }
+
+    TEST_CASE("Platform Services metrics report bounded request, queue, capability, session and shutdown outcomes",
+              "[platform-services][frontend][metrics]") {
+        static_cast<void>(Telemetry::Runtime::Shutdown());
+        const auto sink = std::make_shared<MetricCaptureSink>();
+        REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 256, .enabled = true}, sink));
+        [[maybe_unused]] const TelemetryShutdown telemetryShutdown;
+
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        const auto subject = *session.Subject();
+        auto frontend = Frontend(backend, session);
+
+        auto successful = frontend.UnlockAchievement({subject, {1}});
+        REQUIRE(successful.HasValue());
+        auto handle = std::move(successful).Value();
+        REQUIRE(backend->requests.MarkRunning(handle).HasValue());
+        REQUIRE(backend->requests.RecordThrottled(handle).HasValue());
+        REQUIRE(backend->requests.RecordRetryScheduled(handle).HasValue());
+        CHECK(backend->requests.Query(handle).Value().state == PlatformRequestState::Running);
+        REQUIRE(backend->requests.CompleteSuccess(handle).HasValue());
+
+        RequireError(frontend.UnlockAchievement({subject, {}}), FrontendErrors::InvalidRequest);
+        const auto oldSession = Session({7}, {4}, PlatformSessionPhase::Active, PlatformSessionAccessState::Granted, std::byte{2});
+        RequireError(frontend.UnlockAchievement({*oldSession.Subject(), {1}}), PlatformSessionErrors::StaleSession);
+
+        for (std::size_t index = 0; index < 32; ++index)
+            REQUIRE(backend->requests.Admit<int>().HasValue());
+        RequireError(frontend.UnlockAchievement({subject, {1}}), RequestErrors::CapacityExceeded);
+        REQUIRE(frontend.Close().HasValue());
+        REQUIRE(Telemetry::Runtime::Flush(std::chrono::seconds{2}));
+
+        CHECK(sink->Count("horo.platform_services.request.lifecycle") == 6);
+        CHECK(sink->Count("horo.platform_services.request.queue_admission") == 34);
+        CHECK(sink->Count("horo.platform_services.request.retry_scheduled") == 1);
+        CHECK(sink->Count("horo.platform_services.request.throttled") == 1);
+        CHECK(sink->Count("horo.platform_services.capability.checks") == 3);
+        CHECK(sink->Count("horo.platform_services.session.checks") == 3);
+        CHECK(sink->Count("horo.platform_services.frontend.shutdown") == 1);
     }
 }  // namespace Horo::PlatformServices

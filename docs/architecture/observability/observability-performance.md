@@ -246,6 +246,8 @@ service, not a metric, when making a correctness decision.
 ## Required Core Metrics
 
 Every supported host publishes a core set according to its build profile.
+Platform Services request, queue, retry, throttle, capability and stale-session
+metric descriptors are defined by the [Platform Services Architecture](../runtime/platform-services-architecture.md#observability).
 
 ### Process CPU
 
