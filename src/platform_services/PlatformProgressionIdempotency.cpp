@@ -11,7 +11,11 @@
 
 namespace Horo::PlatformServices {
     namespace {
-        constexpr std::string_view MutationDomain = "horo.platform.progression.mutation.v1";
+        constexpr std::string_view MutationDomain = "horo.platform.progression.mutation.v2";
+
+        [[nodiscard]] constexpr bool IsValidConfiguration(const PlatformProgressionIdempotencyConfig &config) noexcept {
+            return config.maximumInFlight != 0 && config.maximumInFlight <= PlatformProgressionMaximumInFlightMutations;
+        }
 
         class CanonicalWriter final {
         public:
@@ -134,6 +138,9 @@ namespace Horo::PlatformServices {
             if (fields.mutationKind == PlatformProgressionMutationKind::UnlockOnce) {
                 if (!std::holds_alternative<std::monostate>(fields.value) || fields.expectedRevision.has_value())
                     return false;
+            } else if (fields.mutationKind == PlatformProgressionMutationKind::SetProgressMaximum) {
+                if (!std::holds_alternative<std::uint64_t>(fields.value))
+                    return false;
             } else if (!IsNumeric(fields.value)) {
                 return false;
             }
@@ -176,6 +183,8 @@ namespace Horo::PlatformServices {
             writer.AddU64(candidate.scope.provider.value);
             writer.AddU64(candidate.scope.session.value);
             writer.AddU64(candidate.scope.accessPolicy.value);
+            for (const auto byte : candidate.scope.subjectPartition.digest.bytes)
+                writer.AddByte(static_cast<std::byte>(byte));
             writer.AddByte(static_cast<std::byte>(candidate.definitionKind));
             writer.AddU64(candidate.definition.value);
             writer.AddByte(static_cast<std::byte>(candidate.kind));
@@ -214,8 +223,8 @@ namespace Horo::PlatformServices {
             return Result<PlatformProgressionMutationId>::Failure(valid.ErrorValue());
 
         CanonicalWriter writer;
-        writer.AddBytes(std::as_bytes(std::span<const char>{MutationDomain.data(), MutationDomain.size()}));
-        writer.AddByte(std::byte{1});
+        writer.AddBytes(std::as_bytes(std::span{MutationDomain.data(), MutationDomain.size()}));
+        writer.AddByte(std::byte{2});
         AppendCandidate(writer, candidate);
         if (!writer.IsValid())
             return Result<PlatformProgressionMutationId>::Failure(MakeError(PlatformProgressionErrors::InvalidMutation));
@@ -250,12 +259,13 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformProgressionIdempotencyStore::PlatformProgressionIdempotencyStore */
     PlatformProgressionIdempotencyStore::PlatformProgressionIdempotencyStore(const PlatformProgressionIdempotencyConfig config)
         : config_(config) {
-        records_.reserve(config_.maximumInFlight);
+        if (IsValidConfiguration(config_))
+            records_.reserve(config_.maximumInFlight);
     }
 
     /** @copydoc PlatformProgressionIdempotencyStore::Admit */
     Result<PlatformProgressionAdmission> PlatformProgressionIdempotencyStore::Admit(const PlatformProgressionMutationEnvelope &envelope) {
-        if (config_.maximumInFlight == 0)
+        if (!IsValidConfiguration(config_))
             return Result<PlatformProgressionAdmission>::Failure(MakeError(PlatformProgressionErrors::InvalidConfiguration));
         if (const auto valid = ValidateEnvelope(envelope); valid.HasError())
             return Result<PlatformProgressionAdmission>::Failure(valid.ErrorValue());
@@ -286,7 +296,7 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformProgressionIdempotencyStore::Retire */
     Result<PlatformProgressionRetireDisposition> PlatformProgressionIdempotencyStore::Retire(
         const PlatformProgressionMutationEnvelope &envelope) {
-        if (config_.maximumInFlight == 0)
+        if (!IsValidConfiguration(config_))
             return Result<PlatformProgressionRetireDisposition>::Failure(MakeError(PlatformProgressionErrors::InvalidConfiguration));
         if (const auto valid = ValidateEnvelope(envelope); valid.HasError())
             return Result<PlatformProgressionRetireDisposition>::Failure(valid.ErrorValue());

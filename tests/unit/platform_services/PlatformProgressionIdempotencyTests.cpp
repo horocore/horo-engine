@@ -4,6 +4,7 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -16,9 +17,18 @@ namespace {
         return occurrence;
     }
 
+    [[nodiscard]] PlatformProgressionSubjectPartition SubjectPartition(const std::uint8_t value) {
+        PlatformProgressionSubjectPartition partition;
+        partition.digest.bytes.back() = value;
+        return partition;
+    }
+
     [[nodiscard]] PlatformProgressionMutationCandidate Candidate(const std::uint8_t occurrence = 1, const std::uint64_t session = 2) {
         return PlatformProgressionMutationCandidate{.occurrence = Occurrence(occurrence),
-                                                    .scope = {.provider = {1}, .session = {session}, .accessPolicy = {3}},
+                                                    .scope = {.provider = {1},
+                                                              .session = {session},
+                                                              .accessPolicy = {3},
+                                                              .subjectPartition = SubjectPartition(11)},
                                                     .definitionKind = PlatformServiceIdKind::Stat,
                                                     .definition = {42},
                                                     .kind = PlatformProgressionMutationKind::SetStatMaximum,
@@ -45,6 +55,13 @@ TEST_CASE("Platform progression mutation IDs are deterministic and session-parti
     REQUIRE(otherSession.HasValue());
     CHECK(otherSession.Value().mutation != first.Value().mutation);
     CHECK(otherSession.Value().scope != first.Value().scope);
+
+    auto otherSubjectCandidate = Candidate(1, 2);
+    otherSubjectCandidate.scope.subjectPartition = SubjectPartition(12);
+    const auto otherSubject = BuildPlatformProgressionMutationEnvelope(otherSubjectCandidate);
+    REQUIRE(otherSubject.HasValue());
+    CHECK(otherSubject.Value().mutation != first.Value().mutation);
+    CHECK(otherSubject.Value().scope != first.Value().scope);
 }
 
 TEST_CASE("Platform progression mutation validation rejects incomplete or mismatched semantics",
@@ -71,6 +88,20 @@ TEST_CASE("Platform progression mutation validation rejects incomplete or mismat
     const auto validConditional = BuildPlatformProgressionMutationEnvelope(conditional);
     REQUIRE(validConditional.HasValue());
     CHECK(validConditional.Value().IsValid());
+
+    auto negativeAchievementProgress = Candidate();
+    negativeAchievementProgress.definitionKind = PlatformServiceIdKind::Achievement;
+    negativeAchievementProgress.kind = PlatformProgressionMutationKind::SetProgressMaximum;
+    negativeAchievementProgress.value = std::uint64_t{10};
+    CHECK(BuildPlatformProgressionMutationEnvelope(negativeAchievementProgress).HasValue());
+    negativeAchievementProgress.value = std::int64_t{-1};
+    const auto invalidProgress = BuildPlatformProgressionMutationEnvelope(negativeAchievementProgress);
+    REQUIRE(invalidProgress.HasError());
+    CHECK(invalidProgress.ErrorValue().code.Value() == "platform.progression.invalid_mutation");
+
+    auto missingSubjectPartition = Candidate();
+    missingSubjectPartition.scope.subjectPartition = {};
+    CHECK(BuildPlatformProgressionMutationEnvelope(missingSubjectPartition).HasError());
 }
 
 TEST_CASE("Exact in-flight duplicates join while conflicting mutation reuse is rejected", "[platform-services][progression][idempotency]") {
@@ -112,6 +143,61 @@ TEST_CASE("In-flight capacity is bounded and terminal retirement is idempotent",
     CHECK(store.InFlightCount() == 0);
     CHECK(store.Retire(first.Value()).Value() == PlatformProgressionRetireDisposition::Unchanged);
     CHECK(store.Admit(second.Value()).Value().disposition == PlatformProgressionAdmissionDisposition::Started);
+}
+
+TEST_CASE("Progression in-flight configuration accepts the hard maximum and rejects larger bounds",
+          "[platform-services][progression][idempotency][capacity]") {
+    PlatformProgressionIdempotencyStore atMaximum({.maximumInFlight = PlatformProgressionMaximumInFlightMutations});
+    for (std::size_t index = 0; index < PlatformProgressionMaximumInFlightMutations; ++index) {
+        const auto envelope = BuildPlatformProgressionMutationEnvelope(Candidate(1, index + 1));
+        REQUIRE(envelope.HasValue());
+        const auto admitted = atMaximum.Admit(envelope.Value());
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().disposition == PlatformProgressionAdmissionDisposition::Started);
+    }
+    CHECK(atMaximum.InFlightCount() == PlatformProgressionMaximumInFlightMutations);
+
+    const auto overCapacity = BuildPlatformProgressionMutationEnvelope(Candidate(2, PlatformProgressionMaximumInFlightMutations + 1));
+    REQUIRE(overCapacity.HasValue());
+    const auto full = atMaximum.Admit(overCapacity.Value());
+    REQUIRE(full.HasError());
+    CHECK(full.ErrorValue().code.Value() == "platform.progression.capacity_exceeded");
+
+    PlatformProgressionIdempotencyStore oversized({.maximumInFlight = PlatformProgressionMaximumInFlightMutations + 1});
+    const auto validEnvelope = BuildPlatformProgressionMutationEnvelope(Candidate());
+    REQUIRE(validEnvelope.HasValue());
+    const auto rejected = oversized.Admit(validEnvelope.Value());
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == "platform.progression.invalid_configuration");
+
+    PlatformProgressionIdempotencyStore unrepresentable({.maximumInFlight = std::numeric_limits<std::size_t>::max()});
+    const auto rejectedBeforeAllocation = unrepresentable.Admit(validEnvelope.Value());
+    REQUIRE(rejectedBeforeAllocation.HasError());
+    CHECK(rejectedBeforeAllocation.ErrorValue().code.Value() == "platform.progression.invalid_configuration");
+}
+
+TEST_CASE("Different subject partitions do not join or conflict when generations match", "[platform-services][progression][idempotency]") {
+    const auto first = BuildPlatformProgressionMutationEnvelope(Candidate());
+    auto otherSubjectCandidate = Candidate();
+    otherSubjectCandidate.scope.subjectPartition = SubjectPartition(12);
+    const auto otherSubject = BuildPlatformProgressionMutationEnvelope(otherSubjectCandidate);
+    REQUIRE(first.HasValue());
+    REQUIRE(otherSubject.HasValue());
+
+    PlatformProgressionIdempotencyStore store({.maximumInFlight = 2});
+    const auto firstAdmission = store.Admit(first.Value());
+    const auto otherSubjectAdmission = store.Admit(otherSubject.Value());
+    REQUIRE(firstAdmission.HasValue());
+    REQUIRE(otherSubjectAdmission.HasValue());
+    CHECK(firstAdmission.Value().disposition == PlatformProgressionAdmissionDisposition::Started);
+    CHECK(otherSubjectAdmission.Value().disposition == PlatformProgressionAdmissionDisposition::Started);
+    CHECK(store.InFlightCount() == 2);
+
+    auto forcedCollision = otherSubject.Value();
+    forcedCollision.mutation = first.Value().mutation;
+    const auto conflict = store.Admit(forcedCollision);
+    REQUIRE(conflict.HasError());
+    CHECK(conflict.ErrorValue().code.Value() == "platform.progression.idempotency_conflict");
 }
 
 TEST_CASE("Concurrent exact submissions produce one owner and joined observers",

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/PlatformServices/PlatformDefinitionRegistries.h"
 
 #include <array>
@@ -55,18 +56,35 @@ namespace Horo::PlatformServices {
         [[nodiscard]] constexpr auto operator<=>(const PlatformProgressionMutationId &) const noexcept = default;
     };
 
+    /** @brief Protected SHA-256 partition derived from the opaque ADR-135 subject binding. */
+    struct PlatformProgressionSubjectPartition final {
+        Sha256Digest digest; /**< Never a provider account identifier or live subject handle. */
+
+        /** @brief Checks the reserved all-zero representation. @return True when valid. */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            for (const auto byte : digest.bytes) {
+                if (byte != 0)
+                    return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] constexpr auto operator<=>(const PlatformProgressionSubjectPartition &) const noexcept = default;
+    };
+
     /**
-     * @brief Session and access generations that partition one logical mutation stream.
-     * @details This scope contains no provider account identity or credential and is not a live subject handle.
+     * @brief Subject, session, and access generations that partition one logical mutation stream.
+     * @details The subject partition is a protected digest of the provider-neutral binding, never a live handle or account ID.
      */
     struct PlatformProgressionSessionScope final {
         PlatformProviderGeneration provider;
         PlatformSessionGeneration session;
         PlatformAccessPolicyRevision accessPolicy;
+        PlatformProgressionSubjectPartition subjectPartition;
 
-        /** @brief Checks all generation fences. @return True when every generation is nonzero. */
+        /** @brief Checks the subject partition and generation fences. @return True when every field is valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return provider.IsValid() && session.IsValid() && accessPolicy.IsValid();
+            return provider.IsValid() && session.IsValid() && accessPolicy.IsValid() && subjectPartition.IsValid();
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformProgressionSessionScope &) const noexcept = default;
