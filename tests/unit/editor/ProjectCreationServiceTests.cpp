@@ -44,7 +44,7 @@ namespace {
             .projectName = "MyGame",
             .projectRoot = root,
             .projectVersion = "0.1.0",
-            .defaultScene = "assets/scenes/main.horo",
+            .defaultScene = "Assets/Scenes/main.horo",
             .renderBackend = "opengl",
             .physicsEnabled = true,
             .targetFrameRate = 60,
@@ -90,11 +90,11 @@ namespace {
         REQUIRE((snapshot.state == Horo::Editor::ProjectCreationOperationState::Succeeded));
         REQUIRE((snapshot.phase == Horo::Editor::ProjectCreationOperationPhase::Completed));
         REQUIRE((std::filesystem::is_directory(root / ".horo")));
-        REQUIRE((std::filesystem::is_directory(root / "assets/models")));
-        REQUIRE((std::filesystem::is_directory(root / "assets/textures")));
-        REQUIRE((std::filesystem::is_directory(root / "assets/materials")));
-        REQUIRE((std::filesystem::is_directory(root / "assets/shaders")));
-        REQUIRE((std::filesystem::is_regular_file(root / "assets/scenes/main.horo")));
+        REQUIRE((std::filesystem::is_directory(root / "Assets/Models")));
+        REQUIRE((std::filesystem::is_directory(root / "Assets/Textures")));
+        REQUIRE((std::filesystem::is_directory(root / "Assets/Materials")));
+        REQUIRE((std::filesystem::is_directory(root / "Assets/Shaders")));
+        REQUIRE((std::filesystem::is_regular_file(root / "Assets/Scenes/main.horo")));
         REQUIRE((std::filesystem::is_regular_file(root / "CMakeLists.txt")));
         REQUIRE((std::filesystem::is_directory(root / "source/gameplay")));
         REQUIRE_FALSE((std::filesystem::exists(root / "source/gameplay/GameModule.cpp")));
@@ -106,7 +106,7 @@ namespace {
         REQUIRE((project.find("\"persistentContract\": \"sha256:") != std::string::npos));
         REQUIRE((project.find("\"name\": \"MyGame\"") != std::string::npos));
         REQUIRE((project.find("\"projectVersion\": \"0.1.0\"") != std::string::npos));
-        REQUIRE((project.find("\"defaultScene\": \"assets/scenes/main.horo\"") != std::string::npos));
+        REQUIRE((project.find("\"defaultScene\": \"Assets/Scenes/main.horo\"") != std::string::npos));
         REQUIRE((project.find("\"minimumCxxStandard\": 20") != std::string::npos));
         REQUIRE((project.find("\"assetCompression\": \"lz4\"") != std::string::npos));
         REQUIRE((project.find("\"textureCompression\": \"bc7\"") != std::string::npos));
@@ -135,8 +135,8 @@ namespace {
         REQUIRE((started.HasValue()));
         const auto snapshot = WaitForTerminal(service, started.Value().id);
         REQUIRE((snapshot.state == Horo::Editor::ProjectCreationOperationState::Succeeded));
-        REQUIRE((std::filesystem::is_directory(root / "assets/scenes")));
-        REQUIRE((std::filesystem::is_empty(root / "assets/scenes")));
+        REQUIRE((std::filesystem::is_directory(root / "Assets/Scenes")));
+        REQUIRE((std::filesystem::is_empty(root / "Assets/Scenes")));
         REQUIRE((Read(root / ".horo/project.json").find("\"defaultScene\": \"\"") != std::string::npos));
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }

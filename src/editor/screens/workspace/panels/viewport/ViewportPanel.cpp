@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "visualizers/light/LightMarkerLayer.h"
+#include "ViewportOverlay.h"
 
 #include <algorithm>
 #include <array>
@@ -75,6 +76,7 @@ namespace Horo::Editor {
     void ViewportPanel::OnDetach() {
         interaction_.Detach();
         viewportRenderer_ = nullptr;
+        gridOverride_.reset();
     }
 
     /** @copydoc ViewportPanel::DrawIcon */
@@ -122,8 +124,26 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
 
-        DrawProjectionControl(origin, viewModel, command, context);
-        DrawObjectCount(origin, viewModel, context);
+        const ViewportOverlayAction overlay = DrawViewportOverlay(
+            origin, {width, height},
+            ViewportOverlayState{.camera = viewModel.viewportCamera,
+                                 .tool = viewModel.activeTransformTool,
+                                 .gridVisible = gridOverride_.value_or(context.settings.settings.gridOverlay),
+                                 .canFocusSelection = viewModel.primarySelectionWorldBounds.has_value(),
+                                 .objectCount = viewModel.objects.size()},
+            context.theme.fonts, context.localization);
+        if (overlay.projection) {
+            command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
+            command.viewportProjectionPayload = *overlay.projection;
+        } else if (overlay.tool) {
+            command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
+            command.transformToolPayload = *overlay.tool;
+        } else if (overlay.focusSelection && viewModel.primarySelectionWorldBounds && height > 0.0F) {
+            command.command = EditorWorkspaceViewCommand::FocusViewportSelection;
+            command.floatPayload = width / height;
+        }
+        if (overlay.toggleGrid)
+            gridOverride_ = !gridOverride_.value_or(context.settings.settings.gridOverlay);
         if (!hasRenderedViewport)
             DrawMissingRendererMessage(centerX, origin.y, height, context);
 
@@ -136,7 +156,7 @@ namespace Horo::Editor {
         if (viewportRenderer_ == nullptr)
             return;
         viewportRenderer_->RequestGrid(EditorViewportGridOptions{
-            .visible = context.settings.settings.gridOverlay,
+            .visible = gridOverride_.value_or(context.settings.settings.gridOverlay),
         });
         EditorViewportLightVisualizerOptions lightVisualizer;
         if (viewModel.primarySelection.has_value()) {
@@ -231,12 +251,9 @@ namespace Horo::Editor {
     void ViewportPanel::DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
-        const ImVec2 projectionMinimum{layout.origin.x + 10.0F, layout.origin.y + 8.0F};
-        const ImVec2 projectionMaximum{projectionMinimum.x + 190.0F, projectionMinimum.y + ImGui::GetFontSize() + 14.0F};
         const ImVec2 pointer = ImGui::GetMousePos();
-        const bool pointerOverProjection = pointer.x >= projectionMinimum.x && pointer.x <= projectionMaximum.x &&
-                                           pointer.y >= projectionMinimum.y && pointer.y <= projectionMaximum.y;
-        const bool surfaceInteractive = !pointerOverProjection || interaction_.IsActive();
+        const bool pointerOverControls = pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F;
+        const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
         bool surfaceHovered = false;
         if (surfaceInteractive) {
             ImGui::SetCursorScreenPos(layout.origin);
@@ -321,33 +338,6 @@ namespace Horo::Editor {
                                          ImGui::GetColorU32(ImVec4(0.01F, 0.22F, 0.44F, 0.0F)),
                                          ImGui::GetColorU32(ImVec4(0.03F, 0.38F, 0.60F, 0.35F)),
                                          ImGui::GetColorU32(ImVec4(0.03F, 0.38F, 0.60F, 0.35F)));
-    }
-
-    void ViewportPanel::DrawProjectionControl(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel,
-                                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        using enum Runtime::CameraProjection;
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0F, origin.y + 8.0F));
-        const std::array<const char *, 2> projectionItems{
-            context.localization.Get("editor", "workspace.viewport.perspective_shaded").c_str(),
-            context.localization.Get("editor", "workspace.viewport.orthographic_shaded").c_str(),
-        };
-        int projectionIndex = viewModel.viewportCamera.projection == Perspective ? 0 : 1;
-        ImGui::PushItemWidth(190.0F);
-        if (Ui::ComboControl("viewport_projection", &projectionIndex, projectionItems.data(), 2, context.theme.fonts)) {
-            command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
-            command.viewportProjectionPayload = projectionIndex == 0 ? Perspective : Orthographic;
-        }
-        ImGui::PopItemWidth();
-    }
-
-    void ViewportPanel::DrawObjectCount(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) {
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0F, origin.y + 42.0F));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.32F, 0.38F, 0.48F, 1.0F));
-        const std::size_t objectCountValue = viewModel.objects.size();
-        const std::string objectCount =
-            std::vformat(context.localization.Get("editor", "workspace.viewport.object_count"), std::make_format_args(objectCountValue));
-        ImGui::TextUnformatted(objectCount.c_str());
-        ImGui::PopStyleColor();
     }
 
     void ViewportPanel::DrawMissingRendererMessage(const float centerX, const float originY, const float height,

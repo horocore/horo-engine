@@ -7,6 +7,7 @@
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.h"
 
 #include <imgui.h>
+#include <optional>
 
 namespace Horo::Editor {
     class ViewportPanel final : public IWorkspacePanel {
@@ -52,9 +53,6 @@ namespace Horo::Editor {
         static void DrawViewportSurface(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                         const EditorViewportTextureView &textureView, bool hasRenderedViewport);
 
-        static void DrawProjectionControl(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
-        static void DrawObjectCount(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context);
         static void DrawMissingRendererMessage(float centerX, float originY, float height, const EditorGuiContext &context);
 
         IEditorViewportRenderer *viewportRenderer_{nullptr};
@@ -62,5 +60,6 @@ namespace Horo::Editor {
         bool lightMarkerFailureReported_{false};
         bool assetPlacementPreviewActive_{false};
         bool assetPlacementCancelled_{false};
+        std::optional<bool> gridOverride_;
     };
 }  // namespace Horo::Editor
