@@ -7,8 +7,6 @@
 
 namespace Horo::PlatformServices {
     namespace {
-        const ErrorDomainId Domain{"horo.platform.stat"};
-
         [[nodiscard]] Result<void> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<void>::Failure(MakeError(descriptor));
         }
@@ -54,100 +52,6 @@ namespace Horo::PlatformServices {
         };
     }  // namespace
 
-    namespace StatCoordinatorErrors {
-        const ErrorCodeDescriptor InvalidConfiguration{Domain,
-                                                       ErrorCode{"platform.stat.invalid_configuration"},
-                                                       ErrorSeverity::Error,
-                                                       "The stat cache coordinator configuration is invalid.",
-                                                       "Use finite nonzero cache, queue, ledger, and freshness limits.",
-                                                       false,
-                                                       false};
-        const ErrorCodeDescriptor InvalidRequest{Domain,
-                                                 ErrorCode{"platform.stat.invalid_request"},
-                                                 ErrorSeverity::Error,
-                                                 "The stat request is malformed.",
-                                                 "Provide a valid typed subject, stat, value, and mutation envelope.",
-                                                 false,
-                                                 false};
-        const ErrorCodeDescriptor UnknownStat{Domain,
-                                              ErrorCode{"platform.stat.unknown"},
-                                              ErrorSeverity::Error,
-                                              "The stat is not registered in the immutable project registry.",
-                                              "Resolve an active authored stat identity before admission.",
-                                              false,
-                                              false};
-        const ErrorCodeDescriptor AuthorityDenied{Domain,
-                                                  ErrorCode{"platform.stat.authority_denied"},
-                                                  ErrorSeverity::Error,
-                                                  "The stat write authority is not permitted.",
-                                                  "Submit through the authority selected by the registered definition.",
-                                                  false,
-                                                  false};
-        const ErrorCodeDescriptor InvalidValue{Domain,
-                                               ErrorCode{"platform.stat.value_invalid"},
-                                               ErrorSeverity::Error,
-                                               "The stat value contradicts its registered numeric schema.",
-                                               "Use the registered representation and inclusive value range.",
-                                               false,
-                                               false};
-        const ErrorCodeDescriptor RevisionRequired{Domain,
-                                                   ErrorCode{"platform.stat.revision_required"},
-                                                   ErrorSeverity::Error,
-                                                   "The stat operation requires an exact provider revision.",
-                                                   "Supply a nonzero revision captured from the authoritative query.",
-                                                   false,
-                                                   false};
-        const ErrorCodeDescriptor IdempotencyConflict{Domain,
-                                                      ErrorCode{"platform.stat.idempotency_conflict"},
-                                                      ErrorSeverity::Error,
-                                                      "A stat mutation ID was reused with different content.",
-                                                      "Allocate a new logical mutation identity for different content.",
-                                                      false,
-                                                      false};
-        const ErrorCodeDescriptor CapacityExceeded{Domain,
-                                                   ErrorCode{"platform.stat.capacity_exceeded"},
-                                                   ErrorSeverity::Error,
-                                                   "The bounded stat coordinator cannot retain more work or cache state.",
-                                                   "Drain provider work or apply the product capacity policy.",
-                                                   true,
-                                                   false};
-        const ErrorCodeDescriptor Closed{Domain,
-                                         ErrorCode{"platform.stat.closed"},
-                                         ErrorSeverity::Error,
-                                         "The stat cache coordinator is closed.",
-                                         "Compose a new coordinator for the current session.",
-                                         false,
-                                         true};
-        const ErrorCodeDescriptor StalePublication{Domain,
-                                                   ErrorCode{"platform.stat.stale_publication"},
-                                                   ErrorSeverity::Error,
-                                                   "The stat publication belongs to an obsolete session or request.",
-                                                   "Discard the completion and reconcile through the current session.",
-                                                   false,
-                                                   false};
-        const ErrorCodeDescriptor InvalidState{Domain,
-                                               ErrorCode{"platform.stat.state_invalid"},
-                                               ErrorSeverity::Error,
-                                               "The provider returned malformed stat state.",
-                                               "Reject the response and inspect the provider adapter contract.",
-                                               false,
-                                               false};
-        const ErrorCodeDescriptor StaleState{Domain,
-                                             ErrorCode{"platform.stat.state_stale"},
-                                             ErrorSeverity::Error,
-                                             "The provider stat state belongs to an obsolete session or access policy.",
-                                             "Discard it and query the current session generation.",
-                                             false,
-                                             false};
-        const ErrorCodeDescriptor CacheCorrupt{Domain,
-                                               ErrorCode{"platform.stat.cache_corrupt"},
-                                               ErrorSeverity::Error,
-                                               "A restored stat cache record is corrupt or belongs to another namespace.",
-                                               "Quarantine the record and perform an explicit provider read.",
-                                               false,
-                                               false};
-    }  // namespace StatCoordinatorErrors
-
     struct PlatformStatCacheCoordinator::LedgerEntry final {
         PlatformStatWriteRequest request;
         std::uint64_t sequence{};
@@ -187,13 +91,21 @@ namespace Horo::PlatformServices {
             config.maximumLedgerEntries == 0 || config.maximumLedgerEntries > MaximumPlatformStatMutationLedger ||
             config.maximumPendingWrites > config.maximumLedgerEntries || config.freshnessWindowTicks == 0)
             return Result<PlatformStatCacheCoordinator>::Failure(MakeError(StatCoordinatorErrors::InvalidConfiguration));
-        return Result<PlatformStatCacheCoordinator>::Success(PlatformStatCacheCoordinator{std::move(registry), std::move(session), config});
+        try {
+            return Result<PlatformStatCacheCoordinator>::Success(
+                PlatformStatCacheCoordinator{std::move(registry), std::move(session), config});
+        } catch (const std::bad_alloc &) {
+            return Result<PlatformStatCacheCoordinator>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
+        }
     }
 
     PlatformStatCacheCoordinator::PlatformStatCacheCoordinator(std::shared_ptr<const StatDefinitionRegistry> registry,
                                                                PlatformSessionSnapshot session,
-                                                               const PlatformStatCacheCoordinatorConfig config) noexcept
-        : registry_(std::move(registry)), session_(std::move(session)), config_(config) {}
+                                                               const PlatformStatCacheCoordinatorConfig config)
+        : registry_(std::move(registry)), session_(std::move(session)), config_(config) {
+        cache_.reserve(config_.maximumCacheEntries);
+        ledger_.reserve(config_.maximumLedgerEntries);
+    }
 
     PlatformStatCacheCoordinator::~PlatformStatCacheCoordinator() {
         static_cast<void>(Close());
@@ -392,9 +304,7 @@ namespace Horo::PlatformServices {
         const auto *cached = FindCache(request.subject, request.stat);
         if (cached != nullptr) {
             if (const auto valid = ValidateCacheRecord(*cached); valid.HasError()) {
-                cache_.erase(std::ranges::find_if(cache_, [cached](const PlatformStatCacheRecord &record) {
-                    return std::addressof(record) == cached;
-                }));
+                cache_.erase(cache_.begin() + (cached - cache_.data()));
                 return Result<PlatformStatReadDecision>::Success(
                     {.disposition = PlatformStatReadDisposition::CorruptCacheQuery, .query = query});
             }
@@ -439,11 +349,7 @@ namespace Horo::PlatformServices {
                     return Failure(StatCoordinatorErrors::CacheCorrupt);
             }
         }
-        try {
-            cache_ = std::move(records);
-        } catch (const std::bad_alloc &) {
-            return Failure(StatCoordinatorErrors::CapacityExceeded);
-        }
+        cache_ = std::move(records);
         return Result<void>::Success();
     }
 
@@ -465,15 +371,11 @@ namespace Horo::PlatformServices {
         const PlatformStatWritePublication publication{.request = request,
                                                        .sessionGeneration = session_.Generation(),
                                                        .sequence = sequence};
+        ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
         try {
-            ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
-            try {
-                pending_.push_back(publication);
-            } catch (const std::bad_alloc &) {
-                ledger_.pop_back();
-                return Result<PlatformStatWriteAdmission>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
-            }
+            pending_.push_back(publication);
         } catch (const std::bad_alloc &) {
+            ledger_.pop_back();
             return Result<PlatformStatWriteAdmission>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
         }
         return Result<PlatformStatWriteAdmission>::Success(PlatformStatWriteAdmission::Queued);
@@ -486,10 +388,38 @@ namespace Horo::PlatformServices {
         if (inFlight_ || pending_.empty())
             return Result<std::optional<PlatformStatWritePublication>>::Success(std::nullopt);
         inFlight_ = std::move(pending_.front());
-        pending_.erase(pending_.begin());
+        pending_.pop_front();
         if (auto *entry = FindLedger(inFlight_->request.mutation); entry != nullptr)
             entry->state = LedgerState::InFlight;
         return Result<std::optional<PlatformStatWritePublication>>::Success(*inFlight_);
+    }
+
+    /** @copydoc PlatformStatCacheCoordinator::ProcessSuccessfulWrite */
+    Result<void> PlatformStatCacheCoordinator::ProcessSuccessfulWrite(const PlatformStatWritePublication &publication, LedgerEntry &entry,
+                                                                      const std::optional<PlatformStatStateEvidence> &state) {
+        if (!state || state->providerGeneration != session_.ProviderGeneration() || state->sessionGeneration != session_.Generation() ||
+            state->accessRevision != session_.AccessRevision()) {
+            entry.state = LedgerState::Failed;
+            return Failure(StatCoordinatorErrors::InvalidState);
+        }
+        if (const auto access = ValidatePlatformSessionAccess(session_, publication.request.subject, publication.request.accessRevision,
+                                                              PlatformServiceKind::LeaderboardsAndStats);
+            access.HasError()) {
+            entry.state = LedgerState::Failed;
+            return Failure(StatCoordinatorErrors::StaleState);
+        }
+        if (const auto valid = ValidateState(*state, publication.request.stat); valid.HasError()) {
+            entry.state = LedgerState::Failed;
+            return valid;
+        }
+        const PlatformStatCacheRecord record{.subject = publication.request.subject,
+                                             .state = *state,
+                                             .definitionFingerprint = registry_->Fingerprint(),
+                                             .capturedTick = publication.request.observedTick,
+                                             .expiresAtTick =
+                                                 AddSaturating(publication.request.observedTick, config_.freshnessWindowTicks)};
+        entry.state = LedgerState::Succeeded;
+        return UpsertCache(record);
     }
 
     /** @copydoc PlatformStatCacheCoordinator::CompleteWrite */
@@ -505,35 +435,10 @@ namespace Horo::PlatformServices {
             return Failure(StatCoordinatorErrors::StalePublication);
 
         if (outcome == PlatformStatWriteOutcome::Succeeded) {
-            if (!state || state->providerGeneration != session_.ProviderGeneration() || state->sessionGeneration != session_.Generation() ||
-                state->accessRevision != session_.AccessRevision()) {
-                entry->state = LedgerState::Failed;
-                inFlight_.reset();
-                return Failure(StatCoordinatorErrors::InvalidState);
-            }
-            if (const auto access = ValidatePlatformSessionAccess(session_, publication.request.subject, publication.request.accessRevision,
-                                                                  PlatformServiceKind::LeaderboardsAndStats);
-                access.HasError()) {
-                entry->state = LedgerState::Failed;
-                inFlight_.reset();
-                return Failure(StatCoordinatorErrors::StaleState);
-            }
-            if (const auto valid = ValidateState(*state, publication.request.stat); valid.HasError()) {
-                entry->state = LedgerState::Failed;
-                inFlight_.reset();
-                return valid;
-            }
-            const PlatformStatCacheRecord record{.subject = publication.request.subject,
-                                                 .state = *state,
-                                                 .definitionFingerprint = registry_->Fingerprint(),
-                                                 .capturedTick = publication.request.observedTick,
-                                                 .expiresAtTick =
-                                                     AddSaturating(publication.request.observedTick, config_.freshnessWindowTicks)};
-            if (const auto cached = UpsertCache(record); cached.HasError()) {
-                entry->state = LedgerState::Succeeded;
-                inFlight_.reset();
-                return cached;
-            }
+            const auto processed = ProcessSuccessfulWrite(publication, *entry, state);
+            inFlight_.reset();
+            if (processed.HasError())
+                return processed;
         }
 
         switch (outcome) {

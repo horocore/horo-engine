@@ -13,6 +13,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -269,7 +270,7 @@ namespace Horo::PlatformServices {
         struct LedgerEntry;
 
         PlatformStatCacheCoordinator(std::shared_ptr<const StatDefinitionRegistry> registry, PlatformSessionSnapshot session,
-                                     PlatformStatCacheCoordinatorConfig config) noexcept;
+                                     PlatformStatCacheCoordinatorConfig config);
 
         [[nodiscard]] Result<const StatDefinition *> FindDefinition(StatId id) const;
         [[nodiscard]] Result<void> ValidateRead(const PlatformStatReadRequest &request) const;
@@ -285,13 +286,15 @@ namespace Horo::PlatformServices {
         [[nodiscard]] LedgerEntry *FindLedger(PlatformStatMutationId id) noexcept;
         void PruneExpired(std::uint64_t observedTick) noexcept;
         [[nodiscard]] Result<void> UpsertCache(PlatformStatCacheRecord record);
+        [[nodiscard]] Result<void> ProcessSuccessfulWrite(const PlatformStatWritePublication &publication, LedgerEntry &entry,
+                                                          const std::optional<PlatformStatStateEvidence> &state);
 
         std::shared_ptr<const StatDefinitionRegistry> registry_;
         PlatformSessionSnapshot session_;
         PlatformStatCacheCoordinatorConfig config_;
         std::vector<PlatformStatCacheRecord> cache_;
         std::vector<LedgerEntry> ledger_;
-        std::vector<PlatformStatWritePublication> pending_;
+        std::deque<PlatformStatWritePublication> pending_;
         std::optional<PlatformStatWritePublication> inFlight_;
         std::uint64_t nextWriteSequence_{1};
         std::uint64_t nextQuerySequence_{1};
