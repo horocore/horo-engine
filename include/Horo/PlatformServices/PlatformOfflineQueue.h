@@ -28,15 +28,22 @@ namespace Horo::PlatformServices {
     inline constexpr auto PlatformOfflineQueueMaximumPresenceAge = std::chrono::minutes{15};
     inline constexpr auto PlatformOfflineQueueMaximumTerminalRetention = std::chrono::days{30};
 
+    namespace detail {
+        /** @brief Checks whether a fixed byte array contains a nonzero identity value. */
+        template <std::size_t Size> [[nodiscard]] constexpr bool HasNonZeroByte(const std::array<std::byte, Size> &bytes) noexcept {
+            return std::ranges::any_of(bytes, [](const std::byte byte) {
+                return byte != std::byte{};
+            });
+        }
+    }  // namespace detail
+
     /** @brief Opaque protected partition for one stable subject binding; never a provider account identifier. */
     struct PlatformOfflineSubjectPartition final {
         std::array<std::byte, 16> bytes{}; /**< Host-issued pseudonymous binding value; all-zero is invalid. */
 
         /** @brief Checks that the protected partition is nonzero. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return std::ranges::any_of(bytes, [](const std::byte byte) {
-                return byte != std::byte{};
-            });
+            return detail::HasNonZeroByte(bytes);
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformOfflineSubjectPartition &) const noexcept = default;
@@ -48,9 +55,7 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks that the identity is nonzero. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return std::ranges::any_of(bytes, [](const std::byte byte) {
-                return byte != std::byte{};
-            });
+            return detail::HasNonZeroByte(bytes);
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformOfflineIntentId &) const noexcept = default;
