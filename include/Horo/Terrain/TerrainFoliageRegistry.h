@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <vector>
@@ -323,9 +324,10 @@ namespace Horo::Terrain {
         [[nodiscard]] Result<TerrainFoliageRegistryRevision> RegisterDataset(TerrainDatasetRegistration registration);
 
         /**
-         * @brief Replaces one dataset with a strictly newer content or bounds revision.
+         * @brief Replaces one dataset at the exact next content revision and coherent bounds revision.
          * @param registration Complete detached replacement.
          * @return New revision or typed unknown/stale/capability/lifecycle failure; failure preserves publication.
+         * @pre Content advances exactly once; unchanged bounds retain their revision, while changed bounds advance exactly once.
          */
         [[nodiscard]] Result<TerrainFoliageRegistryRevision> ReplaceDataset(TerrainDatasetRegistration registration);
 
@@ -340,7 +342,7 @@ namespace Horo::Terrain {
         [[nodiscard]] Result<TerrainFoliageRegistryRevision> RegisterFoliageType(TerrainFoliageTypeRegistration registration);
 
         /**
-         * @brief Replaces one foliage definition with a strictly newer semantic revision.
+         * @brief Replaces one foliage definition at the exact next semantic revision.
          * @param registration Complete detached replacement.
          * @return New revision or typed unknown/stale/capability/lifecycle failure; failure preserves publication.
          */
@@ -349,7 +351,10 @@ namespace Horo::Terrain {
         /** @brief Removes one foliage type from future snapshots. @return Whether it existed, or a lifecycle/identity failure. */
         [[nodiscard]] Result<bool> UnregisterFoliageType(FoliageTypeId type);
 
-        /** @brief Pins the current immutable publication for bounded concurrent readers. */
+        /**
+         * @brief Pins the current immutable publication for bounded concurrent readers.
+         * @note Capture is synchronized with publication and lifecycle transitions performed by the composition owner.
+         */
         [[nodiscard]] Result<TerrainFoliageRegistrySnapshot> Snapshot() const;
 
         /** @brief Stops new mutations and snapshot capture; retained snapshots remain valid. */
@@ -369,6 +374,7 @@ namespace Horo::Terrain {
         TerrainFoliageRegistryInstanceId instance_{};
         TerrainFoliageCapabilitySet capabilities_{};
         TerrainFoliageRegistryLimits limits_{};
+        mutable std::mutex snapshotMutex_;
         std::shared_ptr<const TerrainFoliageRegistrySnapshot::State> state_;
         TerrainFoliageRegistryState lifecycle_{TerrainFoliageRegistryState::Active};
     };

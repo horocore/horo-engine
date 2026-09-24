@@ -524,7 +524,7 @@ add_executable(HoroTerrainApiTests
         unit/runtime/terrain/TerrainIdentityTests.cpp
 )
 target_compile_features(HoroTerrainApiTests PRIVATE cxx_std_20)
-target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi)
+target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi Threads::Threads)
 horo_register_catch_test(HoroTerrainApiTests LABELS "unit;terrain;headless")
 
 add_executable(HoroWorldStreamingTests

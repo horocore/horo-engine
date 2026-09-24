@@ -9,6 +9,7 @@ namespace Horo::Terrain {
     struct TerrainFoliageRegistrySnapshot::State final {
         TerrainFoliageRegistryBinding binding{};
         TerrainFoliageCapabilitySet capabilities{};
+        std::size_t maximumQueryResults{};
         std::vector<TerrainDatasetRegistration> datasets;
         std::vector<TerrainFoliageTypeRegistration> foliageTypes;
     };
@@ -22,35 +23,17 @@ namespace Horo::Terrain {
             return static_cast<std::uint8_t>(tier) < static_cast<std::uint8_t>(TerrainFeatureTier::Count);
         }
 
-        [[nodiscard]] bool IsValidRegistration(const TerrainDatasetRegistration &registration,
-                                               const TerrainFoliageCapabilitySet available) {
-            const auto &data = registration.descriptor.Data();
-            return data.dataset.IsValid() && data.content.IsValid() && data.bounds.revision.IsValid() &&
-                   registration.supportedTiers.IsValid() && registration.requiredCapabilities.IsValid() &&
-                   available.ContainsAll(registration.requiredCapabilities);
-        }
-
-        [[nodiscard]] bool IsValidRegistration(const TerrainFoliageTypeRegistration &registration,
-                                               const TerrainFoliageCapabilitySet available) {
-            const auto &data = registration.definition.Data();
-            return data.type.IsValid() && data.revision.IsValid() && registration.requiredCapabilities.IsValid() &&
-                   available.ContainsAll(registration.requiredCapabilities);
-        }
-
         [[nodiscard]] Result<void> ValidateDatasetRegistration(const TerrainDatasetRegistration &registration,
                                                                const TerrainFoliageCapabilitySet available,
                                                                const TerrainFoliageRegistryLimits &limits) {
-            if (!IsValidRegistration(registration, available)) {
-                const auto &data = registration.descriptor.Data();
-                if (!registration.requiredCapabilities.IsValid())
-                    return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
-                if (!available.ContainsAll(registration.requiredCapabilities))
-                    return Result<void>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
-                if (!data.dataset.IsValid() || !data.content.IsValid() || !data.bounds.revision.IsValid() ||
-                    !registration.supportedTiers.IsValid())
-                    return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
+            const auto &data = registration.descriptor.Data();
+            if (!registration.requiredCapabilities.IsValid())
                 return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
-            }
+            if (!available.ContainsAll(registration.requiredCapabilities))
+                return Result<void>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
+            if (!data.dataset.IsValid() || !data.content.IsValid() || !data.bounds.revision.IsValid() ||
+                !registration.supportedTiers.IsValid())
+                return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
             if (limits.maximumDatasets == 0)
                 return Result<void>::Failure(MakeError(TerrainErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -59,16 +42,13 @@ namespace Horo::Terrain {
         [[nodiscard]] Result<void> ValidateFoliageRegistration(const TerrainFoliageTypeRegistration &registration,
                                                                const TerrainFoliageCapabilitySet available,
                                                                const TerrainFoliageRegistryLimits &limits) {
-            if (!IsValidRegistration(registration, available)) {
-                const auto &data = registration.definition.Data();
-                if (!registration.requiredCapabilities.IsValid())
-                    return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
-                if (!available.ContainsAll(registration.requiredCapabilities))
-                    return Result<void>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
-                if (!data.type.IsValid() || !data.revision.IsValid())
-                    return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
+            const auto &data = registration.definition.Data();
+            if (!registration.requiredCapabilities.IsValid())
                 return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
-            }
+            if (!available.ContainsAll(registration.requiredCapabilities))
+                return Result<void>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
+            if (!data.type.IsValid() || !data.revision.IsValid())
+                return Result<void>::Failure(MakeError(TerrainErrors::RegistryDescriptorInvalid));
             if (limits.maximumFoliageTypes == 0)
                 return Result<void>::Failure(MakeError(TerrainErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -95,11 +75,30 @@ namespace Horo::Terrain {
             });
         }
 
-        [[nodiscard]] bool HasNewerDatasetRevision(const TerrainDatasetDescriptor &candidate,
-                                                   const TerrainDatasetDescriptor &current) noexcept {
+        template <typename Revision> [[nodiscard]] Result<void> RequireNextRevision(const Revision candidate, const Revision current) {
+            const auto next = AdvanceTerrainRevision(current);
+            if (next.HasError())
+                return Result<void>::Failure(next.ErrorValue());
+            if (candidate != next.Value())
+                return Result<void>::Failure(MakeError(TerrainErrors::RevisionStale));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateDatasetReplacementRevisions(const TerrainDatasetDescriptor &candidate,
+                                                                       const TerrainDatasetDescriptor &current) {
             const auto &candidateData = candidate.Data();
             const auto &currentData = current.Data();
-            return candidateData.content > currentData.content || candidateData.bounds.revision > currentData.bounds.revision;
+            if (const auto content = RequireNextRevision(candidateData.content, currentData.content); content.HasError())
+                return content;
+
+            const bool boundsChanged =
+                candidateData.bounds.minimum != currentData.bounds.minimum || candidateData.bounds.maximum != currentData.bounds.maximum;
+            if (!boundsChanged) {
+                if (candidateData.bounds.revision != currentData.bounds.revision)
+                    return Result<void>::Failure(MakeError(TerrainErrors::RevisionStale));
+                return Result<void>::Success();
+            }
+            return RequireNextRevision(candidateData.bounds.revision, currentData.bounds.revision);
         }
 
         [[nodiscard]] Result<TerrainFoliageRegistryRevision> NextRevision(const TerrainFoliageRegistryRevision current) {
@@ -211,7 +210,7 @@ namespace Horo::Terrain {
                 Capabilities().ContainsAll(registration.requiredCapabilities))
                 ++matches;
         }
-        if (matches > output.size())
+        if (matches > state_->maximumQueryResults || matches > output.size())
             return Result<TerrainFoliageRegistryQueryResult>::Failure(MakeError(TerrainErrors::CapacityExceeded));
 
         std::size_t written{};
@@ -241,7 +240,7 @@ namespace Horo::Terrain {
             if (Capabilities().ContainsAll(registration.requiredCapabilities))
                 ++matches;
         }
-        if (matches > output.size())
+        if (matches > state_->maximumQueryResults || matches > output.size())
             return Result<TerrainFoliageRegistryQueryResult>::Failure(MakeError(TerrainErrors::CapacityExceeded));
 
         std::size_t written{};
@@ -303,16 +302,22 @@ namespace Horo::Terrain {
         Shutdown();
     }
 
-    TerrainFoliageRegistry::TerrainFoliageRegistry(TerrainFoliageRegistry &&other) noexcept
-        : instance_(other.instance_), capabilities_(other.capabilities_), limits_(other.limits_), state_(std::move(other.state_)),
-          lifecycle_(other.lifecycle_) {
+    TerrainFoliageRegistry::TerrainFoliageRegistry(TerrainFoliageRegistry &&other) noexcept {
+        std::lock_guard lock{other.snapshotMutex_};
+        instance_ = other.instance_;
+        capabilities_ = other.capabilities_;
+        limits_ = other.limits_;
+        state_ = std::move(other.state_);
+        lifecycle_ = other.lifecycle_;
         other.lifecycle_ = TerrainFoliageRegistryState::Closed;
     }
 
     TerrainFoliageRegistry &TerrainFoliageRegistry::operator=(TerrainFoliageRegistry &&other) noexcept {
         if (this == &other)
             return *this;
-        Shutdown();
+        std::scoped_lock lock{snapshotMutex_, other.snapshotMutex_};
+        state_.reset();
+        lifecycle_ = TerrainFoliageRegistryState::Closed;
         instance_ = other.instance_;
         capabilities_ = other.capabilities_;
         limits_ = other.limits_;
@@ -334,6 +339,7 @@ namespace Horo::Terrain {
             return Result<TerrainFoliageRegistry>::Failure(revision.ErrorValue());
         state->binding = {instance, revision.Value()};
         state->capabilities = capabilities;
+        state->maximumQueryResults = limits.maximumQueryResults;
         return Result<TerrainFoliageRegistry>::Success(TerrainFoliageRegistry{instance, capabilities, limits, std::move(state)});
     }
 
@@ -363,8 +369,8 @@ namespace Horo::Terrain {
         const auto found = LowerBoundDataset(datasets, registration.descriptor.Data().dataset);
         if (found == datasets.end() || found->descriptor.Data().dataset != registration.descriptor.Data().dataset)
             return Result<TerrainFoliageRegistryRevision>::Failure(MakeError(TerrainErrors::IdentityUnknown));
-        if (!HasNewerDatasetRevision(registration.descriptor, found->descriptor))
-            return Result<TerrainFoliageRegistryRevision>::Failure(MakeError(TerrainErrors::RevisionStale));
+        if (const auto revisions = ValidateDatasetReplacementRevisions(registration.descriptor, found->descriptor); revisions.HasError())
+            return Result<TerrainFoliageRegistryRevision>::Failure(revisions.ErrorValue());
         *found = std::move(registration);
         return Publish(std::move(datasets), state_->foliageTypes);
     }
@@ -410,8 +416,9 @@ namespace Horo::Terrain {
         const auto found = LowerBoundFoliageType(foliageTypes, registration.definition.Data().type);
         if (found == foliageTypes.end() || found->definition.Data().type != registration.definition.Data().type)
             return Result<TerrainFoliageRegistryRevision>::Failure(MakeError(TerrainErrors::IdentityUnknown));
-        if (registration.definition.Data().revision <= found->definition.Data().revision)
-            return Result<TerrainFoliageRegistryRevision>::Failure(MakeError(TerrainErrors::RevisionStale));
+        if (const auto revision = RequireNextRevision(registration.definition.Data().revision, found->definition.Data().revision);
+            revision.HasError())
+            return Result<TerrainFoliageRegistryRevision>::Failure(revision.ErrorValue());
         *found = std::move(registration);
         return Publish(state_->datasets, std::move(foliageTypes));
     }
@@ -433,6 +440,7 @@ namespace Horo::Terrain {
 
     /** @copydoc TerrainFoliageRegistry::Snapshot */
     Result<TerrainFoliageRegistrySnapshot> TerrainFoliageRegistry::Snapshot() const {
+        std::lock_guard lock{snapshotMutex_};
         if (lifecycle_ != TerrainFoliageRegistryState::Active)
             return Result<TerrainFoliageRegistrySnapshot>::Failure(MakeError(TerrainErrors::RegistryClosed));
         return Result<TerrainFoliageRegistrySnapshot>::Success(TerrainFoliageRegistrySnapshot{state_});
@@ -440,18 +448,21 @@ namespace Horo::Terrain {
 
     /** @copydoc TerrainFoliageRegistry::BeginCancellation */
     void TerrainFoliageRegistry::BeginCancellation() noexcept {
+        std::lock_guard lock{snapshotMutex_};
         if (lifecycle_ == TerrainFoliageRegistryState::Active)
             lifecycle_ = TerrainFoliageRegistryState::Cancelling;
     }
 
     /** @copydoc TerrainFoliageRegistry::Shutdown */
     void TerrainFoliageRegistry::Shutdown() noexcept {
+        std::lock_guard lock{snapshotMutex_};
         lifecycle_ = TerrainFoliageRegistryState::Closed;
         state_.reset();
     }
 
     /** @copydoc TerrainFoliageRegistry::Lifecycle */
     TerrainFoliageRegistryState TerrainFoliageRegistry::Lifecycle() const noexcept {
+        std::lock_guard lock{snapshotMutex_};
         return lifecycle_;
     }
 
@@ -463,9 +474,13 @@ namespace Horo::Terrain {
         auto state = std::make_shared<TerrainFoliageRegistrySnapshot::State>();
         state->binding = {instance_, next.Value()};
         state->capabilities = capabilities_;
+        state->maximumQueryResults = limits_.maximumQueryResults;
         state->datasets = std::move(datasets);
         state->foliageTypes = std::move(foliageTypes);
-        state_ = std::move(state);
+        {
+            std::lock_guard lock{snapshotMutex_};
+            state_ = std::move(state);
+        }
         return next;
     }
 }  // namespace Horo::Terrain
