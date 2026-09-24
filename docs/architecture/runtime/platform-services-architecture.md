@@ -471,6 +471,15 @@ monotonic and retryable only when the provider/gateway atomically implements max
 or-equal. Reset/decrement is not a runtime operation. The remote platform owns its
 account projection; querying that projection does not make it trusted gameplay state.
 
+Implementation status for PLS-004.2: `PlatformAchievementCoordinator` validates
+achievement IDs against the immutable authored registry, requires the registered
+authority and progress algebra, and retains a bounded exact mutation-ID ledger.
+Duplicate envelopes join as no-ops while conflicting identity reuse fails; provider
+publication is serialized through Horo-owned tokens. State queries and copied results
+are fenced by subject, provider/session/access generations, provider revision and the
+registered progress total. Session replacement and shutdown discard old work without
+calling provider code.
+
 ### Leaderboards And Stats
 
 Leaderboards are also authored once and mapped to platform backends at cook
