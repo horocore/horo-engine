@@ -424,6 +424,7 @@ namespace Horo::Editor {
         }
     }
 
+
     /** @copydoc GlobalDockOperationsPane::Draw */
     void GlobalDockOperationsPane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
         const bool snapshotChanged = RefreshSnapshot();
