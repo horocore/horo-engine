@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Telemetry/Telemetry.h"
+#include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 #include "PlatformServicesTestSupport.h"
 
