@@ -11,7 +11,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Horo::PlatformServices {
@@ -23,8 +25,11 @@ namespace Horo::PlatformServices {
 
         class RoutingBackend final : public IPlatformServicesBackend {
         public:
+            explicit RoutingBackend(const std::size_t activeCapacity = 32)
+                : requests{{.activeCapacity = activeCapacity, .terminalCapacity = 32, .observerCapacity = 32, .generation = {19}}} {}
+
             PlatformServiceCapabilitySnapshot snapshot;
-            PlatformRequestStore requests{{.activeCapacity = 32, .terminalCapacity = 32, .observerCapacity = 32, .generation = {19}}};
+            PlatformRequestStore requests;
             std::array<std::uint32_t, ServiceCount> calls{};
             mutable std::uint32_t inspectCalls{};
             std::uint32_t shutdownCalls{};
@@ -115,24 +120,72 @@ namespace Horo::PlatformServices {
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
                 if (record.Kind() != Telemetry::RecordKind::Metric || descriptor == nullptr)
                     return;
+
+                const auto *metric = std::get_if<Telemetry::MetricRecord>(&record.payload);
+                if (metric == nullptr)
+                    return;
+
+                MetricSeries observed{.name = descriptor->name, .value = metric->value};
+                for (std::size_t index = 0; index < metric->dimensionCount; ++index) {
+                    if (index >= descriptor->dimensions.size())
+                        return;
+                    const auto &dimension = descriptor->dimensions[index];
+                    const std::uint16_t valueId = metric->dimensionValueIds[index];
+                    if (valueId == 0 || valueId > dimension.allowedValues.size())
+                        return;
+                    observed.dimensions.emplace_back(dimension.key, dimension.allowedValues[valueId - 1]);
+                }
+
                 std::lock_guard lock(mutex_);
-                names_.push_back(descriptor->name);
+                const auto existing = std::ranges::find_if(series_, [&observed](const MetricSeries &candidate) {
+                    return candidate.name == observed.name && candidate.dimensions == observed.dimensions;
+                });
+                if (existing == series_.end())
+                    series_.push_back(std::move(observed));
+                else
+                    existing->value += observed.value;
             }
 
             void Flush() override {}
 
-            [[nodiscard]] std::size_t Count(const std::string_view name) const {
+            [[nodiscard]] double Value(const std::string_view name, const std::string_view key = {},
+                                       const std::string_view value = {}) const {
                 std::lock_guard lock(mutex_);
-                const auto count = std::ranges::count_if(names_, [name](const std::string &candidate) {
-                    return std::string_view(candidate) == name;
-                });
-                return static_cast<std::size_t>(count);
+                double total{};
+                for (const MetricSeries &series : series_) {
+                    if (series.name != name)
+                        continue;
+                    if (!key.empty() && std::ranges::none_of(series.dimensions, [key, value](const auto &dimension) {
+                        return dimension.first == key && dimension.second == value;
+                    }))
+                        continue;
+                    total += series.value;
+                }
+                return total;
             }
 
         private:
+            struct MetricSeries final {
+                std::string name;
+                std::vector<std::pair<std::string, std::string>> dimensions;
+                double value{};
+            };
+
             mutable std::mutex mutex_;
-            std::vector<std::string> names_;
+            std::vector<MetricSeries> series_;
         };
+
+        template <typename RecordMetric> [[nodiscard]] bool RecordMetricUntilAccepted(RecordMetric &&recordMetric) {
+            for (std::size_t attempt = 0; attempt < 128; ++attempt) {
+                const std::uint64_t acceptedBefore = Telemetry::Runtime::GetStatistics().acceptedRecords;
+                if (recordMetric().HasError())
+                    return false;
+                if (Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore)
+                    return true;
+                std::this_thread::yield();
+            }
+            return false;
+        }
 
         struct TelemetryShutdown final {
             ~TelemetryShutdown() {
@@ -379,7 +432,7 @@ namespace Horo::PlatformServices {
         REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 256, .enabled = true}, sink));
         [[maybe_unused]] const TelemetryShutdown telemetryShutdown;
 
-        auto backend = std::make_shared<RoutingBackend>();
+        auto backend = std::make_shared<RoutingBackend>(1);
         const auto session = Session();
         const auto subject = *session.Subject();
         auto frontend = Frontend(backend, session);
@@ -388,8 +441,12 @@ namespace Horo::PlatformServices {
         REQUIRE(successful.HasValue());
         auto handle = std::move(successful).Value();
         REQUIRE(backend->requests.MarkRunning(handle).HasValue());
-        REQUIRE(backend->requests.RecordThrottled(handle).HasValue());
-        REQUIRE(backend->requests.RecordRetryScheduled(handle).HasValue());
+        REQUIRE(RecordMetricUntilAccepted([&backend, &handle] {
+            return backend->requests.RecordThrottled(handle);
+        }));
+        REQUIRE(RecordMetricUntilAccepted([&backend, &handle] {
+            return backend->requests.RecordRetryScheduled(handle);
+        }));
         CHECK(backend->requests.Query(handle).Value().state == PlatformRequestState::Running);
         REQUIRE(backend->requests.CompleteSuccess(handle).HasValue());
 
@@ -397,18 +454,22 @@ namespace Horo::PlatformServices {
         const auto oldSession = Session({7}, {4}, PlatformSessionPhase::Active, PlatformSessionAccessState::Granted, std::byte{2});
         RequireError(frontend.UnlockAchievement({*oldSession.Subject(), {1}}), PlatformSessionErrors::StaleSession);
 
-        for (std::size_t index = 0; index < 32; ++index)
-            REQUIRE(backend->requests.Admit<int>().HasValue());
+        REQUIRE(backend->requests.Admit<int>().HasValue());
         RequireError(frontend.UnlockAchievement({subject, {1}}), RequestErrors::CapacityExceeded);
         REQUIRE(frontend.Close().HasValue());
         REQUIRE(Telemetry::Runtime::Flush(std::chrono::seconds{2}));
 
-        CHECK(sink->Count("horo.platform_services.request.lifecycle") == 6);
-        CHECK(sink->Count("horo.platform_services.request.queue_admission") == 34);
-        CHECK(sink->Count("horo.platform_services.request.retry_scheduled") == 1);
-        CHECK(sink->Count("horo.platform_services.request.throttled") == 1);
-        CHECK(sink->Count("horo.platform_services.capability.checks") == 3);
-        CHECK(sink->Count("horo.platform_services.session.checks") == 3);
-        CHECK(sink->Count("horo.platform_services.frontend.shutdown") == 1);
+        CHECK(sink->Value("horo.platform_services.request.lifecycle", "outcome", "accepted") == 1.0);
+        CHECK(sink->Value("horo.platform_services.request.lifecycle", "outcome", "succeeded") == 1.0);
+        CHECK(sink->Value("horo.platform_services.request.lifecycle", "outcome", "rejected") == 3.0);
+        CHECK(sink->Value("horo.platform_services.request.lifecycle", "outcome", "shutdown") == 1.0);
+        CHECK(sink->Value("horo.platform_services.request.queue_admission", "outcome", "accepted") == 2.0);
+        CHECK(sink->Value("horo.platform_services.request.queue_admission", "outcome", "capacity_rejected") == 1.0);
+        CHECK(sink->Value("horo.platform_services.request.retry_scheduled") == 1.0);
+        CHECK(sink->Value("horo.platform_services.request.throttled") == 1.0);
+        CHECK(sink->Value("horo.platform_services.capability.checks", "outcome", "available") == 3.0);
+        CHECK(sink->Value("horo.platform_services.session.checks", "outcome", "allowed") == 2.0);
+        CHECK(sink->Value("horo.platform_services.session.checks", "outcome", "stale_session") == 1.0);
+        CHECK(sink->Value("horo.platform_services.frontend.shutdown", "outcome", "succeeded") == 1.0);
     }
 }  // namespace Horo::PlatformServices
