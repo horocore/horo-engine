@@ -90,8 +90,8 @@ namespace Horo::PlatformServices::TestSupport {
     /**
      * @brief Scripted, bounded Platform Services backend for contract tests without an SDK or network.
      * @details Tests advance a logical millisecond clock and explicitly dispatch due completions. Same-time events use stable
-     *          provider, cancellation, timeout priority followed by insertion order. Completion and diagnostic histories have
-     *          finite capacities; terminal request state remains owned by the real PlatformRequestStore.
+     *          provider, cancellation, timeout priority followed by insertion order. Completion, diagnostic, and terminal
+     *          identity histories have finite capacities; terminal request state remains owned by the real PlatformRequestStore.
      */
     class MockPlatformServicesBackend final : public IPlatformServicesBackend {
     public:

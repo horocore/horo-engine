@@ -41,8 +41,10 @@ namespace Horo::PlatformServices::TestSupport {
     }  // namespace detail
 
     MockPlatformServicesBackend::Impl::Impl(const PlatformProviderGeneration generation)
-        : providerGeneration(generation),
-          requests({.activeCapacity = 256, .terminalCapacity = 256, .observerCapacity = 256, .generation = {1}}) {
+        : providerGeneration(generation), requests({.activeCapacity = 256,
+                                                    .terminalCapacity = detail::MaximumRetainedTerminalRequests,
+                                                    .observerCapacity = 256,
+                                                    .generation = {1}}) {
         expected.reserve(MockPlatformServicesBackend::MaximumExpectedCalls);
         diagnostics.reserve(MockPlatformServicesBackend::MaximumDiagnostics);
         calls.reserve(MockPlatformServicesBackend::MaximumExpectedCalls);
@@ -261,6 +263,7 @@ namespace Horo::PlatformServices::TestSupport {
         requests.Shutdown();
         events = {};
         requestsInFlight.clear();
+        retainedTerminalRequests.clear();
         return Result<void>::Success();
     }
 }  // namespace Horo::PlatformServices::TestSupport

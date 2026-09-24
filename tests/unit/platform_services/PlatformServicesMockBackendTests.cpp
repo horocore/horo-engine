@@ -194,6 +194,30 @@ namespace Horo::PlatformServices::TestSupport {
         CHECK(backend.VerifyExpectations().HasValue());
     }
 
+    TEST_CASE("Mock cancellation after retained provider completion is an idempotent success", "[platform-services][mock][cancellation]") {
+        MockPlatformServicesBackend backend({7});
+        REQUIRE(
+            backend.ExpectSequence({MockPlatformServicesOperation::QueryFriends, MockPlatformServicesOperation::RequestCancel}).HasValue());
+
+        MockPlatformServicesResponse response;
+        response.payload = FriendsPage{};
+        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriends, std::move(response)).HasValue());
+        ActivateMock(backend);
+
+        const auto request = backend.QueryFriends({.pageSize = 1});
+        REQUIRE(request.HasValue());
+        CHECK(backend.DispatchDueCompletions() == 1);
+        CHECK(backend.Requests().Query(request.Value()).Value().state == PlatformRequestState::Succeeded);
+
+        CHECK(backend.RequestCancel(request.Value().Id(), request.Value().Generation()).HasValue());
+        const auto afterCancellation = backend.Requests().Query(request.Value());
+        REQUIRE(afterCancellation.HasValue());
+        CHECK(afterCancellation.Value().state == PlatformRequestState::Succeeded);
+        CHECK_FALSE(afterCancellation.Value().cancellationRequested);
+        CHECK_FALSE(HasDiagnostic(backend, MockDiagnosticKind::UnexpectedCancellation));
+        CHECK(backend.VerifyExpectations().HasValue());
+    }
+
     TEST_CASE("Mock cancellation is delayed deterministically and late provider completion cannot replace it",
               "[platform-services][mock][cancellation]") {
         MockPlatformServicesBackend backend({7});

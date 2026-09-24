@@ -253,6 +253,16 @@ namespace Horo::PlatformServices {
         auto frontend = std::move(created).Value();
         const auto subject = *session.Subject();
 
+        const auto directNull = backend->ReadCloudObject({subject, {1}});
+        const auto routedNull = frontend.ReadCloudObject({subject, {1}});
+        REQUIRE(directNull.HasError());
+        REQUIRE(routedNull.HasError());
+        CHECK(&FrontendErrors::NullProvider == &BackendErrors::NullProvider);
+        CHECK(directNull.ErrorValue().domain.Value() == routedNull.ErrorValue().domain.Value());
+        CHECK(directNull.ErrorValue().code.Value() == routedNull.ErrorValue().code.Value());
+        CHECK(directNull.ErrorValue().severity == routedNull.ErrorValue().severity);
+        CHECK(directNull.ErrorValue().message == routedNull.ErrorValue().message);
+
         RequireError(frontend.UnlockAchievement({subject, {1}}), FrontendErrors::NullProvider);
         RequireError(frontend.SubmitScore({subject, {1}, 5}), FrontendErrors::NullProvider);
         RequireError(frontend.WriteStat({subject, {1}, 5}), FrontendErrors::NullProvider);

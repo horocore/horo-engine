@@ -27,8 +27,8 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor InvalidRequest;
         /** @brief Frozen product policy denies the requested service. */
         extern const ErrorCodeDescriptor OperationDenied;
-        /** @brief The explicit Null provider cannot accept remote service work. */
-        extern const ErrorCodeDescriptor NullProvider;
+        /** @brief Compatibility alias for the canonical explicit-Null rejection descriptor. */
+        extern const ErrorCodeDescriptor &NullProvider;
         /** @brief A backend returned successful but malformed request identity evidence. */
         extern const ErrorCodeDescriptor InvalidDispatchResult;
     }  // namespace FrontendErrors

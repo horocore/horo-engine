@@ -80,13 +80,7 @@ namespace Horo::PlatformServices {
                                                   "Respect the frozen product service policy.",
                                                   false,
                                                   false};
-        const ErrorCodeDescriptor NullProvider{Domain,
-                                               ErrorCode{"platform.provider.null"},
-                                               ErrorSeverity::Error,
-                                               "The Null platform provider cannot accept remote service work.",
-                                               "Select an available provider or explicitly suppress the optional intent before submission.",
-                                               false,
-                                               false};
+        const ErrorCodeDescriptor &NullProvider = BackendErrors::NullProvider;
         const ErrorCodeDescriptor InvalidDispatchResult{Domain,
                                                         ErrorCode{"platform.frontend.invalid_dispatch_result"},
                                                         ErrorSeverity::Error,

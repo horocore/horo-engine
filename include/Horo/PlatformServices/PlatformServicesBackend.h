@@ -94,7 +94,7 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor RequiredServiceUnavailable;
         /** @brief A typed service method was called while its capability was unavailable. */
         extern const ErrorCodeDescriptor ServiceUnavailable;
-        /** @brief The explicit Null provider never admits remote service work. */
+        /** @brief Canonical rejection descriptor for explicit Null provider service work. */
         extern const ErrorCodeDescriptor NullProvider;
     }  // namespace BackendErrors
 

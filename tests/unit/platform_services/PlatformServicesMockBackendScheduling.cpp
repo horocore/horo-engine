@@ -175,6 +175,13 @@ namespace Horo::PlatformServices::TestSupport {
 
         auto *record = FindRequest(id, generation);
         if (record == nullptr) {
+            const bool retainedTerminal =
+                std::ranges::any_of(retainedTerminalRequests, [id, generation](const TerminalRequestIdentity &entry) {
+                return entry.id == id && entry.generation == generation;
+            });
+            if (retainedTerminal)
+                return Result<void>::Success();
+
             AddDiagnostic({.kind = MockDiagnosticKind::UnexpectedCancellation,
                            .actual = MockPlatformServicesOperation::RequestCancel,
                            .expectationIndex = nextExpected,
@@ -182,9 +189,6 @@ namespace Horo::PlatformServices::TestSupport {
                            .logicalTimeMilliseconds = logicalTimeMilliseconds});
             return detail::Failure<void>();
         }
-        if (record->terminalKind)
-            return Result<void>::Success();
-
         const auto requested = record->requestCancellation();
         if (requested.HasError()) {
             AddDiagnostic({.kind = MockDiagnosticKind::CompletionRejected,
@@ -194,7 +198,7 @@ namespace Horo::PlatformServices::TestSupport {
                            .logicalTimeMilliseconds = logicalTimeMilliseconds});
             return Result<void>::Failure(requested.ErrorValue());
         }
-        if (!record->acknowledgeCancellation || record->cancellationScheduled)
+        if (record->terminalKind || !record->acknowledgeCancellation || record->cancellationScheduled)
             return Result<void>::Success();
 
         record->cancellationScheduled = true;
@@ -233,8 +237,12 @@ namespace Horo::PlatformServices::TestSupport {
                                .request = event.request,
                                .logicalTimeMilliseconds = logicalTimeMilliseconds});
             } else if (completed.Value() == PlatformRequestMutation::Applied) {
-                if (record != nullptr)
+                if (record != nullptr) {
                     record->terminalKind = event.kind;
+                    retainedTerminalRequests.push_back({.id = event.request, .generation = event.generation});
+                    if (retainedTerminalRequests.size() > detail::MaximumRetainedTerminalRequests)
+                        retainedTerminalRequests.pop_front();
+                }
             } else {
                 const bool duplicateProviderCompletion =
                     record != nullptr && record->terminalKind == MockCompletionKind::Provider && event.kind == MockCompletionKind::Provider;

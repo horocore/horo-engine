@@ -3,6 +3,7 @@
 #include "PlatformServicesMockBackend.h"
 
 #include <array>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -17,6 +18,8 @@ namespace Horo::PlatformServices::TestSupport {
         inline constexpr std::uint64_t MaximumDelayMilliseconds = 24ULL * 60ULL * 60ULL * 1000ULL;
         inline constexpr std::size_t MaximumErrorTextBytes = 512;
         inline constexpr std::size_t MaximumErrorIdentityBytes = 128;
+        // Mirrors the mock request store's retained terminal capacity.
+        inline constexpr std::size_t MaximumRetainedTerminalRequests = 256;
 
         inline const ErrorCodeDescriptor ScriptFailure{.domain = ErrorDomainId{"horo.platform.mock"},
                                                        .code = ErrorCode{"platform.mock.script_failure"},
@@ -60,6 +63,11 @@ namespace Horo::PlatformServices::TestSupport {
             std::optional<MockCompletionKind> terminalKind;
             std::function<Result<PlatformRequestMutation>()> requestCancellation;
             std::function<Result<PlatformRequestMutation>()> completeCancellation;
+        };
+
+        struct TerminalRequestIdentity final {
+            PlatformRequestId id;
+            PlatformRequestGeneration generation;
         };
 
         struct ScheduledEvent final {
@@ -136,6 +144,7 @@ namespace Horo::PlatformServices::TestSupport {
         std::vector<MockPlatformServicesOperation> calls;
         std::vector<MockPlatformServicesCompletion> completionOrder;
         std::vector<RequestRecord> requestsInFlight;
+        std::deque<TerminalRequestIdentity> retainedTerminalRequests;
         std::priority_queue<ScheduledEvent, std::vector<ScheduledEvent>, ScheduledEventCompare> events;
         std::size_t scriptedResponseCount{};
         std::size_t unexpectedCallCount{};
