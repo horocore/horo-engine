@@ -58,32 +58,32 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc IAchievementService::UnlockAchievement */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::UnlockAchievement(AchievementUnlockRequest) {
+    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::UnlockAchievement(AchievementUnlockRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
     /** @copydoc ILeaderboardStatService::SubmitScore */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::SubmitScore(LeaderboardScoreRequest) {
+    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::SubmitScore(LeaderboardScoreRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
     /** @copydoc ILeaderboardStatService::WriteStat */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::WriteStat(StatWriteRequest) {
+    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::WriteStat(StatWriteRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
     /** @copydoc ICloudService::ReadCloudObject */
-    Result<PlatformRequestHandle<CloudReadResult>> NullPlatformServicesBackend::ReadCloudObject(CloudReadRequest) {
+    Result<PlatformRequestHandle<CloudReadResult>> NullPlatformServicesBackend::ReadCloudObject(CloudReadRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<CloudReadResult>>();
     }
 
     /** @copydoc ICloudService::WriteCloudObject */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::WriteCloudObject(CloudWriteRequest) {
+    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::WriteCloudObject(CloudWriteRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
     /** @copydoc IPresenceService::SetPresence */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::SetPresence(PresenceUpdateRequest) {
+    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::SetPresence(PresenceUpdateRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
@@ -93,7 +93,7 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc IFriendsService::QueryFriends */
-    Result<PlatformRequestHandle<FriendsPage>> NullPlatformServicesBackend::QueryFriends(FriendsQuery) {
+    Result<PlatformRequestHandle<FriendsPage>> NullPlatformServicesBackend::QueryFriends(FriendsQuery) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<FriendsPage>>();
     }
 
