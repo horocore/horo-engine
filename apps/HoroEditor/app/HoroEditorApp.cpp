@@ -312,21 +312,20 @@ namespace Horo::Editor {
             return f;
         }
 
-        [[nodiscard]] EditorTextures LoadEditorTextures(IEditorGuiRenderer &guiRenderer) {
-            EditorTextures t;
-            auto path = AssetPath("launcher/logo.png");
+        [[nodiscard]] std::uintptr_t LoadEditorTexture(IEditorGuiRenderer &guiRenderer, const char *assetPath) {
+            const std::string path = AssetPath(assetPath);
             int w = 0;
             int h = 0;
             int c = 0;
             auto *px = stbi_load(path.c_str(), &w, &h, &c, 4);
             if (!px) {
-                LOG_WARN("platform.assets", "Logo texture not found at '%s' — sidebar will render without image.", path.c_str());
-                return t;
+                LOG_WARN("platform.assets", "Editor texture not found at '%s'.", path.c_str());
+                return 0;
             }
             if (w <= 0 || h <= 0) {
                 stbi_image_free(px);
-                LOG_WARN("platform.assets", "Logo texture at '%s' has invalid dimensions.", path.c_str());
-                return t;
+                LOG_WARN("platform.assets", "Editor texture at '%s' has invalid dimensions.", path.c_str());
+                return 0;
             }
             const std::span pixels{px, static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4U};
             const Result<std::uintptr_t> uploaded = guiRenderer.CreateTexture(EditorRgba8ImageView{
@@ -336,19 +335,24 @@ namespace Horo::Editor {
             });
             stbi_image_free(px);
             if (uploaded.HasError()) {
-                LOG_WARN("platform.assets", "Logo texture upload failed: %s", uploaded.ErrorValue().message.c_str());
-                return t;
+                LOG_WARN("platform.assets", "Editor texture upload failed for '%s': %s", path.c_str(),
+                         uploaded.ErrorValue().message.c_str());
+                return 0;
             }
-            t.logo = uploaded.Value();
+            return uploaded.Value();
+        }
+
+        [[nodiscard]] EditorTextures LoadEditorTextures(IEditorGuiRenderer &guiRenderer) {
+            EditorTextures t;
+            t.logo = LoadEditorTexture(guiRenderer, "launcher/logo.png");
             return t;
         }
 
         void DestroyEditorTextures(EditorTextures &textures, IEditorGuiRenderer &guiRenderer) noexcept {
-            if (textures.logo == 0) {
-                return;
+            if (textures.logo != 0) {
+                guiRenderer.DestroyTexture(textures.logo);
+                textures.logo = 0;
             }
-            guiRenderer.DestroyTexture(textures.logo);
-            textures.logo = 0;
         }
 
         [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
@@ -921,6 +925,21 @@ namespace Horo::Editor {
                     return Result<void>::Success();
 
                 screenHost_->Draw();
+                if (EditorModal *const modal = p_->modalHost.TopModal(); modal != nullptr && modal->Presentation().dimWorkspace) {
+                    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+                    ImGui::SetNextWindowPos(viewport->Pos);
+                    ImGui::SetNextWindowSize(viewport->Size);
+                    ImGui::SetNextWindowBgAlpha(0.58F);
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+                    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0F, 0.0F, 0.0F, 1.0F});
+                    ImGui::Begin("##ModalWorkspaceBackdrop", nullptr,
+                                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+                                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+                    ImGui::End();
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar();
+                }
                 p_->modalHost.Draw();
                 ImGui::Render();
 

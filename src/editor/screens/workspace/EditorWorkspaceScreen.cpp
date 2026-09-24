@@ -19,6 +19,7 @@
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
@@ -82,8 +83,8 @@ namespace Horo::Editor {
                                                                                               const std::string &requestedDirectory) {
             using enum GameplayBehaviorKind;
             const std::filesystem::path normalizedProjectRoot = NormalizeAbsolutePath(projectRoot);
-            const std::filesystem::path assetsRoot = normalizedProjectRoot / "assets";
-            const std::filesystem::path scriptsRoot = assetsRoot / "scripts";
+            const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(normalizedProjectRoot);
+            const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(normalizedProjectRoot);
             const std::filesystem::path requested = NormalizeAbsolutePath(requestedDirectory);
             std::filesystem::path destination;
             if (kind == Native) {
@@ -336,7 +337,7 @@ namespace Horo::Editor {
                 if (controller_ && (action == EditorMenuAction::SaveSceneAs || action == EditorMenuAction::SaveSceneCopyAs)) {
                     const auto &currentPath = controller_->CurrentScenePath();
                     const std::filesystem::path projectRoot{controller_->ViewModel().projectRoot};
-                    const std::filesystem::path suggestedPath = currentPath.value_or(projectRoot / "assets" / "scenes" / "main.horo");
+                    const std::filesystem::path suggestedPath = currentPath.value_or(ProjectLayout::ScenesRoot(projectRoot) / "main.horo");
 
                     auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.scene_save"},
                                                                         Input::InputContextKind::NativeDialog);

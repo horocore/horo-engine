@@ -193,18 +193,6 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
-    /** @copydoc GuiScreenHost::StartUiPreview */
-    Result<void> GuiScreenHost::StartUiPreview(const std::string_view scenarioId) {
-        if (shutdown_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
-        if (started_)
-            return Result<void>::Failure(MakeError(NavigationErrors::HostAlreadyStarted));
-        if (!OpenUiPreview(scenarioId))
-            return Result<void>::Failure(MakeError(NavigationErrors::ScreenCreationFailed, "UI preview scenario could not open."));
-        started_ = true;
-        return Result<void>::Success();
-    }
-
     /** @copydoc GuiScreenHost::Shutdown */
     void GuiScreenHost::Shutdown() noexcept {
         if (shutdown_) {
@@ -456,10 +444,7 @@ namespace Horo::Editor {
 
     void GuiScreenHost::Draw() {
         if (!uiPreviewScenario_.empty()) {
-            if (const auto selected =
-                    DrawEditorUiPreviewGallery(uiPreviewScenario_, modalHost_->HasOpenModal(), context_->theme.fonts, *localization_);
-                selected.has_value())
-                static_cast<void>(OpenUiPreview(*selected));
+            DrawUiPreview();
             return;
         }
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -537,25 +522,6 @@ namespace Horo::Editor {
             case None:
                 return;
         }
-    }
-
-    bool GuiScreenHost::OpenUiPreview(const std::string_view scenarioId) {
-        if (std::ranges::none_of(EditorUiPreviewScenarios,
-                                 [scenarioId](const EditorUiPreviewScenario &scenario) {
-            return scenario.id == scenarioId;
-        }) ||
-            !context_ || !modalHost_ || modalHost_->HasOpenModal())
-            return false;
-        auto modal = std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
-                                                        services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>(),
-                                                        localization_);
-        modal->RequestUiPreviewFixture(scenarioId == "asset-import-empty" ? AssetImportModal::UiPreviewFixture::Empty
-                                                                          : AssetImportModal::UiPreviewFixture::Populated);
-        if (!modalHost_->OpenRoot(std::move(modal)).HasValue())
-            return false;
-        uiPreviewScenario_ = scenarioId;
-        LOG_INFO("editor.ui_preview", "Opened UI preview scenario '%.*s'.", static_cast<int>(scenarioId.size()), scenarioId.data());
-        return true;
     }
 
     void GuiScreenHost::HandleDropFiles(const std::vector<std::filesystem::path> &files) {

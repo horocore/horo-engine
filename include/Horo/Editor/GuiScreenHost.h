@@ -197,6 +197,7 @@ namespace Horo::Editor {
         Result<void> ExecuteLeaveCheckAndCommit(const LeaveTarget &target);
         Result<void> CommitApplicationClose();
         void FlushPendingNavigation();
+        void DrawUiPreview();
         void CommitRoute(GuiRoute destination);
         void PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target);
         void ExecuteLeaveResolution(LeaveAction action, const LeaveRequirement &requirement, const LeaveTarget &target);

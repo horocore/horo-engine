@@ -1455,8 +1455,9 @@ namespace Horo::Editor::Ui {
 
     // ── CheckboxControl ──────────────────────────────────────────────────
 
-    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{0.0F, 0.0F});
+    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts, const float minimumBoxSize) {
+        const float padding = std::max(0.0F, (minimumBoxSize - Theme::TextPx::Label()) * 0.5F);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{padding, padding});
         ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2{8.0F, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, Theme::GetActiveTokens().radii.control);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);

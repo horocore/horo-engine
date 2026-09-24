@@ -95,7 +95,8 @@ namespace Horo::Application {
         }
 
         [[nodiscard]] bool IsSceneDocument(const std::string_view path) {
-            return HasSuffix(path, {".scene.horo", ".hscene"}) || (path.starts_with("assets/scenes/") && path.ends_with(".horo"));
+            return HasSuffix(path, {".scene.horo", ".hscene"}) ||
+                   ((path.starts_with("assets/scenes/") || path.starts_with("Assets/Scenes/")) && path.ends_with(".horo"));
         }
 
         [[nodiscard]] MigrationDocumentKind ClassifyDocument(const std::string_view path) {

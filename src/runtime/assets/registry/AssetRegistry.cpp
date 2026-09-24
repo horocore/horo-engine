@@ -135,8 +135,8 @@ namespace Horo::Assets {
         }
 
         [[nodiscard]] Result<ProjectPath> ParseAssetPath(const std::string_view value) {
-            if (!value.starts_with("assets/") || value.size() > 4096)
-                return Result<ProjectPath>::Failure(Failure(AssetErrors::RootInvalid, "Asset path is outside assets/."));
+            if ((!value.starts_with("Assets/") && !value.starts_with("assets/")) || value.size() > 4096)
+                return Result<ProjectPath>::Failure(Failure(AssetErrors::RootInvalid, "Asset path is outside the project asset root."));
             return ProjectPath::Parse(value);
         }
 
@@ -467,7 +467,7 @@ namespace Horo::Assets {
     /** @copydoc RebuildAssetRegistry */
     Result<AssetRegistryBuildReport> RebuildAssetRegistry(AssetRegistry &registry, const std::filesystem::path &projectRoot,
                                                           const AssetRegistryOpenMode mode) {
-        const std::filesystem::path assetRoot = projectRoot / "assets";
+        const std::filesystem::path assetRoot = ProjectLayout::AssetRoot(projectRoot);
         if (std::error_code error; !std::filesystem::is_directory(assetRoot, error) || error)
             return Result<AssetRegistryBuildReport>::Failure(Failure(AssetErrors::RootInvalid));
 

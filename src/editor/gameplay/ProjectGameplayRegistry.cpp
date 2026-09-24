@@ -1,6 +1,7 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Foundation/Paths.h"
 
 #include <algorithm>
 #include <array>
@@ -234,7 +235,7 @@ namespace Horo::Editor {
     }
 
     void ProjectGameplayRegistry::DiscoverLuaPrograms(const std::filesystem::path &projectRoot) {
-        const std::filesystem::path scriptsRoot = projectRoot / "assets" / "scripts";
+        const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(projectRoot);
         std::error_code filesystemError;
         if (!std::filesystem::is_directory(scriptsRoot, filesystemError)) {
             if (const Result<void> frozen = registry_.Freeze(); frozen.HasError())
