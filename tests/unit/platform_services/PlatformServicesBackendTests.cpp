@@ -50,6 +50,19 @@ namespace Horo::PlatformServices {
                 return Unavailable<void>();
             }
 
+            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery) override {
+                return Unavailable<LeaderboardEntriesPage>();
+            }
+
+            Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
+                LeaderboardAroundSubjectQuery) override {
+                return Unavailable<LeaderboardAroundSubjectResult>();
+            }
+
+            Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery) override {
+                return Unavailable<LeaderboardEntriesPage>();
+            }
+
             Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest) override {
                 return Unavailable<void>();
             }
@@ -134,6 +147,18 @@ namespace Horo::PlatformServices {
         friends.binding.reset();
         friends.unavailableReason.reset();
         REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+
+        snapshot = Snapshot();
+        snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)].leaderboardQueries.ranked = true;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+
+        snapshot = Snapshot();
+        snapshot.services[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)].limits.maxPageEntries = 0;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+
+        snapshot = Snapshot();
+        snapshot.services[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)].leaderboardQueries = {};
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasValue());
     }
 
     TEST_CASE("Capability validation rejects incompatible versions identities limits and required absence",
@@ -201,5 +226,104 @@ namespace Horo::PlatformServices {
         backend.activated = false;
         REQUIRE(ActivatePlatformServicesBackend(backend, config).HasError());
         CHECK_FALSE(backend.activated);
+    }
+
+    TEST_CASE("Leaderboard page results preserve score ordering, competition ties, and finite offsets",
+              "[platform-services][backend][leaderboard]") {
+        const LeaderboardRankedQuery query{.leaderboard = {2}, .startIndex = 4, .pageSize = 4};
+        LeaderboardEntriesPage page{.startIndex = 4,
+                                    .entries = {{.rank = 1, .score = std::int64_t{100}},
+                                                {.rank = 1, .score = std::int64_t{100}},
+                                                {.rank = 3, .score = std::int64_t{80}}},
+                                    .hasMore = true};
+        REQUIRE(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                    .HasValue());
+
+        page.entries[1].rank = 2;
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .ErrorValue()
+                  .code.Value() == LeaderboardErrors::InvalidResult.code.Value());
+        page.entries = {{.rank = 1, .score = std::int64_t{80}}, {.rank = 2, .score = std::int64_t{100}}};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::LowestFirst)
+                  .HasValue());
+
+        page = {.startIndex = 3, .entries = {{.rank = 4, .score = std::int64_t{80}}}, .hasMore = false};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::LowestFirst)
+                  .HasError());
+        page = {.startIndex = 4, .entries = {}, .hasMore = true};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+        page = {.startIndex = 4,
+                .entries = {{.rank = 1, .score = std::int64_t{100}},
+                            {.rank = 1, .score = std::int64_t{100}},
+                            {.rank = 3, .score = std::int64_t{80}},
+                            {.rank = 4, .score = std::int64_t{70}},
+                            {.rank = 5, .score = std::int64_t{60}}},
+                .hasMore = false};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+
+        page = {.startIndex = 4,
+                .entries = {{.rank = 1, .score = std::uint64_t{100}}, {.rank = 2, .score = std::uint64_t{80}}},
+                .hasMore = false};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::UnsignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasValue());
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+        page.entries[1].score = std::int64_t{80};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::UnsignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+
+        const LeaderboardFriendsQuery friendsQuery{.leaderboard = {2}, .startIndex = 7, .pageSize = 2};
+        page = {.startIndex = 7,
+                .entries = {{.rank = 8, .score = std::int64_t{50}}, {.rank = 10, .score = std::int64_t{40}}},
+                .hasMore = false};
+        CHECK(ValidateLeaderboardEntriesPage(page, friendsQuery, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasValue());
+        page.startIndex = 8;
+        CHECK(ValidateLeaderboardEntriesPage(page, friendsQuery, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+    }
+
+    TEST_CASE("Around-subject results cannot exceed or contradict their bounded window", "[platform-services][backend][leaderboard]") {
+        const LeaderboardAroundSubjectQuery query{.leaderboard = {2}, .entriesBefore = 1, .entriesAfter = 2};
+        LeaderboardAroundSubjectResult result{.entries = {{.rank = 4, .score = std::int64_t{80}},
+                                                          {.rank = 5, .score = std::int64_t{70}},
+                                                          {.rank = 6, .score = std::int64_t{60}}},
+                                              .subjectEntryIndex = 1,
+                                              .hasEarlier = true,
+                                              .hasLater = false};
+        REQUIRE(
+            ValidateLeaderboardAroundSubjectResult(result, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                .HasValue());
+
+        result.subjectEntryIndex = 0;
+        CHECK(
+            ValidateLeaderboardAroundSubjectResult(result, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                .HasError());
+        result = {.entries = {{.rank = 4, .score = std::int64_t{80}}},
+                  .subjectEntryIndex = std::nullopt,
+                  .hasEarlier = false,
+                  .hasLater = false};
+        CHECK(
+            ValidateLeaderboardAroundSubjectResult(result, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                .HasError());
+        result = {.entries = {{.rank = 1, .score = std::int64_t{100}},
+                              {.rank = 1, .score = std::int64_t{100}},
+                              {.rank = 3, .score = std::int64_t{80}},
+                              {.rank = 4, .score = std::int64_t{70}},
+                              {.rank = 5, .score = std::int64_t{60}}},
+                  .subjectEntryIndex = 2,
+                  .hasEarlier = false,
+                  .hasLater = false};
+        CHECK(
+            ValidateLeaderboardAroundSubjectResult(result, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                .HasError());
+        result = {.entries = {{.rank = 4, .score = std::uint64_t{80}}}, .subjectEntryIndex = 0, .hasEarlier = false, .hasLater = false};
+        CHECK(
+            ValidateLeaderboardAroundSubjectResult(result, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                .HasError());
     }
 }  // namespace Horo::PlatformServices

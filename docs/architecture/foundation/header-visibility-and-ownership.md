@@ -310,9 +310,10 @@ remain outside this public definition contract.
 
 `HoroEngine::PlatformServices` additionally owns
 `Horo/PlatformServices/PlatformDefinitionRegistries.h`. The shared
-`ProgressionAuthorityMode` now lives in `PlatformServiceInterfaces.h`, its lowest
-backend-neutral owner, so achievement, stat and leaderboard definitions use one type
-without depending on one another. Project/cook composition builds stats first, then
+`ProgressionAuthorityMode`, `ProgressionValueKind` and `LeaderboardOrdering` now live
+in `PlatformServiceInterfaces.h`, their lowest backend-neutral owner, so achievement,
+stat and leaderboard definitions use shared types without depending on one another.
+Project/cook composition builds stats first, then
 leaderboards against that immutable stat snapshot, and presence independently; all
 three candidates reference the same captured ADR-132 ledger fingerprint. Public
 callers consume only typed definitions and immutable spans. Provider-native mapping,
@@ -331,6 +332,21 @@ identities, and validation admits only bounded inert contributions from those mo
 Constructing or validating policy performs no discovery, registration, lifecycle call,
 SDK initialization or ambient-state mutation. Existing callers require no signature
 migration because this is the first published project configuration contract.
+
+## PLS-004.3 Migration Notes
+
+The leaderboard/stat service contract adds typed ranked-page, around-subject and
+friends-page queries, explicit finite bounds, signed/unsigned score values, per-kind
+capability facts and best-effort frontend cancellation. Provider adapters can now
+request cancellation in `PlatformRequestStore` by Horo request ID/generation without
+knowing the terminal value type. They must update to
+`PlatformServicesBackendInterfaceVersion` 1.1, advertise only query kinds they
+implement, preserve the authored score ordering and competition-rank tie semantics,
+and validate result pages before terminal publication. Old 1.0 adapters are rejected
+by the exact-version activation check; they must not infer support or fall back to a
+different provider/query kind. The existing public header owner remains
+`HoroEngine::PlatformServices`, whose generated consumer target covers the changed
+interfaces.
 
 ## PLS-006.2 Migration Notes
 

@@ -1,6 +1,7 @@
 #include "Horo/PlatformServices/PlatformServicesFrontend.h"
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <new>
 #include <utility>
@@ -26,7 +27,8 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] bool SameCapability(const PlatformServiceCapability &left, const PlatformServiceCapability &right) noexcept {
             return left.service == right.service && left.availability == right.availability && SameLimits(left.limits, right.limits) &&
-                   left.binding == right.binding && left.unavailableReason == right.unavailableReason;
+                   left.leaderboardQueries == right.leaderboardQueries && left.binding == right.binding &&
+                   left.unavailableReason == right.unavailableReason;
         }
 
         [[nodiscard]] bool SameSnapshot(const PlatformServiceCapabilitySnapshot &left,
@@ -148,6 +150,60 @@ namespace Horo::PlatformServices {
         if (const auto valid = ValidateLeaderboardOrStat(request.leaderboard.IsValid(), request.subject); valid.HasError())
             return Result<PlatformRequestHandle<void>>::Failure(valid.ErrorValue());
         return ValidatedDispatch(backend_->SubmitScore(std::move(request)));
+    }
+
+    /** @copydoc PlatformServicesFrontend::QueryRankedLeaderboard */
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> PlatformServicesFrontend::QueryRankedLeaderboard(
+        LeaderboardRankedQuery query) const {
+        if (!query.leaderboard.IsValid())
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
+        const auto valid = ValidateSubjectService(PlatformServiceKind::LeaderboardsAndStats, query.subject);
+        if (valid.HasError())
+            return Result<PlatformRequestHandle<LeaderboardEntriesPage>>::Failure(valid.ErrorValue());
+        if (!valid.Value()->leaderboardQueries.Supports(LeaderboardQueryKind::Ranked))
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(BackendErrors::UnsupportedOperation);
+        if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
+            query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
+        return ValidatedDispatch(backend_->QueryRankedLeaderboard(std::move(query)));
+    }
+
+    /** @copydoc PlatformServicesFrontend::QueryLeaderboardAroundSubject */
+    Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> PlatformServicesFrontend::QueryLeaderboardAroundSubject(
+        LeaderboardAroundSubjectQuery query) const {
+        if (!query.leaderboard.IsValid())
+            return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(FrontendErrors::InvalidRequest);
+        const auto valid = ValidateSubjectService(PlatformServiceKind::LeaderboardsAndStats, query.subject);
+        if (valid.HasError())
+            return Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>>::Failure(valid.ErrorValue());
+        if (!valid.Value()->leaderboardQueries.Supports(LeaderboardQueryKind::AroundSubject))
+            return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(BackendErrors::UnsupportedOperation);
+        const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
+        if (entryLimit > valid.Value()->limits.maxPageEntries)
+            return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(FrontendErrors::InvalidRequest);
+        return ValidatedDispatch(backend_->QueryLeaderboardAroundSubject(std::move(query)));
+    }
+
+    /** @copydoc PlatformServicesFrontend::QueryFriendsLeaderboard */
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> PlatformServicesFrontend::QueryFriendsLeaderboard(
+        LeaderboardFriendsQuery query) const {
+        if (!query.leaderboard.IsValid())
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
+        const auto valid = ValidateSubjectService(PlatformServiceKind::LeaderboardsAndStats, query.subject);
+        if (valid.HasError())
+            return Result<PlatformRequestHandle<LeaderboardEntriesPage>>::Failure(valid.ErrorValue());
+        if (policy_.deniedServices[static_cast<std::size_t>(PlatformServiceKind::Friends)])
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::OperationDenied);
+        if (const auto socialAccess =
+                ValidatePlatformSessionAccess(session_, query.subject, session_.AccessRevision(), PlatformServiceKind::Friends);
+            socialAccess.HasError())
+            return Result<PlatformRequestHandle<LeaderboardEntriesPage>>::Failure(socialAccess.ErrorValue());
+        if (!valid.Value()->leaderboardQueries.Supports(LeaderboardQueryKind::Friends))
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(BackendErrors::UnsupportedOperation);
+        if (query.pageSize == 0 || query.pageSize > valid.Value()->limits.maxPageEntries ||
+            query.startIndex > std::numeric_limits<std::uint32_t>::max() - query.pageSize)
+            return Failure<PlatformRequestHandle<LeaderboardEntriesPage>>(FrontendErrors::InvalidRequest);
+        return ValidatedDispatch(backend_->QueryFriendsLeaderboard(std::move(query)));
     }
 
     /** @copydoc PlatformServicesFrontend::WriteStat */

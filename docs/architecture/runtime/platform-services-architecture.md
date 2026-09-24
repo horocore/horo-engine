@@ -237,6 +237,10 @@ class PlatformServicesFrontend {
 public:
     Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) const;
     Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) const;
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) const;
+    Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>>
+    QueryLeaderboardAroundSubject(LeaderboardAroundSubjectQuery query) const;
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) const;
     Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) const;
     Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) const;
     Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) const;
@@ -244,14 +248,17 @@ public:
     Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) const;
     Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery query) const;
     Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() const;
+    template <typename T> Result<void> RequestCancel(const PlatformRequestHandle<T>& request) const;
     Result<PlatformServiceLimits> ServiceLimits(PlatformServiceKind service) const;
     Result<void> Close();
 };
 ```
 
-The query, subscription and cancellation surfaces remain owned by the request store
-until the PLS-001.4 completion handoff connects admitted frontend handles to that
-store; they are not frontend methods in this slice.
+The request store owns typed snapshots and subscriptions. The frontend forwards an
+explicit cancellation request to the selected backend for the handle's request and
+generation; cancellation remains best effort and does not change ADR-130 terminal
+semantics. A closed frontend rejects both new queries and cancellation before backend
+shutdown.
 
 Pre-admission validation, permission, lifecycle, capability, session and bounded-
 capacity failure returns `Result` with no request record or provider call. Once admitted,
@@ -525,6 +532,34 @@ Stat and leaderboard queries return bounded provider/account projections at a ca
 generation/revision. Leaderboard order is provider-owned under the cooked definition.
 These values support UI and local hints; clients cannot use them as authority for
 shared economy, rewards, simulation or access control.
+
+Leaderboard reads have only three bounded forms: ranked pages, windows around the
+authenticated subject's own entry, and pages of that subject's friends. Ranked and
+friends queries require a zero-based `startIndex` and nonzero `pageSize`; the page size
+cannot exceed the selected service's `maxPageEntries`. Around-subject queries specify
+finite before/after counts, and the center row is included in that same limit. There is
+no unbounded query overload. Providers advertise support for each query kind in the
+capability snapshot; an unsupported kind returns
+`platform.capability.operation_unsupported` before provider dispatch. Friends pages
+also require the session's separate `Friends` access grant.
+
+Page results echo the requested offset and report `hasMore`; the next offset is
+`startIndex + entries.size()`, with overflow rejected at admission. Entries are sorted
+by score direction from the immutable leaderboard definition. Equal scores share a
+one-based competition rank (`1, 1, 3`); private provider tie order is stable for an
+unchanged result set, while no participant or account identifier is returned. Around-
+subject results identify the center by its index in the bounded result and report
+whether earlier or later entries were omitted. Result validators reject an offset,
+count, ordering, score-type or tie-rank contradiction before publication. Offset pages remain
+deterministic for an unchanged leaderboard snapshot; a provider without a snapshot
+revision may reflect score changes between separate page requests.
+
+Implementation status on 25 September 2026: PLS-004.3 adds the three Horo-only query
+requests and results, per-kind provider capability facts, pre-dispatch session and
+bound checks, deterministic page-result validation and frontend cancellation routing.
+The backend interface minor version advances to 1.1. Query payloads contain only typed
+leaderboard IDs, bounded offsets/counts, rank and typed signed/unsigned 64-bit score values; provider SDK
+types, account identifiers and fallback selection remain private/absent.
 
 Implementation status on 10 September 2026: PLS-003.4 publishes immutable typed
 `StatDefinitionRegistry` and `LeaderboardDefinitionRegistry` snapshots in
@@ -920,6 +955,7 @@ struct PlatformServiceCapability {
     PlatformServiceKind service;
     PlatformServiceAvailability availability;
     PlatformServiceLimits limits;
+    LeaderboardQueryCapabilities leaderboardQueries;
     std::optional<PlatformServiceBindingId> binding;
     std::optional<PlatformServiceUnavailableReason> unavailableReason;
 };
@@ -948,7 +984,7 @@ exactly one compatible private binding; `Unavailable` has no binding and exactly
 reason. Missing, duplicate or mismatched bindings fail composition. Public callers do
 not inspect provider pointers, backend names or SDK flags.
 
-Implementation status on 10 September 2026: PLS-002.2 publishes the version-1
+Implementation status on 10 September 2026: PLS-002.2 publishes the version-1.0
 backend-neutral capability bundle and typed achievement, leaderboard/stat, cloud,
 presence, friends and session interfaces in `HoroEngine::PlatformServices`. Candidate
 inspection is inert; `ActivatePlatformServicesBackend` validates interface version,

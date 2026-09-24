@@ -1,5 +1,9 @@
 #include "Horo/PlatformServices/PlatformServicesBackend.h"
 
+#include <limits>
+#include <span>
+#include <type_traits>
+
 namespace Horo::PlatformServices {
     namespace {
         constexpr std::uint32_t MaxConcurrentRequests = 1U << 20U;
@@ -31,9 +35,81 @@ namespace Horo::PlatformServices {
             const bool available = capability.availability == PlatformServiceAvailability::Available;
             if (!ValidateLimits(capability.limits, available))
                 return false;
+            const bool leaderboardService = capability.service == PlatformServiceKind::LeaderboardsAndStats;
+            if ((!leaderboardService || !available) && capability.leaderboardQueries.HasAny())
+                return false;
+            if (capability.leaderboardQueries.HasAny() && capability.limits.maxPageEntries == 0)
+                return false;
             if (available)
                 return capability.binding && capability.binding->IsValid() && !capability.unavailableReason;
             return !capability.binding && capability.unavailableReason && IsKnown(*capability.unavailableReason);
+        }
+
+        [[nodiscard]] constexpr bool IsKnown(const LeaderboardOrdering ordering) noexcept {
+            return ordering == LeaderboardOrdering::HighestFirst || ordering == LeaderboardOrdering::LowestFirst;
+        }
+
+        [[nodiscard]] constexpr bool IsKnown(const ProgressionValueKind valueKind) noexcept {
+            return valueKind == ProgressionValueKind::SignedInteger64 || valueKind == ProgressionValueKind::UnsignedInteger64;
+        }
+
+        [[nodiscard]] bool HasExpectedScoreKind(const LeaderboardScoreValue &score, const ProgressionValueKind valueKind) noexcept {
+            if (score.valueless_by_exception())
+                return false;
+            switch (valueKind) {
+                case ProgressionValueKind::SignedInteger64:
+                    return std::holds_alternative<std::int64_t>(score);
+                case ProgressionValueKind::UnsignedInteger64:
+                    return std::holds_alternative<std::uint64_t>(score);
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool HasValidLeaderboardOrder(const std::span<const LeaderboardEntry> entries, const ProgressionValueKind valueKind,
+                                                    const LeaderboardOrdering ordering) noexcept {
+            if (!IsKnown(valueKind) || !IsKnown(ordering))
+                return false;
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                const auto &entry = entries[index];
+                if (entry.rank == 0 || !HasExpectedScoreKind(entry.score, valueKind))
+                    return false;
+                if (index == 0)
+                    continue;
+                const auto &previous = entries[index - 1];
+                if (entry.score.index() != previous.score.index())
+                    return false;
+                const bool equalScores = std::visit([](const auto left, const auto right) {
+                    using Left = decltype(left);
+                    using Right = decltype(right);
+                    if constexpr (std::is_same_v<Left, Right>)
+                        return left == right;
+                    return false;
+                }, entry.score, previous.score);
+                const bool scoreOrdered = std::visit([ordering](const auto current, const auto prior) {
+                    using Current = decltype(current);
+                    using Prior = decltype(prior);
+                    if constexpr (std::is_same_v<Current, Prior>)
+                        return ordering == LeaderboardOrdering::HighestFirst ? current <= prior : current >= prior;
+                    return false;
+                }, entry.score, previous.score);
+                if (!scoreOrdered)
+                    return false;
+                if (equalScores) {
+                    if (entry.rank != previous.rank)
+                        return false;
+                } else if (entry.rank <= previous.rank) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool HasValidLeaderboardPage(const LeaderboardEntriesPage &page, const std::uint32_t startIndex,
+                                                   const std::uint32_t pageSize, const ProgressionValueKind valueKind,
+                                                   const LeaderboardOrdering ordering) {
+            return page.startIndex == startIndex && pageSize != 0 && pageSize <= MaxPageEntries &&
+                   startIndex <= std::numeric_limits<std::uint32_t>::max() - pageSize && page.entries.size() <= pageSize &&
+                   (!page.hasMore || !page.entries.empty()) && HasValidLeaderboardOrder(page.entries, valueKind, ordering);
         }
     }  // namespace
 
@@ -70,7 +146,28 @@ namespace Horo::PlatformServices {
                                                      "Disable optional use or select a compatible provider.",
                                                      false,
                                                      true};
+        const ErrorCodeDescriptor UnsupportedOperation{Domain,
+                                                       ErrorCode{"platform.capability.operation_unsupported"},
+                                                       ErrorSeverity::Error,
+                                                       "The selected provider does not support this platform operation.",
+                                                       "Use only query kinds explicitly advertised by the selected provider.",
+                                                       false,
+                                                       true};
     }  // namespace BackendErrors
+
+    namespace LeaderboardErrors {
+        namespace {
+            const ErrorDomainId Domain{"horo.platform.leaderboard"};
+        }
+
+        const ErrorCodeDescriptor InvalidResult{Domain,
+                                                ErrorCode{"platform.leaderboard.invalid_result"},
+                                                ErrorSeverity::Error,
+                                                "The provider returned a malformed leaderboard result.",
+                                                "Reject the result and preserve the admitted request's typed failure.",
+                                                false,
+                                                false};
+    }  // namespace LeaderboardErrors
 
     /** @copydoc ValidatePlatformServiceCapabilitySnapshot */
     Result<void> ValidatePlatformServiceCapabilitySnapshot(const PlatformServiceCapabilitySnapshot &snapshot,
@@ -93,6 +190,43 @@ namespace Horo::PlatformServices {
             if (config.requiredServices[index] && !available)
                 return Result<void>::Failure(MakeError(BackendErrors::RequiredServiceUnavailable));
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateLeaderboardEntriesPage */
+    Result<void> ValidateLeaderboardEntriesPage(const LeaderboardEntriesPage &page, const LeaderboardRankedQuery &query,
+                                                const ProgressionValueKind valueKind, const LeaderboardOrdering ordering) {
+        if (!query.leaderboard.IsValid() || !HasValidLeaderboardPage(page, query.startIndex, query.pageSize, valueKind, ordering))
+            return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateLeaderboardEntriesPage */
+    Result<void> ValidateLeaderboardEntriesPage(const LeaderboardEntriesPage &page, const LeaderboardFriendsQuery &query,
+                                                const ProgressionValueKind valueKind, const LeaderboardOrdering ordering) {
+        if (!query.leaderboard.IsValid() || !HasValidLeaderboardPage(page, query.startIndex, query.pageSize, valueKind, ordering))
+            return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateLeaderboardAroundSubjectResult */
+    Result<void> ValidateLeaderboardAroundSubjectResult(const LeaderboardAroundSubjectResult &result,
+                                                        const LeaderboardAroundSubjectQuery &query, const ProgressionValueKind valueKind,
+                                                        const LeaderboardOrdering ordering) {
+        const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
+        if (!query.leaderboard.IsValid() || entryLimit > MaxPageEntries || result.entries.size() > entryLimit ||
+            !HasValidLeaderboardOrder(result.entries, valueKind, ordering))
+            return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
+        if (!result.subjectEntryIndex) {
+            if (!result.entries.empty() || result.hasEarlier || result.hasLater)
+                return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
+            return Result<void>::Success();
+        }
+        const auto subjectIndex = static_cast<std::size_t>(*result.subjectEntryIndex);
+        if (subjectIndex >= result.entries.size() || subjectIndex > query.entriesBefore ||
+            result.entries.size() - subjectIndex - 1U > query.entriesAfter || (result.hasEarlier && subjectIndex < query.entriesBefore) ||
+            (result.hasLater && result.entries.size() - subjectIndex - 1U < query.entriesAfter))
+            return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
         return Result<void>::Success();
     }
 
