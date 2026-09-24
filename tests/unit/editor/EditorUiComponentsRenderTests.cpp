@@ -340,8 +340,9 @@ TEST_CASE("Side dock tabs preserve reference padding height and interaction", "[
         startY = ImGui::GetCursorScreenPos().y;
         activeTab = DrawSideDockTabs(tabs, activeTab, imgui.fonts);
         endY = ImGui::GetCursorScreenPos().y;
-        const float inspectorWidth = defaultFont->CalcTextSizeA(12.0F, 100000.0F, 0.0F, tabs.front()).x + 20.0F;
-        const float sceneWidth = defaultFont->CalcTextSizeA(12.0F, 100000.0F, 0.0F, tabs.back()).x + 20.0F;
+        const float tabFontSize = Theme::TextPx::Label();
+        const float inspectorWidth = defaultFont->CalcTextSizeA(tabFontSize, 100000.0F, 0.0F, tabs.front()).x + 20.0F;
+        const float sceneWidth = defaultFont->CalcTextSizeA(tabFontSize, 100000.0F, 0.0F, tabs.back()).x + 20.0F;
         sceneTabCenter = {ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x + 10.0F + inspectorWidth + sceneWidth * 0.5F,
                           startY + 18.0F};
         ImGui::End();
@@ -435,6 +436,7 @@ TEST_CASE("Component metrics use theme overrides while global scaling is disable
         output << R"({
             "name": "Component token test",
             "tokens": {
+                "typography": {"sansCompactBase": 12, "caption": 12, "label": 12},
                 "componentSizes": {
                     "xs": {
                         "fontSize": 11,
@@ -451,8 +453,11 @@ TEST_CASE("Component metrics use theme overrides while global scaling is disable
 
     Theme::ThemeEntry entry;
     REQUIRE(Theme::LoadThemeFromJson(path.string().c_str(), entry));
+    REQUIRE(entry.designTokens.typography.sansCompactBase == 16.0F);
+    REQUIRE(entry.designTokens.typography.caption == 16.0F);
+    REQUIRE(entry.designTokens.typography.label == 16.0F);
     const ComponentSizeMetrics &xs = MetricsFor(entry.designTokens, ComponentSize::XS);
-    REQUIRE(xs.fontSize == 14.0F);
+    REQUIRE(xs.fontSize == 16.0F);
     REQUIRE(xs.minimumHeight == 20.0F);
     REQUIRE(SpacingFor(entry.designTokens, SpacingSize::Medium) == 13.0F);
     std::error_code removeError;

@@ -185,8 +185,28 @@ TEST_CASE("Transform gizmo linear handles remain selectable", "[unit][editor][vi
     REQUIRE(hub.HasValue());
     REQUIRE_FALSE(hub.Value().hoveredAxis.has_value());
 
+    TransformGizmoGeometryRequest planeRequest = context.request;
+    planeRequest.pointer = {222.0F, 222.0F};
+    const Result<TransformGizmoFrameGeometry> plane = DrawTransformGizmoGeometry(drawList, planeRequest);
+    REQUIRE(plane.HasValue());
+    REQUIRE(plane.Value().hoveredAxis == 6);
+
+    EditorViewportCamera distantCamera = context.camera;
+    distantCamera.position = {0.0F, 0.0F, 8.0F};
+    const TransformGizmoGeometryRequest distantRequest{.camera = distantCamera,
+                                                       .worldTransform = context.worldTransform,
+                                                       .tool = EditorTransformTool::Move,
+                                                       .space = EditorTransformSpace::World,
+                                                       .width = 400.0F,
+                                                       .height = 400.0F,
+                                                       .pointer = planeRequest.pointer,
+                                                       .hovered = true};
+    const Result<TransformGizmoFrameGeometry> distantPlane = DrawTransformGizmoGeometry(drawList, distantRequest);
+    REQUIRE(distantPlane.HasValue());
+    REQUIRE(distantPlane.Value().hoveredAxis == 6);
+
     TransformGizmoGeometryRequest endOnRequest = context.request;
-    endOnRequest.pointer = {212.75F, 212.75F};
+    endOnRequest.pointer = {222.0F, 178.0F};
     const Result<TransformGizmoFrameGeometry> endOnZ = DrawTransformGizmoGeometry(drawList, endOnRequest);
     REQUIRE(endOnZ.HasValue());
     REQUIRE(endOnZ.Value().hoveredAxis == 2);
@@ -209,12 +229,52 @@ TEST_CASE("Transform gizmo linear handles remain selectable", "[unit][editor][vi
     REQUIRE(endOnX.Value().hoveredAxis == 0);
 
     endOnXRequest.tool = EditorTransformTool::Scale;
+    endOnXRequest.pointer = {212.75F, 212.75F};
     const Result<TransformGizmoFrameGeometry> scaleEndOnX = DrawTransformGizmoGeometry(drawList, endOnXRequest);
     REQUIRE(scaleEndOnX.HasValue());
     REQUIRE(scaleEndOnX.Value().hoveredAxis == 0);
 }
 
-TEST_CASE("Transform gizmo tool extents remain consistent", "[unit][editor][viewport][gizmo]") {
+TEST_CASE("Move plane pointer projection stays on the selected world plane", "[unit][editor][viewport][gizmo]") {
+    EditorViewportCamera camera;
+    const Result<std::optional<Math::Vec3>> point = ProjectTransformGizmoPlanePoint(
+        {.camera = camera, .center = {}, .normal = {0.0F, 0.0F, 1.0F}, .pointer = {220.0F, 180.0F}, .width = 400.0F, .height = 400.0F});
+    REQUIRE(point.HasValue());
+    REQUIRE(point.Value().has_value());
+    REQUIRE(std::fabs(point.Value()->z) < 1e-5F);
+    REQUIRE(point.Value()->x > 0.0F);
+    REQUIRE(point.Value()->y > 0.0F);
+}
+
+TEST_CASE("Move plane handles stay behind their matching arrows across camera angles", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    ImDrawList &drawList = context.DrawList();
+    for (const Math::Vec3 cameraPosition : std::array{Math::Vec3{4.0F, 3.0F, 4.0F}, Math::Vec3{-4.0F, 3.0F, 4.0F}}) {
+        context.camera.position = cameraPosition;
+        const Result<TransformGizmoFrameGeometry> geometry = DrawTransformGizmoGeometry(drawList, context.request);
+        REQUIRE(geometry.HasValue());
+        REQUIRE(geometry.Value().center.has_value());
+        for (int axis = 0; axis < 3; ++axis) {
+            REQUIRE(geometry.Value().projectedAxisVisible[axis]);
+            REQUIRE(geometry.Value().movePlaneCorners[axis].has_value());
+            const ImVec2 direction = geometry.Value().screenDirections[axis];
+            ImVec2 handleCenter{};
+            for (const ImVec2 corner : *geometry.Value().movePlaneCorners[axis]) {
+                const ImVec2 offset{corner.x - geometry.Value().center->x, corner.y - geometry.Value().center->y};
+                REQUIRE(offset.x * direction.x + offset.y * direction.y <= -7.9F);
+                handleCenter.x += corner.x * 0.25F;
+                handleCenter.y += corner.y * 0.25F;
+            }
+            TransformGizmoGeometryRequest hoverRequest = context.request;
+            hoverRequest.pointer = handleCenter;
+            const Result<TransformGizmoFrameGeometry> hovered = DrawTransformGizmoGeometry(drawList, hoverRequest);
+            REQUIRE(hovered.HasValue());
+            REQUIRE(hovered.Value().hoveredAxis == axis + 4);
+        }
+    }
+}
+
+TEST_CASE("Move arrows extend beyond rotation and scale handles", "[unit][editor][viewport][gizmo]") {
     ImGuiGizmoGeometryTestContext context;
     context.camera.position = {4.0F, 3.0F, 5.0F};
 
@@ -225,7 +285,9 @@ TEST_CASE("Transform gizmo tool extents remain consistent", "[unit][editor][view
     };
     for (const float extent : toolExtents)
         REQUIRE(extent >= 78.0F);
-    REQUIRE(*std::max_element(toolExtents.begin(), toolExtents.end()) - *std::min_element(toolExtents.begin(), toolExtents.end()) < 18.0F);
+    REQUIRE(toolExtents[0] > toolExtents[1] + 25.0F);
+    REQUIRE(toolExtents[0] > toolExtents[2] + 25.0F);
+    REQUIRE(std::fabs(toolExtents[1] - toolExtents[2]) < 18.0F);
 }
 
 TEST_CASE("Transform gizmo scale handles remain stable under camera changes", "[unit][editor][viewport][gizmo]") {
@@ -270,6 +332,43 @@ TEST_CASE("Transform gizmo scale handles remain stable under camera changes", "[
         }
         context.camera.position = context.camera.position - strafeDelta;
         context.camera.target = context.camera.target - strafeDelta;
+    }
+}
+
+TEST_CASE("Scale handle faces stay square to their projected axes", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    context.camera.position = {4.0F, 3.0F, 5.0F};
+    TransformGizmoGeometryRequest request = context.request;
+    request.tool = EditorTransformTool::Scale;
+    request.hovered = false;
+
+    ImDrawList &drawList = context.DrawList();
+    const int firstVertex = drawList.VtxBuffer.Size;
+    const Result<TransformGizmoFrameGeometry> geometry = DrawTransformGizmoGeometry(drawList, request);
+    REQUIRE(geometry.HasValue());
+    REQUIRE(geometry.Value().center.has_value());
+
+    const Result<Math::Vec3> viewDirection = Math::TryNormalize(context.camera.target - context.camera.position);
+    REQUIRE(viewDirection.HasValue());
+    const ImU32 redFace = ImGui::GetColorU32(ImVec4{0.93F, 0.29F, 0.26F, 1.0F});
+    const Math::Vec3 worldAxis = geometry.Value().worldAxes[0];
+    const float alignment = Math::Dot(worldAxis, viewDirection.Value());
+    const float axisLength = 96.0F * std::sqrt(1.0F - alignment * alignment);
+    const ImVec2 direction = geometry.Value().screenDirections[0];
+    const ImVec2 handle{geometry.Value().center->x + direction.x * (axisLength - 9.0F),
+                        geometry.Value().center->y + direction.y * (axisLength - 9.0F)};
+    for (const float along : {-9.0F, 9.0F}) {
+        for (const float across : {-9.0F, 9.0F}) {
+            const ImVec2 corner{handle.x + direction.x * along - direction.y * across,
+                                handle.y + direction.y * along + direction.x * across};
+            float nearest = std::numeric_limits<float>::max();
+            for (int vertexIndex = firstVertex; vertexIndex < drawList.VtxBuffer.Size; ++vertexIndex) {
+                const ImDrawVert &vertex = drawList.VtxBuffer[vertexIndex];
+                if (vertex.col == redFace)
+                    nearest = std::min(nearest, std::hypot(vertex.pos.x - corner.x, vertex.pos.y - corner.y));
+            }
+            REQUIRE(nearest < 1.0F);
+        }
     }
 }
 
@@ -345,6 +444,45 @@ TEST_CASE("Transform gizmo rotation rings preserve radius and crossings", "[unit
     REQUIRE(up.HasValue());
     RequireTransformGizmoRotationRingCrossings(drawList, firstAngledVertex, *angledRotation.Value().center, colors, right.Value(),
                                                up.Value());
+
+    const ImVec2 rearCrossing{angledRotation.Value().center->x - 96.0F * right.Value().x,
+                              angledRotation.Value().center->y + 96.0F * up.Value().x};
+    rotationRequest.pointer = rearCrossing;
+    rotationRequest.hovered = true;
+    const Result<TransformGizmoFrameGeometry> rearHover = DrawTransformGizmoGeometry(drawList, rotationRequest);
+    REQUIRE(rearHover.HasValue());
+    REQUIRE_FALSE(rearHover.Value().hoveredAxis.has_value());
+}
+
+TEST_CASE("Transform gizmo rotation drag isolates its axis and draws an angle sector", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    ImDrawList &drawList = context.DrawList();
+    context.camera.position = {4.0F, 3.0F, 5.0F};
+    TransformGizmoGeometryRequest request = context.request;
+    request.tool = EditorTransformTool::Rotate;
+    request.activeAxis = 0;
+    const int firstVertex = drawList.VtxBuffer.Size;
+    const Result<TransformGizmoFrameGeometry> geometry = DrawTransformGizmoGeometry(drawList, request);
+    REQUIRE(geometry.HasValue());
+    REQUIRE(geometry.Value().center.has_value());
+    const auto colors = TransformGizmoRotationColors();
+    std::array<bool, 3> axisDrawn{};
+    for (int vertexIndex = firstVertex; vertexIndex < drawList.VtxBuffer.Size; ++vertexIndex)
+        for (int axis = 0; axis < 3; ++axis)
+            axisDrawn[axis] = axisDrawn[axis] || drawList.VtxBuffer[vertexIndex].col == colors[axis];
+    REQUIRE(drawList.VtxBuffer.Size > firstVertex);
+    REQUIRE_FALSE(axisDrawn[1]);
+    REQUIRE_FALSE(axisDrawn[2]);
+
+    const int firstSweepVertex = drawList.VtxBuffer.Size;
+    REQUIRE(DrawTransformGizmoRotationSweep(drawList, context.camera, *geometry.Value().center, {1.0F, 0.0F, 0.0F}, {0.0F, 1.0F, 0.0F},
+                                            {0.0F, 0.0F, 1.0F})
+                .HasValue());
+    const ImU32 fill = ImGui::GetColorU32(ImVec4{0.82F, 0.84F, 0.88F, 0.22F});
+    bool sectorDrawn = false;
+    for (int vertexIndex = firstSweepVertex; vertexIndex < drawList.VtxBuffer.Size; ++vertexIndex)
+        sectorDrawn = sectorDrawn || drawList.VtxBuffer[vertexIndex].col == fill;
+    REQUIRE(sectorDrawn);
 }
 
 TEST_CASE("Transform gizmo rotation pins follow strafed rings", "[unit][editor][viewport][gizmo]") {

@@ -15,6 +15,7 @@ namespace Horo::Editor {
         constexpr float kOuterPadding = 10.0F;
         constexpr float kItemGap = 8.0F;
         constexpr float kInnerPadding = 7.0F;
+        constexpr float kItemHeight = 28.0F;
         constexpr float kIconDiameter = 6.0F;
         constexpr float kOverflowWidth = 28.0F;
         constexpr std::size_t kMaxVisibleItems = 12;
@@ -79,7 +80,7 @@ namespace Horo::Editor {
 
     bool EditorStatusBar::DrawItem(const EditorStatusItem &item, const ImVec2 &position, const float width,
                                    const bool interactionEnabled) const {
-        const ImVec2 itemSize{width, Height - 6.0F};
+        const ImVec2 itemSize{width, kItemHeight};
         const ImVec2 itemMax{position.x + itemSize.x, position.y + itemSize.y};
         ImGui::SetCursorScreenPos(position);
         ImGui::PushID(item.descriptor.id.c_str());
@@ -191,7 +192,7 @@ namespace Horo::Editor {
 
             float leftX = position.x + kOuterPadding;
             float rightX = position.x + size.x - kOuterPadding - rightWidth;
-            const float itemY = position.y + 3.0F;
+            const float itemY = position.y + (size.y - kItemHeight) * 0.5F;
             for (const EditorStatusItem *item : layout_.items) {
                 float &x = item->descriptor.alignment == EditorStatusBarAlignment::Left ? leftX : rightX;
                 const float itemWidth = PlannedWidth(*item);

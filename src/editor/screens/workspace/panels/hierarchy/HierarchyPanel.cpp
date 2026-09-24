@@ -20,7 +20,6 @@ namespace Horo::Editor {
         constexpr float kTabHeight = 36.0F;
         constexpr float kToolbarHeight = 42.0F;
         constexpr float kSearchRegionHeight = 30.0F;
-        constexpr float kFooterHeight = 28.0F;
         constexpr float kOuterPadding = 6.0F;
         constexpr float kRowActionsWidth = 48.0F;
 
@@ -56,14 +55,6 @@ namespace Horo::Editor {
                 drawList.AddLine({minimum.x, y}, {minimum.x, yEnd}, color, scale);
                 drawList.AddLine({maximum.x, y}, {maximum.x, yEnd}, color, scale);
             }
-        }
-
-        /** @brief Substitutes the hierarchy object count into one complete localized label. */
-        [[nodiscard]] std::string FormatObjectCount(std::string pattern, const std::size_t count) {
-            constexpr std::string_view token{"{count}"};
-            if (const std::size_t position = pattern.find(token); position != std::string::npos)
-                pattern.replace(position, token.size(), std::to_string(count));
-            return pattern;
         }
 
         /** @brief Draws the reference-height hierarchy tab without changing shared bottom-dock tabs. */
@@ -918,7 +909,7 @@ namespace Horo::Editor {
         const float outerPadding = kOuterPadding * uiScale;
         const float contentHeight = std::max(1.0F, size.y - tabHeight);
         const float scrollTop = toolbarHeight + kSearchRegionHeight * uiScale;
-        const float scrollHeight = std::max(1.0F, contentHeight - scrollTop - kFooterHeight * uiScale);
+        const float scrollHeight = std::max(1.0F, contentHeight - scrollTop);
         ImGui::SetCursorPos({0.0F, scrollTop});
         ImGui::BeginChild("##HierarchyScroll", {size.x, scrollHeight}, false, ImGuiWindowFlags_NoSavedSettings);
         ImGui::SetCursorPosY(5.0F * uiScale);
@@ -963,24 +954,6 @@ namespace Horo::Editor {
         }
         ImGui::PopStyleVar();
         ImGui::EndChild();
-
-        ImGui::SetCursorPos({0.0F, contentHeight - kFooterHeight * uiScale});
-        const ImVec2 footerMin = ImGui::GetCursorScreenPos();
-        ImDrawList &footerDrawList = *ImGui::GetWindowDrawList();
-        footerDrawList.AddRectFilled(footerMin, {footerMin.x + size.x, footerMin.y + kFooterHeight * uiScale}, Theme::U32(Theme::Bg0()));
-        footerDrawList.AddLine(footerMin, {footerMin.x + size.x, footerMin.y}, Theme::U32(Theme::Border()));
-        ImFont *footerFont = ResolveFont(ctx.theme.fonts.sans);
-        const float footerFontSize = Theme::TextPx::Caption();
-        const std::string objectCount =
-            FormatObjectCount(ctx.localization.Get("editor", "workspace.hierarchy.footer.objects"), vm.objects.size());
-        const std::string &footerLabel = ctx.localization.Get("editor", "workspace.hierarchy.footer.label");
-        const ImVec2 footerLabelSize = footerFont->CalcTextSizeA(footerFontSize, 100000.0F, 0.0F, footerLabel.c_str());
-        const float footerTextY = footerMin.y + (kFooterHeight * uiScale - footerLabelSize.y) * 0.5F;
-        footerDrawList.AddText(footerFont, footerFontSize, {footerMin.x + 10.0F * uiScale, footerTextY}, Theme::U32(Theme::Dim()),
-                               objectCount.c_str());
-        footerDrawList.AddText(footerFont, footerFontSize, {footerMin.x + size.x - 10.0F * uiScale - footerLabelSize.x, footerTextY},
-                               Theme::U32(Theme::Dim()), footerLabel.c_str());
-        ImGui::Dummy({size.x, kFooterHeight * uiScale});
 
         if (interaction.workspaceEligible && interaction.panelFocused && !interaction.searchActive && !renamingId_.has_value() &&
             editSession_.SelectedId().has_value()) {

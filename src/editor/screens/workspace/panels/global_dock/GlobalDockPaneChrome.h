@@ -81,13 +81,6 @@ namespace Horo::Editor {
     /** @brief Draws a canonical value meter used by audio and network panes. */
     void DrawGlobalDockMeter(ImVec2 origin, float width, float progress);
 
-    /** @brief Draws the canonical footer surface and top divider. */
-    void DrawGlobalDockFooterSurface(ImVec2 origin, float width, float height);
-
-    /** @brief Draws canonical left-aligned footer segments and one right-aligned status. */
-    void DrawGlobalDockStatusFooter(ImVec2 origin, float width, std::span<const std::string_view> segments, std::string_view status,
-                                    const Theme::Fonts &fonts);
-
     /** @brief Measures a toolbar chip using the active typography and layout tokens. */
     [[nodiscard]] float MeasureGlobalDockToolbarChip(const GlobalDockToolbarChipProps &props, const Theme::Fonts &fonts);
 

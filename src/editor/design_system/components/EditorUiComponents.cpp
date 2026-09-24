@@ -1235,12 +1235,12 @@ namespace Horo::Editor::Ui {
 
     // ── InputIntControl ──────────────────────────────────────────────────
 
-    void InputIntControl(const char *id, int *value, const Theme::Fonts &fonts) {
+    void InputIntControl(const char *id, int *value, const Theme::Fonts &fonts, const bool showSteppers) {
         PushControlStyle();
         ImGui::PushItemWidth(-1.0F);
         {
             Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Body(), Theme::FontPx::SansCompact);
-            ImGui::InputInt(id, value, 1, 4);
+            ImGui::InputInt(id, value, showSteppers ? 1 : 0, showSteppers ? 4 : 0);
         }
         ImGui::PopItemWidth();
         PopControlStyle();
@@ -1260,7 +1260,7 @@ namespace Horo::Editor::Ui {
     }
 
     /** @copydoc InputFloatStepperControl */
-    bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, const float step) {
+    bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, const float step, const bool showSteppers) {
         ImGui::PushID(id);
         PushControlStyle();
         ImGui::PushItemWidth(-1.0F);
@@ -1271,6 +1271,11 @@ namespace Horo::Editor::Ui {
         }
         ImGui::PopItemWidth();
         PopControlStyle();
+
+        if (!showSteppers) {
+            ImGui::PopID();
+            return changed;
+        }
 
         const ImVec2 fieldMin = ImGui::GetItemRectMin();
         const ImVec2 fieldMax = ImGui::GetItemRectMax();

@@ -187,11 +187,9 @@ namespace Horo::Editor {
         const std::string name{asset.name};
         const float metaX = listView ? thumbMax.x + 12.0F : cardMin.x + 8.0F;
         const float metaY = listView ? cardMin.y + 7.0F : thumbMax.y + 6.0F;
-        const ImVec4 clipRect{metaX, cardMin.y, cardMax.x - 26.0F, cardMax.y};
+        const ImVec4 clipRect{metaX, cardMin.y, cardMax.x - 8.0F, cardMax.y};
         drawList->AddText(font, fontSize, {metaX, metaY}, Theme::U32(Theme::Text()), name.c_str(), nullptr, 0.0F, &clipRect);
         drawList->AddText(font, AssetBrowserLayout::SecondaryFontSize(), {metaX, metaY + fontSize + 2.0F}, Theme::U32(Theme::Dim()),
                           secondaryText.data(), secondaryText.data() + secondaryText.size(), 0.0F, &clipRect);
-        Ui::DrawEditorIcon(drawList, Ui::UiIcon::MoreVertical, {cardMax.x - 17.0F, cardMin.y + 6.0F}, {16.0F, 16.0F},
-                           Theme::U32(Theme::Dim()), iconFont);
     }
 }  // namespace Horo::Editor

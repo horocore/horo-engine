@@ -4,15 +4,19 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
 #include "editor/renderer/EditorViewportRenderer.h"
+#include "editor/screens/workspace/panels/viewport/ViewportOverlay.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <imgui.h>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace {
     class TestLocalization final : public Horo::Editor::ILocalizationService {
@@ -157,6 +161,25 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
         return ImVec2{total.x / count, total.y / count};
     };
 
+    const auto rotationRingPointNear = [&](const ImVec2 target) -> std::optional<ImVec2> {
+        const ImU32 ringColor = ImGui::GetColorU32(ImVec4{0.48F, 0.64F, 1.0F, 1.0F});
+        float nearestDistance = std::numeric_limits<float>::max();
+        std::optional<ImVec2> nearest;
+        const ImDrawData *drawData = ImGui::GetDrawData();
+        for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
+            for (const ImDrawVert &vertex : drawData->CmdLists[listIndex]->VtxBuffer) {
+                if (vertex.col != ringColor)
+                    continue;
+                const float distance = std::hypot(vertex.pos.x - target.x, vertex.pos.y - target.y);
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearest = vertex.pos;
+                }
+            }
+        }
+        return nearest;
+    };
+
     io.AddFocusEvent(true);
     io.AddMousePosEvent(80.0F, 54.0F);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
@@ -185,7 +208,7 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     drawFrame();
 
     REQUIRE((renderer.requestedExtent.width == 800));
-    REQUIRE((renderer.requestedExtent.height == 504));
+    REQUIRE((renderer.requestedExtent.height == 560));
     REQUIRE((renderer.gridOptions.visible));
     REQUIRE((command.command == EditorWorkspaceViewCommand::PickViewport));
     REQUIRE((command.viewportPickPayload.has_value()));
@@ -233,14 +256,14 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     viewModel.primarySelectionWorldTransform = Math::Mat4::Identity();
     viewModel.primarySelectionParentWorldTransform = Math::Mat4::Identity();
     command = {};
-    io.AddMousePosEvent(230.0F, 162.0F);
+    io.AddMousePosEvent(230.0F, 148.0F);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     drawFrame();
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     drawFrame();
     command = {};
-    io.AddMousePosEvent(250.0F, 162.0F);
+    io.AddMousePosEvent(250.0F, 148.0F);
     drawFrame();
     REQUIRE((command.command == EditorWorkspaceViewCommand::PreviewObjectTransform));
     REQUIRE((command.objectPayload == SceneObjectId{1}));
@@ -254,7 +277,11 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
 
     viewModel.activeTransformTool = EditorTransformTool::Rotate;
     command = {};
-    io.AddMousePosEvent(278.0F, 94.0F);
+    io.AddMousePosEvent(10.0F, 200.0F);
+    drawFrame();
+    const std::optional<ImVec2> ringPoint = rotationRingPointNear({278.0F, 226.0F});
+    REQUIRE(ringPoint.has_value());
+    io.AddMousePosEvent(ringPoint->x, ringPoint->y);
     drawFrame();
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
@@ -262,7 +289,7 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     const std::optional<ImVec2> pinAtStart = rotationPinCenter();
     REQUIRE(pinAtStart.has_value());
     command = {};
-    io.AddMousePosEvent(242.0F, 196.0F);
+    io.AddMousePosEvent(160.0F, 220.0F);
     drawFrame();
     const std::optional<ImVec2> pinAfterRotation = rotationPinCenter();
     REQUIRE(pinAfterRotation.has_value());
@@ -283,13 +310,17 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     viewModel.primarySelectionWorldTransform =
         Math::Multiply(parentTransform.ToMatrix(), viewModel.objects.front().localTransform.ToMatrix());
     command = {};
-    io.AddMousePosEvent(278.0F, 94.0F);
+    io.AddMousePosEvent(10.0F, 200.0F);
+    drawFrame();
+    const std::optional<ImVec2> worldRingPoint = rotationRingPointNear({278.0F, 226.0F});
+    REQUIRE(worldRingPoint.has_value());
+    io.AddMousePosEvent(worldRingPoint->x, worldRingPoint->y);
     drawFrame();
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     drawFrame();
     command = {};
-    io.AddMousePosEvent(242.0F, 196.0F);
+    io.AddMousePosEvent(160.0F, 220.0F);
     drawFrame();
     REQUIRE((command.command == EditorWorkspaceViewCommand::PreviewObjectTransform));
     REQUIRE((command.transformPayload.has_value()));
@@ -303,7 +334,7 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     viewModel.primarySelectionWorldTransform =
         Math::Multiply(parentTransform.ToMatrix(), viewModel.objects.front().localTransform.ToMatrix());
     command = {};
-    io.AddMousePosEvent(210.0F, 162.0F);
+    io.AddMousePosEvent(210.0F, 148.0F);
     drawFrame();
     command = {};
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
@@ -377,5 +408,52 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     REQUIRE_FALSE((renderer.lightVisualizerOptions.selectedLight.has_value()));
 
     panel.OnDetach();
+    ImGui::DestroyContext();
+}
+
+TEST_CASE("Viewport compass selects both signed ends of each axis", "[unit][editor][viewport]") {
+    using namespace Horo::Editor;
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = {900.0F, 600.0F};
+    io.DeltaTime = 1.0F / 60.0F;
+    io.Fonts->AddFontDefault();
+    static_cast<void>(io.Fonts->Build());
+    ImFont *font = io.Fonts->Fonts.front();
+    const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font};
+    TestLocalization localization;
+    ViewportOverlayState state;
+    state.camera.position = {4.0F, 3.0F, 5.0F};
+    const Horo::Math::Vec3 forward = Horo::Math::TryNormalize(state.camera.target - state.camera.position).Value();
+    const Horo::Math::Vec3 right = Horo::Math::TryNormalize(Horo::Math::Cross(forward, state.camera.up)).Value();
+    const Horo::Math::Vec3 up = Horo::Math::Cross(right, forward);
+    const auto draw = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.0F, 0.0F});
+        ImGui::SetNextWindowSize({900.0F, 600.0F});
+        ImGui::Begin("CompassTest", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+        const ViewportOverlayAction action = DrawViewportOverlay({0.0F, 0.0F}, {800.0F, 500.0F}, state, fonts, localization);
+        ImGui::End();
+        ImGui::Render();
+        return action;
+    };
+    constexpr std::array endpoints{
+        std::pair{Horo::Math::Vec3{1.0F, 0.0F, 0.0F}, EditorViewportAxisView::PositiveX},
+        std::pair{Horo::Math::Vec3{-1.0F, 0.0F, 0.0F}, EditorViewportAxisView::NegativeX},
+        std::pair{Horo::Math::Vec3{0.0F, 1.0F, 0.0F}, EditorViewportAxisView::PositiveY},
+        std::pair{Horo::Math::Vec3{0.0F, -1.0F, 0.0F}, EditorViewportAxisView::NegativeY},
+        std::pair{Horo::Math::Vec3{0.0F, 0.0F, 1.0F}, EditorViewportAxisView::PositiveZ},
+        std::pair{Horo::Math::Vec3{0.0F, 0.0F, -1.0F}, EditorViewportAxisView::NegativeZ},
+    };
+    for (const auto &[axis, expected] : endpoints) {
+        io.AddMousePosEvent(752.0F + Horo::Math::Dot(axis, right) * 29.0F, 64.0F - Horo::Math::Dot(axis, up) * 29.0F);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        static_cast<void>(draw());
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        static_cast<void>(draw());
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        REQUIRE(draw().axisView == expected);
+    }
     ImGui::DestroyContext();
 }

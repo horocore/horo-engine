@@ -14,7 +14,7 @@ namespace Horo::Editor {
     namespace {
         constexpr float ControlHeight = 36.0F;
         constexpr float ControlGap = 8.0F;
-        constexpr float ToolGap = 1.0F;
+        constexpr float ToolGap = 8.0F;
         constexpr float TopInset = 16.0F;
         constexpr float SideInset = 16.0F;
         constexpr float ButtonWidth = 38.0F;
@@ -91,7 +91,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] bool DrawOverlayButton(const char *id, const ImVec2 position, const OverlayGlyph glyph, const bool selected,
-                                             const bool enabled, const char *tooltip) {
+                                             const bool enabled, const char *tooltip, const Theme::Fonts &fonts) {
             ImDrawList &drawList = *ImGui::GetWindowDrawList();
             const ImVec2 end{position.x + ButtonWidth, position.y + ControlHeight};
             ImGui::SetCursorScreenPos(position);
@@ -107,17 +107,18 @@ namespace Horo::Editor {
             DrawGlyph(drawList, glyph, {position.x + ButtonWidth * 0.5F, position.y + ControlHeight * 0.5F},
                       Theme::U32(enabled ? selected ? Theme::Accent() : Theme::Text() : Theme::Muted()));
             if (hovered && tooltip != nullptr)
-                ImGui::SetTooltip("%s", tooltip);
+                Ui::ShowTooltip(tooltip, &fonts);
             return clicked && enabled;
         }
 
-        void DrawCompass(ImDrawList &drawList, const ImVec2 origin, const EditorViewportCamera &camera) {
+        [[nodiscard]] std::optional<EditorViewportAxisView> DrawCompass(ImDrawList &drawList, const ImVec2 origin,
+                                                                        const EditorViewportCamera &camera) {
             const auto forward = Math::TryNormalize(camera.target - camera.position);
             if (!forward.HasValue())
-                return;
+                return std::nullopt;
             const auto right = Math::TryNormalize(Math::Cross(forward.Value(), camera.up));
             if (!right.HasValue())
-                return;
+                return std::nullopt;
             const Math::Vec3 up = Math::Cross(right.Value(), forward.Value());
             const Math::Vec3 towardCamera = forward.Value() * -1.0F;
             constexpr std::array axes{Math::Vec3{1.0F, 0.0F, 0.0F}, Math::Vec3{0.0F, 1.0F, 0.0F}, Math::Vec3{0.0F, 0.0F, 1.0F}};
@@ -126,29 +127,67 @@ namespace Horo::Editor {
             constexpr std::array labels{'X', 'Y', 'Z'};
             const ImVec2 center{origin.x, origin.y};
 
-            for (const bool frontPass : {false, true}) {
-                for (std::size_t i = 0; i < axes.size(); ++i) {
-                    for (const float sign : {-1.0F, 1.0F}) {
-                        const Math::Vec3 axis = axes[i] * sign;
-                        const bool front = Math::Dot(axis, towardCamera) >= 0.0F;
-                        if (front != frontPass)
-                            continue;
-                        const ImVec2 tip{center.x + Math::Dot(axis, right.Value()) * 29.0F, center.y - Math::Dot(axis, up) * 29.0F};
-                        drawList.AddLine(center, tip, front ? colors[i] : mutedColors[i], front ? 2.0F : 1.5F);
-                        if (sign < 0.0F) {
-                            drawList.AddCircleFilled(tip, front ? 6.0F : 5.0F, front ? colors[i] : mutedColors[i], 16);
-                            continue;
-                        }
-                        drawList.AddCircleFilled(tip, front ? 10.0F : 8.5F, front ? colors[i] : mutedColors[i], 24);
-                        const char label[]{labels[i], '\0'};
-                        const ImVec2 textSize = ImGui::CalcTextSize(label);
-                        drawList.AddText({tip.x - textSize.x * 0.5F, tip.y - textSize.y * 0.5F},
-                                         front ? IM_COL32(17, 23, 29, 255) : IM_COL32(174, 184, 196, 255), label);
-                    }
+            struct CompassEndpoint {
+                ImVec2 tip;
+                float depth;
+                std::size_t axis;
+                bool positive;
+            };
+
+            std::array<CompassEndpoint, 6> endpoints{};
+            std::size_t endpointCount = 0;
+            for (std::size_t i = 0; i < axes.size(); ++i) {
+                for (const float sign : {-1.0F, 1.0F}) {
+                    const Math::Vec3 axis = axes[i] * sign;
+                    endpoints[endpointCount++] = {
+                        .tip = {center.x + Math::Dot(axis, right.Value()) * 29.0F, center.y - Math::Dot(axis, up) * 29.0F},
+                        .depth = Math::Dot(axis, towardCamera),
+                        .axis = i,
+                        .positive = sign > 0.0F,
+                    };
                 }
+            }
+            std::sort(endpoints.begin(), endpoints.end(), [](const CompassEndpoint &lhs, const CompassEndpoint &rhs) {
+                return lhs.depth < rhs.depth;
+            });
+            for (const CompassEndpoint &endpoint : endpoints) {
+                const bool front = endpoint.depth >= 0.0F;
+                drawList.AddLine(center, endpoint.tip, front ? colors[endpoint.axis] : mutedColors[endpoint.axis], front ? 2.0F : 1.5F);
             }
             drawList.AddCircleFilled(center, 4.0F, Theme::U32(Theme::Bg2()), 16);
             drawList.AddCircle(center, 4.0F, Theme::U32(Theme::Border()), 16, 1.0F);
+            for (const CompassEndpoint &endpoint : endpoints) {
+                const bool front = endpoint.depth >= 0.0F;
+                if (!endpoint.positive) {
+                    drawList.AddCircleFilled(endpoint.tip, front ? 6.0F : 5.0F, front ? colors[endpoint.axis] : mutedColors[endpoint.axis],
+                                             16);
+                    continue;
+                }
+                drawList.AddCircleFilled(endpoint.tip, front ? 10.0F : 8.5F, front ? colors[endpoint.axis] : mutedColors[endpoint.axis],
+                                         24);
+                const char label[]{labels[endpoint.axis], '\0'};
+                const ImVec2 textSize = ImGui::CalcTextSize(label);
+                drawList.AddText({endpoint.tip.x - textSize.x * 0.5F, endpoint.tip.y - textSize.y * 0.5F},
+                                 front ? IM_COL32(17, 23, 29, 255) : IM_COL32(174, 184, 196, 255), label);
+            }
+            ImGui::SetCursorScreenPos({center.x - 40.0F, center.y - 40.0F});
+            if (!ImGui::InvisibleButton("##Compass", {80.0F, 80.0F}))
+                return std::nullopt;
+            const ImVec2 pointer = ImGui::GetMousePos();
+            for (auto it = endpoints.rbegin(); it != endpoints.rend(); ++it) {
+                const bool front = it->depth >= 0.0F;
+                const float radius = it->positive ? (front ? 10.0F : 8.5F) : (front ? 6.0F : 5.0F);
+                const float dx = pointer.x - it->tip.x;
+                const float dy = pointer.y - it->tip.y;
+                if (dx * dx + dy * dy > radius * radius)
+                    continue;
+                constexpr std::array views{
+                    EditorViewportAxisView::NegativeX, EditorViewportAxisView::PositiveX, EditorViewportAxisView::NegativeY,
+                    EditorViewportAxisView::PositiveY, EditorViewportAxisView::NegativeZ, EditorViewportAxisView::PositiveZ,
+                };
+                return views[it->axis * 2 + (it->positive ? 1U : 0U)];
+            }
+            return std::nullopt;
         }
 
         void DrawStats(const ImVec2 origin, const ImVec2 size, const ViewportOverlayState &state,
@@ -213,22 +252,22 @@ namespace Horo::Editor {
         for (std::size_t i = 0; i < tools.size(); ++i) {
             ImGui::PushID(static_cast<int>(i));
             if (DrawOverlayButton("##Tool", {toolX, toolY}, glyphs[i], state.tool == tools[i], true,
-                                  localization.Get("editor", keys[i]).c_str()))
+                                  localization.Get("editor", keys[i]).c_str(), fonts))
                 action.tool = tools[i];
             ImGui::PopID();
             toolX += ButtonWidth + ToolGap;
         }
         if (DrawOverlayButton("##Focus", {toolX, toolY}, OverlayGlyph::Focus, false, state.canFocusSelection,
-                              localization.Get("editor", "workspace.viewport.focus").c_str()))
+                              localization.Get("editor", "workspace.viewport.focus").c_str(), fonts))
             action.focusSelection = true;
 
         if (size.x >= 580.0F) {
             if (DrawOverlayButton("##Grid", {rightControlStart, controlPosition.y}, OverlayGlyph::Grid, state.gridVisible, true,
-                                  localization.Get("editor", "workspace.viewport.grid").c_str()))
+                                  localization.Get("editor", "workspace.viewport.grid").c_str(), fonts))
                 action.toggleGrid = true;
         }
         if (size.x >= 740.0F)
-            DrawCompass(*ImGui::GetWindowDrawList(), {origin.x + size.x - 48.0F, origin.y + 64.0F}, state.camera);
+            action.axisView = DrawCompass(*ImGui::GetWindowDrawList(), {origin.x + size.x - 48.0F, origin.y + 64.0F}, state.camera);
         DrawStats(origin, size, state, localization);
         ImGui::PopID();
         return action;

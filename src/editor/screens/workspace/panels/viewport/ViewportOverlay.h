@@ -29,6 +29,7 @@ namespace Horo::Editor {
     struct ViewportOverlayAction {
         std::optional<Runtime::CameraProjection> projection;
         std::optional<EditorTransformTool> tool;
+        std::optional<EditorViewportAxisView> axisView;
         bool toggleGrid{};
         bool focusSelection{};
     };

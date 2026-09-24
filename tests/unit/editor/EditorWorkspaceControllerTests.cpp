@@ -1529,6 +1529,70 @@ namespace {
         std::filesystem::remove_all(projectRoot, cleanupError);
     }
 
+    TEST_CASE("Document tabs open, activate and close without losing the center dock", "[unit][editor]") {
+        TestWorkspaceController controller;
+        EditorWorkspaceViewCommandData open;
+        open.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+        open.targetIndex = 3;
+        open.stringPayload = "horo.game";
+        controller.ProcessCommand(open);
+
+        const auto &model = controller.ViewModel();
+        const TabStackNode *document = model.workspacePanelHost.Layout().FindTabStack("workspace.document");
+        REQUIRE(document != nullptr);
+        REQUIRE(document->tabs.size() == 2);
+        REQUIRE(model.activeDocumentPanelId == "horo.game");
+
+        EditorWorkspaceViewCommandData close;
+        close.command = EditorWorkspaceViewCommand::CloseWorkspacePanel;
+        close.stringPayload = "horo.game";
+        controller.ProcessCommand(close);
+        REQUIRE(document->tabs.size() == 1);
+        REQUIRE(model.activeDocumentPanelId == "horo.viewport");
+
+        close.stringPayload = "horo.viewport";
+        controller.ProcessCommand(close);
+        REQUIRE(document->tabs.empty());
+        REQUIRE(model.activeDocumentPanelId.empty());
+
+        open.stringPayload = "horo.viewport";
+        controller.ProcessCommand(open);
+        REQUIRE(document->tabs.size() == 1);
+        REQUIRE(model.activeDocumentPanelId == "horo.viewport");
+    }
+
+    TEST_CASE("Docking a side panel into the center updates visible tabs", "[unit][editor]") {
+        TestWorkspaceController controller;
+        EditorWorkspaceViewCommandData drop;
+        drop.command = EditorWorkspaceViewCommand::DockWorkspacePanel;
+        drop.stringPayload = "horo.hierarchy";
+        drop.workspaceDropTarget = WorkspacePanelDropTarget{"workspace.document", WorkspacePanelHost::DropKind::TabCenter};
+        controller.ProcessCommand(drop);
+
+        const auto &model = controller.ViewModel();
+        const TabStackNode *document = model.workspacePanelHost.Layout().FindTabStack("workspace.document");
+        REQUIRE(document != nullptr);
+        REQUIRE(document->tabs.size() == 2);
+        REQUIRE(model.activeDocumentPanelId == "horo.hierarchy");
+        REQUIRE(model.activeLeftPanelId.empty());
+
+        drop.workspaceDropTarget->kind = WorkspacePanelHost::DropKind::SplitRight;
+        controller.ProcessCommand(drop);
+        REQUIRE(document->tabs.size() == 2);
+        REQUIRE(model.workspacePanelHost.Layout().FindNode("workspace.document.split.horo.hierarchy") == nullptr);
+
+        drop.workspaceDropTarget = WorkspacePanelDropTarget{"workspace.left", WorkspacePanelHost::DropKind::TabCenter};
+        controller.ProcessCommand(drop);
+        REQUIRE(document->tabs.size() == 1);
+        REQUIRE(model.activeDocumentPanelId == "horo.viewport");
+        REQUIRE(model.activeLeftPanelId == "horo.hierarchy");
+
+        drop.workspaceDropTarget = WorkspacePanelDropTarget{"workspace.bottom", WorkspacePanelHost::DropKind::SplitRight};
+        controller.ProcessCommand(drop);
+        REQUIRE(model.activeBottomRightPanelId == "horo.hierarchy");
+        REQUIRE(model.activeLeftPanelId.empty());
+    }
+
     TEST_CASE("Moving An Active Panel Across Areas Updates Its Runtime Placement", "[unit][editor]") {
         TestWorkspaceController controller;
 
@@ -1635,6 +1699,7 @@ namespace {
 
         REQUIRE(
             (controller.ViewModel().activityBarLayout.FindSlot("horo.viewport") == ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
+        REQUIRE_FALSE(controller.ViewModel().activityBarLayout.FindSlot("horo.input_mapping").has_value());
     }
 
     TEST_CASE("Dropping Into The Lower Half Splits The Left Dock", "[unit][editor]") {
@@ -2151,6 +2216,22 @@ namespace {
         REQUIRE((!controller.ViewModel().canUndo));
         REQUIRE((events.size() == 1 && events.front().kind == ViewportChangeKind::CameraMoved));
         static_cast<void>(subscription);
+    }
+
+    TEST_CASE("Viewport compass commands synchronize the camera without editing the scene", "[unit][editor]") {
+        TestWorkspaceController controller;
+        const DocumentRevision documentRevision = controller.ViewModel().documentRevision;
+        EditorWorkspaceViewCommandData align;
+        align.command = EditorWorkspaceViewCommand::AlignViewportToAxis;
+        align.viewportAxisPayload = EditorViewportAxisView::NegativeY;
+        controller.ProcessCommand(align);
+
+        const EditorViewportCamera &camera = controller.ViewModel().viewportCamera;
+        REQUIRE(camera.IsValid());
+        REQUIRE(camera.position.y < camera.target.y);
+        REQUIRE(controller.ViewportScene().camera.position == camera.position);
+        REQUIRE(controller.ViewModel().documentRevision == documentRevision);
+        REQUIRE_FALSE(controller.ViewModel().isDirty);
     }
 
     TEST_CASE("Viewport Focus Treats An Empty Selection As No Interaction", "[unit][editor]") {

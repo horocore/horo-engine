@@ -2,15 +2,13 @@
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
-#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "ViewportOverlay.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "visualizers/light/LightMarkerLayer.h"
-#include "ViewportOverlay.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -52,7 +50,7 @@ namespace Horo::Editor {
 
     /** @copydoc ViewportPanel::GetDisplayName */
     std::string ViewportPanel::GetDisplayName() const {
-        return "horo.panel.viewport.title";
+        return "workspace.panel.viewport";
     }
 
     /** @copydoc ViewportPanel::GetDefaultDockArea */
@@ -90,18 +88,13 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::DrawPanel */
     void ViewportPanel::DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        const std::array tabNames{context.localization.Get("editor", "workspace.panel.viewport").c_str()};
-        Ui::DrawDockTabs(tabNames, 0, context.theme.fonts);
-
-        constexpr float tabBarHeight = 28.0F;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        ImGui::BeginChild("##Content", ImVec2(size.x, size.y - tabBarHeight), false,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::BeginChild("##Content", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
-        const float height = size.y - tabBarHeight;
+        const float height = size.y;
         const float centerX = origin.x + width * 0.5F;
         const float horizon = origin.y + height * 0.38F;
         const float ground = origin.y + height;
@@ -124,17 +117,20 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
 
-        const ViewportOverlayAction overlay = DrawViewportOverlay(
-            origin, {width, height},
-            ViewportOverlayState{.camera = viewModel.viewportCamera,
-                                 .tool = viewModel.activeTransformTool,
-                                 .gridVisible = gridOverride_.value_or(context.settings.settings.gridOverlay),
-                                 .canFocusSelection = viewModel.primarySelectionWorldBounds.has_value(),
-                                 .objectCount = viewModel.objects.size()},
-            context.theme.fonts, context.localization);
+        const ViewportOverlayAction overlay =
+            DrawViewportOverlay(origin, {width, height},
+                                ViewportOverlayState{.camera = viewModel.viewportCamera,
+                                                     .tool = viewModel.activeTransformTool,
+                                                     .gridVisible = gridOverride_.value_or(context.settings.settings.gridOverlay),
+                                                     .canFocusSelection = viewModel.primarySelectionWorldBounds.has_value(),
+                                                     .objectCount = viewModel.objects.size()},
+                                context.theme.fonts, context.localization);
         if (overlay.projection) {
             command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
             command.viewportProjectionPayload = *overlay.projection;
+        } else if (overlay.axisView) {
+            command.command = EditorWorkspaceViewCommand::AlignViewportToAxis;
+            command.viewportAxisPayload = *overlay.axisView;
         } else if (overlay.tool) {
             command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
             command.transformToolPayload = *overlay.tool;

@@ -13,7 +13,6 @@ namespace Horo::Editor {
         inline constexpr float ToolbarPaddingX = 10.0F;
         inline constexpr float TableHeaderHeight = 30.0F;
         inline constexpr float TableRowHeight = 34.0F;
-        inline constexpr float FooterHeight = 28.0F;
         inline constexpr float ContentPadding = 12.0F;
         inline constexpr float ColumnGap = 9.0F;
     }  // namespace GlobalDockLayout
@@ -26,15 +25,13 @@ namespace Horo::Editor {
         float toolbarPaddingX;
         float tableHeaderHeight;
         float tableRowHeight;
-        float footerHeight;
         float contentPadding;
         float columnGap;
     };
 
-    /** @brief Optional pane regions supported by the shared bottom-dock layout contract. */
+    /** @brief Optional toolbar and rail regions supported by the shared bottom-dock layout contract. */
     struct GlobalDockPaneLayoutOptions {
         bool hasToolbar{true};
-        bool hasFooter{false};
         float leftRailWidth{};
     };
 
@@ -42,12 +39,10 @@ namespace Horo::Editor {
     struct GlobalDockPaneRegions {
         ImVec2 toolbarOrigin{};
         ImVec2 contentOrigin{};
-        ImVec2 footerOrigin{};
         ImVec2 leftRailOrigin{};
         float toolbarWidth{};
         float contentWidth{};
         float contentHeight{};
-        float footerWidth{};
         float leftRailHeight{};
     };
 
@@ -61,29 +56,25 @@ namespace Horo::Editor {
             .toolbarPaddingX = GlobalDockLayout::ToolbarPaddingX * scale,
             .tableHeaderHeight = GlobalDockLayout::TableHeaderHeight * scale,
             .tableRowHeight = GlobalDockLayout::TableRowHeight * scale,
-            .footerHeight = GlobalDockLayout::FooterHeight * scale,
             .contentPadding = GlobalDockLayout::ContentPadding * scale,
             .columnGap = GlobalDockLayout::ColumnGap * scale,
         };
     }
 
-    /** @brief Partitions a pane into toolbar, optional rail, content, and optional footer regions. */
+    /** @brief Partitions a pane into toolbar, optional rail, and content regions. */
     [[nodiscard]] inline GlobalDockPaneRegions ResolveGlobalDockPaneRegions(const ImVec2 origin, const float width, const float height,
                                                                             const GlobalDockPaneLayoutOptions options = {}) noexcept {
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float toolbarHeight = options.hasToolbar ? metrics.toolbarHeight : 0.0F;
-        const float footerHeight = options.hasFooter ? metrics.footerHeight : 0.0F;
-        const float bodyHeight = std::max(1.0F, height - toolbarHeight - footerHeight);
+        const float bodyHeight = std::max(1.0F, height - toolbarHeight);
         const float railWidth = std::clamp(options.leftRailWidth, 0.0F, std::max(0.0F, width - 1.0F));
         return {
             .toolbarOrigin = origin,
             .contentOrigin = {origin.x + railWidth, origin.y + toolbarHeight},
-            .footerOrigin = {origin.x, origin.y + toolbarHeight + bodyHeight},
             .leftRailOrigin = {origin.x, origin.y + toolbarHeight},
             .toolbarWidth = width,
             .contentWidth = std::max(1.0F, width - railWidth),
             .contentHeight = bodyHeight,
-            .footerWidth = width,
             .leftRailHeight = bodyHeight,
         };
     }

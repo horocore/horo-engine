@@ -107,8 +107,6 @@ namespace Horo::Editor {
         void DrawTableRow(const BuildOutputRecord &record, std::size_t visibleIndex, const GlobalDockPaneRegions &regions,
                           const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
                           ImDrawList &drawList) const;
-        void DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
-                        std::size_t errorCount, std::size_t warningCount);
 
         const IBuildOutputQuery *m_buildOutputQuery{nullptr};
         BuildOutputSnapshot m_snapshot;

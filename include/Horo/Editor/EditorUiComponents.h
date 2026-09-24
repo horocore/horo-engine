@@ -472,8 +472,14 @@ namespace Horo::Editor::Ui {
         Milliseconds,
     };
 
-    /** @brief Integer input with shared frame styling. */
-    void InputIntControl(const char *id, int *value, const Theme::Fonts &fonts);
+    /**
+     * @brief Integer input with shared frame styling.
+     * @param id Stable UI identity.
+     * @param value Edited value.
+     * @param fonts Editor font handles.
+     * @param showSteppers Whether to show the native step buttons.
+     */
+    void InputIntControl(const char *id, int *value, const Theme::Fonts &fonts, bool showSteppers = true);
 
     /** @brief Float input with shared frame styling. */
     void InputFloatControl(const char *id, float *value, const Theme::Fonts &fonts);
@@ -484,9 +490,11 @@ namespace Horo::Editor::Ui {
      * @param value Edited value.
      * @param fonts Editor font handles.
      * @param step Amount applied by each arrow action.
+     * @param showSteppers Whether to draw the increment and decrement actions.
      * @return True when typing or an arrow action changed the value.
      */
-    [[nodiscard]] bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, float step = 0.1F);
+    [[nodiscard]] bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, float step = 0.1F,
+                                                bool showSteppers = true);
 
     /**
      * @brief Custom slider imitating an HTML <input type="range">.

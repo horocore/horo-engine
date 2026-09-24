@@ -39,15 +39,19 @@ namespace Horo::Editor {
             forward = RotateAroundAxis(forward.Value(), sceneUp, delta.yawRadians);
             if (forward.HasError())
                 return Result<NavigationBasis>::Failure(forward.ErrorValue());
-            Result<Math::Vec3> right = Math::TryNormalize(Math::Cross(forward.Value(), sceneUp));
+            const float initialVerticality = std::fabs(Math::Dot(forward.Value(), sceneUp));
+            const Math::Vec3 referenceUp = initialVerticality >= CameraVerticalLimitThreshold ? camera.up : sceneUp;
+            Result<Math::Vec3> right = Math::TryNormalize(Math::Cross(forward.Value(), referenceUp));
             if (right.HasError())
                 return Result<NavigationBasis>::Failure(right.ErrorValue());
             const Result<Math::Vec3> pitched = RotateAroundAxis(forward.Value(), right.Value(), delta.pitchRadians);
             if (pitched.HasError())
                 return Result<NavigationBasis>::Failure(pitched.ErrorValue());
-            if (std::fabs(Math::Dot(pitched.Value(), sceneUp)) < CameraVerticalLimitThreshold)
+            if (const float nextVerticality = std::fabs(Math::Dot(pitched.Value(), sceneUp));
+                nextVerticality < CameraVerticalLimitThreshold || nextVerticality < initialVerticality)
                 forward = pitched;
-            right = Math::TryNormalize(Math::Cross(forward.Value(), sceneUp));
+            const Math::Vec3 finalUp = std::fabs(Math::Dot(forward.Value(), sceneUp)) >= CameraVerticalLimitThreshold ? camera.up : sceneUp;
+            right = Math::TryNormalize(Math::Cross(forward.Value(), finalUp));
             if (right.HasError())
                 return Result<NavigationBasis>::Failure(right.ErrorValue());
             const Result<Math::Vec3> up = Math::TryNormalize(Math::Cross(right.Value(), forward.Value()));
@@ -125,13 +129,58 @@ namespace Horo::Editor {
                 camera.orthographicHeight = std::clamp(camera.orthographicHeight * delta.dollyScale, 0.01F, 100000.0F);
             }
         }
-        camera.up = {0.0F, 1.0F, 0.0F};
+        camera.up = localUp;
         if (!camera.IsValid()) {
             return Result<void>::Failure(
                 MakeViewportError(ViewportModelErrors::InvalidCamera, "Viewport navigation produced an invalid camera."));
         }
 
         current_.camera = camera;
+        ++current_.revision.value;
+        events_->Publish(ViewportChangedEvent{current_.revision, ViewportChangeKind::CameraMoved});
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportModel::AlignToAxis */
+    Result<void> EditorViewportModel::AlignToAxis(const EditorViewportAxisView axis) {
+        const EditorViewportCamera &currentCamera = current_.camera;
+        if (!currentCamera.IsValid())
+            return Result<void>::Failure(MakeViewportError(ViewportModelErrors::InvalidCamera, "Viewport camera is invalid."));
+        Math::Vec3 direction;
+        Math::Vec3 up{0.0F, 1.0F, 0.0F};
+        switch (axis) {
+            case EditorViewportAxisView::PositiveX:
+                direction = {1.0F, 0.0F, 0.0F};
+                break;
+            case EditorViewportAxisView::NegativeX:
+                direction = {-1.0F, 0.0F, 0.0F};
+                break;
+            case EditorViewportAxisView::PositiveY:
+                direction = {0.0F, 1.0F, 0.0F};
+                up = {0.0F, 0.0F, -1.0F};
+                break;
+            case EditorViewportAxisView::NegativeY:
+                direction = {0.0F, -1.0F, 0.0F};
+                up = {0.0F, 0.0F, 1.0F};
+                break;
+            case EditorViewportAxisView::PositiveZ:
+                direction = {0.0F, 0.0F, 1.0F};
+                break;
+            case EditorViewportAxisView::NegativeZ:
+                direction = {0.0F, 0.0F, -1.0F};
+                break;
+            default:
+                return Result<void>::Failure(MakeViewportError(ViewportModelErrors::InvalidNavigation, "Viewport axis is invalid."));
+        }
+        EditorViewportCamera next = currentCamera;
+        next.position = next.target + direction * Math::Length(next.position - next.target);
+        next.up = up;
+        if (!next.IsValid())
+            return Result<void>::Failure(
+                MakeViewportError(ViewportModelErrors::InvalidCamera, "Axis alignment produced an invalid camera."));
+        if (next.position == currentCamera.position && next.up == currentCamera.up)
+            return Result<void>::Success();
+        current_.camera = next;
         ++current_.revision.value;
         events_->Publish(ViewportChangedEvent{current_.revision, ViewportChangeKind::CameraMoved});
         return Result<void>::Success();
