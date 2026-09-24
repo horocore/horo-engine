@@ -110,24 +110,23 @@ namespace Horo::Editor {
         };
 
         /** @brief Copies, regenerates, and validates component identities for one duplicated scene object. */
-        [[nodiscard]] Result<PreparedDuplicatedComponents> PrepareDuplicatedComponents(
-            const std::span<const SceneObjectSnapshot> objects, const SceneObjectSnapshot &source, const std::uint64_t nextAiAgentId,
-            const std::uint64_t nextNavigationSurfaceId, const std::uint64_t nextNavigationRegionId,
-            const std::uint64_t nextNavigationModifierId, const std::uint64_t nextNavigationLinkId) {
+        [[nodiscard]] Result<PreparedDuplicatedComponents> PrepareDuplicatedComponents(const std::span<const SceneObjectSnapshot> objects,
+                                                                                       const SceneObjectSnapshot &source,
+                                                                                       const DuplicatedIdentityCounters &counters) {
             PreparedDuplicatedComponents prepared{.components = source.components};
             if (prepared.components.aiAgent) {
-                if (nextAiAgentId == 0)
+                if (counters.aiAgentId == 0)
                     return Result<PreparedDuplicatedComponents>::Failure(
                         MakeError(AI::AIErrors::AgentCapacityExceeded, "AI agent identities are exhausted for this document session."));
-                const auto duplicateAgent = AI::AgentId::Create(nextAiAgentId);
+                const auto duplicateAgent = AI::AgentId::Create(counters.aiAgentId);
                 if (duplicateAgent.HasError())
                     return Result<PreparedDuplicatedComponents>::Failure(duplicateAgent.ErrorValue());
                 prepared.components.aiAgent->agent = duplicateAgent.Value();
-                prepared.aiAgentId = nextAiAgentId;
+                prepared.aiAgentId = counters.aiAgentId;
             }
             if (Result<void> regenerated =
-                    RegenerateDuplicatedNavigationIdentities(prepared.components, nextNavigationSurfaceId, nextNavigationRegionId,
-                                                             nextNavigationModifierId, nextNavigationLinkId);
+                    RegenerateDuplicatedNavigationIdentities(prepared.components, counters.navigationSurfaceId, counters.navigationRegionId,
+                                                             counters.navigationModifierId, counters.navigationLinkId);
                 regenerated.HasError())
                 return Result<PreparedDuplicatedComponents>::Failure(regenerated.ErrorValue());
             if (Result<void> navigation = ValidateSceneNavigationComponents(objects, std::nullopt, &prepared.components);
@@ -140,12 +139,7 @@ namespace Horo::Editor {
 
         /** @brief Regenerates all identity-bearing component values and returns their staged counters. */
         [[nodiscard]] Result<DuplicatedIdentityCounters> PrepareDuplicatedIdentityCounters(
-            SceneObjectComponentSet &components, const std::optional<std::uint64_t> duplicatedAiAgentId, const std::uint64_t nextAiAgentId,
-            const std::uint64_t nextBehaviorInstanceId, const std::uint64_t nextNavigationSurfaceId,
-            const std::uint64_t nextNavigationRegionId, const std::uint64_t nextNavigationModifierId,
-            const std::uint64_t nextNavigationLinkId) {
-            DuplicatedIdentityCounters next{nextAiAgentId,          nextBehaviorInstanceId,   nextNavigationSurfaceId,
-                                            nextNavigationRegionId, nextNavigationModifierId, nextNavigationLinkId};
+            SceneObjectComponentSet &components, const std::optional<std::uint64_t> duplicatedAiAgentId, DuplicatedIdentityCounters next) {
             if (duplicatedAiAgentId.has_value())
                 next.aiAgentId = *duplicatedAiAgentId == std::numeric_limits<std::uint64_t>::max() ? 0 : *duplicatedAiAgentId + 1;
             for (Gameplay::BehaviorComponent &behavior : components.behaviors) {
@@ -162,23 +156,18 @@ namespace Horo::Editor {
         }
 
         /** @brief Prepares one complete duplicate and stages every counter it would consume. */
-        [[nodiscard]] Result<PreparedDuplicatedObject> PrepareDuplicatedObject(
-            const std::span<const SceneObjectSnapshot> objects, const SceneObjectSnapshot &source, const std::uint64_t nextAiAgentId,
-            const std::uint64_t nextBehaviorInstanceId, const std::uint64_t nextNavigationSurfaceId,
-            const std::uint64_t nextNavigationRegionId, const std::uint64_t nextNavigationModifierId,
-            const std::uint64_t nextNavigationLinkId) {
-            auto preparedComponents = PrepareDuplicatedComponents(objects, source, nextAiAgentId, nextNavigationSurfaceId,
-                                                                  nextNavigationRegionId, nextNavigationModifierId, nextNavigationLinkId);
+        [[nodiscard]] Result<PreparedDuplicatedObject> PrepareDuplicatedObject(const std::span<const SceneObjectSnapshot> objects,
+                                                                               const SceneObjectSnapshot &source,
+                                                                               const DuplicatedIdentityCounters &counters) {
+            auto preparedComponents = PrepareDuplicatedComponents(objects, source, counters);
             if (preparedComponents.HasError())
                 return Result<PreparedDuplicatedObject>::Failure(preparedComponents.ErrorValue());
             PreparedDuplicatedComponents prepared = std::move(preparedComponents).Value();
-            auto counters = PrepareDuplicatedIdentityCounters(prepared.components, prepared.aiAgentId, nextAiAgentId,
-                                                              nextBehaviorInstanceId, nextNavigationSurfaceId, nextNavigationRegionId,
-                                                              nextNavigationModifierId, nextNavigationLinkId);
-            if (counters.HasError())
-                return Result<PreparedDuplicatedObject>::Failure(counters.ErrorValue());
+            auto nextCounters = PrepareDuplicatedIdentityCounters(prepared.components, prepared.aiAgentId, counters);
+            if (nextCounters.HasError())
+                return Result<PreparedDuplicatedObject>::Failure(nextCounters.ErrorValue());
             return Result<PreparedDuplicatedObject>::Success(
-                PreparedDuplicatedObject{std::move(prepared.components), std::move(counters).Value()});
+                PreparedDuplicatedObject{std::move(prepared.components), std::move(nextCounters).Value()});
         }
     }  // namespace
 
@@ -318,10 +307,13 @@ namespace Horo::Editor {
         if (IsEffectivelyLocked(m_document.m_objects, command.source))
             return Result<SceneCommandResult>::Failure(LockedObjectError());
 
-        auto prepared =
-            PrepareDuplicatedObject(m_document.m_objects, *source, m_document.m_nextAiAgentId, m_document.m_nextBehaviorInstanceId,
-                                    m_document.m_nextNavigationSurfaceId, m_document.m_nextNavigationRegionId,
-                                    m_document.m_nextNavigationModifierId, m_document.m_nextNavigationLinkId);
+        const DuplicatedIdentityCounters identityCounters{m_document.m_nextAiAgentId,
+                                                          m_document.m_nextBehaviorInstanceId,
+                                                          m_document.m_nextNavigationSurfaceId,
+                                                          m_document.m_nextNavigationRegionId,
+                                                          m_document.m_nextNavigationModifierId,
+                                                          m_document.m_nextNavigationLinkId};
+        auto prepared = PrepareDuplicatedObject(m_document.m_objects, *source, identityCounters);
         if (prepared.HasError())
             return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
         PreparedDuplicatedObject duplicated = std::move(prepared).Value();

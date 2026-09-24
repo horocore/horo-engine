@@ -476,7 +476,7 @@ namespace {
         REQUIRE_FALSE((document.Objects().back().editorState.locked));
     }
 
-    TEST_CASE("Scene object history accounts for opaque gameplay payloads", "[unit][editor][history]") {
+    TEST_CASE("Oversized scene object duplicate rejection preserves component identity counters", "[unit][editor][history]") {
         using namespace Horo;
         using namespace Horo::Editor;
 
@@ -493,6 +493,21 @@ namespace {
 
         SceneObjectComponentSet largeComponentSet;
         largeComponentSet.gameplayComponents = largeComponents;
+        largeComponentSet.navigationSurface = NavigationSurface(8);
+        largeComponentSet.navigationRegion = NavigationRegion(11, 8);
+        largeComponentSet.navigationModifier = NavigationModifier(17, 8);
+        largeComponentSet.navigationLink = NavigationLink(23, 8);
+        largeComponentSet.aiAgent = Horo::AI::AiAgentComponent{.agent = Horo::AI::AgentId::Create(41).Value()};
+        largeComponentSet.aiController =
+            Horo::AI::AiControllerComponent{.controller = Horo::AI::ControllerTypeId::Create(51).Value(),
+                                            .decisionAsset = Horo::AI::DecisionGraphAssetId::Create(61).Value(),
+                                            .blackboardSchema = Horo::AI::BlackboardSchemaId::Create(71).Value(),
+                                            .requiredCapabilities = Horo::AI::AiCapabilitySet::Of(Horo::AI::AiCapability::Behavior)};
+        const auto behaviorType = Gameplay::BehaviorTypeId::Parse("game.audit.identity_behavior");
+        REQUIRE((behaviorType.HasValue()));
+        largeComponentSet.behaviors.push_back(
+            Gameplay::BehaviorComponent{Gameplay::BehaviorInstanceId{44}, behaviorType.Value(), 1, true, {}});
+
         std::vector<SceneObjectSnapshot> loadedObjects;
         loadedObjects.push_back(SceneObjectSnapshot{.id = SceneObjectId{1}, .name = "Large Source", .components = largeComponentSet});
 
@@ -513,9 +528,32 @@ namespace {
         REQUIRE_FALSE((history.CanUndo()));
         REQUIRE_FALSE((history.CanRedo()));
 
-        const auto created = commands.Execute(CreateSceneObjectCommand{.name = "Small"});
+        SceneObjectComponentSet smallIdentityComponents = largeComponentSet;
+        smallIdentityComponents.gameplayComponents.clear();
+        const auto smallSurface = Navigation::SurfaceId::Create(1).Value();
+        smallIdentityComponents.navigationSurface->id = smallSurface;
+        smallIdentityComponents.navigationRegion->id = Navigation::NavigationRegionId::Create(1).Value();
+        smallIdentityComponents.navigationRegion->surface = smallSurface;
+        smallIdentityComponents.navigationModifier->id = Navigation::NavigationModifierId::Create(1).Value();
+        smallIdentityComponents.navigationModifier->surface = smallSurface;
+        smallIdentityComponents.navigationLink->id = Navigation::NavigationLinkId::Create(1).Value();
+        smallIdentityComponents.navigationLink->start.surface = smallSurface;
+        smallIdentityComponents.navigationLink->end.surface = smallSurface;
+        smallIdentityComponents.aiAgent->agent = AI::AgentId::Create(1).Value();
+        smallIdentityComponents.behaviors.front().instanceId = Gameplay::BehaviorInstanceId{1};
+
+        const auto created = commands.Execute(CreateSceneObjectCommand{.name = "Small", .components = smallIdentityComponents});
         REQUIRE((created.HasValue()));
         REQUIRE((created.Value().object == SceneObjectId{2}));
+        const auto successfulDuplicate = commands.Execute(DuplicateSceneObjectCommand{created.Value().object, "Small Copy"});
+        REQUIRE((successfulDuplicate.HasValue()));
+        const SceneObjectComponentSet &duplicatedComponents = document.Objects().back().components;
+        REQUIRE((duplicatedComponents.aiAgent->agent.Value() == 42));
+        REQUIRE((duplicatedComponents.behaviors.front().instanceId.value == 45));
+        REQUIRE((duplicatedComponents.navigationSurface->id.Value() == 9));
+        REQUIRE((duplicatedComponents.navigationRegion->id.Value() == 12));
+        REQUIRE((duplicatedComponents.navigationModifier->id.Value() == 18));
+        REQUIRE((duplicatedComponents.navigationLink->id.Value() == 24));
         const DocumentRevision committedRevision = document.Revision();
         const auto noOpRename = commands.Execute(RenameSceneObjectCommand{created.Value().object, "Small"});
         REQUIRE((noOpRename.HasValue()));
@@ -523,9 +561,9 @@ namespace {
         REQUIRE((document.Revision() == committedRevision));
 
         REQUIRE((commands.Undo().HasValue()));
-        REQUIRE((document.Objects().size() == 1));
-        REQUIRE((commands.Redo().HasValue()));
         REQUIRE((document.Objects().size() == 2));
+        REQUIRE((commands.Redo().HasValue()));
+        REQUIRE((document.Objects().size() == 3));
     }
 
     TEST_CASE("Scene document load rejects duplicate identities and missing parents atomically", "[unit][editor][persistence]") {
