@@ -72,6 +72,12 @@ namespace Horo::PlatformServices {
         /** @brief Validates and routes one cloud object read. @param request Owned typed address. @return Backend request handle or
          * pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) const;
+        /** @brief Validates and routes one bounded opaque cloud metadata page request. @param request Session-partitioned page query.
+         * @return Backend request handle or pre-admission failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest request) const;
+        /** @brief Validates and routes one complete opaque cloud read. @param request Session-partitioned bounded read.
+         * @return Backend request handle or pre-admission failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest request) const;
         /** @brief Validates and routes one bounded cloud object write. @param request Owned typed payload. @return Backend request handle
          * or pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) const;

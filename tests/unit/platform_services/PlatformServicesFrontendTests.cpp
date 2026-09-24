@@ -2,6 +2,7 @@
 #include "PlatformServicesTestSupport.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <stdexcept>
@@ -63,6 +64,14 @@ namespace Horo::PlatformServices {
 
             Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest) override {
                 return Admit<CloudReadResult>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest) override {
+                return Admit<CloudObjectPage>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest) override {
+                return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
             }
 
             Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest) override {
@@ -145,15 +154,19 @@ namespace Horo::PlatformServices {
         REQUIRE(frontend.SubmitScore({subject, {2}, -9}).HasValue());
         REQUIRE(frontend.WriteStat({subject, {3}, 17}).HasValue());
         REQUIRE(frontend.ReadCloudObject({subject, {4}}).HasValue());
+        REQUIRE(frontend.ListCloudObjects({.subject = subject, .pageSize = 2}).HasValue());
+        const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{4}});
+        REQUIRE(key.HasValue());
+        REQUIRE(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 4}).HasValue());
         REQUIRE(frontend.WriteCloudObject({subject, {4}, {std::byte{1}, std::byte{2}}}).HasValue());
         REQUIRE(frontend.SetPresence({subject, {5}, "busy"}).HasValue());
         REQUIRE(frontend.ClearPresence(subject).HasValue());
         REQUIRE(frontend.QueryFriends({subject, 4}).HasValue());
         REQUIRE(frontend.QueryCurrentSession().HasValue());
 
-        CHECK(backend->TotalCalls() == 9);
+        CHECK(backend->TotalCalls() == 11);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)] == 2);
-        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 2);
+        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 4);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Presence)] == 2);
     }
 
@@ -167,7 +180,12 @@ namespace Horo::PlatformServices {
         RequireError(frontend.UnlockAchievement({subject, {}}), FrontendErrors::InvalidRequest);
         RequireError(frontend.SubmitScore({subject, {}, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ReadCloudObject({subject, {}}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), FrontendErrors::InvalidRequest);
+        const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
+        REQUIRE(key.HasValue());
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteCloudObject({subject, {1}, std::vector<std::byte>(5)}), FrontendErrors::InvalidRequest);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
