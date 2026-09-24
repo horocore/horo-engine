@@ -1,6 +1,7 @@
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "PlatformServicesMockBackendImpl.h"
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <type_traits>
