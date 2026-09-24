@@ -52,7 +52,11 @@ namespace Horo::Extensions {
         std::vector<EditorSurfaceWorkspaceEntry> surfaces;
     };
 
-    /** @brief Finite bounds enforced before external surface state enters the registry. */
+    /**
+     * @brief Finite bounds enforced before external surface state enters the registry.
+     * @details maximumWorkspaceEntries bounds registered plus unresolved persistent surfaces across all scopes, reserving a slot so
+     * teardown can preserve each registration without allocating.
+     */
     struct EditorSurfaceRegistryLimits final {
         std::size_t maximumSurfaces{256};
         std::size_t maximumWorkspaceEntries{512};
@@ -101,7 +105,7 @@ namespace Horo::Extensions {
      * @brief Move-only lifetime registration for one exact external surface contribution.
      *
      * Reset withdraws the contribution from future host admission while preserving its
-     * bounded workspace state as an unresolved entry for a later provider activation.
+     * bounded presentation state as an unresolved entry for a later provider activation.
      */
     class EditorSurfaceRegistration final {
     public:
@@ -181,13 +185,17 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> SetOpaqueState(std::string_view surfaceId, std::span<const std::uint8_t> state) const;
 
         /**
-         * @brief Restores workspace state atomically and defers unavailable contributions.
+         * @brief Restores workspace-scoped state atomically and defers unavailable contributions.
          * @param state Versioned copied workspace state.
          * @return Restore report, or a typed invalid-state/shutdown failure with no partial mutation.
+         * @note Session and Project surfaces are not changed by workspace restoration.
          */
         [[nodiscard]] Result<EditorSurfaceRestoreReport> Restore(const EditorSurfaceWorkspaceState &state) const;
 
-        /** @brief Saves deterministic copied state for registered and unresolved contributions. */
+        /**
+         * @brief Saves deterministic copied state for registered and unresolved workspace-scoped contributions.
+         * @return Workspace state; Session and Project surfaces are excluded.
+         */
         [[nodiscard]] EditorSurfaceWorkspaceState Save() const;
         /** @brief Returns deterministic copied snapshots in contribution-ID order. */
         [[nodiscard]] std::vector<EditorSurfaceSnapshot> Snapshot() const;

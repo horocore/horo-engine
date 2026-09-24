@@ -1,15 +1,18 @@
 #include "Horo/Extensions/EditorSurfaceRegistry.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace Horo::Extensions::Tests {
     namespace {
-        [[nodiscard]] EditorSurfaceContextDescriptor ContextDescriptor(const std::string &id = "com.example.tools.inspector",
-                                                                       const EditorSurfaceKind kind = EditorSurfaceKind::Tab) {
+        [[nodiscard]] EditorSurfaceContextDescriptor ContextDescriptor(
+            const std::string &id = "com.example.tools.inspector", const EditorSurfaceKind kind = EditorSurfaceKind::Tab,
+            const EditorSurfacePersistence persistence = EditorSurfacePersistence::Workspace) {
             return EditorSurfaceContextDescriptor{
                 .surface =
                     EditorSurfaceDescriptor{
@@ -18,7 +21,7 @@ namespace Horo::Extensions::Tests {
                         .labelLocalizationKey = "editor.tools.inspector.label",
                         .tooltipLocalizationKey = "editor.tools.inspector.tooltip",
                         .placement = EditorSurfacePlacement{EditorSurfacePlacementKind::Workspace, "bottom.tools", 20},
-                        .persistence = EditorSurfacePersistence::Workspace,
+                        .persistence = persistence,
                         .openByDefault = false,
                         .provider = EditorSurfaceProviderIdentity{"com.example.tools", "com.example.tools.editor", 4},
                     },
@@ -60,6 +63,14 @@ namespace Horo::Extensions::Tests {
 
         [[nodiscard]] EditorSurfaceProviderKey Provider() {
             return EditorSurfaceProviderKey{"com.example.tools", "com.example.tools.editor"};
+        }
+
+        [[nodiscard]] const EditorSurfaceSnapshot *FindSnapshot(const std::vector<EditorSurfaceSnapshot> &snapshots,
+                                                                const std::string_view id) {
+            const auto found = std::ranges::find_if(snapshots, [id](const EditorSurfaceSnapshot &snapshot) {
+                return snapshot.descriptor.id == id;
+            });
+            return found == snapshots.end() ? nullptr : &*found;
         }
     }  // namespace
 
@@ -191,6 +202,221 @@ namespace Horo::Extensions::Tests {
         wrongOwner.surfaces.front().provider = EditorSurfaceProviderKey{"com.other.tools", "com.other.tools.editor"};
         RequireErrorCode(registry.Restore(wrongOwner), "editor_surface_registry_state_invalid");
         CHECK(registry.Snapshot().front().open);
+    }
+
+    TEST_CASE("External editor surface workspace persistence isolates session and project state", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        auto workspace =
+            RegisterSurface(registry, provider, admission,
+                            ContextDescriptor("com.example.tools.workspace", EditorSurfaceKind::Tab, EditorSurfacePersistence::Workspace));
+        auto session =
+            RegisterSurface(registry, provider, admission,
+                            ContextDescriptor("com.example.tools.session", EditorSurfaceKind::Tab, EditorSurfacePersistence::Session));
+        auto project =
+            RegisterSurface(registry, provider, admission,
+                            ContextDescriptor("com.example.tools.project", EditorSurfaceKind::Tab, EditorSurfacePersistence::Project));
+        REQUIRE(registry.Open(workspace.Id()).HasValue());
+        REQUIRE(registry.Open(session.Id()).HasValue());
+        REQUIRE(registry.Open(project.Id()).HasValue());
+        const std::array<std::uint8_t, 1> workspaceBytes{1};
+        const std::array<std::uint8_t, 1> sessionBytes{2};
+        const std::array<std::uint8_t, 1> projectBytes{3};
+        REQUIRE(registry.SetOpaqueState(workspace.Id(), workspaceBytes).HasValue());
+        REQUIRE(registry.SetOpaqueState(session.Id(), sessionBytes).HasValue());
+        REQUIRE(registry.SetOpaqueState(project.Id(), projectBytes).HasValue());
+
+        EditorSurfaceWorkspaceState saved = registry.Save();
+        REQUIRE(saved.surfaces.size() == 1);
+        CHECK(saved.surfaces.front().surfaceId == std::string{workspace.Id()});
+
+        saved.surfaces.front().open = false;
+        saved.surfaces.front().focused = false;
+        saved.surfaces.front().opaqueState = {9};
+        REQUIRE(registry.Restore(saved).HasValue());
+        const std::vector<EditorSurfaceSnapshot> snapshots = registry.Snapshot();
+        const EditorSurfaceSnapshot *workspaceSnapshot = FindSnapshot(snapshots, workspace.Id());
+        const EditorSurfaceSnapshot *sessionSnapshot = FindSnapshot(snapshots, session.Id());
+        const EditorSurfaceSnapshot *projectSnapshot = FindSnapshot(snapshots, project.Id());
+        REQUIRE(workspaceSnapshot != nullptr);
+        REQUIRE(sessionSnapshot != nullptr);
+        REQUIRE(projectSnapshot != nullptr);
+        CHECK_FALSE(workspaceSnapshot->open);
+        CHECK(workspaceSnapshot->opaqueState == std::vector<std::uint8_t>{9});
+        CHECK(sessionSnapshot->open);
+        CHECK(sessionSnapshot->opaqueState == std::vector<std::uint8_t>{2});
+        CHECK(projectSnapshot->open);
+        CHECK(projectSnapshot->opaqueState == std::vector<std::uint8_t>{3});
+
+        const std::string sessionId{session.Id()};
+        const std::string projectId{project.Id()};
+        session.Reset();
+        project.Reset();
+        const EditorSurfaceWorkspaceState afterUnload = registry.Save();
+        REQUIRE(afterUnload.surfaces.size() == 1);
+        CHECK(afterUnload.surfaces.front().surfaceId == std::string{workspace.Id()});
+        auto sessionReplacement = RegisterSurface(registry, provider, admission,
+                                                  ContextDescriptor(sessionId, EditorSurfaceKind::Tab, EditorSurfacePersistence::Session));
+        auto projectReplacement = RegisterSurface(registry, provider, admission,
+                                                  ContextDescriptor(projectId, EditorSurfaceKind::Tab, EditorSurfacePersistence::Project));
+        CHECK(sessionReplacement.IsRegistered());
+        CHECK(projectReplacement.IsRegistered());
+        const std::vector<EditorSurfaceSnapshot> reattachedSnapshots = registry.Snapshot();
+        sessionSnapshot = FindSnapshot(reattachedSnapshots, sessionId);
+        projectSnapshot = FindSnapshot(reattachedSnapshots, projectId);
+        REQUIRE(sessionSnapshot != nullptr);
+        REQUIRE(projectSnapshot != nullptr);
+        CHECK(sessionSnapshot->open);
+        CHECK(sessionSnapshot->opaqueState == std::vector<std::uint8_t>{2});
+        CHECK(projectSnapshot->open);
+        CHECK(projectSnapshot->opaqueState == std::vector<std::uint8_t>{3});
+
+        for (const std::string &id : {sessionId, projectId}) {
+            EditorSurfaceWorkspaceState wrongScope{
+                .schemaVersion = EditorSurfaceRegistry::WorkspaceSchemaVersion,
+                .surfaces = {EditorSurfaceWorkspaceEntry{
+                    .surfaceId = id,
+                    .provider = Provider(),
+                    .open = false,
+                }},
+            };
+            RequireErrorCode(registry.Restore(wrongScope), "editor_surface_registry_state_invalid");
+        }
+    }
+
+    TEST_CASE("External editor surface removal preserves state at the configured retention limit",
+              "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry{EditorSurfaceRegistryLimits{
+            .maximumSurfaces = 2,
+            .maximumWorkspaceEntries = 1,
+        }};
+        auto registration = RegisterSurface(registry, provider, admission, ContextDescriptor("com.example.tools.retained"));
+        REQUIRE(registry.Open(registration.Id()).HasValue());
+        const std::array<std::uint8_t, 2> state{7, 6};
+        REQUIRE(registry.SetOpaqueState(registration.Id(), state).HasValue());
+
+        auto secondContext = provider.Attach(ContextDescriptor("com.example.tools.second"), admission.ActivationLease());
+        REQUIRE(secondContext.HasValue());
+        RequireErrorCode(registry.Register(std::move(secondContext).Value()), "editor_surface_registry_capacity_exceeded");
+
+        registration.Reset();
+        const EditorSurfaceWorkspaceState saved = registry.Save();
+        REQUIRE(saved.surfaces.size() == 1);
+        CHECK(saved.surfaces.front().surfaceId == "com.example.tools.retained");
+        CHECK(saved.surfaces.front().open);
+        CHECK(saved.surfaces.front().opaqueState == std::vector<std::uint8_t>{7, 6});
+    }
+
+    TEST_CASE("Restored unresolved surfaces reserve capacity for no-throw teardown", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry{EditorSurfaceRegistryLimits{
+            .maximumSurfaces = 2,
+            .maximumWorkspaceEntries = 1,
+        }};
+        EditorSurfaceWorkspaceState restoredState{
+            .schemaVersion = EditorSurfaceRegistry::WorkspaceSchemaVersion,
+            .surfaces = {EditorSurfaceWorkspaceEntry{
+                .surfaceId = "com.example.tools.restored",
+                .provider = Provider(),
+                .open = true,
+                .focused = true,
+            }},
+        };
+        REQUIRE(registry.Restore(restoredState).HasValue());
+
+        auto unrelated = provider.Attach(ContextDescriptor("com.example.tools.unrelated"), admission.ActivationLease());
+        REQUIRE(unrelated.HasValue());
+        RequireErrorCode(registry.Register(std::move(unrelated).Value()), "editor_surface_registry_capacity_exceeded");
+
+        auto restored = RegisterSurface(registry, provider, admission, ContextDescriptor("com.example.tools.restored"));
+        CHECK(registry.Snapshot().front().open);
+        restored.Reset();
+        const EditorSurfaceWorkspaceState saved = registry.Save();
+        REQUIRE(saved.surfaces.size() == 1);
+        CHECK(saved.surfaces.front().surfaceId == "com.example.tools.restored");
+        CHECK(saved.surfaces.front().focused);
+    }
+
+    TEST_CASE("Workspace restore cannot transfer unresolved state to another persistence scope", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        const std::string surfaceId = "com.example.tools.future";
+        EditorSurfaceWorkspaceState workspace{
+            .schemaVersion = EditorSurfaceRegistry::WorkspaceSchemaVersion,
+            .surfaces = {EditorSurfaceWorkspaceEntry{
+                .surfaceId = surfaceId,
+                .provider = Provider(),
+                .open = true,
+            }},
+        };
+        REQUIRE(registry.Restore(workspace).HasValue());
+
+        auto projectContext = provider.Attach(ContextDescriptor(surfaceId, EditorSurfaceKind::Tab, EditorSurfacePersistence::Project),
+                                              admission.ActivationLease());
+        REQUIRE(projectContext.HasValue());
+        RequireErrorCode(registry.Register(std::move(projectContext).Value()), "editor_surface_registry_invalid");
+        const EditorSurfaceWorkspaceState saved = registry.Save();
+        REQUIRE(saved.surfaces.size() == 1);
+        CHECK(saved.surfaces.front().surfaceId == surfaceId);
+
+        auto workspaceRegistration = RegisterSurface(registry, provider, admission, ContextDescriptor(surfaceId));
+        CHECK(registry.Snapshot().front().open);
+        CHECK(workspaceRegistration.Descriptor().persistence == EditorSurfacePersistence::Workspace);
+    }
+
+    TEST_CASE("Workspace restore enforces the total opaque-state budget across persistence scopes",
+              "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry{EditorSurfaceRegistryLimits{
+            .maximumSurfaces = 2,
+            .maximumWorkspaceEntries = 2,
+            .maximumOpaqueStateBytes = 4,
+            .maximumTotalStateBytes = 5,
+        }};
+        auto workspace =
+            RegisterSurface(registry, provider, admission,
+                            ContextDescriptor("com.example.tools.workspace", EditorSurfaceKind::Tab, EditorSurfacePersistence::Workspace));
+        auto session =
+            RegisterSurface(registry, provider, admission,
+                            ContextDescriptor("com.example.tools.session", EditorSurfaceKind::Tab, EditorSurfacePersistence::Session));
+        const std::array<std::uint8_t, 3> sessionBytes{1, 2, 3};
+        REQUIRE(registry.SetOpaqueState(session.Id(), sessionBytes).HasValue());
+
+        EditorSurfaceWorkspaceState workspaceState{
+            .schemaVersion = EditorSurfaceRegistry::WorkspaceSchemaVersion,
+            .surfaces = {EditorSurfaceWorkspaceEntry{
+                .surfaceId = std::string{workspace.Id()},
+                .provider = Provider(),
+                .open = true,
+                .opaqueState = {4, 5, 6},
+            }},
+        };
+        RequireErrorCode(registry.Restore(workspaceState), "editor_surface_registry_state_invalid");
+        const std::vector<EditorSurfaceSnapshot> snapshots = registry.Snapshot();
+        const EditorSurfaceSnapshot *workspaceSnapshot = FindSnapshot(snapshots, workspace.Id());
+        const EditorSurfaceSnapshot *sessionSnapshot = FindSnapshot(snapshots, session.Id());
+        REQUIRE(workspaceSnapshot != nullptr);
+        REQUIRE(sessionSnapshot != nullptr);
+        CHECK_FALSE(workspaceSnapshot->open);
+        CHECK(workspaceSnapshot->opaqueState.empty());
+        CHECK(sessionSnapshot->opaqueState == std::vector<std::uint8_t>{1, 2, 3});
+    }
+
+    TEST_CASE("External editor surface registry rejects overflowing preservation limits", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistryLimits limits;
+        limits.maximumWorkspaceEntries = std::numeric_limits<std::size_t>::max();
+        EditorSurfaceRegistry registry{limits};
+        auto context = provider.Attach(ContextDescriptor(), admission.ActivationLease());
+        REQUIRE(context.HasValue());
+        RequireErrorCode(registry.Register(std::move(context).Value()), "editor_surface_registry_invalid");
     }
 
     TEST_CASE("External editor surface registry rejects unsupported surfaces and closes deterministically",

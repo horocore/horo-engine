@@ -3,8 +3,10 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
-#include <limits>
+#include <cassert>
+#include <memory>
 #include <ranges>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Extensions {
@@ -60,18 +62,22 @@ namespace Horo::Extensions {
             return static_cast<std::uint8_t>(status) <= static_cast<std::uint8_t>(EditorSurfaceProviderStatus::Missing);
         }
 
-        [[nodiscard]] bool ValidLimits(const EditorSurfaceRegistryLimits &limits) noexcept {
-            return limits.maximumSurfaces != 0 && limits.maximumWorkspaceEntries != 0 && limits.maximumOpaqueStateBytes != 0 &&
-                   limits.maximumTotalStateBytes >= limits.maximumOpaqueStateBytes;
-        }
-
         [[nodiscard]] bool SameProvider(const EditorSurfaceProviderKey &left, const EditorSurfaceProviderKey &right) noexcept {
             return left == right;
         }
 
         struct PendingSurfaceState final {
+            EditorSurfacePersistence persistence{EditorSurfacePersistence::Workspace};
             EditorSurfaceWorkspaceEntry entry;
         };
+
+        static_assert(std::is_nothrow_move_constructible_v<PendingSurfaceState>);
+
+        [[nodiscard]] bool ValidLimits(const EditorSurfaceRegistryLimits &limits) noexcept {
+            return limits.maximumSurfaces != 0 && limits.maximumWorkspaceEntries != 0 &&
+                   limits.maximumWorkspaceEntries <= std::vector<PendingSurfaceState>{}.max_size() && limits.maximumOpaqueStateBytes != 0 &&
+                   limits.maximumTotalStateBytes >= limits.maximumOpaqueStateBytes;
+        }
 
         struct ProviderStatusEntry final {
             EditorSurfaceProviderKey provider;
@@ -104,7 +110,10 @@ namespace Horo::Extensions {
 
     struct EditorSurfaceRegistryState final {
         explicit EditorSurfaceRegistryState(const EditorSurfaceRegistryLimits registryLimits)
-            : limits(registryLimits), validLimits(ValidLimits(registryLimits)) {}
+            : limits(registryLimits), validLimits(ValidLimits(registryLimits)) {
+            if (validLimits)
+                pending.reserve(limits.maximumWorkspaceEntries);
+        }
 
         EditorSurfaceRegistryLimits limits;
         bool validLimits{};
@@ -116,6 +125,25 @@ namespace Horo::Extensions {
     };
 
     namespace {
+        [[nodiscard]] bool HasPreservationCapacity(const EditorSurfaceRegistryState &state) noexcept {
+            const std::size_t maximumEntries = state.limits.maximumWorkspaceEntries;
+            return state.pending.size() <= maximumEntries && state.surfaces.size() <= maximumEntries - state.pending.size();
+        }
+
+        [[nodiscard]] PendingSurfaceState TakePending(EditorSurfaceState &surface) noexcept {
+            return PendingSurfaceState{
+                .persistence = surface.descriptor.persistence,
+                .entry =
+                    EditorSurfaceWorkspaceEntry{
+                        .surfaceId = std::move(surface.descriptor.id),
+                        .provider = std::move(surface.provider),
+                        .open = surface.desiredOpen,
+                        .focused = surface.desiredOpen && surface.desiredFocused,
+                        .opaqueState = std::move(surface.opaqueState),
+                    },
+            };
+        }
+
         [[nodiscard]] EditorSurfaceProviderStatus ConfiguredStatus(const EditorSurfaceRegistryState &state,
                                                                    const EditorSurfaceProviderKey &provider) {
             const auto found = std::ranges::find_if(state.providers, [&provider](const ProviderStatusEntry &entry) {
@@ -126,8 +154,8 @@ namespace Horo::Extensions {
 
         [[nodiscard]] EditorSurfaceProviderStatus EffectiveStatus(const EditorSurfaceRegistryState &state,
                                                                   const EditorSurfaceState &surface) {
-            const EditorSurfaceProviderStatus configured = ConfiguredStatus(state, surface.provider);
-            if (configured != EditorSurfaceProviderStatus::Active)
+            if (const EditorSurfaceProviderStatus configured = ConfiguredStatus(state, surface.provider);
+                configured != EditorSurfaceProviderStatus::Active)
                 return configured;
             return surface.context.IsRegistered() ? EditorSurfaceProviderStatus::Active : EditorSurfaceProviderStatus::Missing;
         }
@@ -140,27 +168,24 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] PendingSurfaceState MakePending(const EditorSurfaceState &surface) {
-            return PendingSurfaceState{EditorSurfaceWorkspaceEntry{
-                .surfaceId = surface.descriptor.id,
-                .provider = surface.provider,
-                .open = surface.desiredOpen,
-                .focused = surface.desiredOpen && surface.desiredFocused,
-                .opaqueState = surface.opaqueState,
-            }};
-        }
-
-        [[nodiscard]] const PendingSurfaceState *FindPending(const EditorSurfaceRegistryState &state, const std::string_view id) {
-            const auto found = std::ranges::find_if(state.pending, [id](const PendingSurfaceState &pending) {
-                return pending.entry.surfaceId == id;
-            });
-            return found == state.pending.end() ? nullptr : &*found;
+            return PendingSurfaceState{
+                .persistence = surface.descriptor.persistence,
+                .entry =
+                    EditorSurfaceWorkspaceEntry{
+                        .surfaceId = surface.descriptor.id,
+                        .provider = surface.provider,
+                        .open = surface.desiredOpen,
+                        .focused = surface.desiredOpen && surface.desiredFocused,
+                        .opaqueState = surface.opaqueState,
+                    },
+            };
         }
 
         [[nodiscard]] PendingSurfaceState *FindPending(EditorSurfaceRegistryState &state, const std::string_view id) {
             const auto found = std::ranges::find_if(state.pending, [id](const PendingSurfaceState &pending) {
                 return pending.entry.surfaceId == id;
             });
-            return found == state.pending.end() ? nullptr : &*found;
+            return found == state.pending.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] bool FitsTotalOpaqueState(const EditorSurfaceRegistryState &state, const std::string_view replacementId,
@@ -306,11 +331,14 @@ namespace Horo::Extensions {
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
 
         const PendingSurfaceState *pending = FindPending(*state_, surfaceId);
-        if (pending != nullptr && !SameProvider(pending->entry.provider, provider))
+        if (pending != nullptr && (!SameProvider(pending->entry.provider, provider) || pending->persistence != descriptor.persistence))
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
+        if (!HasPreservationCapacity(*state_) ||
+            (pending == nullptr && state_->surfaces.size() >= state_->limits.maximumWorkspaceEntries - state_->pending.size()))
+            return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
 
-        const EditorSurfaceProviderStatus configured = ConfiguredStatus(*state_, provider);
-        if (configured == EditorSurfaceProviderStatus::Missing)
+        if (const EditorSurfaceProviderStatus configured = ConfiguredStatus(*state_, provider);
+            configured == EditorSurfaceProviderStatus::Missing)
             SetProviderConfiguredStatus(*state_, provider, EditorSurfaceProviderStatus::Active);
 
         auto surface = std::make_shared<EditorSurfaceState>(std::move(context));
@@ -318,14 +346,16 @@ namespace Horo::Extensions {
             surface->desiredOpen = pending->entry.open;
             surface->desiredFocused = pending->entry.focused;
             surface->opaqueState = pending->entry.opaqueState;
-            const auto found = std::ranges::find_if(state_->pending, [surfaceId](const PendingSurfaceState &candidate) {
-                return candidate.entry.surfaceId == surfaceId;
-            });
-            state_->pending.erase(found);
         } else {
             surface->desiredOpen = descriptor.openByDefault;
         }
         state_->surfaces.push_back(surface);
+        if (pending != nullptr) {
+            const auto found = std::ranges::find_if(state_->pending, [&surfaceId](const PendingSurfaceState &candidate) {
+                return candidate.entry.surfaceId == surfaceId;
+            });
+            state_->pending.erase(found);
+        }
         return Result<EditorSurfaceRegistration>::Success(EditorSurfaceRegistration{state_, std::move(surface)});
     }
 
@@ -445,26 +475,35 @@ namespace Horo::Extensions {
         std::scoped_lock lock{state_->mutex};
         if (state_->shutdown)
             return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryShutdown);
+        if (!HasPreservationCapacity(*state_))
+            return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
 
         EditorSurfaceRestoreReport report;
         std::vector<PendingSurfaceState> pending;
-        pending.reserve(workspace.surfaces.size());
-        std::vector<const EditorSurfaceWorkspaceEntry *> entriesForSurfaces;
-        entriesForSurfaces.reserve(state_->surfaces.size());
+        pending.reserve(state_->limits.maximumWorkspaceEntries);
+        for (const PendingSurfaceState &entry : state_->pending) {
+            if (entry.persistence != EditorSurfacePersistence::Workspace)
+                pending.push_back(entry);
+        }
 
         for (const EditorSurfaceWorkspaceEntry &entry : workspace.surfaces) {
             const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, entry.surfaceId);
             if (surface == nullptr) {
-                pending.push_back(PendingSurfaceState{entry});
+                if (const PendingSurfaceState *existing = FindPending(*state_, entry.surfaceId);
+                    existing != nullptr && existing->persistence != EditorSurfacePersistence::Workspace)
+                    return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+                const std::size_t availablePending = state_->limits.maximumWorkspaceEntries - state_->surfaces.size();
+                if (pending.size() >= availablePending)
+                    return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
+                pending.push_back(PendingSurfaceState{.persistence = EditorSurfacePersistence::Workspace, .entry = entry});
                 if (ConfiguredStatus(*state_, entry.provider) == EditorSurfaceProviderStatus::Disabled)
                     report.disabledProvider.push_back(entry.surfaceId);
                 else
                     report.missingProvider.push_back(entry.surfaceId);
                 continue;
             }
-            if (!SameProvider(surface->provider, entry.provider))
+            if (surface->descriptor.persistence != EditorSurfacePersistence::Workspace || !SameProvider(surface->provider, entry.provider))
                 return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
-            entriesForSurfaces.push_back(&entry);
             const EditorSurfaceProviderStatus status = EffectiveStatus(*state_, *surface);
             if (status == EditorSurfaceProviderStatus::Active)
                 report.restored.push_back(entry.surfaceId);
@@ -474,17 +513,58 @@ namespace Horo::Extensions {
                 report.missingProvider.push_back(entry.surfaceId);
         }
 
-        state_->pending = std::move(pending);
+        struct SurfaceRestoreState final {
+            std::shared_ptr<EditorSurfaceState> surface;
+            bool desiredOpen{};
+            bool desiredFocused{};
+            std::vector<std::uint8_t> opaqueState;
+        };
+
+        std::vector<SurfaceRestoreState> restoredSurfaces;
+        restoredSurfaces.reserve(state_->surfaces.size());
         for (const std::shared_ptr<EditorSurfaceState> &surface : state_->surfaces) {
-            surface->desiredOpen = surface->descriptor.openByDefault;
-            surface->desiredFocused = false;
-            surface->opaqueState.clear();
+            if (surface->descriptor.persistence != EditorSurfacePersistence::Workspace)
+                continue;
+            SurfaceRestoreState restored{
+                .surface = surface,
+                .desiredOpen = surface->descriptor.openByDefault,
+            };
+            const auto entry = std::ranges::find_if(workspace.surfaces, [&surface](const EditorSurfaceWorkspaceEntry &candidate) {
+                return candidate.surfaceId == surface->descriptor.id;
+            });
+            if (entry != workspace.surfaces.end()) {
+                restored.desiredOpen = entry->open;
+                restored.desiredFocused = entry->focused;
+                restored.opaqueState = entry->opaqueState;
+            }
+            restoredSurfaces.push_back(std::move(restored));
         }
-        for (const EditorSurfaceWorkspaceEntry *entry : entriesForSurfaces) {
-            const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, entry->surfaceId);
-            surface->desiredOpen = entry->open;
-            surface->desiredFocused = entry->focused;
-            surface->opaqueState = entry->opaqueState;
+
+        std::size_t totalOpaqueStateBytes = 0;
+        const auto addOpaqueState = [&totalOpaqueStateBytes, maximum = state_->limits.maximumTotalStateBytes](const std::size_t bytes) {
+            if (bytes > maximum - totalOpaqueStateBytes)
+                return false;
+            totalOpaqueStateBytes += bytes;
+            return true;
+        };
+        for (const SurfaceRestoreState &restored : restoredSurfaces) {
+            if (!addOpaqueState(restored.opaqueState.size()))
+                return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        }
+        for (const std::shared_ptr<EditorSurfaceState> &surface : state_->surfaces) {
+            if (surface->descriptor.persistence != EditorSurfacePersistence::Workspace && !addOpaqueState(surface->opaqueState.size()))
+                return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        }
+        for (const PendingSurfaceState &entry : pending) {
+            if (!addOpaqueState(entry.entry.opaqueState.size()))
+                return FailureValue<EditorSurfaceRestoreReport>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
+        }
+
+        state_->pending = std::move(pending);
+        for (SurfaceRestoreState &restored : restoredSurfaces) {
+            restored.surface->desiredOpen = restored.desiredOpen;
+            restored.surface->desiredFocused = restored.desiredFocused;
+            restored.surface->opaqueState = std::move(restored.opaqueState);
         }
         return Result<EditorSurfaceRestoreReport>::Success(std::move(report));
     }
@@ -495,11 +575,24 @@ namespace Horo::Extensions {
         if (state_ == nullptr)
             return workspace;
         std::scoped_lock lock{state_->mutex};
-        workspace.surfaces.reserve(state_->surfaces.size() + state_->pending.size());
-        for (const std::shared_ptr<EditorSurfaceState> &surface : state_->surfaces)
-            workspace.surfaces.push_back(MakePending(*surface).entry);
+        const std::size_t registeredWorkspaceSurfaces =
+            static_cast<std::size_t>(std::ranges::count_if(state_->surfaces, [](const std::shared_ptr<EditorSurfaceState> &surface) {
+            return surface->descriptor.persistence == EditorSurfacePersistence::Workspace;
+        }));
+        const std::size_t pendingWorkspaceSurfaces =
+            static_cast<std::size_t>(std::ranges::count_if(state_->pending, [](const PendingSurfaceState &pending) {
+            return pending.persistence == EditorSurfacePersistence::Workspace;
+        }));
+        workspace.surfaces.reserve(registeredWorkspaceSurfaces + pendingWorkspaceSurfaces);
+        for (const std::shared_ptr<EditorSurfaceState> &surface : state_->surfaces) {
+            if (surface->descriptor.persistence != EditorSurfacePersistence::Workspace)
+                continue;
+            PendingSurfaceState saved = MakePending(*surface);
+            workspace.surfaces.push_back(std::move(saved.entry));
+        }
         for (const PendingSurfaceState &pending : state_->pending)
-            workspace.surfaces.push_back(pending.entry);
+            if (pending.persistence == EditorSurfacePersistence::Workspace)
+                workspace.surfaces.push_back(pending.entry);
         std::ranges::sort(workspace.surfaces, {}, &EditorSurfaceWorkspaceEntry::surfaceId);
         return workspace;
     }
@@ -561,8 +654,12 @@ namespace Horo::Extensions {
         const auto found = std::ranges::find(registry->surfaces, surface);
         if (found == registry->surfaces.end())
             return;
-        if (!registry->shutdown && registry->pending.size() < registry->limits.maximumWorkspaceEntries)
-            registry->pending.push_back(MakePending(*surface));
+        if (!registry->shutdown) {
+            assert(HasPreservationCapacity(*registry));
+            assert(registry->pending.size() < registry->limits.maximumWorkspaceEntries);
+            assert(registry->pending.capacity() >= registry->limits.maximumWorkspaceEntries);
+            registry->pending.push_back(TakePending(*surface));
+        }
         registry->surfaces.erase(found);
     }
 }  // namespace Horo::Extensions
