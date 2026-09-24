@@ -71,16 +71,13 @@ namespace {
     }
 }  // namespace
 
-TEST_CASE("Metric descriptors enforce typed units and hard admission bounds", "[foundation][observability][telemetry][contract]") {
+TEST_CASE("Metric descriptors accept each typed unit", "[foundation][observability][telemetry][contract]") {
     using namespace Horo::Telemetry;
     Runtime::Shutdown();
     REQUIRE(Runtime::Initialize({.queueCapacity = 64, .enabled = true}, std::make_shared<NullSink>()));
-    const std::uint64_t invalidBefore = Runtime::GetStatistics().invalidInstrumentRegistrations;
 
-    auto maximum = MakeMaximumDescriptor();
-    static_cast<void>(Runtime::RegisterCounter(std::move(maximum)));
-    REQUIRE(Runtime::GetDiagnosticSnapshot().availabilityCount == 1);
     for (const auto &[name, unit] : std::array{
+             std::pair{"valid.count", MetricUnit::Count},
              std::pair{"valid.bytes", MetricUnit::Bytes},
              std::pair{"valid.seconds", MetricUnit::Seconds},
              std::pair{"valid.ratio", MetricUnit::Ratio},
@@ -89,6 +86,20 @@ TEST_CASE("Metric descriptors enforce typed units and hard admission bounds", "[
         descriptor.unit = unit;
         REQUIRE(Register(std::move(descriptor)));
     }
+
+    CHECK(Runtime::GetDiagnosticSnapshot().availabilityCount == 4);
+    CHECK(Runtime::Shutdown());
+}
+
+TEST_CASE("Metric descriptors enforce hard admission bounds", "[foundation][observability][telemetry][contract]") {
+    using namespace Horo::Telemetry;
+    Runtime::Shutdown();
+    REQUIRE(Runtime::Initialize({.queueCapacity = 64, .enabled = true}, std::make_shared<NullSink>()));
+    const std::uint64_t invalidBefore = Runtime::GetStatistics().invalidInstrumentRegistrations;
+
+    auto maximum = MakeMaximumDescriptor();
+    static_cast<void>(Runtime::RegisterCounter(std::move(maximum)));
+    REQUIRE(Runtime::GetDiagnosticSnapshot().availabilityCount == 1);
 
     const auto rejects = [](InstrumentDescriptor descriptor) {
         return !Register(std::move(descriptor));
@@ -100,7 +111,7 @@ TEST_CASE("Metric descriptors enforce typed units and hard admission bounds", "[
     CHECK_FALSE(static_cast<bool>(Runtime::RegisterTiming(std::move(invalidTimingUnit))));
 
     const DiagnosticSnapshot snapshot = Runtime::GetDiagnosticSnapshot();
-    CHECK(snapshot.availabilityCount == 4);
+    CHECK(snapshot.availabilityCount == 1);
     CHECK(snapshot.statistics.invalidInstrumentRegistrations == invalidBefore + 11);
     CHECK(Runtime::Shutdown());
 }
