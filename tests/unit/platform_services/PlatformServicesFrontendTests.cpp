@@ -234,52 +234,56 @@ namespace Horo::PlatformServices {
         CHECK(backend->requests.RecordCount() == 0);
     }
 
-    TEST_CASE("Platform Services frontend fails closed for session capability and product policy",
+    TEST_CASE("Platform Services frontend rejects stale session handles", "[platform-services][frontend][admission]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto oldSession = Session({7}, {4}, PlatformSessionPhase::Active, PlatformSessionAccessState::Granted, std::byte{2});
+        const auto currentSession = Session();
+        auto frontend = Frontend(backend, currentSession);
+        RequireError(frontend.UnlockAchievement({*oldSession.Subject(), {1}}), PlatformSessionErrors::StaleSession);
+        RequireError(frontend.QueryRankedLeaderboard({*oldSession.Subject(), {2}, 0, 1}), PlatformSessionErrors::StaleSession);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Platform Services frontend rejects denied session access", "[platform-services][frontend][admission]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto denied = Session({7}, {5}, PlatformSessionPhase::Active, PlatformSessionAccessState::Denied);
+        auto frontend = Frontend(backend, denied);
+        RequireError(frontend.QueryFriends({*denied.Subject(), 1}), PlatformSessionErrors::AccessDenied);
+        RequireError(frontend.QueryFriendsLeaderboard({*denied.Subject(), {2}, 0, 1}), PlatformSessionErrors::AccessDenied);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Friends leaderboard requires the separate friends consent grant", "[platform-services][frontend][admission]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        PlatformSessionCandidate candidate{.phase = PlatformSessionPhase::Active,
+                                           .generation = {5},
+                                           .providerGeneration = {7},
+                                           .accessRevision = {3}};
+        PlatformSubjectNonce nonce;
+        nonce.bytes.back() = std::byte{1};
+        candidate.subjectNonce = nonce;
+        candidate.capabilities.services.fill(PlatformSessionAccessState::Granted);
+        candidate.capabilities.services[static_cast<std::size_t>(PlatformServiceKind::Friends)] =
+            PlatformSessionAccessState::ConsentRequired;
+        auto built = BuildPlatformSessionSnapshot(candidate);
+        REQUIRE(built.HasValue());
+        const auto session = std::move(built).Value();
+        auto frontend = Frontend(backend, session);
+        RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), PlatformSessionErrors::ConsentRequired);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Platform Services frontend rejects subject operations without an active session",
               "[platform-services][frontend][admission]") {
-        SECTION("stale session") {
-            auto backend = std::make_shared<RoutingBackend>();
-            const auto oldSession = Session({7}, {4}, PlatformSessionPhase::Active, PlatformSessionAccessState::Granted, std::byte{2});
-            const auto currentSession = Session();
-            auto frontend = Frontend(backend, currentSession);
-            RequireError(frontend.UnlockAchievement({*oldSession.Subject(), {1}}), PlatformSessionErrors::StaleSession);
-            RequireError(frontend.QueryRankedLeaderboard({*oldSession.Subject(), {2}, 0, 1}), PlatformSessionErrors::StaleSession);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("denied access") {
-            auto backend = std::make_shared<RoutingBackend>();
-            const auto denied = Session({7}, {5}, PlatformSessionPhase::Active, PlatformSessionAccessState::Denied);
-            auto frontend = Frontend(backend, denied);
-            RequireError(frontend.QueryFriends({*denied.Subject(), 1}), PlatformSessionErrors::AccessDenied);
-            RequireError(frontend.QueryFriendsLeaderboard({*denied.Subject(), {2}, 0, 1}), PlatformSessionErrors::AccessDenied);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("friends leaderboard requires the separate friends consent grant") {
-            auto backend = std::make_shared<RoutingBackend>();
-            PlatformSessionCandidate candidate{.phase = PlatformSessionPhase::Active,
-                                               .generation = {5},
-                                               .providerGeneration = {7},
-                                               .accessRevision = {3}};
-            PlatformSubjectNonce nonce;
-            nonce.bytes.back() = std::byte{1};
-            candidate.subjectNonce = nonce;
-            candidate.capabilities.services.fill(PlatformSessionAccessState::Granted);
-            candidate.capabilities.services[static_cast<std::size_t>(PlatformServiceKind::Friends)] =
-                PlatformSessionAccessState::ConsentRequired;
-            auto built = BuildPlatformSessionSnapshot(candidate);
-            REQUIRE(built.HasValue());
-            const auto session = std::move(built).Value();
-            auto frontend = Frontend(backend, session);
-            RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), PlatformSessionErrors::ConsentRequired);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("inactive session") {
-            auto backend = std::make_shared<RoutingBackend>();
-            const auto active = Session();
-            auto frontend = Frontend(backend, Session({7}, {5}, PlatformSessionPhase::NoSubject));
-            RequireError(frontend.ClearPresence(*active.Subject()), PlatformSessionErrors::NoSubject);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("product policy") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto active = Session();
+        auto frontend = Frontend(backend, Session({7}, {5}, PlatformSessionPhase::NoSubject));
+        RequireError(frontend.ClearPresence(*active.Subject()), PlatformSessionErrors::NoSubject);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Friends leaderboard honors leaderboard and Friends operation policies", "[platform-services][frontend][admission]") {
+        SECTION("leaderboard policy") {
             auto backend = std::make_shared<RoutingBackend>();
             const auto session = Session();
             PlatformServicesOperationPolicy policy;
@@ -288,7 +292,7 @@ namespace Horo::PlatformServices {
             RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), FrontendErrors::OperationDenied);
             CHECK(backend->TotalCalls() == 0);
         }
-        SECTION("friends leaderboard also honors the Friends operation policy") {
+        SECTION("Friends policy") {
             auto backend = std::make_shared<RoutingBackend>();
             const auto session = Session();
             PlatformServicesOperationPolicy policy;

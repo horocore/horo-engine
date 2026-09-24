@@ -228,8 +228,7 @@ namespace Horo::PlatformServices {
         CHECK_FALSE(backend.activated);
     }
 
-    TEST_CASE("Leaderboard page results preserve score ordering, competition ties, and finite offsets",
-              "[platform-services][backend][leaderboard]") {
+    TEST_CASE("Leaderboard page results preserve score ordering and competition ties", "[platform-services][backend][leaderboard]") {
         const LeaderboardRankedQuery query{.leaderboard = {2}, .startIndex = 4, .pageSize = 4};
         LeaderboardEntriesPage page{.startIndex = 4,
                                     .entries = {{.rank = 1, .score = std::int64_t{100}},
@@ -238,7 +237,6 @@ namespace Horo::PlatformServices {
                                     .hasMore = true};
         REQUIRE(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
                     .HasValue());
-
         page.entries[1].rank = 2;
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
                   .ErrorValue()
@@ -248,7 +246,11 @@ namespace Horo::PlatformServices {
                   .HasError());
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::LowestFirst)
                   .HasValue());
+    }
 
+    TEST_CASE("Leaderboard page validation rejects invalid offsets and bounds", "[platform-services][backend][leaderboard]") {
+        const LeaderboardRankedQuery query{.leaderboard = {2}, .startIndex = 4, .pageSize = 4};
+        LeaderboardEntriesPage page;
         page = {.startIndex = 3, .entries = {{.rank = 4, .score = std::int64_t{80}}}, .hasMore = false};
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::LowestFirst)
                   .HasError());
@@ -264,7 +266,11 @@ namespace Horo::PlatformServices {
                 .hasMore = false};
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
                   .HasError());
+    }
 
+    TEST_CASE("Leaderboard pages preserve authored score kinds", "[platform-services][backend][leaderboard]") {
+        const LeaderboardRankedQuery query{.leaderboard = {2}, .startIndex = 4, .pageSize = 4};
+        LeaderboardEntriesPage page;
         page = {.startIndex = 4,
                 .entries = {{.rank = 1, .score = std::uint64_t{100}}, {.rank = 2, .score = std::uint64_t{80}}},
                 .hasMore = false};
