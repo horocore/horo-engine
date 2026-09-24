@@ -87,13 +87,6 @@ namespace Horo::Editor {
         void DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
                          EditorWorkspaceViewCommandData &outCommand) const;
 
-        void DrawToolbar(const ImVec2 &pos, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
-                         EditorWorkspaceViewCommandData &outCommand);
-        void DrawDocumentRail(const ImVec2 &pos, const ImVec2 &size, float centerY, float minimumX, float maximumX,
-                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
-        void DrawDocumentRailItem(const std::string &panelId, const std::shared_ptr<IWorkspacePanel> &panel, float tabX, float centerY,
-                                  const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
-
         void DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const;
 
         void DrawExternalConflictBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const;
@@ -101,6 +94,7 @@ namespace Horo::Editor {
         void DrawDockArea(WorkspaceDockArea area, const char *windowId, const ImVec2 &pos, const ImVec2 &size,
                           std::string_view activePanelId, const EditorWorkspaceViewModel &viewModel,
                           EditorWorkspaceViewCommandData &outCommand);
+        void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         void DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,
                                       EditorWorkspaceViewCommandData &outCommand);
         void DrawWorkspaceDropTarget(const char *targetNodeId, const char *id, const ImVec2 &position, const ImVec2 &size,

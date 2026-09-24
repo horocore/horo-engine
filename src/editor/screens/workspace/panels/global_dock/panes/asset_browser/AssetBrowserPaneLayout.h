@@ -15,14 +15,13 @@ namespace Horo::Editor {
         inline constexpr float ToolbarControlHeight = GlobalDockLayout::ControlHeight;
         inline constexpr float ToolbarGap = GlobalDockLayout::ToolbarGap;
         inline constexpr float LocationRailWidth = 42.0F;
-        inline constexpr float FooterHeight = GlobalDockLayout::FooterHeight;
         inline constexpr float GridPaddingX = 12.0F;
         inline constexpr float GridPaddingTop = 12.0F;
         inline constexpr float GridPaddingBottom = 20.0F;
         inline constexpr float GridGap = 8.0F;
         inline constexpr float CardMinimumWidth = 118.0F;
         inline constexpr float CardMaximumWidth = 152.0F;
-        inline constexpr float CardHeight = 105.0F;
+        inline constexpr float CardHeight = 120.0F;
         inline constexpr float CardPreviewHeight = 62.0F;
 
         /** @brief Returns the theme-resolved supporting-text size. */

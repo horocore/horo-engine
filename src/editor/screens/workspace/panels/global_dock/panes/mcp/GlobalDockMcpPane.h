@@ -21,7 +21,6 @@ namespace Horo::Editor {
         void DrawSessionActions(float x, float y, const EditorGuiContext &context);
         void DrawTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context);
         void DrawAuditRow(std::size_t index, float width, const TableLayout &layout, const EditorGuiContext &context);
-        void DrawFooter(const ImVec2 &origin, float width, const EditorGuiContext &context) const;
 
         enum class Filter : unsigned char {
             All,

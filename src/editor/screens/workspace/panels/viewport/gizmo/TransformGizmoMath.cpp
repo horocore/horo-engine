@@ -15,6 +15,8 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] bool IsAxisValid(const EditorTransformTool tool, const int axis) noexcept {
+            if (tool == EditorTransformTool::Move)
+                return axis >= 0 && (axis <= 2 || (axis >= 4 && axis <= 6));
             return axis >= 0 && axis <= (tool == EditorTransformTool::Scale ? 3 : 2);
         }
 
@@ -80,8 +82,17 @@ namespace Horo::Editor {
         [[nodiscard]] Result<std::pair<Math::Transform, Math::Vec3>> EvaluateMoveMath(const TransformGizmoMathSession &session,
                                                                                       const TransformGizmoMathUpdate &update) {
             Math::Transform next = session.initialLocalTransform;
-            const float worldDistance = update.projectedPixels / session.pixelsPerWorldUnit;
-            const Math::Vec3 worldPosition = session.initialWorldPosition + session.worldAxis * worldDistance;
+            Math::Vec3 worldPosition;
+            if (session.axis >= 4) {
+                if (!update.worldTranslation.has_value() || !Math::IsFinite(*update.worldTranslation))
+                    return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(MakeError(TransformGizmoErrors::InvalidUpdate));
+                const Math::Vec3 planeDelta =
+                    *update.worldTranslation - session.worldAxis * Math::Dot(*update.worldTranslation, session.worldAxis);
+                worldPosition = session.initialWorldPosition + planeDelta;
+            } else {
+                const float worldDistance = update.projectedPixels / session.pixelsPerWorldUnit;
+                worldPosition = session.initialWorldPosition + session.worldAxis * worldDistance;
+            }
             const Result<Math::Vec3> localPosition = Math::TryTransformPoint(session.parentWorldInverse, worldPosition);
             if (localPosition.HasError())
                 return Result<std::pair<Math::Transform, Math::Vec3>>::Failure(localPosition.ErrorValue());
@@ -181,7 +192,7 @@ namespace Horo::Editor {
         }
 
         Math::Vec3 worldAxis{};
-        if (request.axis < 3) {
+        if (request.axis < 3 || (request.tool == EditorTransformTool::Move && request.axis >= 4)) {
             const Result<Math::Vec3> normalizedAxis = Math::TryNormalize(request.worldAxis);
             if (normalizedAxis.HasError())
                 return Result<TransformGizmoMathSession>::Failure(normalizedAxis.ErrorValue());

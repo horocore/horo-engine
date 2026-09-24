@@ -13,7 +13,7 @@ The editor workspace shown in the screenshots is structured as:
 +----------------------------------------------------------+
 |  System menu bar (File / Edit / Assets / GameObject / Component / Window / Build / Help)             |
 +----------------------------------------------------------+
-|  Toolbar (Select / Move / Rotate / Scale / Play / Scene) |
+|  Viewport tools live within the viewport panel         |
 +----------+-------------------------------+---------------+
 |          |                               |               |
 |  Left    |                               |   Right       |
@@ -47,7 +47,6 @@ EditorLayer
     |       +-- EditorDataBus
     |
     +-- EditorMenuBar            system menu bar (File, Edit, Assets, GameObject, Component, Window, Build, Help)
-    +-- EditorToolbar            top icon bar (select, transform, play, scene)
     +-- EditorPanelHost          owns layout tree and tab containers
     |       |
     |       +-- RootSplit (vertical)
@@ -75,7 +74,7 @@ EditorLayer
 ```
 
 `EditorLayer` is the GUI composition root. It creates the workspace controller,
-panel host, modal host, menu bar, toolbar, and viewport render
+panel host, modal host, menu bar, and viewport render
 integration, then forwards frame lifecycle calls.
 
 The persistent status bar is shell chrome owned by `GuiScreenHost`, not by
@@ -85,17 +84,16 @@ contributions through the host registry, including an
 [Editor Status Bar](./editor-status-bar.md).
 
 `EditorLayer` is also the GUI coordinator for top-level presentation actions. It
-consumes typed results from the menu bar and toolbar, opens GUI-only surfaces
+consumes typed results from the menu bar and viewport controls, opens GUI-only surfaces
 through `EditorModalHost` or `EditorPanelHost`, and forwards editor-session
 operations to `EditorWorkspaceController`. It does not implement domain
 operations itself. `EditorWorkspaceController` is not a GUI coordinator and
-does not depend on menu, toolbar, panel, or modal types.
+does not depend on menu, viewport-control, panel, or modal types.
 
 ```cpp
 class EditorLayer {
 private:
     void Handle(const EditorMenuResult& result);
-    void Handle(const EditorToolbarResult& result);
 };
 ```
 
@@ -206,9 +204,15 @@ struct LayoutNode {
 };
 ```
 
-The viewport is a `PanelNode`, not a special hard-coded dock. The default editor
-layout places it in the center of the tree, but alternative workspace layouts
-may place other dedicated panels there.
+The center editor region is the fixed `workspace.document` `TabStackNode`. It
+starts with the viewport tab and accepts additional registered view or plugin
+panels. Closing its last tab leaves the stack in place so another tab can be
+opened. A drop into this region can add or move a tab, but cannot split the
+center into another dock. The left, right, and bottom regions remain dock
+stations with their own activity selection and tab surfaces. Persistent source
+documents use the host's typed document identity and dirty-close policy; a
+source editor surface must be registered before those identities are presented
+as editable center tabs.
 
 ### Host Interface
 
@@ -760,9 +764,14 @@ their projected plane behavior.
 All three rotation rings start from one world-space radius computed from the
 camera depth and projection. Their projected points are then fitted to the same
 screen-space major radius; the ellipse shape still reflects each axis plane.
-The move gizmo draws screen-sized, filled arrowheads with shaded shafts and a
-central hub. Pointer hit testing covers the shaft and tip while leaving the hub
-clear of axis capture.
+At rest, only the camera-facing half of each ring is drawn and hit-tested, with
+a thin view-facing outer circle. During a rotation drag, the selected axis ring
+is shown alone with a translucent sector from the initial to current direction.
+The move gizmo draws long, thin axes with filled arrowheads and small plane
+translation handles between visible axis pairs. Pointer hit testing covers the
+shaft, tip, and plane handles while leaving the hub clear of axis capture. Plane
+drags project the pointer ray onto the selected world-space plane and convert
+the resulting displacement through the parent inverse before previewing it.
 
 Content Browser assets that support scene instantiation follow the same preview
 boundary. While the primary pointer remains held over the viewport, the editor
@@ -949,17 +958,11 @@ Visible as the Workspace panel with the following tabs:
     `ProfilerCaptureService`
   - Does not receive one data-bus event per metric sample or profiler zone
 
-### Toolbar
+### Viewport Controls
 
-Top icon bar with select, move, rotate, scale, play, pause, scene dropdown,
-help, and settings.
-
-- Owner: `EditorToolbar`
-- Returns typed interaction results to the `EditorLayer` GUI coordinator
-- The coordinator opens GUI-only workflows through `EditorModalHost`
-- Domain operations are routed to `EditorWorkspaceController` or application
-  use cases directly
-- Does not own document state
+The viewport panel owns its select, move, rotate, scale, projection, and compass
+controls. The compass sends signed axis-view commands to the editor-session
+camera authority. The workspace has no separate top toolbar.
 
 ### Menu Bar
 
@@ -974,10 +977,9 @@ The system menu bar at the top of the window (File, Edit, Assets, GameObject, Co
   rendered inside the application window
 - Does not own document state
 
-`EditorMenuBar` and `EditorToolbar` route actions through the same interaction
+`EditorMenuBar` and viewport controls route actions through the same interaction
 scope policy as panels. When `EditorModalHost` owns interaction,
-workspace-mutating menu and toolbar actions are disabled or rejected before
-command dispatch.
+workspace-mutating actions are disabled or rejected before command dispatch.
 
 ### Status Bar
 
@@ -1166,7 +1168,6 @@ src/editor/panels/
     EditorSelectionModel.h/cpp
     EditorViewportModel.h/cpp
     EditorMenuBar.h/cpp
-    EditorToolbar.h/cpp
     tabs/
         HierarchyTab.h/cpp
         ProjectTab.h/cpp

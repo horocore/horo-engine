@@ -28,6 +28,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -82,6 +83,9 @@ namespace {
 
         REQUIRE(Horo::Editor::GlobalDockLabelFontSize() == Horo::Editor::Theme::TextPx::Label());
         REQUIRE(Horo::Editor::AssetBrowserLayout::SecondaryFontSize() == Horo::Editor::Theme::TextPx::Caption());
+        const float secondaryBottom = Horo::Editor::AssetBrowserLayout::CardPreviewHeight + 6.0F + Horo::Editor::GlobalDockLabelFontSize() +
+                                      2.0F + Horo::Editor::AssetBrowserLayout::SecondaryFontSize();
+        REQUIRE(Horo::Editor::AssetBrowserLayout::CardHeight - secondaryBottom >= 12.0F);
 
         const auto wide = ComputeAssetBrowserGridMetrics(580.0F);
         REQUIRE((wide.columns == 3));
@@ -111,17 +115,16 @@ namespace {
         REQUIRE_FALSE(panel.ActivatePane("test.global_dock.missing"));
     }
 
-    TEST_CASE("Global dock layout partitions optional regions without overlap", "[unit][editor][gui]") {
+    TEST_CASE("Global dock layout gives the content all space below the toolbar", "[unit][editor][gui]") {
         using namespace Horo::Editor;
 
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions({10.0F, 20.0F}, 800.0F, 300.0F, {.hasToolbar = true, .hasFooter = true, .leftRailWidth = 42.0F});
+            ResolveGlobalDockPaneRegions({10.0F, 20.0F}, 800.0F, 300.0F, {.hasToolbar = true, .leftRailWidth = 42.0F});
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         REQUIRE((regions.contentOrigin.x == 52.0F));
         REQUIRE((regions.contentOrigin.y == 20.0F + metrics.toolbarHeight));
         REQUIRE((regions.contentWidth == 758.0F));
-        REQUIRE((regions.contentHeight == 300.0F - metrics.toolbarHeight - metrics.footerHeight));
-        REQUIRE((regions.footerOrigin.y == 20.0F + 300.0F - metrics.footerHeight));
+        REQUIRE((regions.contentHeight == 300.0F - metrics.toolbarHeight));
         REQUIRE((regions.leftRailHeight == regions.contentHeight));
     }
 
@@ -174,6 +177,9 @@ namespace {
         REQUIRE((factoryCalls == 1));
 
         const auto &panels = registry.GetAllPanels();
+        REQUIRE(std::ranges::none_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
+            return panel->GetId() == "horo.input_mapping";
+        }));
         const auto globalDock = std::ranges::find_if(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
             return panel->GetId() == "horo.global_dock";
         });

@@ -25,9 +25,7 @@ namespace Horo::Editor {
             float header;
             float row;
             float compactRow;
-            float footer;
             float padding;
-            float chevron;
             float columnGap;
             float time;
             float level;
@@ -59,11 +57,9 @@ namespace Horo::Editor {
                 .control = pane.controlHeight,
                 .gap = pane.toolbarGap,
                 .header = pane.tableHeaderHeight,
-                .row = 27.0F * s,
+                .row = pane.tableRowHeight,
                 .compactRow = 26.0F * s,
-                .footer = pane.footerHeight,
                 .padding = pane.contentPadding,
-                .chevron = 28.0F * s,
                 .columnGap = 8.0F * s,
                 .time = 72.0F * s,
                 .level = 112.0F * s,
@@ -157,7 +153,8 @@ namespace Horo::Editor {
                 width += TextWidth(font, fontSize, label);
             if (count.has_value()) {
                 const std::string countText = std::to_string(*count);
-                width += l.gap * 0.7F + std::max(l.icon + l.gap * 0.5F, TextWidth(font, fontSize, countText.c_str()) + l.gap);
+                const float badgeHeight = std::max(l.icon, fontSize + 4.0F * l.scale);
+                width += l.gap * 0.7F + std::max(badgeHeight, TextWidth(font, fontSize, countText.c_str()) + l.gap);
             }
             return std::max(minimumWidth * l.scale, width);
         }
@@ -192,11 +189,15 @@ namespace Horo::Editor {
             }
             if (props.count.has_value()) {
                 const std::string value = std::to_string(*props.count);
-                const float badgeWidth = std::max(l.icon + l.gap * 0.5F, TextWidth(fonts.sansCompact, fontSize, value.c_str()) + l.gap);
-                const ImVec2 badge{minimum.x + extent.x - l.gap - badgeWidth, minimum.y + (extent.y - l.icon) * 0.5F};
-                drawList->AddRectFilled(badge, {badge.x + badgeWidth, badge.y + l.icon}, Theme::U32(surface),
+                const float badgeHeight = std::max(l.icon, fontSize + 4.0F * l.scale);
+                const float badgeWidth = std::max(badgeHeight, TextWidth(fonts.sansCompact, fontSize, value.c_str()) + l.gap);
+                const ImVec2 badge{minimum.x + extent.x - l.gap - badgeWidth, minimum.y + (extent.y - badgeHeight) * 0.5F};
+                drawList->AddRectFilled(badge, {badge.x + badgeWidth, badge.y + badgeHeight}, Theme::U32(surface),
                                         Theme::GetActiveTokens().radii.control);
-                drawList->AddText(fonts.sansCompact, fontSize, {badge.x + l.gap * 0.5F, badge.y}, Theme::U32(Theme::Dim()), value.c_str());
+                const float countWidth = TextWidth(fonts.sansCompact, fontSize, value.c_str());
+                drawList->AddText(fonts.sansCompact, fontSize,
+                                  {badge.x + (badgeWidth - countWidth) * 0.5F, badge.y + (badgeHeight - fontSize) * 0.5F},
+                                  Theme::U32(Theme::Dim()), value.c_str());
             }
             return pressed;
         }
@@ -258,7 +259,7 @@ namespace Horo::Editor {
         DrawToolbar(origin, width, context);
         DrawTableHeader({origin.x, origin.y + l.toolbar}, width, context);
         const float rowsY = origin.y + l.toolbar + l.header;
-        const float rowsHeight = std::max(1.0F, bottom - rowsY - l.footer);
+        const float rowsHeight = std::max(1.0F, bottom - rowsY);
         ImGui::SetCursorScreenPos({origin.x, rowsY});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
@@ -272,7 +273,6 @@ namespace Horo::Editor {
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
-        DrawFooter({origin.x, bottom - l.footer}, width, context);
     }
 
     void GlobalDockConsolePane::DrawToolbar(const ImVec2 &minimum, const float width, const EditorGuiContext &context) {
@@ -441,7 +441,7 @@ namespace Horo::Editor {
         DrawGlobalDockTableHeaderSurface(minimum, width, l.header);
         const float size = Theme::TextPx::Caption();
         const float y = minimum.y + (l.header - size) * 0.5F;
-        float x = minimum.x + l.padding + l.chevron + l.columnGap;
+        float x = minimum.x + l.padding;
         const auto header = [&](const char *key, const float column) {
             const std::string &label = context.localization.Get("editor", key);
             ClippedText(*drawList, context.theme.fonts.sans, size, {x, y}, {x + column - l.columnGap, minimum.y + l.header}, Theme::Muted(),
@@ -508,9 +508,6 @@ namespace Horo::Editor {
         const float fontSize = Theme::TextPx::Caption();
         const float y = origin.y + (height - fontSize) * 0.5F;
         float x = origin.x + l.padding;
-        Ui::DrawEditorIcon(drawList, Ui::UiIcon::ArrowForward, {x, origin.y + (height - l.icon) * 0.5F}, {l.icon, l.icon},
-                           Theme::U32(Theme::Muted()), context.theme.fonts.icon);
-        x += l.chevron + l.columnGap;
         const std::string time = TimeLabel(record.timestampUtc);
         ClippedText(*drawList, context.theme.fonts.sans, fontSize, {x, y}, {x + l.time, maximum.y}, Theme::Dim(), time);
         x += l.time + l.columnGap;
@@ -524,49 +521,6 @@ namespace Horo::Editor {
         x += l.source + l.columnGap;
         ClippedText(*drawList, context.theme.fonts.sans, fontSize, {x, y}, {maximum.x - l.padding, maximum.y}, Theme::ConsoleMessageText(),
                     record.message);
-    }
-
-    void GlobalDockConsolePane::DrawFooter(const ImVec2 &minimum, const float width, const EditorGuiContext &context) const {
-        const Layout l = GetLayout();
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(minimum, {minimum.x + width, minimum.y + l.footer}, Theme::U32(Theme::ConsoleFooterSurface()));
-        drawList->AddLine(minimum, {minimum.x + width, minimum.y}, Theme::U32(Theme::Border()));
-        const float fontSize = Theme::TextPx::Caption();
-        const float y = minimum.y + (l.footer - fontSize) * 0.5F;
-        float x = minimum.x + l.padding;
-        const auto text = [&](const std::string &value, const ImVec4 color = Theme::Muted()) {
-            drawList->AddText(context.theme.fonts.sans, fontSize, {x, y}, Theme::U32(color), value.c_str());
-            x += TextWidth(context.theme.fonts.sans, fontSize, value.c_str()) + l.gap;
-        };
-        const auto divider = [&] {
-            drawList->AddLine({x, minimum.y + l.gap}, {x, minimum.y + l.footer - l.gap}, Theme::U32(Theme::Border()));
-            x += l.gap * 1.5F;
-        };
-        const auto count = [&](const Severity severity, const std::size_t value, const char *key) {
-            Ui::DrawEditorIcon(drawList, SeverityIcon(severity), {x, minimum.y + (l.footer - l.icon) * 0.5F}, {l.icon, l.icon},
-                               Theme::U32(SeverityColor(severity)), context.theme.fonts.icon);
-            x += l.icon + l.gap * 0.5F;
-            text(std::format("{} {}", value, context.localization.Get("editor", key)));
-        };
-        text(std::format("{} {}", m_filteredIndices.size(),
-                         context.localization.Get("editor", "workspace.global_dock.console.footer.logs")));
-        divider();
-        count(Severity::Info, m_visibleLevelCounts[0], "workspace.global_dock.console.footer.info");
-        divider();
-        count(Severity::Warning, m_visibleLevelCounts[1], "workspace.global_dock.console.footer.warning");
-        divider();
-        count(Severity::Error, m_visibleLevelCounts[2], "workspace.global_dock.console.footer.error");
-        const std::string state =
-            std::format("{}: {}", context.localization.Get("editor", "workspace.global_dock.console.auto_scroll"),
-                        context.localization.Get("editor", m_autoScroll ? "workspace.global_dock.console.footer.on"
-                                                                        : "workspace.global_dock.console.footer.off"));
-        const float dot = 7.0F * l.scale;
-        const float right = minimum.x + width - l.padding - dot;
-        drawList->AddText(context.theme.fonts.sans, fontSize,
-                          {right - l.gap - TextWidth(context.theme.fonts.sans, fontSize, state.c_str()), y}, Theme::U32(Theme::Muted()),
-                          state.c_str());
-        drawList->AddCircleFilled({right + dot * 0.5F, minimum.y + l.footer * 0.5F}, dot * 0.5F,
-                                  Theme::U32(m_autoScroll ? Theme::Ok() : Theme::Dim()));
     }
 
     bool GlobalDockConsolePane::RefreshSnapshot() {

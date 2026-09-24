@@ -229,31 +229,6 @@ namespace Horo::Editor {
                                           Theme::U32(GlobalDockToneColor(GlobalDockTone::Positive)), Theme::U32(Theme::Accent()));
     }
 
-    void DrawGlobalDockFooterSurface(const ImVec2 origin, const float width, const float height) {
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, Theme::U32(Theme::BottomDockToolbarSurface()));
-        drawList->AddLine(origin, {origin.x + width, origin.y}, Theme::U32(Theme::Border()));
-    }
-
-    void DrawGlobalDockStatusFooter(const ImVec2 origin, const float width, const std::span<const std::string_view> segments,
-                                    const std::string_view status, const Theme::Fonts &fonts) {
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const float footerY = origin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        DrawGlobalDockFooterSurface(origin, width, metrics.footerHeight);
-        float footerX = origin.x + metrics.contentPadding;
-        for (const std::string_view segment : segments) {
-            drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {footerX, footerY}, Theme::U32(Theme::Muted()), segment.data(),
-                              segment.data() + segment.size());
-            footerX += MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), segment) + 10.0F * scale;
-        }
-        const float statusX =
-            origin.x + width - metrics.contentPadding - MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), status);
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {statusX, footerY}, Theme::U32(Theme::Muted()), status.data(),
-                          status.data() + status.size());
-    }
-
     float MeasureGlobalDockToolbarChip(const GlobalDockToolbarChipProps &props, const Theme::Fonts &fonts) {
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float fontSize = Theme::TextPx::Label();

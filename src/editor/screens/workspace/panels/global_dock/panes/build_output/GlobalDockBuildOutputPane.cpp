@@ -197,7 +197,7 @@ namespace Horo::Editor {
             RebuildFilter();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
 
         std::size_t errorCount = 0U;
@@ -208,7 +208,6 @@ namespace Horo::Editor {
         }
         DrawToolbar(regions, metrics, context, errorCount, warningCount);
         DrawTable(regions, metrics, context, command, snapshotChanged);
-        DrawFooter(regions, metrics, context, errorCount, warningCount);
     }
 
     void GlobalDockBuildOutputPane::DrawToolbar(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
@@ -450,33 +449,6 @@ namespace Horo::Editor {
         }
     }
 
-    void GlobalDockBuildOutputPane::DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
-                                               const EditorGuiContext &context, const std::size_t errorCount,
-                                               const std::size_t warningCount) {
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const std::string summary =
-            std::format("{} {}   {} {}   {} {}", m_snapshot.records.size(),
-                        context.localization.Get("editor", "workspace.global_dock.build_output.footer.diagnostics"), errorCount,
-                        context.localization.Get("editor", "workspace.global_dock.build_output.footer.errors"), warningCount,
-                        context.localization.Get("editor", "workspace.global_dock.build_output.footer.warnings"));
-        DrawGlobalDockFooterSurface(regions.footerOrigin, regions.footerWidth, metrics.footerHeight);
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        const float footerY = regions.footerOrigin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {regions.footerOrigin.x + metrics.contentPadding, footerY},
-                          Theme::U32(Theme::Muted()), summary.c_str());
-        if (m_snapshot.records.empty())
-            return;
-        const BuildOutputRecord &last = m_snapshot.records.back();
-        const std::string lastBuild =
-            std::format("{} {} · {}", context.localization.Get("editor", "workspace.global_dock.build_output.footer.last_build"),
-                        FormatTimeOfDay(last.timestampUtc), context.localization.Get("editor", StatusLocalizationKey(last)));
-        const float textWidth = (fonts.sansCompact != nullptr ? fonts.sansCompact : ImGui::GetFont())
-                                    ->CalcTextSizeA(Theme::TextPx::Caption(), FLT_MAX, 0.0F, lastBuild.c_str())
-                                    .x;
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                          {regions.footerOrigin.x + regions.footerWidth - metrics.contentPadding - textWidth, footerY},
-                          Theme::U32(Theme::Muted()), lastBuild.c_str());
-    }
 
     bool GlobalDockBuildOutputPane::RefreshSnapshot() {
         if (m_buildOutputQuery == nullptr)

@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorServiceRegistry.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/GuiScreenHost.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/RecentProject.h"
 #include "Horo/Editor/RecentProjectInspectionService.h"
 #include "Horo/Editor/ScreenRegistry.h"
@@ -38,6 +39,7 @@ namespace Horo::Editor {
             }
 
             Result<void> OnEnter(const GuiRoute &) override {
+                viewState_ = {};
                 recentProjects_ = LoadRecentProjectsFromDisk();
                 for (RecentProjectEntry &project : recentProjects_) {
                     if (project.compatibility.has_value())
@@ -46,6 +48,7 @@ namespace Horo::Editor {
                 static_cast<void>(recentInspection_.Refresh(recentProjects_));
                 controller_ = std::make_unique<WelcomeScreenController>(recentProjects_);
                 viewModel_ = controller_->BuildViewModel();
+                RefreshProjectModifiedTimes();
                 LOG_DEBUG("editor.screens", "WelcomeScreen entered with %zu recent projects.", recentProjects_.size());
                 return Result<void>::Success();
             }
@@ -71,7 +74,7 @@ namespace Horo::Editor {
                     return;
                 }
                 const WelcomeViewResult result =
-                    DrawWelcomeView(viewModel_, context_, WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
+                    DrawWelcomeView(viewModel_, viewState_, context_, WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
                 if (modalHost_.HasOpenModal()) {
                     // A modal owns interaction — ignore any commands the view emits this frame.
                     return;
@@ -89,10 +92,40 @@ namespace Horo::Editor {
                         break;
                     }
                     case WelcomeViewCommand::OpenRecentProject: {
-                        if (result.openRecentIndex >= 0 && static_cast<std::size_t>(result.openRecentIndex) < recentProjects_.size()) {
-                            const auto &entry = recentProjects_[static_cast<std::size_t>(result.openRecentIndex)];
-                            OpenProject(entry.rootPath, entry.name);
+                        if (const RecentProjectEntry *entry = SelectedRecentProject(result)) {
+                            OpenProject(entry->rootPath, entry->name);
                         }
+                        break;
+                    }
+                    case WelcomeViewCommand::RemoveRecentProject: {
+                        if (const RecentProjectEntry *entry = SelectedRecentProject(result)) {
+                            if (!RemoveRecentProject(entry->rootPath))
+                                ShowRecentListSaveFailure();
+                        }
+                        break;
+                    }
+                    case WelcomeViewCommand::DeleteRecentProject: {
+                        const RecentProjectEntry *entry = SelectedRecentProject(result);
+                        if (entry == nullptr)
+                            break;
+                        const std::string projectRoot = entry->rootPath;
+                        auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.delete_project"},
+                                                                            Input::InputContextKind::NativeDialog);
+                        const std::string title = context_.localization.Get("editor", "welcome.project.delete_confirm_title");
+                        const std::string prompt =
+                            context_.localization.Get("editor", "welcome.project.delete_confirm_message") + "\n\n" + projectRoot;
+                        if (pfd::message(title, prompt, pfd::choice::yes_no, pfd::icon::warning).result() != pfd::button::yes)
+                            break;
+                        if (!DeleteRecentProjectFiles(projectRoot)) {
+                            static_cast<void>(
+                                pfd::message(title,
+                                             context_.localization.Get("editor", "welcome.project.delete_failed") + "\n\n" + projectRoot,
+                                             pfd::choice::ok, pfd::icon::error)
+                                    .result());
+                            break;
+                        }
+                        if (!RemoveRecentProject(projectRoot))
+                            ShowRecentListSaveFailure();
                         break;
                     }
                     case WelcomeViewCommand::OpenProject: {
@@ -139,6 +172,54 @@ namespace Horo::Editor {
             }
 
         private:
+            [[nodiscard]] const RecentProjectEntry *SelectedRecentProject(const WelcomeViewResult &result) const {
+                if (result.openRecentIndex < 0 || static_cast<std::size_t>(result.openRecentIndex) >= viewModel_.recentProjects.size())
+                    return nullptr;
+                return &viewModel_.recentProjects[static_cast<std::size_t>(result.openRecentIndex)];
+            }
+
+            void RefreshProjectModifiedTimes() {
+                viewState_.visibleProjectsDirty = true;
+                viewState_.projectModifiedTimes.clear();
+                viewState_.projectModifiedTimes.reserve(viewModel_.recentProjects.size());
+                for (const RecentProjectEntry &project : viewModel_.recentProjects) {
+                    std::error_code error;
+                    const std::filesystem::path root{project.rootPath};
+                    auto modified = std::filesystem::last_write_time(root, error);
+                    if (error)
+                        modified = std::filesystem::file_time_type::min();
+                    error.clear();
+                    const auto metadataModified = std::filesystem::last_write_time(root / ".horo/project.json", error);
+                    if (!error)
+                        modified = std::max(modified, metadataModified);
+                    viewState_.projectModifiedTimes.push_back(modified);
+                }
+            }
+
+            bool RemoveRecentProject(const std::string &rootPath) {
+                std::vector<RecentProjectEntry> updated = recentProjects_;
+                std::erase_if(updated, [&rootPath](const RecentProjectEntry &entry) {
+                    return entry.rootPath == rootPath;
+                });
+                const bool saved = SaveRecentProjectsToDisk(updated);
+                if (!saved)
+                    LOG_ERROR("editor.welcome", "Could not save recent projects after removing '%s'.", rootPath.c_str());
+                recentProjects_ = std::move(updated);
+                controller_ = std::make_unique<WelcomeScreenController>(recentProjects_);
+                viewModel_ = controller_->BuildViewModel();
+                RefreshProjectModifiedTimes();
+                return saved;
+            }
+
+            void ShowRecentListSaveFailure() {
+                auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.recent_projects_error"},
+                                                                    Input::InputContextKind::NativeDialog);
+                static_cast<void>(pfd::message(context_.localization.Get("editor", "welcome.project.list_save_failed_title"),
+                                               context_.localization.Get("editor", "welcome.project.list_save_failed"), pfd::choice::ok,
+                                               pfd::icon::error)
+                                      .result());
+            }
+
             void OpenProject(const std::string &projectRoot, const std::string &fallbackName) {
                 static_cast<void>(
                     host_.Navigate(GuiRoute{GuiRouteKind::ProjectLoading, ProjectLoadingRouteParameters{projectRoot, fallbackName}}));
@@ -154,6 +235,7 @@ namespace Horo::Editor {
             std::vector<RecentProjectEntry> recentProjects_;
             std::unique_ptr<WelcomeScreenController> controller_;
             WelcomeViewModel viewModel_;
+            WelcomeViewState viewState_;
         };
     }  // namespace
 

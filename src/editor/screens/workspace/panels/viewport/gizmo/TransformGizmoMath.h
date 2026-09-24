@@ -46,6 +46,7 @@ namespace Horo::Editor {
     struct TransformGizmoMathUpdate {
         float projectedPixels{0.0F};
         std::optional<Math::Vec3> currentRotationVector;
+        std::optional<Math::Vec3> worldTranslation; /**< Pointer displacement along an active move plane. */
     };
 
     /** @brief Draft local transform and world-space gizmo position produced by one evaluation. */
