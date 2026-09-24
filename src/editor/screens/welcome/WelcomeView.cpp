@@ -5,8 +5,11 @@
 
 #include <Horo/Editor/Localization/ILocalizationService.h>
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <numeric>
+#include <string_view>
 
 namespace Horo::Editor {
     namespace {
@@ -35,12 +38,20 @@ namespace Horo::Editor {
             return "welcome.project.compatibility.version_unavailable";
         }
 
-        /// @brief Draws a single recent project card.
-        /// @return true if the card was clicked this frame.
-        [[nodiscard]] bool DrawProjectCard(const RecentProjectEntry &project, const int index, const EditorGuiContext &ctx) {
+        [[nodiscard]] bool MatchesSearch(const RecentProjectEntry &project, const std::string_view query) {
+            const auto contains = [query](const std::string_view value) {
+                return std::search(value.begin(), value.end(), query.begin(), query.end(), [](const char left, const char right) {
+                    return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
+                }) != value.end();
+            };
+            return query.empty() || contains(project.name) || contains(project.rootPath);
+        }
+
+        /// @brief Draws one recent-project card and its context menu.
+        [[nodiscard]] WelcomeViewCommand DrawProjectCard(const RecentProjectEntry &project, const int index, const EditorGuiContext &ctx) {
             using namespace Theme;
 
-            bool clicked = false;
+            WelcomeViewCommand action = WelcomeViewCommand::None;
             ImGui::PushID(index);
             {
                 Ui::ScopedCard card("ProjectCard", {-1.0F, 64.0F}, 14.0F, 12.0F);
@@ -48,7 +59,22 @@ namespace Horo::Editor {
                 const ImVec2 contentMin = ImGui::GetCursorScreenPos();
                 constexpr float contentHeight = 40.0F;
                 const float contentWidth = ImGui::GetContentRegionAvail().x;
-                clicked = ImGui::InvisibleButton("Project card###welcome_project_card", {contentWidth, contentHeight});
+                if (ImGui::InvisibleButton("Project card###welcome_project_card", {contentWidth, contentHeight}))
+                    action = WelcomeViewCommand::OpenRecentProject;
+                if (Ui::BeginContextMenu("##welcome_project_context")) {
+                    const auto menuItem = [&](const char *key, const Ui::ContextMenuItemTone tone = Ui::ContextMenuItemTone::Normal,
+                                              const bool enabled = true) {
+                        return Ui::ContextMenuItem(ctx.localization.Get("editor", key).c_str(), nullptr, ctx.theme.fonts, tone, {},
+                                                   enabled);
+                    };
+                    if (menuItem("welcome.project.remove"))
+                        action = WelcomeViewCommand::RemoveRecentProject;
+                    if (menuItem("welcome.project.delete", Ui::ContextMenuItemTone::Danger))
+                        action = WelcomeViewCommand::DeleteRecentProject;
+                    Ui::ContextMenuSeparator();
+                    static_cast<void>(menuItem("welcome.project.settings", Ui::ContextMenuItemTone::Normal, false));
+                    Ui::EndContextMenu();
+                }
 
                 auto *drawList = ImGui::GetWindowDrawList();
                 drawList->AddRectFilled(contentMin, {contentMin.x + contentHeight, contentMin.y + contentHeight}, U32(Bg3()),
@@ -90,7 +116,7 @@ namespace Horo::Editor {
                                   statusText.c_str(), nullptr, 0.0F, &metaClip);
             }
             ImGui::PopID();
-            return clicked;
+            return action;
         }
 
         [[nodiscard]] float NewsCardHeight(const char *tag, const char *title, const char *description, const float width,
@@ -147,7 +173,32 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    [[nodiscard]] WelcomeViewResult DrawWelcomeView(const WelcomeViewModel &viewModel, const EditorGuiContext &ctx,
+    /** @copydoc VisibleWelcomeProjectIndices */
+    std::vector<std::size_t> VisibleWelcomeProjectIndices(const WelcomeViewModel &model, const WelcomeViewState &state) {
+        std::vector<std::size_t> indices(model.recentProjects.size());
+        std::iota(indices.begin(), indices.end(), 0U);
+        const std::string_view search{state.search.data()};
+        std::erase_if(indices, [&](const std::size_t index) {
+            return !MatchesSearch(model.recentProjects[index], search);
+        });
+        const auto compare = [&](const std::size_t left, const std::size_t right) {
+            const RecentProjectEntry &lhs = model.recentProjects[left];
+            const RecentProjectEntry &rhs = model.recentProjects[right];
+            if (state.sortSelection == 1)
+                return lhs.name == rhs.name ? left < right : lhs.name < rhs.name;
+            if (state.sortSelection == 2)
+                return lhs.rootPath == rhs.rootPath ? left < right : lhs.rootPath < rhs.rootPath;
+            const auto modified = [&](const std::size_t index) {
+                return index < state.projectModifiedTimes.size() ? state.projectModifiedTimes[index]
+                                                                 : std::filesystem::file_time_type::min();
+            };
+            return modified(left) == modified(right) ? left < right : modified(left) > modified(right);
+        };
+        std::sort(indices.begin(), indices.end(), compare);
+        return indices;
+    }
+
+    [[nodiscard]] WelcomeViewResult DrawWelcomeView(const WelcomeViewModel &viewModel, WelcomeViewState &state, const EditorGuiContext &ctx,
                                                     const WelcomeViewAssets &assets, const GuiContentRegion &contentRegion) {
         using namespace Theme;
 
@@ -179,9 +230,10 @@ namespace Horo::Editor {
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_AlwaysUseWindowPadding);
 
         if (assets.logo != 0) {
-            ImGui::Image(assets.logo, {64.0F, 64.0F});
+            const float logoSize = Ui::ScaledLayoutValue(80.0F);
+            ImGui::Image(assets.logo, {logoSize, logoSize});
         }
-        ImGui::Dummy({0.0F, 18.0F});
+        ImGui::Dummy({0.0F, Ui::ScaledLayoutValue(4.0F)});
 
         {
             ImFont *titleFont = ctx.theme.fonts.sansEmphasis ? ctx.theme.fonts.sansEmphasis : ImGui::GetFont();
@@ -216,6 +268,7 @@ namespace Horo::Editor {
         const std::string newProject = ctx.localization.Get("editor", "welcome.new_project") + "###welcome_new_project";
         const std::string openProject = ctx.localization.Get("editor", "welcome.open_project") + "###welcome_open_project";
         const std::string openSettings = ctx.localization.Get("editor", "welcome.open_settings") + "###welcome_open_settings";
+        const std::string pluginStore = ctx.localization.Get("editor", "welcome.plugin_store") + "###welcome_plugin_store";
         if (DrawWelcomeActionButton(newProject.c_str(), Ui::ButtonVariant::Primary, ctx)) {
             result.command = WelcomeViewCommand::NewProject;
         }
@@ -225,6 +278,13 @@ namespace Horo::Editor {
         if (DrawWelcomeActionButton(openSettings.c_str(), Ui::ButtonVariant::Secondary, ctx)) {
             result.command = WelcomeViewCommand::OpenSettings;
         }
+        static_cast<void>(Ui::Button(Ui::ButtonProps{.label = pluginStore.c_str(),
+                                                     .size = {0.0F, 42.0F},
+                                                     .variant = Ui::ButtonVariant::Secondary,
+                                                     .enabled = false,
+                                                     .font = ctx.theme.fonts.sans,
+                                                     .componentSize = Ui::ComponentSize::Large,
+                                                     .style = {.width = Ui::StyleWidth::FillAvailable}}));
 
         ImGui::EndChild();
         ImGui::PopStyleColor();
@@ -239,22 +299,34 @@ namespace Horo::Editor {
         ImGui::BeginChild("Main", {0.0F, 0.0F}, false,
                           ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_AlwaysUseWindowPadding);
 
-        {
-            ScopedTextStyle textStyle(ctx.theme.fonts.sansEmphasis, TextPx::Label(), FontPx::SansEmphasis);
-            const std::string recentProjects = ctx.localization.Get("editor", "welcome.recent_projects");
-            ImGui::TextDisabled("%s", recentProjects.c_str());
-            ImGui::SameLine(ImGui::GetWindowWidth() - 92.0F);
-            ImGui::PushStyleColor(ImGuiCol_Text, Accent());
-            const std::string browseAll = ctx.localization.Get("editor", "welcome.browse_all");
-            ImGui::TextUnformatted(browseAll.c_str());
-            ImGui::PopStyleColor();
-        }
+        const float scale = std::max(GetActiveTokens().sizes.uiScale, 0.01F);
+        const float rowWidth = ImGui::GetContentRegionAvail().x;
+        const float gap = Ui::ScaledLayoutValue(12.0F);
+        const float sortWidth = std::min(Ui::ScaledLayoutValue(200.0F), rowWidth * 0.44F);
+        const float searchWidth = std::max(1.0F, rowWidth - sortWidth - gap);
+        const std::string &searchHint = ctx.localization.Get("editor", "welcome.search_projects");
+        const bool searchChanged =
+            Ui::InputTextControl("##welcome_project_search", state.search.data(), state.search.size(), ctx.theme.fonts,
+                                 {.width = searchWidth / scale, .hint = searchHint.c_str(), .componentSize = Ui::ComponentSize::Medium});
+        ImGui::SameLine(0.0F, gap);
+        const std::array<const char *, 3> sortItems{ctx.localization.Get("editor", "welcome.sort.last_edited").c_str(),
+                                                    ctx.localization.Get("editor", "welcome.sort.name").c_str(),
+                                                    ctx.localization.Get("editor", "welcome.sort.path").c_str()};
+        ImGui::SetNextItemWidth(sortWidth);
+        const bool sortChanged =
+            Ui::ComboControl("##welcome_project_sort", &state.sortSelection, sortItems.data(), static_cast<int>(sortItems.size()),
+                             ctx.theme.fonts, {.componentSize = Ui::ComponentSize::Medium});
         ImGui::Dummy({0.0F, 14.0F});
 
-        for (std::size_t i = 0; i < viewModel.recentProjects.size(); ++i) {
-            if (DrawProjectCard(viewModel.recentProjects[i], static_cast<int>(i), ctx)) {
-                result.command = WelcomeViewCommand::OpenRecentProject;
-                result.openRecentIndex = static_cast<int>(i);
+        if (state.visibleProjectsDirty || searchChanged || sortChanged) {
+            state.visibleProjectIndices = VisibleWelcomeProjectIndices(viewModel, state);
+            state.visibleProjectsDirty = false;
+        }
+        for (const std::size_t index : state.visibleProjectIndices) {
+            const WelcomeViewCommand action = DrawProjectCard(viewModel.recentProjects[index], static_cast<int>(index), ctx);
+            if (action != WelcomeViewCommand::None) {
+                result.command = action;
+                result.openRecentIndex = static_cast<int>(index);
             }
         }
 

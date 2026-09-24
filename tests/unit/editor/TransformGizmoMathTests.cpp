@@ -126,6 +126,30 @@ TEST_CASE("Move gizmo maps a world displacement through the parent inverse", "[u
     REQUIRE((Math::NearlyEqual(outcome.Value().worldPosition, resolvedPosition, 1e-5F)));
 }
 
+TEST_CASE("Move gizmo plane drag stays on its plane and maps through the parent", "[unit][editor][viewport][gizmo]") {
+    const Math::Transform parent{
+        .translation = {4.0F, -2.0F, 1.0F},
+        .rotation = Math::Quaternion::FromEulerRadians({0.0F, 0.35F, 0.0F}),
+        .scale = {2.0F, 0.75F, 1.5F},
+    };
+    BeginTransformGizmoMathRequest request = MakeRequest();
+    request.axis = 4;
+    request.worldAxis = {1.0F, 0.0F, 0.0F};
+    request.parentWorldTransform = parent.ToMatrix();
+    request.initialWorldTransform = parent.ToMatrix();
+    const Result<TransformGizmoMathSession> session = BeginTransformGizmoMath(request);
+    REQUIRE(session.HasValue());
+    REQUIRE(EvaluateTransformGizmoMath(session.Value(), {}).HasError());
+
+    const Result<TransformGizmoMathOutcome> outcome =
+        EvaluateTransformGizmoMath(session.Value(), TransformGizmoMathUpdate{.worldTranslation = Math::Vec3{3.0F, 2.0F, -4.0F}});
+    REQUIRE(outcome.HasValue());
+    const Math::Vec3 expected = session.Value().initialWorldPosition + Math::Vec3{0.0F, 2.0F, -4.0F};
+    REQUIRE((Math::NearlyEqual(outcome.Value().worldPosition, expected, 1e-5F)));
+    const Math::Vec3 resolved = Math::TransformPoint(Math::Multiply(parent.ToMatrix(), outcome.Value().localTransform.ToMatrix()), {});
+    REQUIRE((Math::NearlyEqual(resolved, expected, 1e-5F)));
+}
+
 TEST_CASE("World gizmo scale remains representable under a rotated non-uniform parent", "[unit][editor][viewport][gizmo]") {
     const Math::Transform parent{
         .rotation = Math::Quaternion::FromEulerRadians({0.0F, 0.35F, 0.0F}),

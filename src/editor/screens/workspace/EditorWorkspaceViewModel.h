@@ -89,6 +89,7 @@ namespace Horo::Editor {
         SelectObject,
         PickViewport,
         NavigateViewport,
+        AlignViewportToAxis,
         ChangeViewportProjection,
         FocusViewportSelection,
         ChangeTransformTool,
@@ -130,6 +131,7 @@ namespace Horo::Editor {
         OpenSourceFile,
         OpenDiagnosticSource,
         ChangeActivePanel,
+        CloseWorkspacePanel,
         ReorderActivityBarItem,
         DockWorkspacePanel,
         ResizePanel,
@@ -214,6 +216,7 @@ namespace Horo::Editor {
         std::optional<std::vector<SceneObjectTransformUpdate>> transformUpdates = std::nullopt;
         std::optional<ViewportPickRequest> viewportPickPayload = std::nullopt;
         std::optional<EditorViewportNavigationDelta> viewportNavigationPayload = std::nullopt;
+        std::optional<EditorViewportAxisView> viewportAxisPayload = std::nullopt;
         std::optional<Runtime::CameraProjection> viewportProjectionPayload = std::nullopt;
         std::optional<Runtime::CameraComponent> cameraPayload = std::nullopt;
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
@@ -302,7 +305,7 @@ namespace Horo::Editor {
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;
-        float bottomPanelHeight = 310.0F;
+        float bottomPanelHeight = 250.0F;
 
         std::unordered_map<PanelId, WorkspaceDockArea, TransparentStringHash, std::equal_to<>> panelDockAreas;
 

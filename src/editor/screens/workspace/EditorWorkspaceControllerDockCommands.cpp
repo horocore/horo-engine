@@ -2,6 +2,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -279,7 +280,6 @@ namespace Horo::Editor {
                 ActivateBottomPanel(cmd, displacedPanelIds);
                 break;
             case Document:
-                displacedPanelIds.push_back(m_viewModel.activeDocumentPanelId);
                 m_viewModel.activeDocumentPanelId = *cmd.stringPayload;
                 break;
         }
@@ -301,6 +301,7 @@ namespace Horo::Editor {
                 stackId = "workspace.right";
                 break;
             case Bottom:
+                static_cast<void>(m_viewModel.workspacePanelHost.ClosePanel(panelId));
                 return;
         }
         if (const auto activated = m_viewModel.workspacePanelHost.SetActiveTab(stackId, panelId); !activated.Succeeded())
@@ -356,12 +357,28 @@ namespace Horo::Editor {
 
         ActivatePanelDock(area, cmd, displacedPanelIds);
         SyncPanelHost(area, panelId);
+        if (const TabStackNode *document = m_viewModel.workspacePanelHost.Layout().FindTabStack("workspace.document"))
+            m_viewModel.activeDocumentPanelId = document->activeTab.value_or("");
         PublishPanelActivation(area, panelId, panelWasActive, displacedPanelIds);
         MovePanelActivitySlot(cmd);
         return true;
     }
 
     bool EditorWorkspaceController::ProcessLayoutCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command == EditorWorkspaceViewCommand::CloseWorkspacePanel) {
+            if (!cmd.stringPayload.has_value())
+                return true;
+            const std::string panelId = *cmd.stringPayload;
+            const TabStackNode *document = m_viewModel.workspacePanelHost.Layout().FindTabStack("workspace.document");
+            if (document == nullptr || std::ranges::find(document->tabs, panelId) == document->tabs.end())
+                return true;
+            if (m_viewModel.workspacePanelHost.ClosePanel(panelId).Succeeded()) {
+                document = m_viewModel.workspacePanelHost.Layout().FindTabStack("workspace.document");
+                m_viewModel.activeDocumentPanelId = document->activeTab.value_or("");
+                m_dataBus.Publish(WorkspacePanelClosedEvent{panelId, WorkspaceDockArea::Document});
+            }
+            return true;
+        }
         if (cmd.command == EditorWorkspaceViewCommand::ReorderActivityBarItem) {
             ReorderActivityBarItem(cmd);
             return true;
@@ -412,10 +429,35 @@ namespace Horo::Editor {
         if (!cmd.stringPayload.has_value() || !cmd.workspaceDropTarget.has_value())
             return;
         const auto &target = *cmd.workspaceDropTarget;
-        if (const auto result = m_viewModel.workspacePanelHost.DockPanel(*cmd.stringPayload, target.targetNodeId, target.kind);
-            result.Succeeded()) {
-            m_dataBus.Publish(WorkspacePanelDockedEvent{*cmd.stringPayload, target.targetNodeId, target.kind});
+        WorkspaceDockArea area = WorkspaceDockArea::Document;
+        if (target.targetNodeId == "workspace.left")
+            area = WorkspaceDockArea::Left;
+        else if (target.targetNodeId == "workspace.right")
+            area = WorkspaceDockArea::Right;
+        else if (target.targetNodeId == "workspace.bottom")
+            area = WorkspaceDockArea::Bottom;
+        else if (target.targetNodeId != "workspace.document")
+            return;
+        if (area == WorkspaceDockArea::Document && target.kind != WorkspacePanelHost::DropKind::TabCenter)
+            return;
+
+        EditorWorkspaceViewCommandData activation;
+        activation.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+        activation.targetIndex = static_cast<int>(area);
+        activation.stringPayload = *cmd.stringPayload;
+        if (area == WorkspaceDockArea::Bottom && target.kind != WorkspacePanelHost::DropKind::TabCenter) {
+            activation.bottomDockSlot =
+                target.kind == WorkspacePanelHost::DropKind::SplitLeft || target.kind == WorkspacePanelHost::DropKind::SplitTop
+                    ? BottomDockSlot::Left
+                    : BottomDockSlot::Right;
+        } else if (area != WorkspaceDockArea::Document && target.kind != WorkspacePanelHost::DropKind::TabCenter) {
+            activation.sideDockSlot =
+                target.kind == WorkspacePanelHost::DropKind::SplitTop || target.kind == WorkspacePanelHost::DropKind::SplitLeft
+                    ? SideDockSlot::Top
+                    : SideDockSlot::Bottom;
         }
+        if (ProcessActivePanelCommand(activation))
+            m_dataBus.Publish(WorkspacePanelDockedEvent{*cmd.stringPayload, target.targetNodeId, target.kind});
     }
 
     void EditorWorkspaceController::ResizeWorkspacePanel(const EditorWorkspaceViewCommandData &cmd) {

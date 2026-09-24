@@ -17,7 +17,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string GetDisplayName() const override {
-            return "horo.panel.hierarchy.title";
+            return "workspace.panel.hierarchy";
         }
 
         [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override {

@@ -10,11 +10,9 @@
 #include <array>
 #include <cstring>
 #include <format>
-#include <numbers>
 
 namespace Horo::Editor {
-    constexpr float kMenuBarH = 28.0F;
-    constexpr float kToolbarH = 38.0F;
+    constexpr float kMenuBarH = 32.0F;
     constexpr float kRecoveryBarH = 40.0F;
     constexpr float kActivityBarW = 42.0F;
     constexpr float kMinimumDocumentW = 120.0F;
@@ -403,11 +401,10 @@ namespace Horo::Editor {
         const ImVec2 display{contentRegion.width, contentRegion.height};
 
         const float menuH = UsesNativeEditorMenuBar() ? 0.0F : kMenuBarH;
-        constexpr float toolH = kToolbarH;
         const float recoveryH = viewModel.recoveryAvailable ? kRecoveryBarH : 0.0F;
         const float externalConflictH = viewModel.sceneExternalConflict ? kRecoveryBarH : 0.0F;
         // The shell has already removed its persistent status-bar height.
-        const float activityBarH = (std::max)(0.0F, display.y - menuH - toolH - recoveryH - externalConflictH);
+        const float activityBarH = (std::max)(0.0F, display.y - menuH - recoveryH - externalConflictH);
 
         const bool bottomDockActive = viewModel.bottomDockMode == BottomDockMode::Full
                                           ? !viewModel.activeBottomPanelId.empty()
@@ -447,13 +444,6 @@ namespace Horo::Editor {
             }
         }
         curY += menuH;
-
-        // ── Toolbar ─────────────────────────────────────────────────────
-        DrawToolbar(ImVec2(0.0F, curY), ImVec2(display.x, toolH), viewModel, outCommand);
-        if (!m_inputRouter.IsContextActive(m_workspaceInputContext)) {
-            outCommand.command = EditorWorkspaceViewCommand::None;
-        }
-        curY += toolH;
 
         if (viewModel.recoveryAvailable) {
             DrawRecoveryBar(ImVec2(0.0F, curY), ImVec2(display.x, recoveryH), outCommand);
@@ -556,14 +546,14 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0F, 0.0F));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0F, 5.0F));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0F, 7.0F));
 
         ImGui::Begin("##MenuBar", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar);
 
         if (ImGui::BeginMenuBar()) {
-            constexpr ImVec2 logoSize(22.0F, 22.0F);
+            constexpr ImVec2 logoSize(26.0F, 26.0F);
             const ImVec2 logoMin = ImGui::GetCursorScreenPos();
             if (ImGui::InvisibleButton("##HoroAppLogo", logoSize)) {
                 outCommand.menuInvocation = EditorMenuInvocation{EditorMenuAction::OpenProject, std::nullopt};
@@ -601,315 +591,6 @@ namespace Horo::Editor {
         ImGui::End();
         ImGui::PopStyleVar(4);
         ImGui::PopStyleColor(3);
-    }
-
-    namespace {
-        void DrawSelectIcon(ImDrawList *dl, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const float ox = x + (w - 14.0f) * 0.5f;
-            const float oy = y + (h - 14.0f) * 0.5f;
-            const std::array<ImVec2, 4> pts = {ImVec2(ox + 2.5f, oy + 2.5f), ImVec2(ox + 6.3f, oy + 12.0f), ImVec2(ox + 8.0f, oy + 8.0f),
-                                               ImVec2(ox + 12.2f, oy + 6.2f)};
-            dl->AddPolyline(pts.data(), pts.size(), col, ImDrawFlags_Closed, 1.5f);
-        }
-
-        void DrawMoveIcon(ImDrawList *dl, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const float ox = x + (w - 14.0f) * 0.5f;
-            const float oy = y + (h - 14.0f) * 0.5f;
-            dl->AddLine(ImVec2(ox + 7, oy + 2), ImVec2(ox + 7, oy + 12), col, 1.4f);
-            dl->AddLine(ImVec2(ox + 2, oy + 7), ImVec2(ox + 12, oy + 7), col, 1.4f);
-            const std::array<ImVec2, 3> p1 = {ImVec2(ox + 5, oy + 4), ImVec2(ox + 7, oy + 2), ImVec2(ox + 9, oy + 4)};
-            dl->AddPolyline(p1.data(), p1.size(), col, 0, 1.4f);
-            const std::array<ImVec2, 3> p2 = {ImVec2(ox + 5, oy + 10), ImVec2(ox + 7, oy + 12), ImVec2(ox + 9, oy + 10)};
-            dl->AddPolyline(p2.data(), p2.size(), col, 0, 1.4f);
-            const std::array<ImVec2, 3> p3 = {ImVec2(ox + 4, oy + 5), ImVec2(ox + 2, oy + 7), ImVec2(ox + 4, oy + 9)};
-            dl->AddPolyline(p3.data(), p3.size(), col, 0, 1.4f);
-            const std::array<ImVec2, 3> p4 = {ImVec2(ox + 10, oy + 5), ImVec2(ox + 12, oy + 7), ImVec2(ox + 10, oy + 9)};
-            dl->AddPolyline(p4.data(), p4.size(), col, 0, 1.4f);
-        }
-
-        void DrawRotateIcon(ImDrawList *dl, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const float ox = x + (w - 14.0f) * 0.5f;
-            const float oy = y + (h - 14.0f) * 0.5f;
-            dl->PathArcTo(ImVec2(ox + 7, oy + 7), 4.0f, std::numbers::pi_v<float> * 1.5f, std::numbers::pi_v<float> * -0.2f);
-            dl->PathStroke(col, 0, 1.4f);
-            const std::array<ImVec2, 3> p1 = {ImVec2(ox + 12, oy + 1.5f), ImVec2(ox + 11, oy + 4.1f), ImVec2(ox + 8.4f, oy + 3)};
-            dl->AddPolyline(p1.data(), p1.size(), col, 0, 1.4f);
-        }
-
-        void DrawScaleIcon(ImDrawList *dl, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const float ox = x + (w - 14.0f) * 0.5f;
-            const float oy = y + (h - 14.0f) * 0.5f;
-            dl->AddRect(ImVec2(ox + 4.5f, oy + 4.5f), ImVec2(ox + 9.5f, oy + 9.5f), col, 0.5f, 0, 1.4f);
-            dl->AddLine(ImVec2(ox + 9.5f, oy + 4.5f), ImVec2(ox + 12, oy + 2), col, 1.4f);
-            dl->AddLine(ImVec2(ox + 9.5f, oy + 9.5f), ImVec2(ox + 12, oy + 12), col, 1.4f);
-            dl->AddLine(ImVec2(ox + 4.5f, oy + 9.5f), ImVec2(ox + 2, oy + 12), col, 1.4f);
-            dl->AddLine(ImVec2(ox + 4.5f, oy + 4.5f), ImVec2(ox + 2, oy + 2), col, 1.4f);
-        }
-
-        void DrawLocalIcon(ImDrawList *dl, ImFont *font, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const ImVec2 ts = ImGui::CalcTextSize("L");
-            dl->AddText(font, font->FontSize, ImVec2(x + (w - ts.x) * 0.5f, y + (h - ts.y) * 0.5f), col, "L");
-        }
-
-        void DrawWorldIcon(ImDrawList *dl, ImFont *font, const float x, const float y, const float w, const float h) {
-            const ImVec2 ts = ImGui::CalcTextSize("W");
-            dl->AddText(font, font->FontSize, ImVec2(x + (w - ts.x) * 0.5f, y + (h - ts.y) * 0.5f), Theme::U32(Theme::Dim()), "W");
-        }
-
-        void DrawViewModeIcon(ImDrawList *dl, ImFont *font, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const ImVec2 ts = ImGui::CalcTextSize("Scene");
-            dl->AddText(font, font->FontSize, ImVec2(x + 10.0f, y + (h - ts.y) * 0.5f), col, "Scene");
-            const float ax = x + w - 14.0f;
-            const float ay = y + h * 0.5f;
-            dl->AddTriangleFilled(ImVec2(ax - 3, ay - 1.5f), ImVec2(ax + 3, ay - 1.5f), ImVec2(ax, ay + 2.5f), col);
-        }
-
-        void DrawSettingsIcon(ImDrawList *dl, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const float ox = x + (w - 14.0f) * 0.5f;
-            const float oy = y + (h - 14.0f) * 0.5f;
-            dl->AddCircle(ImVec2(ox + 7, oy + 7), 1.8f, col, 12, 1.35f);
-            dl->AddLine(ImVec2(ox + 7, oy + 1.5f), ImVec2(ox + 7, oy + 2.7f), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 7, oy + 11.3f), ImVec2(ox + 7, oy + 12.5f), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 1.5f, oy + 7), ImVec2(ox + 2.7f, oy + 7), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 11.3f, oy + 7), ImVec2(ox + 12.5f, oy + 7), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 3.1f, oy + 3.1f), ImVec2(ox + 3.95f, oy + 3.95f), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 10.05f, oy + 10.05f), ImVec2(ox + 10.9f, oy + 10.9f), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 10.9f, oy + 3.1f), ImVec2(ox + 10.05f, oy + 3.95f), col, 1.35f);
-            dl->AddLine(ImVec2(ox + 3.95f, oy + 10.05f), ImVec2(ox + 3.1f, oy + 10.9f), col, 1.35f);
-        }
-
-        void DrawHelpIcon(ImDrawList *dl, const float x, const float y, const float w, const float h, const ImU32 col) {
-            const float ox = x + (w - 14.0f) * 0.5f;
-            const float oy = y + (h - 14.0f) * 0.5f;
-            dl->AddCircle(ImVec2(ox + 7, oy + 7), 5.5f, col, 24, 1.4f);
-            dl->PathArcTo(ImVec2(ox + 7, oy + 5.5f), 1.5f, std::numbers::pi_v<float>, 0);
-            dl->PathLineTo(ImVec2(ox + 7, oy + 8.5f));
-            dl->PathStroke(col, 0, 1.4f);
-            dl->AddCircleFilled(ImVec2(ox + 7, oy + 10.5f), 0.8f, col);
-        }
-
-        template <typename DrawIconFunc>
-        bool DrawToolButton(ImDrawList *dl, const float centerY, float &curX, const char *id, float width, const bool active,
-                            DrawIconFunc drawIcon) {
-            const float h = 26.0f;
-            const float y = centerY - h * 0.5f;
-            ImGui::SetCursorScreenPos(ImVec2(curX, y));
-            const bool clicked = ImGui::InvisibleButton(id, ImVec2(width, h));
-            const bool hovered = ImGui::IsItemHovered();
-            if (active) {
-                dl->AddRectFilled(ImVec2(curX + 2.0f, y + 2.0f), ImVec2(curX + width - 2.0f, y + h - 2.0f), Theme::U32(Theme::Bg3()), 3.0f);
-            } else if (hovered) {
-                dl->AddRectFilled(ImVec2(curX + 2.0f, y + 2.0f), ImVec2(curX + width - 2.0f, y + h - 2.0f), Theme::U32(Theme::Hover()),
-                                  3.0f);
-            }
-            drawIcon(curX, y, width, h, Theme::U32(active || hovered ? Theme::Text() : Theme::Muted()));
-            curX += width;
-            return clicked;
-        }
-    }  // namespace
-
-    void EditorWorkspaceView::DrawToolbar(const ImVec2 &pos, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &outCommand) {
-        BeginWorkspaceSurface("##Toolbar", pos, size, {10.0F, 0.0F},
-                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
-
-        ImDrawList *dl = ImGui::GetWindowDrawList();
-
-        float curX = pos.x + 10.0f;
-        const float centerY = pos.y + size.y * 0.5f;
-
-        auto drawToolGroupBg = [dl, centerY, &curX](const float width) {
-            constexpr float h = 26.0f;
-            const float y = centerY - h * 0.5f;
-            dl->AddRectFilled(ImVec2(curX, y), ImVec2(curX + width, y + h), Theme::U32(Theme::Bg0()), 4.0f);
-            dl->AddRect(ImVec2(curX, y), ImVec2(curX + width, y + h), Theme::U32(Theme::Border()), 4.0f);
-            return y;
-        };
-
-        // Transform tools
-        drawToolGroupBg(28.0f * 4);
-        if (DrawToolButton(dl, centerY, curX, "##Select", 28.0f, viewModel.activeTransformTool == EditorTransformTool::Select,
-                           [dl](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawSelectIcon(dl, x, y, w, h, col);
-        })) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-            outCommand.transformToolPayload = EditorTransformTool::Select;
-        }
-        if (DrawToolButton(dl, centerY, curX, "##Move", 28.0f, viewModel.activeTransformTool == EditorTransformTool::Move,
-                           [dl](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawMoveIcon(dl, x, y, w, h, col);
-        })) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-            outCommand.transformToolPayload = EditorTransformTool::Move;
-        }
-        if (DrawToolButton(dl, centerY, curX, "##Rotate", 28.0f, viewModel.activeTransformTool == EditorTransformTool::Rotate,
-                           [dl](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawRotateIcon(dl, x, y, w, h, col);
-        })) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-            outCommand.transformToolPayload = EditorTransformTool::Rotate;
-        }
-        if (DrawToolButton(dl, centerY, curX, "##Scale", 28.0f, viewModel.activeTransformTool == EditorTransformTool::Scale,
-                           [dl](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawScaleIcon(dl, x, y, w, h, col);
-        })) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-            outCommand.transformToolPayload = EditorTransformTool::Scale;
-        }
-
-        curX += 16.0f;  // Gap
-
-        // Space
-        drawToolGroupBg(28.0f * 2);
-        if (DrawToolButton(dl, centerY, curX, "##Local", 28.0f, viewModel.activeTransformSpace == EditorTransformSpace::Local,
-                           [dl, this](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawLocalIcon(dl, m_context.theme.fonts.sans, x, y, w, h, col);
-        })) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeTransformSpace;
-            outCommand.transformSpacePayload = EditorTransformSpace::Local;
-        }
-        if (DrawToolButton(dl, centerY, curX, "##World", 28.0f, viewModel.activeTransformSpace == EditorTransformSpace::World,
-                           [dl, this](const float x, const float y, const float w, const float h, [[maybe_unused]] ImU32 col) {
-            DrawWorldIcon(dl, m_context.theme.fonts.sans, x, y, w, h);
-        })) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeTransformSpace;
-            outCommand.transformSpacePayload = EditorTransformSpace::World;
-        }
-
-        curX += 16.0f;
-
-        // View mode
-        constexpr float viewModeW = 80.0f;
-        drawToolGroupBg(viewModeW);
-        DrawToolButton(dl, centerY, curX, "##ViewMode", viewModeW, false,
-                       [dl, this](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawViewModeIcon(dl, m_context.theme.fonts.sans, x, y, w, h, col);
-        });
-
-        // The remaining strip is the document activity/file-tab rail. Play is the
-        // left-most member of the right-aligned controls.
-        const bool playIdle = viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed;
-        const bool playPaused = viewModel.playState == EditorPlayState::Paused;
-        float playW = 136.0F;
-        if (playIdle) {
-            playW = 70.0F;
-        } else if (playPaused) {
-            playW = 202.0F;
-        }
-        constexpr float utilW = 28.0f * 2;
-        const float utilX = pos.x + size.x - utilW - 10.0F;
-        const float playX = utilX - playW - 8.0F;
-        const float documentRailMinX = curX + 8.0F;
-        DrawDocumentRail(pos, size, centerY, documentRailMinX, playX - 8.0F, viewModel, outCommand);
-
-        // Play-mode controls use one shared primitive size so their geometry remains consistent.
-        curX = playX;
-        const float py = centerY - 13.0f;
-        const auto drawPlayButton = [&](const std::string &visibleLabel, const char *stableId, const bool enabled) {
-            const std::string label = visibleLabel + "###" + stableId;
-            ImGui::SetCursorScreenPos(ImVec2(curX, py));
-            const bool clicked = Ui::Button({.label = label.c_str(),
-                                             .size = {64.0F, 26.0F},
-                                             .variant = Ui::ButtonVariant::Secondary,
-                                             .enabled = enabled,
-                                             .font = m_context.theme.fonts.sans,
-                                             .componentSize = Ui::ComponentSize::Small});
-            curX += 66.0F;
-            return clicked;
-        };
-        const bool transition = viewModel.playState == EditorPlayState::Starting || viewModel.playState == EditorPlayState::Stopping;
-        if (playIdle) {
-            if (drawPlayButton(m_context.localization.Get("editor", "web_workspace.toolbar.play"), "workspace_play_play", !transition)) {
-                outCommand.command = EditorWorkspaceViewCommand::StartPlay;
-            }
-        } else if (playPaused) {
-            if (drawPlayButton(m_context.localization.Get("editor", "workspace.play.resume"), "workspace_play_resume", true)) {
-                outCommand.command = EditorWorkspaceViewCommand::ResumePlay;
-            }
-            if (drawPlayButton(m_context.localization.Get("editor", "workspace.play.step"), "workspace_play_step", true)) {
-                outCommand.command = EditorWorkspaceViewCommand::StepPlay;
-            }
-            if (drawPlayButton(m_context.localization.Get("editor", "workspace.play.stop"), "workspace_play_stop", true)) {
-                outCommand.command = EditorWorkspaceViewCommand::StopPlay;
-            }
-        } else {
-            if (drawPlayButton(m_context.localization.Get("editor", "workspace.play.pause"), "workspace_play_pause", !transition)) {
-                outCommand.command = EditorWorkspaceViewCommand::PausePlay;
-            }
-            if (drawPlayButton(m_context.localization.Get("editor", "workspace.play.stop"), "workspace_play_stop", !transition)) {
-                outCommand.command = EditorWorkspaceViewCommand::StopPlay;
-            }
-        }
-
-        // Utility group (Right aligned)
-        curX = utilX;
-        drawToolGroupBg(utilW);
-        DrawToolButton(dl, centerY, curX, "##Settings", 28.0f, false,
-                       [dl](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawSettingsIcon(dl, x, y, w, h, col);
-        });
-        DrawToolButton(dl, centerY, curX, "##Help", 28.0f, false,
-                       [dl](const float x, const float y, const float w, const float h, const ImU32 col) {
-            DrawHelpIcon(dl, x, y, w, h, col);
-        });
-
-        ImGui::End();
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(2);
-    }
-
-    void EditorWorkspaceView::DrawDocumentRailItem(const std::string &panelId, const std::shared_ptr<IWorkspacePanel> &panel,
-                                                   const float tabX, const float centerY, const EditorWorkspaceViewModel &viewModel,
-                                                   EditorWorkspaceViewCommandData &outCommand) {
-        constexpr float tabWidth = 32.0F;
-        constexpr float tabHeight = 26.0F;
-        const float tabY = centerY - tabHeight * 0.5F;
-        ImGui::SetCursorScreenPos(ImVec2(tabX, tabY));
-        ImGui::PushID(panelId.c_str());
-        if (ImGui::InvisibleButton("##DocumentActivityItem", ImVec2(tabWidth, tabHeight))) {
-            outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
-            outCommand.targetIndex = static_cast<int>(WorkspaceDockArea::Document);
-            outCommand.stringPayload = panelId;
-        }
-        if (!m_splitterInteraction.OwnsPrimaryPointer())
-            DrawActivityPanelDragSource(panelId, panel);
-        const bool active = panelId == viewModel.activeDocumentPanelId;
-        const ImVec2 itemMin(tabX, tabY);
-        const ImVec2 itemMax(tabX + tabWidth, tabY + tabHeight);
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        if (active || ImGui::IsItemHovered()) {
-            drawList->AddRectFilled(itemMin, itemMax, Theme::U32(active ? Theme::Bg3() : Theme::Hover()), 3.0F);
-        }
-        drawList->AddRect(itemMin, itemMax, Theme::U32(Theme::Border()), 3.0F);
-        panel->DrawIcon(drawList, itemMin, ImVec2(tabWidth, tabHeight), Theme::U32(active ? Theme::Text() : Theme::Dim()));
-        ImGui::PopID();
-    }
-
-    void EditorWorkspaceView::DrawDocumentRail(const ImVec2 &pos, const ImVec2 &size, const float centerY, const float minimumX,
-                                               const float maximumX, const EditorWorkspaceViewModel &viewModel,
-                                               EditorWorkspaceViewCommandData &outCommand) {
-        if (maximumX <= minimumX) {
-            return;
-        }
-
-        ImGui::PushClipRect(ImVec2(minimumX, pos.y), ImVec2(maximumX, pos.y + size.y), true);
-        float tabX = minimumX;
-        constexpr float tabWidth = 32.0F;
-        if (const auto &documentGroups = viewModel.activityBarLayout.Groups(ActivityBarRail::DocumentTop); !documentGroups.empty()) {
-            for (const std::string &panelId : documentGroups.front().items) {
-                const auto panelIt = std::ranges::find_if(m_panelRegistry.GetAllPanels(), [&panelId](const auto &panel) {
-                    return panel->GetId() == panelId;
-                });
-                if (panelIt == m_panelRegistry.GetAllPanels().end()) {
-                    continue;
-                }
-
-                DrawDocumentRailItem(panelId, *panelIt, tabX, centerY, viewModel, outCommand);
-                tabX += tabWidth + 2.0F;
-            }
-        }
-        ImGui::PopClipRect();
     }
 
     void EditorWorkspaceView::DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const {
@@ -1055,7 +736,7 @@ namespace Horo::Editor {
             }
         }
 
-        if (!activePanel) {
+        if (!activePanel && area != WorkspaceDockArea::Document) {
             ImGui::End();
             ImGui::PopStyleVar(3);
             ImGui::PopStyleColor(2);
@@ -1067,6 +748,8 @@ namespace Horo::Editor {
             targetNodeId = "workspace.left";
         } else if (area == WorkspaceDockArea::Right) {
             targetNodeId = "workspace.right";
+        } else if (area == WorkspaceDockArea::Bottom) {
+            targetNodeId = "workspace.bottom";
         }
         if (const ImGuiPayload *dragPayload = ImGui::GetDragDropPayload();
             dragPayload != nullptr && dragPayload->IsDataType("HORO_WORKSPACE_PANEL")) {
@@ -1074,31 +757,38 @@ namespace Horo::Editor {
             const float edgeW = size.x * edgeFraction;
             const float edgeH = size.y * edgeFraction;
             using enum WorkspacePanelHost::DropKind;
-            DrawWorkspaceDropTarget(targetNodeId, "##DropLeft", pos, ImVec2(edgeW, size.y), SplitLeft, outCommand);
-            DrawWorkspaceDropTarget(targetNodeId, "##DropRight", ImVec2(pos.x + size.x - edgeW, pos.y), ImVec2(edgeW, size.y), SplitRight,
-                                    outCommand);
-            DrawWorkspaceDropTarget(targetNodeId, "##DropTop", ImVec2(pos.x + edgeW, pos.y), ImVec2(size.x - edgeW * 2.0F, edgeH), SplitTop,
-                                    outCommand);
-            DrawWorkspaceDropTarget(targetNodeId, "##DropBottom", ImVec2(pos.x + edgeW, pos.y + size.y - edgeH),
-                                    ImVec2(size.x - edgeW * 2.0F, edgeH), SplitBottom, outCommand);
+            if (area != WorkspaceDockArea::Document) {
+                DrawWorkspaceDropTarget(targetNodeId, "##DropLeft", pos, ImVec2(edgeW, size.y), SplitLeft, outCommand);
+                DrawWorkspaceDropTarget(targetNodeId, "##DropRight", ImVec2(pos.x + size.x - edgeW, pos.y), ImVec2(edgeW, size.y),
+                                        SplitRight, outCommand);
+                DrawWorkspaceDropTarget(targetNodeId, "##DropTop", ImVec2(pos.x + edgeW, pos.y), ImVec2(size.x - edgeW * 2.0F, edgeH),
+                                        SplitTop, outCommand);
+                DrawWorkspaceDropTarget(targetNodeId, "##DropBottom", ImVec2(pos.x + edgeW, pos.y + size.y - edgeH),
+                                        ImVec2(size.x - edgeW * 2.0F, edgeH), SplitBottom, outCommand);
+            }
             DrawWorkspaceDropTarget(targetNodeId, "##DropCenter", ImVec2(pos.x + edgeW, pos.y + edgeH),
                                     ImVec2(size.x - edgeW * 2.0F, size.y - edgeH * 2.0F), TabCenter, outCommand);
         }
 
-        // The panel owns its visible title/tab surface. A separate host chrome bar
-        // would duplicate that surface and waste vertical space in every dock.
+        const float tabHeight = area == WorkspaceDockArea::Document ? 28.0F * Theme::GetActiveTokens().sizes.uiScale : 0.0F;
+        if (area == WorkspaceDockArea::Document)
+            DrawDocumentTabs(viewModel, outCommand);
+
         ImGui::SetCursorPos(ImVec2(0.0F, 0.0F));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg1());
-        ImGui::BeginChild("##DockContent", ImVec2(0.0F, size.y), false, ImGuiWindowFlags_NoSavedSettings);
-        activePanel->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
+        ImGui::SetCursorPosY(tabHeight);
+        ImGui::BeginChild("##DockContent", ImVec2(0.0F, size.y - tabHeight), false, ImGuiWindowFlags_NoSavedSettings);
+        if (activePanel)
+            activePanel->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
         ImGui::EndChild();
         ImGui::PopStyleColor();
 
         // Preserve panel rearrangement without adding visible host chrome. The
         // panel-owned top tab/title region doubles as the drag initiation area.
-        const float dragRegionHeight = 28.0F * Theme::GetActiveTokens().sizes.uiScale;
+        const float dragRegionHeight = tabHeight > 0.0F ? tabHeight : 28.0F * Theme::GetActiveTokens().sizes.uiScale;
         if (const bool pointerInDragRegion = ImGui::IsMouseHoveringRect(pos, ImVec2(pos.x + size.x, pos.y + dragRegionHeight), false);
-            !m_splitterInteraction.OwnsPrimaryPointer() && pointerInDragRegion && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            activePanel && area != WorkspaceDockArea::Document && !m_splitterInteraction.OwnsPrimaryPointer() && pointerInDragRegion &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             m_panelDragCandidateId.assign(activePanelId);
         const ImGuiPayload *currentPayload = ImGui::GetDragDropPayload();
         if (const bool payloadAllowsPanelDrag = currentPayload == nullptr || currentPayload->IsDataType("HORO_WORKSPACE_PANEL");
@@ -1114,6 +804,58 @@ namespace Horo::Editor {
         ImGui::End();
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(2);
+    }
+
+    void EditorWorkspaceView::DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) {
+        const TabStackNode *stack = viewModel.workspacePanelHost.Layout().FindTabStack("workspace.document");
+        if (stack == nullptr)
+            return;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0F, 0.0F));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0F, 5.0F));
+        for (const std::string &panelId : stack->tabs) {
+            const auto &panels = m_panelRegistry.GetAllPanels();
+            const auto panel = std::ranges::find_if(panels, [&panelId](const auto &candidate) {
+                return candidate->GetId() == panelId;
+            });
+            ImGui::PushID(panelId.c_str());
+            const char *title =
+                panel == panels.end() ? panelId.c_str() : m_context.localization.Get("editor", (*panel)->GetDisplayName()).c_str();
+            if (stack->activeTab == panelId)
+                ImGui::PushStyleColor(ImGuiCol_Button, Theme::Bg2());
+            if (ImGui::Button(title)) {
+                outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+                outCommand.targetIndex = 3;
+                outCommand.stringPayload = panelId;
+            }
+            if (panel != panels.end())
+                DrawActivityPanelDragSource(panelId, *panel);
+            if (stack->activeTab == panelId)
+                ImGui::PopStyleColor();
+            ImGui::SameLine();
+            if (ImGui::Button("x", ImVec2(26.0F, 0.0F))) {
+                outCommand.command = EditorWorkspaceViewCommand::CloseWorkspacePanel;
+                outCommand.stringPayload = panelId;
+            }
+            ImGui::SameLine();
+            ImGui::PopID();
+        }
+        if (ImGui::Button("+##OpenDocumentTab"))
+            ImGui::OpenPopup("##OpenDocumentTabMenu");
+        if (ImGui::BeginPopup("##OpenDocumentTabMenu")) {
+            for (const auto &panel : m_panelRegistry.GetAllPanels()) {
+                if (std::ranges::find(stack->tabs, panel->GetId()) != stack->tabs.end())
+                    continue;
+                const std::string &title = m_context.localization.Get("editor", panel->GetDisplayName());
+                if (Ui::ContextMenuItem(title.c_str(), nullptr, m_context.theme.fonts)) {
+                    outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+                    outCommand.targetIndex = 3;
+                    outCommand.stringPayload = panel->GetId();
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar(2);
     }
 
     void EditorWorkspaceView::DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,
