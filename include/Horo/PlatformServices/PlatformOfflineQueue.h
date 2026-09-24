@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/PlatformServices/PlatformServiceInterfaces.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <compare>
@@ -33,10 +34,9 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks that the protected partition is nonzero. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            for (const auto byte : bytes)
-                if (byte != std::byte{})
-                    return true;
-            return false;
+            return std::ranges::any_of(bytes, [](const std::byte byte) {
+                return byte != std::byte{};
+            });
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformOfflineSubjectPartition &) const noexcept = default;
@@ -48,10 +48,9 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks that the identity is nonzero. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            for (const auto byte : bytes)
-                if (byte != std::byte{})
-                    return true;
-            return false;
+            return std::ranges::any_of(bytes, [](const std::byte byte) {
+                return byte != std::byte{};
+            });
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformOfflineIntentId &) const noexcept = default;
@@ -302,7 +301,7 @@ namespace Horo::PlatformServices {
          * @brief Creates one finite queue generation.
          * @param config Product limits validated before the first mutation.
          */
-        explicit PlatformOfflineQueue(PlatformOfflineQueueConfig config = {});
+        explicit PlatformOfflineQueue(const PlatformOfflineQueueConfig &config = {});
         ~PlatformOfflineQueue();
         PlatformOfflineQueue(const PlatformOfflineQueue &) = delete;
         PlatformOfflineQueue &operator=(const PlatformOfflineQueue &) = delete;
@@ -429,21 +428,28 @@ namespace Horo::PlatformServices {
         [[nodiscard]] bool ConfigurationIsValid() const noexcept;
         /** @brief Advances the monotonic high-water mark. @param now Candidate timestamp. @return Success or invalid-time error. */
         [[nodiscard]] Result<void> ObserveTime(TimePoint now);
-        /** @brief Resolves one generation-fenced operation. @param operation Handle to resolve. @return Record or null. */
-        [[nodiscard]] State *FindOperation(PlatformOfflineOperationHandle operation) noexcept;
-        /** @brief Resolves one generation-fenced operation. @param operation Handle to resolve. @return Record or null. */
-        [[nodiscard]] const State *FindOperation(PlatformOfflineOperationHandle operation) const noexcept;
-        /** @brief Resolves the aggregate containing one receipt. @param id Producer identity. @return Record or null. */
-        [[nodiscard]] State *FindReceipt(PlatformOfflineIntentId id) noexcept;
-        /** @brief Resolves the aggregate containing one receipt. @param id Producer identity. @return Record or null. */
-        [[nodiscard]] const State *FindReceipt(PlatformOfflineIntentId id) const noexcept;
+        /** @brief Adds a bounded lifetime without overflowing the monotonic clock. @param time Base time. @param age Lifetime. @return Safe
+         * deadline. */
+        [[nodiscard]] static std::optional<TimePoint> AddAge(TimePoint time, std::chrono::seconds age) noexcept;
+        /** @brief Finds the newest non-terminal operation in one lane. @param lane Semantic lane. @return Tail or null. */
+        [[nodiscard]] State *FindTail(const PlatformOfflineLaneKey &lane) noexcept;
+        /** @brief Counts active receipts for one protected subject. @param subject Subject partition. @return Active count. */
+        [[nodiscard]] std::size_t ActiveForSubject(const PlatformOfflineSubjectPartition &subject) const noexcept;
+        /** @brief Attempts bounded coalescing into a pending lane tail. @return Admission, no-op, or typed capacity failure. */
+        [[nodiscard]] Result<std::optional<PlatformOfflineAdmission>> TryCoalesceTail(State *tail, PlatformOfflineIntent &intent,
+                                                                                      TimePoint now);
+        /** @brief Admits a new aggregate after joining/coalescing was ruled out. @return New admission or typed capacity failure. */
+        [[nodiscard]] Result<PlatformOfflineAdmission> AdmitFresh(PlatformOfflineIntent intent, TimePoint now, TimePoint expiresAt,
+                                                                  State *tail);
+        /** @brief Marks active presence receipts as superseded. @return Superseded producer identities. */
+        [[nodiscard]] std::vector<PlatformOfflineIntentId> SupersedePresence(State &tail, TimePoint now);
+        /** @brief Checks whether all active receipts in a state remain before their deadlines. @return True when live. */
+        [[nodiscard]] static bool ReceiptsRemainLive(const State &state, TimePoint now);
         /** @brief Copies immutable operation and receipt state. @param state Queue-owned record. @return Detached snapshot. */
         [[nodiscard]] PlatformOfflineOperationSnapshot Snapshot(const State &state) const;
         /** @brief Expires safe unsent receipts. @param state Queue-owned record. @param now Current time. @param expired Optional event
          * sink. */
         void ExpireDue(State &state, TimePoint now, std::vector<PlatformOfflineIntentId> *expired);
-        /** @brief Rebuilds the reduced operation from live receipts. @param state Queue-owned record to update. */
-        void RecomputeOperation(State &state);
         /** @brief Commits one terminal receipt outcome. @param state Queue-owned record. @param terminal Final outcome. @param now Commit
          * time. */
         [[nodiscard]] Result<PlatformRequestMutation> CompleteOperation(State &state, PlatformOfflineIntentState terminal, TimePoint now);

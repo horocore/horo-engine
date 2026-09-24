@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <utility>
 
-namespace {
+namespace PlatformOfflineQueueTests {
     using namespace Horo;
     using namespace Horo::PlatformServices;
     using namespace std::chrono_literals;
@@ -82,9 +82,43 @@ namespace {
                                      .lane = lane,
                                      .operation = PlatformOfflineSetStatMaximum{.stat = StatId{stat}, .value = value}};
     }
-}  // namespace
 
-TEST_CASE("Platform offline monotonic and best-score coalescing preserves the semantic result and every receipt",
+}  // namespace PlatformOfflineQueueTests
+
+using Horo::PlatformServices::AchievementId;
+using Horo::PlatformServices::LeaderboardId;
+using Horo::PlatformServices::PlatformOfflineAddStatOnce;
+using Horo::PlatformServices::PlatformOfflineAdmission;
+using Horo::PlatformServices::PlatformOfflineAdmissionDisposition;
+using Horo::PlatformServices::PlatformOfflineIntent;
+using Horo::PlatformServices::PlatformOfflineIntentId;
+using Horo::PlatformServices::PlatformOfflineIntentState;
+using Horo::PlatformServices::PlatformOfflinePresenceDesiredState;
+using Horo::PlatformServices::PlatformOfflinePresenceLane;
+using Horo::PlatformServices::PlatformOfflinePresencePurpose;
+using Horo::PlatformServices::PlatformOfflineProgressionLane;
+using Horo::PlatformServices::PlatformOfflineQueue;
+using Horo::PlatformServices::PlatformOfflineQueueConfig;
+using Horo::PlatformServices::PlatformOfflineScoreOrder;
+using Horo::PlatformServices::PlatformOfflineSetStatMaximum;
+using Horo::PlatformServices::PlatformOfflineSubjectPartition;
+using Horo::PlatformServices::PlatformOfflineSubmitBestScore;
+using Horo::PlatformServices::PlatformRequestMutation;
+using Horo::PlatformServices::PresenceStatusId;
+using Horo::PlatformServices::StatId;
+using PlatformOfflineQueueTests::AchievementLane;
+using PlatformOfflineQueueTests::Admit;
+using PlatformOfflineQueueTests::At;
+using PlatformOfflineQueueTests::Config;
+using PlatformOfflineQueueTests::IntentId;
+using PlatformOfflineQueueTests::PresenceLane;
+using PlatformOfflineQueueTests::ScoreLane;
+using PlatformOfflineQueueTests::StatLane;
+using PlatformOfflineQueueTests::StatMaximum;
+using PlatformOfflineQueueTests::Subject;
+using std::chrono_literals::operator""s;
+
+TEST_CASE("Platform offline monotonic coalescing preserves the semantic result and every receipt",
           "[platform-services][offline][coalescing]") {
     PlatformOfflineQueue queue(Config());
     const auto first = Admit(queue, StatMaximum(1, 1, 10, 12), 0s);
@@ -99,7 +133,17 @@ TEST_CASE("Platform offline monotonic and best-score coalescing preserves the se
     CHECK(std::get<PlatformOfflineSetStatMaximum>(maxSnapshot.Value().operation).value == 23);
     CHECK(maxSnapshot.Value().receipts.size() == 3);
     CHECK(queue.PendingInLane(StatLane(1, 10)).size() == 1);
+    REQUIRE(queue.MarkDispatching(first.operation, At(7s)).HasValue());
+    REQUIRE(queue.CompleteSuccess(first.operation, At(8s)).HasValue());
+    const auto completed = queue.Query(IntentId(1));
+    REQUIRE(completed.HasValue());
+    for (const auto &receipt : completed.Value().receipts)
+        CHECK(receipt.state == PlatformOfflineIntentState::Succeeded);
+}
 
+TEST_CASE("Platform offline best-score coalescing keeps the semantic optimum in both score orders",
+          "[platform-services][offline][coalescing]") {
+    PlatformOfflineQueue queue(Config());
     const auto scoreLane = ScoreLane(1, 20);
     const auto lowFirst =
         Admit(queue,
@@ -147,13 +191,6 @@ TEST_CASE("Platform offline monotonic and best-score coalescing preserves the se
     REQUIRE(reversedSnapshot.HasValue());
     CHECK(reversedResult.disposition == PlatformOfflineAdmissionDisposition::Coalesced);
     CHECK(std::get<PlatformOfflineSetStatMaximum>(reversedSnapshot.Value().operation).value == 23);
-
-    REQUIRE(queue.MarkDispatching(first.operation, At(7s)).HasValue());
-    REQUIRE(queue.CompleteSuccess(first.operation, At(8s)).HasValue());
-    const auto completed = queue.Query(IntentId(1));
-    REQUIRE(completed.HasValue());
-    for (const auto &receipt : completed.Value().receipts)
-        CHECK(receipt.state == PlatformOfflineIntentState::Succeeded);
 }
 
 TEST_CASE("Platform offline ordering is stable per lane and non-coalescible operations cannot overtake",
@@ -319,21 +356,21 @@ TEST_CASE("Offline cancellation abandons only unsent work and preserves terminal
     PlatformOfflineQueue queue(Config());
     const auto pending = Admit(queue, StatMaximum(84, 3, 82, 4), 0s);
     const auto joined = Admit(queue, StatMaximum(86, 3, 82, 6), 1s);
-    const auto dispatching = Admit(queue, StatMaximum(85, 4, 83, 5), 0s);
+    const auto dispatching = Admit(queue, StatMaximum(85, 4, 83, 5), 2s);
     REQUIRE(joined.operation == pending.operation);
-    REQUIRE(queue.MarkDispatching(dispatching.operation, At(1s)).HasValue());
+    REQUIRE(queue.MarkDispatching(dispatching.operation, At(2s)).HasValue());
 
-    const auto cancelled = queue.CancelPending(pending.operation, At(2s));
+    const auto cancelled = queue.CancelPending(pending.operation, At(3s));
     REQUIRE(cancelled.HasValue());
     CHECK(cancelled.Value() == PlatformRequestMutation::Applied);
     CHECK(queue.Query(IntentId(84)).Value().receipts.front().state == PlatformOfflineIntentState::Abandoned);
     CHECK(queue.Query(IntentId(86)).Value().receipts.front().state == PlatformOfflineIntentState::Abandoned);
-    CHECK(queue.CancelPending(pending.operation, At(3s)).Value() == PlatformRequestMutation::Unchanged);
+    CHECK(queue.CancelPending(pending.operation, At(4s)).Value() == PlatformRequestMutation::Unchanged);
 
-    const auto dispatchedCancellation = queue.CancelPending(dispatching.operation, At(3s));
+    const auto dispatchedCancellation = queue.CancelPending(dispatching.operation, At(5s));
     REQUIRE(dispatchedCancellation.HasError());
     CHECK(dispatchedCancellation.ErrorValue().code.Value() == "platform.offline.invalid_transition");
-    REQUIRE(queue.CompleteSuccess(dispatching.operation, At(4s)).HasValue());
+    REQUIRE(queue.CompleteSuccess(dispatching.operation, At(6s)).HasValue());
     CHECK(queue.Query(IntentId(85)).Value().receipts.front().state == PlatformOfflineIntentState::Succeeded);
 }
 
