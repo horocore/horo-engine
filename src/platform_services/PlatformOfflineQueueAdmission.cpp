@@ -205,6 +205,22 @@ namespace Horo::PlatformServices {
             PlatformOfflineAdmission{.disposition = PlatformOfflineAdmissionDisposition::Coalesced, .operation = tail->handle});
     }
 
+    /** @copydoc PlatformOfflineQueue::PrepareSupersededPresenceIds */
+    std::vector<PlatformOfflineIntentId> PlatformOfflineQueue::PrepareSupersededPresenceIds(const State *const presenceTail) const {
+        std::vector<PlatformOfflineIntentId> superseded;
+        if (presenceTail == nullptr)
+            return superseded;
+
+        const auto activeCount = static_cast<std::size_t>(std::ranges::count_if(presenceTail->receipts, [](const State::Receipt &receipt) {
+            return IsActive(receipt.state);
+        }));
+        superseded.reserve(activeCount);
+        for (const auto &receipt : presenceTail->receipts)
+            if (IsActive(receipt.state))
+                superseded.push_back(receipt.intent.id);
+        return superseded;
+    }
+
     Result<PlatformOfflineAdmission> PlatformOfflineQueue::AdmitFresh(PlatformOfflineIntent intent, const TimePoint now,
                                                                       const TimePoint expiresAt, State *const tail) {
         const bool replacingPresence =
@@ -223,14 +239,7 @@ namespace Horo::PlatformServices {
             ActiveForSubject(subject) + 1U - replacedCount > config_.perSubjectActiveCapacity || nextSequence_ == 0)
             return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::CapacityExceeded));
 
-        std::vector<PlatformOfflineIntentId> superseded;
-        if (presenceTail != nullptr) {
-            superseded.reserve(replacedCount);
-            for (const auto &receipt : presenceTail->receipts)
-                if (IsActive(receipt.state))
-                    superseded.push_back(receipt.intent.id);
-        }
-
+        auto superseded = PrepareSupersededPresenceIds(presenceTail);
         const auto presenceTailIndex =
             presenceTail == nullptr ? operations_.size() : static_cast<std::size_t>(presenceTail - operations_.data());
         const auto handle = PlatformOfflineOperationHandle{.generation = config_.generation, .sequence = nextSequence_};

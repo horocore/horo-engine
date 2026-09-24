@@ -455,6 +455,12 @@ namespace Horo::PlatformServices {
         /** @brief Admits a new aggregate after joining/coalescing was ruled out. @return New admission or typed capacity failure. */
         [[nodiscard]] Result<PlatformOfflineAdmission> AdmitFresh(PlatformOfflineIntent intent, TimePoint now, TimePoint expiresAt,
                                                                   State *tail);
+        /**
+         * @brief Prepares active presence receipt IDs before a replacement admission mutates queue state.
+         * @param presenceTail Pending or suspended presence operation to replace, or null.
+         * @return Superseded receipt IDs in their stable admission order.
+         */
+        [[nodiscard]] std::vector<PlatformOfflineIntentId> PrepareSupersededPresenceIds(const State *presenceTail) const;
         /** @brief Checks whether all active receipts in a state remain before their deadlines. @return True when live. */
         [[nodiscard]] static bool ReceiptsRemainLive(const State &state, TimePoint now);
         /** @brief Copies immutable operation and receipt state. @param state Queue-owned record. @return Detached snapshot. */

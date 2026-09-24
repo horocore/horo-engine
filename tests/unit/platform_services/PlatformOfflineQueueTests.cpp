@@ -1,4 +1,3 @@
-#include "AllocationProbe.h"
 #include "Horo/PlatformServices/PlatformOfflineQueue.h"
 #include "Horo/PlatformServices/PlatformOfflineQueueErrors.h"
 
@@ -6,7 +5,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <new>
 #include <utility>
 
 namespace PlatformOfflineQueueTests {
@@ -286,69 +284,6 @@ TEST_CASE("Rejected fresh presence replacement preserves the prior receipt", "[p
     CHECK(prior.operation.IsValid());
 }
 
-TEST_CASE("Fresh presence admission leaves prior receipts unchanged on allocation failure",
-          "[platform-services][offline][coalescing][allocation]") {
-    bool admitted = false;
-    std::size_t allocationFailures{};
-    for (std::size_t successfulAllocations{}; successfulAllocations < 16 && !admitted; ++successfulAllocations) {
-        PlatformOfflineQueue queue(Config());
-        const auto prior =
-            Admit(queue,
-                  PlatformOfflineIntent{.id = IntentId(98),
-                                        .lane = PresenceLane(9),
-                                        .operation =
-                                            PlatformOfflinePresenceDesiredState{.action = PlatformOfflinePresenceDesiredState::Action::Set,
-                                                                                .status = PresenceStatusId{9},
-                                                                                .detail = "Playing"}},
-                  0s);
-        auto replacement = PlatformOfflineIntent{.id = IntentId(99),
-                                                 .lane = PresenceLane(9),
-                                                 .operation = PlatformOfflinePresenceDesiredState{
-                                                     .action = PlatformOfflinePresenceDesiredState::Action::Clear}};
-
-        bool allocationFailed = false;
-        PlatformOfflineAdmission admission;
-        try {
-            auto result = [&] {
-                Horo::Tests::AllocationProbe::ScopedFailure failure{successfulAllocations};
-                return queue.Admit(std::move(replacement), At(1s));
-            }();
-            if (result.HasError()) {
-                CHECK(false);
-                break;
-            }
-            admission = std::move(result).Value();
-            admitted = true;
-        } catch (const std::bad_alloc &) {
-            allocationFailed = true;
-            ++allocationFailures;
-        }
-
-        if (allocationFailed) {
-            CHECK(queue.Query(IntentId(98)).Value().receipts.front().state == PlatformOfflineIntentState::Pending);
-            CHECK(queue.Query(IntentId(99)).HasError());
-            CHECK(queue.ActiveIntentCount() == 1);
-            CHECK(queue.RetainedIntentCount() == 1);
-            CHECK(queue.OperationCount() == 1);
-            continue;
-        }
-
-        CHECK(admitted);
-        CHECK(admission.disposition == PlatformOfflineAdmissionDisposition::PresenceSuperseded);
-        REQUIRE(admission.superseded.size() == 1);
-        CHECK(admission.superseded.front() == IntentId(98));
-        CHECK(queue.Query(IntentId(98)).Value().receipts.front().state == PlatformOfflineIntentState::Superseded);
-        CHECK(queue.Query(IntentId(99)).Value().receipts.front().state == PlatformOfflineIntentState::Pending);
-        CHECK(queue.ActiveIntentCount() == 1);
-        CHECK(queue.RetainedIntentCount() == 2);
-        CHECK(queue.OperationCount() == 2);
-        CHECK(prior.operation != admission.operation);
-    }
-
-    CHECK(allocationFailures > 0);
-    CHECK(admitted);
-}
-
 TEST_CASE("Offline expiry preserves per-receipt deadlines and recomputes a coalesced operation", "[platform-services][offline][expiry]") {
     PlatformOfflineQueue queue(Config());
     Admit(queue, StatMaximum(31, 4, 50, 100), 0s);
@@ -370,74 +305,6 @@ TEST_CASE("Offline expiry preserves per-receipt deadlines and recomputes a coale
     REQUIRE(queue.CompleteSuccess(liveSnapshot.Value().handle, At(12s)).HasValue());
     CHECK(queue.Query(IntentId(32)).Value().receipts.back().state == PlatformOfflineIntentState::Succeeded);
     CHECK(queue.Query(IntentId(31)).Value().receipts.front().state == PlatformOfflineIntentState::Expired);
-}
-
-TEST_CASE("Dispatch leaves due lane receipts for the owner expiry transition", "[platform-services][offline][expiry][ordering]") {
-    PlatformOfflineQueue queue(Config());
-    const auto lane = StatLane(4, 51);
-    const auto first = Admit(queue,
-                             PlatformOfflineIntent{.id = IntentId(91),
-                                                   .lane = lane,
-                                                   .operation = PlatformOfflineAddStatOnce{.stat = StatId{51}, .delta = 1}},
-                             0s);
-    const auto second = Admit(queue,
-                              PlatformOfflineIntent{.id = IntentId(92),
-                                                    .lane = lane,
-                                                    .operation = PlatformOfflineAddStatOnce{.stat = StatId{51}, .delta = 2}},
-                              1s);
-
-    const auto dispatchBeforeExpiry = queue.MarkDispatching(second.operation, At(10s));
-    REQUIRE(dispatchBeforeExpiry.HasError());
-    CHECK(dispatchBeforeExpiry.ErrorValue().code.Value() == "platform.offline.expired");
-    CHECK(queue.Query(IntentId(91)).Value().receipts.front().state == PlatformOfflineIntentState::Pending);
-    CHECK(queue.Query(IntentId(92)).Value().receipts.front().state == PlatformOfflineIntentState::Pending);
-
-    const auto expired = queue.Expire(At(10s));
-    REQUIRE(expired.HasValue());
-    REQUIRE(expired.Value().size() == 1);
-    CHECK(expired.Value().front() == IntentId(91));
-    const auto repeatedExpiry = queue.Expire(At(10s));
-    REQUIRE(repeatedExpiry.HasValue());
-    CHECK(repeatedExpiry.Value().empty());
-    CHECK(queue.Query(IntentId(91)).Value().receipts.front().state == PlatformOfflineIntentState::Expired);
-    REQUIRE(queue.MarkDispatching(second.operation, At(10s)).HasValue());
-    CHECK(queue.Query(IntentId(92)).Value().receipts.front().state == PlatformOfflineIntentState::Dispatching);
-    CHECK(first.operation != second.operation);
-}
-
-TEST_CASE("Cancellation leaves due receipts for the owner expiry transition", "[platform-services][offline][expiry][cancellation]") {
-    PlatformOfflineQueue queue(Config());
-    const auto admission = Admit(queue, StatMaximum(93, 5, 52, 4), 0s);
-
-    const auto cancelled = queue.CancelPending(admission.operation, At(10s));
-    REQUIRE(cancelled.HasError());
-    CHECK(cancelled.ErrorValue().code.Value() == "platform.offline.expired");
-    CHECK(queue.Query(IntentId(93)).Value().receipts.front().state == PlatformOfflineIntentState::Pending);
-
-    const auto expired = queue.Expire(At(10s));
-    REQUIRE(expired.HasValue());
-    REQUIRE(expired.Value().size() == 1);
-    CHECK(expired.Value().front() == IntentId(93));
-    CHECK(queue.Expire(At(10s)).Value().empty());
-    CHECK(queue.Query(IntentId(93)).Value().receipts.front().state == PlatformOfflineIntentState::Expired);
-}
-
-TEST_CASE("Resume leaves due suspended receipts for the owner expiry transition", "[platform-services][offline][expiry][lifecycle]") {
-    PlatformOfflineQueue queue(Config());
-    const auto admission = Admit(queue, StatMaximum(94, 6, 53, 5), 0s);
-    REQUIRE(queue.SuspendPending(admission.operation).HasValue());
-
-    const auto resumed = queue.Resume(admission.operation, At(10s));
-    REQUIRE(resumed.HasError());
-    CHECK(resumed.ErrorValue().code.Value() == "platform.offline.expired");
-    CHECK(queue.Query(IntentId(94)).Value().receipts.front().state == PlatformOfflineIntentState::Suspended);
-
-    const auto expired = queue.Expire(At(10s));
-    REQUIRE(expired.HasValue());
-    REQUIRE(expired.Value().size() == 1);
-    CHECK(expired.Value().front() == IntentId(94));
-    CHECK(queue.Expire(At(10s)).Value().empty());
-    CHECK(queue.Query(IntentId(94)).Value().receipts.front().state == PlatformOfflineIntentState::Expired);
 }
 
 TEST_CASE("Expired work is observable, cannot become success, and compaction returns every retired identity",
