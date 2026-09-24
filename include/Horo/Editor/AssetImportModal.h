@@ -11,6 +11,7 @@
 #include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/OperationStore.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -18,6 +19,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Horo::Editor::Theme {
@@ -31,6 +33,8 @@ namespace Horo::Assets {
 
 namespace Horo::Editor {
     class ILocalizationService;
+    class IEditorGuiRenderer;
+    class AssetImportSourcePreview;
 
     /**
      * @brief Host-owned asset import workflow modal.
@@ -123,27 +127,104 @@ namespace Horo::Editor {
         /** @brief Includes or excludes a queued item before it has been imported. */
         void SetItemIncluded(std::size_t index, bool included) noexcept;
 
+        /** @brief Reports whether an item remains in the visible import queue. @param index Queue index. @return True if visible. */
+        [[nodiscard]] bool IsItemVisible(std::size_t index) const noexcept;
+
+        /** @brief Returns the number of items still shown in the import queue. @return Visible item count. */
+        [[nodiscard]] std::size_t VisibleItemCount() const noexcept;
+
+        /** @brief Removes a pending item from the visible import queue without changing operation indices. @param index Queue index. */
+        void RemoveItem(std::size_t index);
+
         /** @brief Returns the number of selected items still available to import. */
         [[nodiscard]] std::size_t IncludedItemCount() const noexcept;
 
         /** @brief Returns the source file size captured when a queued item was added. */
         [[nodiscard]] std::optional<std::uintmax_t> SourceFileSize(std::size_t index) const noexcept;
 
-        /** @brief Representative, in-memory states exposed by the native UI gallery. */
-        enum class UiPreviewFixture {
-            Populated,
-            Empty
-        };
+        /**
+         * @brief Returns the registered importer selected for an item, when available.
+         * @param index Queue index.
+         * @return Pinned catalog contribution or null for an unsupported or invalid item.
+         */
+        [[nodiscard]] const Assets::AssetImporterContribution *ImporterFor(std::size_t index) const noexcept;
 
-        /** @brief Requests an inert representative UI state when the modal opens. */
-        void RequestUiPreviewFixture(UiPreviewFixture fixture) noexcept {
-            m_pendingUiPreviewFixture = true;
-            m_pendingUiPreviewKind = fixture;
+        /** @brief Attaches the GUI texture owner for optional source-file previews. */
+        void SetPreviewRenderer(IEditorGuiRenderer *renderer);
+
+        /** @brief Returns the selected source preview texture, or zero while unavailable. */
+        [[nodiscard]] std::uintptr_t SelectedPreviewTexture() const noexcept;
+
+        /**
+         * @brief Reads a catalog-declared setting without exposing its storage encoding to the view.
+         * @param index Queue index.
+         * @param setting Descriptor supplied by the selected importer.
+         * @return Typed current value, or the descriptor default when no valid value is stored.
+         */
+        [[nodiscard]] Assets::ImportSettingValue SettingValue(std::size_t index,
+                                                              const Assets::ImportSettingDescriptor &setting) const;
+        /**
+         * @brief Stores a typed setting value for an editable item.
+         * @param index Queue index.
+         * @param setting Descriptor supplied by the selected importer.
+         * @param value Typed value selected by the view.
+         */
+        void SetSettingValue(std::size_t index, const Assets::ImportSettingDescriptor &setting,
+                             const Assets::ImportSettingValue &value);
+
+        /** @brief Opens the native file picker and queues its selected source files. */
+        void BrowseSourceFiles();
+        /** @brief Queues paths received from a view drop or another caller. @param paths Absolute source paths. */
+        void AddSourceFiles(const std::vector<std::filesystem::path> &paths);
+        /** @brief Opens the native folder picker and applies a valid project asset destination. */
+        void BrowseDestination();
+        /** @brief Opens the selected source in the native file manager when available. */
+        void RevealSelectedSource() const;
+        /** @brief Starts import of included pending items. */
+        void StartIncludedImport();
+
+        /** @brief Host-owned advanced options edited as one item value. */
+        struct ItemOptions {
+            std::string assetName;          /**< Destination asset name without extension. */
+            int folderStrategy{};          /**< Existing folder strategy selection. */
+            int assetIdStrategy{};         /**< Existing asset ID strategy selection. */
+            bool createMetaSidecar{};      /**< Whether to create a metadata sidecar. */
+            bool overwriteWithoutPrompt{}; /**< Whether to resolve conflicts by overwriting. */
+        };
+        /** @brief Reads advanced options for one item. @param index Queue index. @return Option value or empty defaults. */
+        [[nodiscard]] ItemOptions OptionsFor(std::size_t index) const;
+        /** @brief Updates advanced options on an editable item. @param index Queue index. @param options New option value. */
+        void SetOptionsFor(std::size_t index, ItemOptions options);
+        /** @brief Checks whether the current included items can start importing. @return True when ready. */
+        [[nodiscard]] bool CanImportIncludedItems() const noexcept;
+
+        /** @brief Returns whether this modal is presenting data without file or import actions. */
+        [[nodiscard]] bool IsReadOnlyPresentation() const noexcept {
+            return m_readOnlyPresentation;
         }
 
-        /** @brief Returns whether this modal is displaying an inert UI preview. */
-        [[nodiscard]] bool IsUiPreview() const noexcept {
-            return m_uiPreviewMode;
+        /** @brief Returns the left and top canvas insets for an embedded presentation. */
+        [[nodiscard]] std::pair<float, float> PresentationCanvasInsets() const noexcept {
+            return m_presentationCanvasInsets;
+        }
+
+        /** @brief Consumes an initial advanced-section expansion request. */
+        [[nodiscard]] bool ConsumeInitialAdvancedState() noexcept {
+            const bool pending = m_initialAdvancedStatePending;
+            m_initialAdvancedStatePending = false;
+            return pending;
+        }
+
+        /** @brief Returns whether the requested initial advanced-section state is open. */
+        [[nodiscard]] bool InitialAdvancedOpen() const noexcept {
+            return m_initialAdvancedOpen;
+        }
+
+        /** @brief Consumes an initial details-scroll reset request. */
+        [[nodiscard]] bool ConsumeInitialScrollReset() noexcept {
+            const bool pending = m_initialScrollResetPending;
+            m_initialScrollResetPending = false;
+            return pending;
         }
 
         /** @brief Imports selected pending items in queue order. */
@@ -233,32 +314,31 @@ namespace Horo::Editor {
         /** @brief Records one terminal item result and completes the visible operation when the queue is finished. */
         void MarkItemCompleted(std::size_t index);
 
+        /** @brief Hides a terminal item and moves selection to another visible item. */
+        void HideItem(std::size_t index);
+
         /** @brief Moves the visible operation to failed and releases its active handle. */
         void FailVisibleOperation(const Error &error, std::string_view phase);
 
         /** @brief Refreshes the retained import-operation projection from the process store. */
         void RefreshImportHistory();
 
-        /** @brief Installs the requested preview state after normal modal initialization. */
-        void LoadUiPreviewFixture(UiPreviewFixture fixture);
+    protected:
+        /**
+         * @brief Installs an in-memory read-only view of the import workflow after OnOpen.
+         * @param snapshot Items and diagnostics to present without an import operation.
+         * @param sourceFileSizes Optional source sizes in item order.
+         * @param projectRoot Displayed project root; no files are read from it.
+         * @param defaultDestinationFolder Project-relative destination shown in the breadcrumb.
+         * @param canvasInsets Left and top insets reserved by an embedding canvas.
+         * @param advancedOpen Initial state of the Advanced section.
+         */
+        void PresentReadOnlySnapshot(Assets::AssetImportSnapshot snapshot,
+                                     std::vector<std::optional<std::uintmax_t>> sourceFileSizes,
+                                     std::filesystem::path projectRoot, std::string defaultDestinationFolder,
+                                     std::pair<float, float> canvasInsets, bool advancedOpen);
 
-        /** @brief Appends one deterministic file row to the in-memory preview fixture. */
-        void AppendUiPreviewFile(std::string_view name, std::string_view extension, std::uintmax_t size);
-
-        /** @brief Completes the shared preset and inclusion state for a populated preview fixture. */
-        void FinalizeUiPreviewFixture();
-
-        /** @brief Appends files to the active import operation and refreshes its UI projection. */
-        [[nodiscard]] Result<void> AppendImportFiles(const std::vector<std::filesystem::path> &sourceFiles,
-                                                     const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
-
-        /** @brief Starts a new import operation and initializes its queue projection. */
-        [[nodiscard]] Result<void> StartImportOperation(const std::vector<std::filesystem::path> &sourceFiles,
-                                                        const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
-
-        /** @brief Publishes a newly started import in the shared operation history. */
-        void RegisterVisibleImportOperation();
-
+    private:
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;
@@ -276,14 +356,18 @@ namespace Horo::Editor {
         std::string m_defaultDestinationFolder;
 
         std::unique_ptr<Assets::AssetImportOperation> m_operation;
+        std::unique_ptr<AssetImportSourcePreview> m_sourcePreview;
         std::unique_ptr<Assets::ProjectAssetImportCommitter> m_committer;
         Assets::AssetImportSnapshot m_snapshot;
         std::vector<bool> m_itemCompleted;
         std::vector<bool> m_includedItems;
+        std::vector<bool> m_itemVisible;
         std::vector<std::optional<std::uintmax_t>> m_sourceFileSizes;
-        bool m_uiPreviewMode{false};
-        bool m_pendingUiPreviewFixture{false};
-        UiPreviewFixture m_pendingUiPreviewKind{UiPreviewFixture::Populated};
+        bool m_readOnlyPresentation{false};
+        std::pair<float, float> m_presentationCanvasInsets{};
+        bool m_initialAdvancedStatePending{false};
+        bool m_initialAdvancedOpen{false};
+        bool m_initialScrollResetPending{false};
         bool m_prepared{false};
 
         // Conflict resolution popup state
