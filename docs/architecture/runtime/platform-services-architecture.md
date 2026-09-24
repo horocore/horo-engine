@@ -710,6 +710,15 @@ data. Publication requires a current subject plus `PresencePublish` access, and 
 captured session/access generations are revalidated before provider submission and
 observable completion.
 
+Implementation status for PLS-006.5: `PlatformPresenceCoordinator` resolves every set
+status through the immutable presence-definition registry, enforces the registered
+detail policy and valid UTF-8 bounds, and captures the exact subject/session/access
+authority. It retains one latest-wins pending desired state, never replaces an
+in-flight provider operation, applies a bounded publication interval, and invalidates
+pending/in-flight state on sign-out, session/access replacement or close. Provider
+adapters receive only a Horo-owned publication token and normalized completion result;
+provider strings, native values and implicit status fallback are not representable.
+
 PLS-003.4 also publishes the immutable `PresenceDefinitionRegistry`. Every active
 presence-status identity has exactly one definition fixing whether free detail is
 forbidden or optional and, when optional, its finite UTF-8 byte ceiling. Localization
