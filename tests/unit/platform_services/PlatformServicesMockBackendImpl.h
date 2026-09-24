@@ -109,6 +109,11 @@ namespace Horo::PlatformServices::TestSupport {
         template <typename T>
         [[nodiscard]] std::function<Result<PlatformRequestMutation>()> CancellationCompletion(PlatformRequestId id,
                                                                                               PlatformRequestGeneration generation);
+        [[nodiscard]] bool HasSubmissionCapacity(const ScriptedResponse &response) const noexcept;
+        template <typename T> [[nodiscard]] Result<PlatformRequestHandle<T>> AdmitAndStart(MockPlatformServicesOperation operation);
+        template <typename T>
+        void RegisterRequest(MockPlatformServicesOperation operation, std::shared_ptr<const ScriptedResponse> response,
+                             const PlatformRequestHandle<T> &handle);
         template <typename T>
         [[nodiscard]] Result<PlatformRequestHandle<T>> Submit(MockPlatformServicesOperation operation, bool requestIsValid = true);
 

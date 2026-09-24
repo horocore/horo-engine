@@ -67,35 +67,15 @@ namespace Horo::PlatformServices::TestSupport {
         };
     }
 
+    bool MockPlatformServicesBackend::Impl::HasSubmissionCapacity(const ScriptedResponse &response) const noexcept {
+        const auto eventCount = 1U + static_cast<unsigned int>(response.timeoutAfterMilliseconds.has_value()) +
+                                static_cast<unsigned int>(response.duplicateDelayMilliseconds.has_value());
+        return events.size() + eventCount <= MockPlatformServicesBackend::MaximumScheduledEvents &&
+               requestsInFlight.size() < MockPlatformServicesBackend::MaximumExpectedCalls;
+    }
+
     template <typename T>
-    Result<PlatformRequestHandle<T>> MockPlatformServicesBackend::Impl::Submit(const MockPlatformServicesOperation operation,
-                                                                               const bool requestIsValid) {
-        const auto call = RecordCall(operation);
-        if (call.HasError() || !active_ || closed_ || !requestIsValid) {
-            if (call.HasValue())
-                AddDiagnostic({.kind = MockDiagnosticKind::InvalidRequest,
-                               .actual = operation,
-                               .expectationIndex = nextExpected,
-                               .logicalTimeMilliseconds = logicalTimeMilliseconds});
-            return detail::Failure<PlatformRequestHandle<T>>();
-        }
-
-        auto responseResult = TakeResponse(operation);
-        if (responseResult.HasError())
-            return detail::Failure<PlatformRequestHandle<T>>();
-        auto response = std::make_shared<const ScriptedResponse>(std::move(responseResult).Value());
-
-        const auto eventCount = 1U + static_cast<unsigned int>(response->timeoutAfterMilliseconds.has_value()) +
-                                static_cast<unsigned int>(response->duplicateDelayMilliseconds.has_value());
-        if (events.size() + eventCount > MockPlatformServicesBackend::MaximumScheduledEvents ||
-            requestsInFlight.size() >= MockPlatformServicesBackend::MaximumExpectedCalls) {
-            AddDiagnostic({.kind = MockDiagnosticKind::CapacityExceeded,
-                           .actual = operation,
-                           .expectationIndex = nextExpected,
-                           .logicalTimeMilliseconds = logicalTimeMilliseconds});
-            return detail::Failure<PlatformRequestHandle<T>>();
-        }
-
+    Result<PlatformRequestHandle<T>> MockPlatformServicesBackend::Impl::AdmitAndStart(const MockPlatformServicesOperation operation) {
         auto admitted = requests.Admit<T>();
         if (admitted.HasError()) {
             AddDiagnostic({.kind = MockDiagnosticKind::CapacityExceeded,
@@ -114,21 +94,25 @@ namespace Horo::PlatformServices::TestSupport {
                            .logicalTimeMilliseconds = logicalTimeMilliseconds});
             return Result<PlatformRequestHandle<T>>::Failure(running.ErrorValue());
         }
+        return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
+    }
 
+    template <typename T>
+    void MockPlatformServicesBackend::Impl::RegisterRequest(const MockPlatformServicesOperation operation,
+                                                            std::shared_ptr<const ScriptedResponse> response,
+                                                            const PlatformRequestHandle<T> &handle) {
         const auto id = handle.Id();
         const auto generation = handle.Generation();
-        RequestRecord record{.id = id,
-                             .generation = generation,
-                             .operation = operation,
-                             .cancellationDelayMilliseconds = response->cancellationDelayMilliseconds,
-                             .acknowledgeCancellation = response->acknowledgeCancellation,
-                             .requestCancellation =
-                                 [this, id, generation]() {
+        requestsInFlight.push_back(RequestRecord{.id = id,
+                                                 .generation = generation,
+                                                 .operation = operation,
+                                                 .cancellationDelayMilliseconds = response->cancellationDelayMilliseconds,
+                                                 .acknowledgeCancellation = response->acknowledgeCancellation,
+                                                 .requestCancellation =
+                                                     [this, id, generation]() {
             return requests.RequestCancel<T>(id, generation);
         },
-                             .completeCancellation = CancellationCompletion<T>(id, generation)};
-        requestsInFlight.push_back(std::move(record));
-
+                                                 .completeCancellation = CancellationCompletion<T>(id, generation)});
         ScheduleEvent(id, generation, operation, MockCompletionKind::Provider, response->delayMilliseconds,
                       ProviderCompletion<T>(id, generation, response));
         if (response->timeoutAfterMilliseconds)
@@ -139,6 +123,40 @@ namespace Horo::PlatformServices::TestSupport {
             ScheduleEvent(id, generation, operation, MockCompletionKind::Provider, duplicateDelay,
                           ProviderCompletion<T>(id, generation, response));
         }
+    }
+
+    template <typename T>
+    Result<PlatformRequestHandle<T>> MockPlatformServicesBackend::Impl::Submit(const MockPlatformServicesOperation operation,
+                                                                               const bool requestIsValid) {
+        const auto call = RecordCall(operation);
+        if (call.HasError() || !active_ || closed_ || !requestIsValid) {
+            if (call.HasValue())
+                AddDiagnostic({.kind = MockDiagnosticKind::InvalidRequest,
+                               .actual = operation,
+                               .expectationIndex = nextExpected,
+                               .logicalTimeMilliseconds = logicalTimeMilliseconds});
+            return detail::Failure<PlatformRequestHandle<T>>();
+        }
+
+        auto responseResult = TakeResponse(operation);
+        if (responseResult.HasError())
+            return detail::Failure<PlatformRequestHandle<T>>();
+        auto response = std::make_shared<const ScriptedResponse>(std::move(responseResult).Value());
+
+        if (!HasSubmissionCapacity(*response)) {
+            AddDiagnostic({.kind = MockDiagnosticKind::CapacityExceeded,
+                           .actual = operation,
+                           .expectationIndex = nextExpected,
+                           .logicalTimeMilliseconds = logicalTimeMilliseconds});
+            return detail::Failure<PlatformRequestHandle<T>>();
+        }
+
+        auto admitted = AdmitAndStart<T>(operation);
+        if (admitted.HasError()) {
+            return Result<PlatformRequestHandle<T>>::Failure(admitted.ErrorValue());
+        }
+        auto handle = std::move(admitted).Value();
+        RegisterRequest<T>(operation, std::move(response), handle);
         return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
     }
 

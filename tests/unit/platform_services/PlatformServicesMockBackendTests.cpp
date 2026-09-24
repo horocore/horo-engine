@@ -17,139 +17,153 @@ namespace Horo::PlatformServices::TestSupport {
             }
             return false;
         }
+
+        void ConfigureRoutingBackend(MockPlatformServicesBackend &backend) {
+            REQUIRE(backend
+                        .ExpectSequence({MockPlatformServicesOperation::UnlockAchievement, MockPlatformServicesOperation::SubmitScore,
+                                         MockPlatformServicesOperation::WriteStat, MockPlatformServicesOperation::ReadCloudObject,
+                                         MockPlatformServicesOperation::WriteCloudObject, MockPlatformServicesOperation::SetPresence,
+                                         MockPlatformServicesOperation::ClearPresence, MockPlatformServicesOperation::QueryFriends,
+                                         MockPlatformServicesOperation::QueryCurrentSession})
+                        .HasValue());
+
+            MockPlatformServicesResponse voidResponse;
+            for (const auto operation : {MockPlatformServicesOperation::UnlockAchievement, MockPlatformServicesOperation::SubmitScore,
+                                         MockPlatformServicesOperation::WriteStat, MockPlatformServicesOperation::WriteCloudObject,
+                                         MockPlatformServicesOperation::SetPresence, MockPlatformServicesOperation::ClearPresence})
+                REQUIRE(backend.SetResponse(operation, voidResponse).HasValue());
+
+            MockPlatformServicesResponse cloudResponse;
+            cloudResponse.payload = CloudReadResult{.object = {11}, .bytes = {std::byte{0x2a}}};
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::ReadCloudObject, std::move(cloudResponse)).HasValue());
+
+            MockPlatformServicesResponse friendsResponse;
+            friendsResponse.payload = FriendsPage{.entries = {}, .hasMore = true};
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriends, std::move(friendsResponse)).HasValue());
+
+            const auto sessionSnapshot = BuildPlatformSessionSnapshot(PlatformSessionCandidate{});
+            REQUIRE(sessionSnapshot.HasValue());
+            MockPlatformServicesResponse sessionResponse;
+            sessionResponse.payload = std::move(sessionSnapshot).Value();
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryCurrentSession, std::move(sessionResponse)).HasValue());
+        }
+
+        void VerifyRoutingBackend(MockPlatformServicesBackend &backend) {
+            ActivateMock(backend);
+            const auto achievement = backend.UnlockAchievement({});
+            const auto score = backend.SubmitScore({});
+            const auto stat = backend.WriteStat({});
+            const auto cloud = backend.ReadCloudObject({});
+            const auto cloudWrite = backend.WriteCloudObject({});
+            const auto presence = backend.SetPresence({});
+            const auto clearPresence = backend.ClearPresence({});
+            const auto friends = backend.QueryFriends({.pageSize = 1});
+            const auto session = backend.QueryCurrentSession();
+
+            REQUIRE(achievement.HasValue());
+            REQUIRE(score.HasValue());
+            REQUIRE(stat.HasValue());
+            REQUIRE(cloud.HasValue());
+            REQUIRE(cloudWrite.HasValue());
+            REQUIRE(presence.HasValue());
+            REQUIRE(clearPresence.HasValue());
+            REQUIRE(friends.HasValue());
+            REQUIRE(session.HasValue());
+            CHECK(backend.DispatchDueCompletions() == 9);
+
+            const auto cloudSnapshot = backend.Requests().Query(cloud.Value());
+            REQUIRE(cloudSnapshot.HasValue());
+            REQUIRE(cloudSnapshot.Value().terminal.has_value());
+            REQUIRE(cloudSnapshot.Value().terminal->Value() != nullptr);
+            CHECK(cloudSnapshot.Value().terminal->Value()->object == CloudObjectId{11});
+            CHECK(cloudSnapshot.Value().terminal->Value()->bytes == std::vector<std::byte>{std::byte{0x2a}});
+
+            const auto friendsSnapshot = backend.Requests().Query(friends.Value());
+            REQUIRE(friendsSnapshot.HasValue());
+            REQUIRE(friendsSnapshot.Value().terminal.has_value());
+            REQUIRE(friendsSnapshot.Value().terminal->Value() != nullptr);
+            CHECK(friendsSnapshot.Value().terminal->Value()->hasMore);
+            CHECK(backend.Calls().size() == 9);
+            REQUIRE(backend.CompletionOrder().size() == 9);
+            for (std::size_t index = 0; index < backend.Calls().size(); ++index)
+                CHECK(backend.CompletionOrder()[index].operation == backend.Calls()[index]);
+            CHECK(backend.VerifyExpectations().HasValue());
+        }
+
+        void ConfigureManualClockBackend(MockPlatformServicesBackend &backend) {
+            REQUIRE(backend
+                        .ExpectSequence({MockPlatformServicesOperation::QueryFriends, MockPlatformServicesOperation::ReadCloudObject,
+                                         MockPlatformServicesOperation::SetPresence})
+                        .HasValue());
+
+            MockPlatformServicesResponse friendsResponse;
+            friendsResponse.payload = FriendsPage{};
+            friendsResponse.delay = std::chrono::milliseconds{4};
+            friendsResponse.timeoutAfter = std::chrono::milliseconds{4};
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriends, std::move(friendsResponse)).HasValue());
+
+            MockPlatformServicesResponse cloudResponse;
+            cloudResponse.payload = CloudReadResult{.object = {3}, .bytes = {std::byte{0x03}}};
+            cloudResponse.delay = std::chrono::milliseconds{10};
+            cloudResponse.timeoutAfter = std::chrono::milliseconds{4};
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::ReadCloudObject, std::move(cloudResponse)).HasValue());
+
+            MockPlatformServicesResponse presenceResponse;
+            presenceResponse.delay = std::chrono::milliseconds{1};
+            presenceResponse.duplicateDelay = std::chrono::milliseconds{1};
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::SetPresence, std::move(presenceResponse)).HasValue());
+        }
+
+        void VerifyManualClockBackend(MockPlatformServicesBackend &backend) {
+            ActivateMock(backend);
+            const auto friends = backend.QueryFriends({.pageSize = 1});
+            const auto cloud = backend.ReadCloudObject({});
+            const auto presence = backend.SetPresence({});
+            REQUIRE(friends.HasValue());
+            REQUIRE(cloud.HasValue());
+            REQUIRE(presence.HasValue());
+
+            REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{1}).HasValue());
+            CHECK(backend.DispatchDueCompletions() == 1);
+            REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{1}).HasValue());
+            CHECK(backend.DispatchDueCompletions() == 1);
+            CHECK(HasDiagnostic(backend, MockDiagnosticKind::DuplicateCompletionIgnored));
+
+            REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{2}).HasValue());
+            CHECK(backend.CurrentTimeMilliseconds() == 4);
+            CHECK(backend.DispatchDueCompletions() == 3);
+            CHECK(backend.Requests().Query(friends.Value()).Value().state == PlatformRequestState::Succeeded);
+            const auto timedOutCloud = backend.Requests().Query(cloud.Value());
+            REQUIRE(timedOutCloud.HasValue());
+            CHECK(timedOutCloud.Value().state == PlatformRequestState::TimedOut);
+            REQUIRE(timedOutCloud.Value().terminal.has_value());
+            REQUIRE(timedOutCloud.Value().terminal->ErrorValue() != nullptr);
+            CHECK(timedOutCloud.Value().terminal->ErrorValue()->code.Value() == "platform.request.timed_out");
+            REQUIRE(backend.CompletionOrder().size() >= 5);
+            CHECK(backend.CompletionOrder()[2].operation == MockPlatformServicesOperation::QueryFriends);
+            CHECK(backend.CompletionOrder()[3].operation == MockPlatformServicesOperation::QueryFriends);
+            CHECK(backend.CompletionOrder()[4].operation == MockPlatformServicesOperation::ReadCloudObject);
+
+            REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{6}).HasValue());
+            CHECK(backend.DispatchDueCompletions() == 1);
+            CHECK(backend.Requests().Query(cloud.Value()).Value().state == PlatformRequestState::TimedOut);
+            CHECK(HasDiagnostic(backend, MockDiagnosticKind::LateCompletionIgnored));
+            CHECK(backend.VerifyExpectations().HasValue());
+        }
     }  // namespace
 
     TEST_CASE("Deterministic mock routes typed operations and replays bounded payloads in call order",
               "[platform-services][mock][routing]") {
         MockPlatformServicesBackend backend({7});
-        REQUIRE(backend
-                    .ExpectSequence({MockPlatformServicesOperation::UnlockAchievement, MockPlatformServicesOperation::SubmitScore,
-                                     MockPlatformServicesOperation::WriteStat, MockPlatformServicesOperation::ReadCloudObject,
-                                     MockPlatformServicesOperation::WriteCloudObject, MockPlatformServicesOperation::SetPresence,
-                                     MockPlatformServicesOperation::ClearPresence, MockPlatformServicesOperation::QueryFriends,
-                                     MockPlatformServicesOperation::QueryCurrentSession})
-                    .HasValue());
-
-        MockPlatformServicesResponse voidResponse;
-        for (const auto operation : {MockPlatformServicesOperation::UnlockAchievement, MockPlatformServicesOperation::SubmitScore,
-                                     MockPlatformServicesOperation::WriteStat, MockPlatformServicesOperation::WriteCloudObject,
-                                     MockPlatformServicesOperation::SetPresence, MockPlatformServicesOperation::ClearPresence})
-            REQUIRE(backend.SetResponse(operation, voidResponse).HasValue());
-
-        MockPlatformServicesResponse cloudResponse;
-        cloudResponse.payload = CloudReadResult{.object = {11}, .bytes = {std::byte{0x2a}}};
-        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::ReadCloudObject, std::move(cloudResponse)).HasValue());
-
-        MockPlatformServicesResponse friendsResponse;
-        friendsResponse.payload = FriendsPage{.entries = {}, .hasMore = true};
-        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriends, std::move(friendsResponse)).HasValue());
-
-        const auto sessionSnapshot = BuildPlatformSessionSnapshot(PlatformSessionCandidate{});
-        REQUIRE(sessionSnapshot.HasValue());
-        MockPlatformServicesResponse sessionResponse;
-        sessionResponse.payload = std::move(sessionSnapshot).Value();
-        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryCurrentSession, std::move(sessionResponse)).HasValue());
-
-        ActivateMock(backend);
-        auto achievement = backend.UnlockAchievement({});
-        auto score = backend.SubmitScore({});
-        auto stat = backend.WriteStat({});
-        auto cloud = backend.ReadCloudObject({});
-        auto cloudWrite = backend.WriteCloudObject({});
-        auto presence = backend.SetPresence({});
-        auto clearPresence = backend.ClearPresence({});
-        auto friends = backend.QueryFriends({.pageSize = 1});
-        auto session = backend.QueryCurrentSession();
-
-        REQUIRE(achievement.HasValue());
-        REQUIRE(score.HasValue());
-        REQUIRE(stat.HasValue());
-        REQUIRE(cloud.HasValue());
-        REQUIRE(cloudWrite.HasValue());
-        REQUIRE(presence.HasValue());
-        REQUIRE(clearPresence.HasValue());
-        REQUIRE(friends.HasValue());
-        REQUIRE(session.HasValue());
-        CHECK(backend.DispatchDueCompletions() == 9);
-
-        const auto cloudSnapshot = backend.Requests().Query(cloud.Value());
-        REQUIRE(cloudSnapshot.HasValue());
-        REQUIRE(cloudSnapshot.Value().terminal.has_value());
-        REQUIRE(cloudSnapshot.Value().terminal->Value() != nullptr);
-        CHECK(cloudSnapshot.Value().terminal->Value()->object == CloudObjectId{11});
-        CHECK(cloudSnapshot.Value().terminal->Value()->bytes == std::vector<std::byte>{std::byte{0x2a}});
-
-        const auto friendsSnapshot = backend.Requests().Query(friends.Value());
-        REQUIRE(friendsSnapshot.HasValue());
-        REQUIRE(friendsSnapshot.Value().terminal.has_value());
-        REQUIRE(friendsSnapshot.Value().terminal->Value() != nullptr);
-        CHECK(friendsSnapshot.Value().terminal->Value()->hasMore);
-        CHECK(backend.Calls().size() == 9);
-        REQUIRE(backend.CompletionOrder().size() == 9);
-        for (std::size_t index = 0; index < backend.Calls().size(); ++index)
-            CHECK(backend.CompletionOrder()[index].operation == backend.Calls()[index]);
-        CHECK(backend.VerifyExpectations().HasValue());
+        ConfigureRoutingBackend(backend);
+        VerifyRoutingBackend(backend);
     }
 
     TEST_CASE("Manual clock reorders completions and resolves deadline ties before timeout",
               "[platform-services][mock][ordering][timeout]") {
         MockPlatformServicesBackend backend({7});
-        REQUIRE(backend
-                    .ExpectSequence({MockPlatformServicesOperation::QueryFriends, MockPlatformServicesOperation::ReadCloudObject,
-                                     MockPlatformServicesOperation::SetPresence})
-                    .HasValue());
-
-        MockPlatformServicesResponse friendsResponse;
-        friendsResponse.payload = FriendsPage{};
-        friendsResponse.delay = std::chrono::milliseconds{4};
-        friendsResponse.timeoutAfter = std::chrono::milliseconds{4};
-        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriends, std::move(friendsResponse)).HasValue());
-
-        MockPlatformServicesResponse cloudResponse;
-        cloudResponse.payload = CloudReadResult{.object = {3}, .bytes = {std::byte{0x03}}};
-        cloudResponse.delay = std::chrono::milliseconds{10};
-        cloudResponse.timeoutAfter = std::chrono::milliseconds{4};
-        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::ReadCloudObject, std::move(cloudResponse)).HasValue());
-
-        MockPlatformServicesResponse presenceResponse;
-        presenceResponse.delay = std::chrono::milliseconds{1};
-        presenceResponse.duplicateDelay = std::chrono::milliseconds{1};
-        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::SetPresence, std::move(presenceResponse)).HasValue());
-
-        ActivateMock(backend);
-        auto friends = backend.QueryFriends({.pageSize = 1});
-        auto cloud = backend.ReadCloudObject({});
-        auto presence = backend.SetPresence({});
-        REQUIRE(friends.HasValue());
-        REQUIRE(cloud.HasValue());
-        REQUIRE(presence.HasValue());
-
-        REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{1}).HasValue());
-        CHECK(backend.DispatchDueCompletions() == 1);
-        REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{1}).HasValue());
-        CHECK(backend.DispatchDueCompletions() == 1);
-        CHECK(HasDiagnostic(backend, MockDiagnosticKind::DuplicateCompletionIgnored));
-
-        REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{2}).HasValue());
-        CHECK(backend.CurrentTimeMilliseconds() == 4);
-        CHECK(backend.DispatchDueCompletions() == 3);
-        CHECK(backend.Requests().Query(friends.Value()).Value().state == PlatformRequestState::Succeeded);
-        const auto timedOutCloud = backend.Requests().Query(cloud.Value());
-        REQUIRE(timedOutCloud.HasValue());
-        CHECK(timedOutCloud.Value().state == PlatformRequestState::TimedOut);
-        REQUIRE(timedOutCloud.Value().terminal.has_value());
-        REQUIRE(timedOutCloud.Value().terminal->ErrorValue() != nullptr);
-        CHECK(timedOutCloud.Value().terminal->ErrorValue()->code.Value() == "platform.request.timed_out");
-        REQUIRE(backend.CompletionOrder().size() >= 5);
-        CHECK(backend.CompletionOrder()[2].operation == MockPlatformServicesOperation::QueryFriends);
-        CHECK(backend.CompletionOrder()[3].operation == MockPlatformServicesOperation::QueryFriends);
-        CHECK(backend.CompletionOrder()[4].operation == MockPlatformServicesOperation::ReadCloudObject);
-
-        REQUIRE(backend.AdvanceClock(std::chrono::milliseconds{6}).HasValue());
-        CHECK(backend.DispatchDueCompletions() == 1);
-        CHECK(backend.Requests().Query(cloud.Value()).Value().state == PlatformRequestState::TimedOut);
-        CHECK(HasDiagnostic(backend, MockDiagnosticKind::LateCompletionIgnored));
-        CHECK(backend.VerifyExpectations().HasValue());
+        ConfigureManualClockBackend(backend);
+        VerifyManualClockBackend(backend);
     }
 
     TEST_CASE("Mock replays scripted provider failures with their typed error identity", "[platform-services][mock][errors]") {
