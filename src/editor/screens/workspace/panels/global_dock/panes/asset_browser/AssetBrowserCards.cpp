@@ -35,19 +35,19 @@ namespace Horo::Editor {
 
         [[nodiscard]] AssetCardPresentation PresentEntry(const ContentBrowserEntry &entry) {
             if (entry.kind == ContentBrowserEntryKind::Directory) {
-                if (entry.displayName == "materials") {
+                if (entry.displayName == "materials" || entry.displayName == "Materials") {
                     return TintedPresentation(entry.displayName, Theme::Accent(), 0.10F, Ui::UiIcon::Folder);
                 }
-                if (entry.displayName == "models") {
+                if (entry.displayName == "models" || entry.displayName == "Models") {
                     return TintedPresentation(entry.displayName, Theme::Accent(), 0.16F, Ui::UiIcon::Folder);
                 }
-                if (entry.displayName == "scenes") {
+                if (entry.displayName == "scenes" || entry.displayName == "Scenes") {
                     return TintedPresentation(entry.displayName, Theme::Ok(), 0.12F, Ui::UiIcon::Folder);
                 }
-                if (entry.displayName == "shaders") {
+                if (entry.displayName == "shaders" || entry.displayName == "Shaders") {
                     return TintedPresentation(entry.displayName, Theme::Muted(), 0.09F, Ui::UiIcon::Folder);
                 }
-                if (entry.displayName == "textures") {
+                if (entry.displayName == "textures" || entry.displayName == "Textures") {
                     return TintedPresentation(entry.displayName, Theme::Warn(), 0.11F, Ui::UiIcon::Folder);
                 }
                 return TintedPresentation(entry.displayName, Theme::Accent(), 0.08F, Ui::UiIcon::Folder);

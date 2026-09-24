@@ -2,6 +2,7 @@
 
 #include "Horo/Assets/AssetImportMetadata.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
 
 #include <algorithm>
 #include <cctype>
@@ -331,7 +332,7 @@ namespace Horo::Editor {
                                                          const Assets::AssetRegistrySnapshot &snapshot,
                                                          const Assets::AssetImporterCatalogSnapshot *importerCatalog) {
         const std::filesystem::path projectRoot = NormalizeAbsolute(absoluteProjectRoot);
-        const std::filesystem::path assetRoot = NormalizeAbsolute(projectRoot / "assets");
+        const std::filesystem::path assetRoot = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
         std::filesystem::path currentDirectory =
             requestedAbsoluteDirectory.empty() ? assetRoot : NormalizeAbsolute(requestedAbsoluteDirectory);
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory))

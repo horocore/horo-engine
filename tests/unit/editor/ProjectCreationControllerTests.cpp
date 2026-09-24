@@ -51,7 +51,7 @@ namespace {
         const ProjectCreationDraft draft = ProjectCreationController{DefaultAvailability()}.Draft();
         REQUIRE((draft.templateId == "3d-starter"));
         REQUIRE((draft.projectVersion == "0.1.0"));
-        REQUIRE((draft.defaultScene == "assets/scenes/main.horo"));
+        REQUIRE((draft.defaultScene == "Assets/Scenes/main.horo"));
         REQUIRE((draft.renderBackend == "opengl"));
         REQUIRE((draft.physicsEnabled));
         REQUIRE((draft.targetFrameRate == 60));
@@ -74,17 +74,17 @@ namespace {
 
         controller.SetTemplateId("custom");
         REQUIRE((controller.Draft().includeStarterContent));
-        REQUIRE((controller.Draft().defaultScene == "assets/scenes/main.horo"));
+        REQUIRE((controller.Draft().defaultScene == "Assets/Scenes/main.horo"));
 
         controller.SetTemplateId("empty");
         controller.SetTemplateId("package-based");
         REQUIRE((controller.Draft().includeStarterContent));
-        REQUIRE((controller.Draft().defaultScene == "assets/scenes/main.horo"));
+        REQUIRE((controller.Draft().defaultScene == "Assets/Scenes/main.horo"));
 
         controller.SetIncludeStarterContent(false);
         REQUIRE((controller.Draft().defaultScene.empty()));
         controller.SetIncludeStarterContent(true);
-        REQUIRE((controller.Draft().defaultScene == "assets/scenes/main.horo"));
+        REQUIRE((controller.Draft().defaultScene == "Assets/Scenes/main.horo"));
     }
 
     TEST_CASE("Rejects Blank And Path Like Names", "[unit][editor]") {

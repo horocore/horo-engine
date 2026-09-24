@@ -357,6 +357,7 @@ namespace Horo::Editor::Ui {
         float height{0.0F};
         ComponentSize componentSize{ComponentSize::Small};
         ComboControlSurface surface{ComboControlSurface::Default};
+        UiIcon leadingIcon{UiIcon::None}; /**< Optional semantic icon before the selected value. */
     };
 
     /** @brief Renders a styled dropdown with optional error styling. Returns true if the selection changed. */
@@ -510,9 +511,10 @@ namespace Horo::Editor::Ui {
      * @param label The label to show next to the checkbox.
      * @param value Pointer to the boolean state.
      * @param fonts The application font set.
+     * @param minimumBoxSize Optional minimum square size in logical pixels.
      * @return True when the checkbox was clicked.
      */
-    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts);
+    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts, float minimumBoxSize = 0.0F);
 
     // ── Higher-order helpers ─────────────────────────────────────────────
 
