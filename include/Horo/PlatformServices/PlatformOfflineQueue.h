@@ -343,10 +343,11 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<std::vector<PlatformOfflineIntentId>> Expire(TimePoint now);
 
         /**
-         * @brief Begins an operation before its earliest live receipt expires.
+         * @brief Begins an operation after the owner explicitly processes due expiries.
          * @param operation Aggregate operation handle.
          * @param now Monotonic time supplied by the queue owner.
-         * @return Applied/unchanged, or expired/stale/invalid-transition failure.
+         * @return Applied/unchanged, or expired/stale/invalid-transition failure. Call Expire(now) first and persist/publish its
+         * returned receipt IDs before dispatch. This method does not expire receipts itself.
          */
         [[nodiscard]] Result<PlatformRequestMutation> MarkDispatching(PlatformOfflineOperationHandle operation, TimePoint now);
 
@@ -368,7 +369,8 @@ namespace Horo::PlatformServices {
          * @brief Abandons only unsent pending or suspended work; it never requests provider cancellation.
          * @param operation Aggregate operation handle.
          * @param now Monotonic time supplied by the queue owner.
-         * @return Applied/unchanged, or expired/stale/invalid-transition failure.
+         * @return Applied/unchanged, or expired/stale/invalid-transition failure. Call Expire(now) first; this method leaves due
+         * receipts unchanged so the owner can persist/publish their expiry IDs.
          */
         [[nodiscard]] Result<PlatformRequestMutation> CancelPending(PlatformOfflineOperationHandle operation, TimePoint now);
 
@@ -376,7 +378,8 @@ namespace Horo::PlatformServices {
          * @brief Resumes suspended work without resetting its original expiry.
          * @param operation Aggregate operation handle.
          * @param now Monotonic time supplied by the queue owner.
-         * @return Applied/unchanged, or expired/stale/invalid-transition failure.
+         * @return Applied/unchanged, or expired/stale/invalid-transition failure. Call Expire(now) first; this method leaves due
+         * receipts unchanged so the owner can persist/publish their expiry IDs.
          */
         [[nodiscard]] Result<PlatformRequestMutation> Resume(PlatformOfflineOperationHandle operation, TimePoint now);
 
@@ -433,6 +436,12 @@ namespace Horo::PlatformServices {
         [[nodiscard]] bool ConfigurationIsValid() const noexcept;
         /** @brief Advances the monotonic high-water mark. @param now Candidate timestamp. @return Success or invalid-time error. */
         [[nodiscard]] Result<void> ObserveTime(TimePoint now);
+        /**
+         * @brief Counts unsent receipts due at a timestamp so expiry output can be reserved before mutation.
+         * @param now Monotonic time supplied by the queue owner.
+         * @return Number of newly due pending or suspended receipts.
+         */
+        [[nodiscard]] std::size_t DueReceiptCount(TimePoint now) const noexcept;
         /** @brief Adds a bounded lifetime without overflowing the monotonic clock. @param time Base time. @param age Lifetime. @return Safe
          * deadline. */
         [[nodiscard]] static std::optional<TimePoint> AddAge(TimePoint time, std::chrono::seconds age) noexcept;
@@ -446,8 +455,6 @@ namespace Horo::PlatformServices {
         /** @brief Admits a new aggregate after joining/coalescing was ruled out. @return New admission or typed capacity failure. */
         [[nodiscard]] Result<PlatformOfflineAdmission> AdmitFresh(PlatformOfflineIntent intent, TimePoint now, TimePoint expiresAt,
                                                                   State *tail);
-        /** @brief Marks active presence receipts as superseded. @return Superseded producer identities. */
-        [[nodiscard]] std::vector<PlatformOfflineIntentId> SupersedePresence(State &tail, TimePoint now);
         /** @brief Checks whether all active receipts in a state remain before their deadlines. @return True when live. */
         [[nodiscard]] static bool ReceiptsRemainLive(const State &state, TimePoint now);
         /** @brief Copies immutable operation and receipt state. @param state Queue-owned record. @return Detached snapshot. */

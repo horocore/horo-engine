@@ -1206,6 +1206,7 @@ add_executable(HoroPlatformTests
 target_compile_features(HoroPlatformTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
 add_executable(HoroPlatformRequestTests
+        support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
         unit/platform_services/PlatformOfflineQueueTests.cpp
@@ -1217,6 +1218,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformUserSessionTests.cpp
 )
 target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
+target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
 add_executable(HoroGameplayBuildServiceTests
         unit/application/GameplayBuildServiceTests.cpp

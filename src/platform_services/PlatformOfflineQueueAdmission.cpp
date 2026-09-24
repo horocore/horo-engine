@@ -205,21 +205,6 @@ namespace Horo::PlatformServices {
             PlatformOfflineAdmission{.disposition = PlatformOfflineAdmissionDisposition::Coalesced, .operation = tail->handle});
     }
 
-    std::vector<PlatformOfflineIntentId> PlatformOfflineQueue::SupersedePresence(State &tail, const TimePoint now) {
-        std::vector<PlatformOfflineIntentId> superseded;
-        for (auto &receipt : tail.receipts) {
-            if (!IsActive(receipt.state))
-                continue;
-            receipt.state = PlatformOfflineIntentState::Superseded;
-            receipt.terminalAt = now;
-            --activeIntentCount_;
-            superseded.push_back(receipt.intent.id);
-        }
-        tail.state = PlatformOfflineOperationState::Terminal;
-        tail.terminalAt = now;
-        return superseded;
-    }
-
     Result<PlatformOfflineAdmission> PlatformOfflineQueue::AdmitFresh(PlatformOfflineIntent intent, const TimePoint now,
                                                                       const TimePoint expiresAt, State *const tail) {
         const bool replacingPresence =
@@ -238,20 +223,45 @@ namespace Horo::PlatformServices {
             ActiveForSubject(subject) + 1U - replacedCount > config_.perSubjectActiveCapacity || nextSequence_ == 0)
             return Result<PlatformOfflineAdmission>::Failure(MakeError(OfflineQueueErrors::CapacityExceeded));
 
-        auto superseded = presenceTail == nullptr ? std::vector<PlatformOfflineIntentId>{} : SupersedePresence(*presenceTail, now);
-        const auto handle = PlatformOfflineOperationHandle{.generation = config_.generation, .sequence = nextSequence_++};
-        operations_.push_back(State{.handle = handle,
-                                    .lane = intent.lane,
-                                    .operation = intent.operation,
-                                    .state = PlatformOfflineOperationState::Pending,
-                                    .receipts = {State::Receipt{.intent = std::move(intent), .admittedAt = now, .expiresAt = expiresAt}}});
+        std::vector<PlatformOfflineIntentId> superseded;
+        if (presenceTail != nullptr) {
+            superseded.reserve(replacedCount);
+            for (const auto &receipt : presenceTail->receipts)
+                if (IsActive(receipt.state))
+                    superseded.push_back(receipt.intent.id);
+        }
+
+        const auto presenceTailIndex =
+            presenceTail == nullptr ? operations_.size() : static_cast<std::size_t>(presenceTail - operations_.data());
+        const auto handle = PlatformOfflineOperationHandle{.generation = config_.generation, .sequence = nextSequence_};
+        State freshOperation{.handle = handle,
+                             .lane = intent.lane,
+                             .operation = intent.operation,
+                             .state = PlatformOfflineOperationState::Pending,
+                             .receipts = {State::Receipt{.intent = std::move(intent), .admittedAt = now, .expiresAt = expiresAt}}};
+        PlatformOfflineAdmission admission{.disposition = replacingPresence ? PlatformOfflineAdmissionDisposition::PresenceSuperseded
+                                                                            : PlatformOfflineAdmissionDisposition::Accepted,
+                                           .operation = handle,
+                                           .superseded = std::move(superseded)};
+
+        operations_.reserve(operations_.size() + 1U);
+        operations_.push_back(std::move(freshOperation));
+        if (presenceTail != nullptr) {
+            auto &replaced = operations_[presenceTailIndex];
+            for (auto &receipt : replaced.receipts) {
+                if (!IsActive(receipt.state))
+                    continue;
+                receipt.state = PlatformOfflineIntentState::Superseded;
+                receipt.terminalAt = now;
+                --activeIntentCount_;
+            }
+            replaced.state = PlatformOfflineOperationState::Terminal;
+            replaced.terminalAt = now;
+        }
+        ++nextSequence_;
         ++activeIntentCount_;
         ++retainedIntentCount_;
-        return Result<PlatformOfflineAdmission>::Success(
-            PlatformOfflineAdmission{.disposition = replacingPresence ? PlatformOfflineAdmissionDisposition::PresenceSuperseded
-                                                                      : PlatformOfflineAdmissionDisposition::Accepted,
-                                     .operation = handle,
-                                     .superseded = std::move(superseded)});
+        return Result<PlatformOfflineAdmission>::Success(std::move(admission));
     }
 
     /** @copydoc PlatformOfflineQueue::ExpireDue */

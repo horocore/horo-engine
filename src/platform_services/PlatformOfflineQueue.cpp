@@ -38,6 +38,20 @@ namespace Horo::PlatformServices {
         return Result<void>::Success();
     }
 
+    /** @copydoc PlatformOfflineQueue::DueReceiptCount */
+    std::size_t PlatformOfflineQueue::DueReceiptCount(const TimePoint now) const noexcept {
+        using enum PlatformOfflineIntentState;
+        std::size_t dueCount{};
+        for (const auto &operation : operations_) {
+            if (operation.state != PlatformOfflineOperationState::Pending && operation.state != PlatformOfflineOperationState::Suspended)
+                continue;
+            dueCount += static_cast<std::size_t>(std::ranges::count_if(operation.receipts, [now](const State::Receipt &receipt) {
+                return (receipt.state == Pending || receipt.state == Suspended) && receipt.expiresAt <= now;
+            }));
+        }
+        return dueCount;
+    }
+
     /** @copydoc PlatformOfflineQueue::AddAge */
     std::optional<PlatformOfflineQueue::TimePoint> PlatformOfflineQueue::AddAge(const TimePoint time,
                                                                                 const std::chrono::seconds age) noexcept {
@@ -87,6 +101,7 @@ namespace Horo::PlatformServices {
         if (const auto observed = ObserveTime(now); observed.HasError())
             return Result<std::vector<PlatformOfflineIntentId>>::Failure(observed.ErrorValue());
         std::vector<PlatformOfflineIntentId> expired;
+        expired.reserve(DueReceiptCount(now));
         for (auto &operation : operations_)
             ExpireDue(operation, now, &expired);
         return Result<std::vector<PlatformOfflineIntentId>>::Success(std::move(expired));

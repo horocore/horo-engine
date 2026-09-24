@@ -972,6 +972,9 @@ core is in-memory policy state: it does not report durable acceptance or schedul
 provider. A durable owner must atomically persist its transitions before publishing
 durable receipts or dispatching work. Expired, superseded and compacted identities
 remain observable as non-success outcomes.
+The owner calls `Expire(now)` before dispatch, cancellation or resumption and persists
+or publishes the returned receipt IDs before the next transition; those lifecycle
+methods leave due receipts untouched when that expiry pass has not occurred.
 
 The ADR-136 `PlatformOfflineQueue` is the only durable owner for replay-eligible
 progression and explicitly opted-in presence desired state. It stores canonical Horo

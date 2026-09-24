@@ -34,11 +34,12 @@ namespace Horo::PlatformServices {
         if (record->state != PlatformOfflineOperationState::Pending)
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
 
-        for (auto &candidate : operations_)
-            if (candidate.lane == record->lane && candidate.handle.sequence <= record->handle.sequence)
-                ExpireDue(candidate, now, nullptr);
-        if (record->state == PlatformOfflineOperationState::Terminal)
-            return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::Expired));
+        for (const auto &candidate : operations_)
+            if (candidate.lane == record->lane && candidate.handle.sequence <= record->handle.sequence &&
+                (candidate.state == PlatformOfflineOperationState::Pending ||
+                 candidate.state == PlatformOfflineOperationState::Suspended) &&
+                !ReceiptsRemainLive(candidate, now))
+                return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::Expired));
         if (record->state != PlatformOfflineOperationState::Pending)
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
         if (const auto earlierLaneWork = std::ranges::any_of(operations_,
@@ -115,8 +116,7 @@ namespace Horo::PlatformServices {
         if (record->state != PlatformOfflineOperationState::Pending && record->state != PlatformOfflineOperationState::Suspended)
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
 
-        ExpireDue(*record, now, nullptr);
-        if (record->state == PlatformOfflineOperationState::Terminal)
+        if (!ReceiptsRemainLive(*record, now))
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::Expired));
         for (auto &receipt : record->receipts) {
             if (!IsActiveReceipt(receipt.state))
@@ -143,8 +143,7 @@ namespace Horo::PlatformServices {
             return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Unchanged);
         if (record->state != PlatformOfflineOperationState::Suspended)
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::InvalidTransition));
-        ExpireDue(*record, now, nullptr);
-        if (record->state == PlatformOfflineOperationState::Terminal)
+        if (!ReceiptsRemainLive(*record, now))
             return Result<PlatformRequestMutation>::Failure(MakeError(OfflineQueueErrors::Expired));
         record->state = PlatformOfflineOperationState::Pending;
         for (auto &receipt : record->receipts)
@@ -211,6 +210,7 @@ namespace Horo::PlatformServices {
             return Result<std::vector<PlatformOfflineIntentId>>::Success({});
 
         std::vector<PlatformOfflineIntentId> expired;
+        expired.reserve(DueReceiptCount(now));
         for (auto &operation : operations_) {
             ExpireDue(operation, now, &expired);
             if (operation.state == PlatformOfflineOperationState::Pending) {
