@@ -6,6 +6,7 @@
 #include <array>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::PlatformServices {
@@ -47,35 +48,38 @@ namespace Horo::PlatformServices {
         };
 
         [[nodiscard]] bool IsKnown(const PlatformServiceIdKind kind) noexcept {
+            using enum PlatformServiceIdKind;
             switch (kind) {
-                case PlatformServiceIdKind::Achievement:
-                case PlatformServiceIdKind::Leaderboard:
-                case PlatformServiceIdKind::Stat:
-                case PlatformServiceIdKind::PresenceStatus:
+                case Achievement:
+                case Leaderboard:
+                case Stat:
+                case PresenceStatus:
                     return true;
             }
             return false;
         }
 
         [[nodiscard]] bool IsKnown(const PlatformProgressionMutationKind kind) noexcept {
+            using enum PlatformProgressionMutationKind;
             switch (kind) {
-                case PlatformProgressionMutationKind::UnlockOnce:
-                case PlatformProgressionMutationKind::SetProgressMaximum:
-                case PlatformProgressionMutationKind::SetStatMaximum:
-                case PlatformProgressionMutationKind::SetStatMinimum:
-                case PlatformProgressionMutationKind::SetStatSnapshot:
-                case PlatformProgressionMutationKind::AddStatOnce:
-                case PlatformProgressionMutationKind::SubmitBestScore:
-                case PlatformProgressionMutationKind::ReplaceScoreAtRevision:
+                case UnlockOnce:
+                case SetProgressMaximum:
+                case SetStatMaximum:
+                case SetStatMinimum:
+                case SetStatSnapshot:
+                case AddStatOnce:
+                case SubmitBestScore:
+                case ReplaceScoreAtRevision:
                     return true;
             }
             return false;
         }
 
         [[nodiscard]] bool IsKnown(const ProgressionAuthorityMode authority) noexcept {
+            using enum ProgressionAuthorityMode;
             switch (authority) {
-                case ProgressionAuthorityMode::LocalProduct:
-                case ProgressionAuthorityMode::AuthorityServer:
+                case LocalProduct:
+                case AuthorityServer:
                     return true;
             }
             return false;
@@ -92,56 +96,77 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] bool DefinitionMatches(const PlatformServiceIdKind definitionKind,
                                              const PlatformProgressionMutationKind mutationKind) noexcept {
+            using enum PlatformProgressionMutationKind;
+            using enum PlatformServiceIdKind;
             switch (mutationKind) {
-                case PlatformProgressionMutationKind::UnlockOnce:
-                case PlatformProgressionMutationKind::SetProgressMaximum:
-                    return definitionKind == PlatformServiceIdKind::Achievement;
-                case PlatformProgressionMutationKind::SetStatMaximum:
-                case PlatformProgressionMutationKind::SetStatMinimum:
-                case PlatformProgressionMutationKind::SetStatSnapshot:
-                case PlatformProgressionMutationKind::AddStatOnce:
-                    return definitionKind == PlatformServiceIdKind::Stat;
-                case PlatformProgressionMutationKind::SubmitBestScore:
-                case PlatformProgressionMutationKind::ReplaceScoreAtRevision:
-                    return definitionKind == PlatformServiceIdKind::Leaderboard;
+                case UnlockOnce:
+                case SetProgressMaximum:
+                    return definitionKind == Achievement;
+                case SetStatMaximum:
+                case SetStatMinimum:
+                case SetStatSnapshot:
+                case AddStatOnce:
+                    return definitionKind == Stat;
+                case SubmitBestScore:
+                case ReplaceScoreAtRevision:
+                    return definitionKind == Leaderboard;
             }
             return false;
         }
 
-        [[nodiscard]] bool ValidateSemanticFields(const PlatformProgressionSessionScope &scope, const PlatformServiceIdKind definitionKind,
-                                                  const PlatformServiceStableIdValue definition,
-                                                  const PlatformProgressionMutationKind mutationKind, const PlatformProgressionValue &value,
-                                                  const std::optional<std::uint64_t> expectedRevision,
-                                                  const ProgressionAuthorityMode authority,
-                                                  const PlatformProgressionPolicyRevision policy) noexcept {
-            if (!scope.IsValid() || !IsKnown(definitionKind) || !definition.IsValid() || !IsKnown(mutationKind) ||
-                !DefinitionMatches(definitionKind, mutationKind) || !IsKnown(authority) || !policy.IsValid())
+        struct SemanticFields final {
+            const PlatformProgressionSessionScope &scope;
+            PlatformServiceIdKind definitionKind;
+            PlatformServiceStableIdValue definition;
+            PlatformProgressionMutationKind mutationKind;
+            const PlatformProgressionValue &value;
+            const std::optional<std::uint64_t> &expectedRevision;
+            ProgressionAuthorityMode authority;
+            PlatformProgressionPolicyRevision policy;
+        };
+
+        [[nodiscard]] bool ValidateSemanticFields(const SemanticFields &fields) noexcept {
+            if (!fields.scope.IsValid() || !IsKnown(fields.definitionKind) || !fields.definition.IsValid() ||
+                !IsKnown(fields.mutationKind) || !DefinitionMatches(fields.definitionKind, fields.mutationKind) ||
+                !IsKnown(fields.authority) || !fields.policy.IsValid())
                 return false;
 
-            if (mutationKind == PlatformProgressionMutationKind::UnlockOnce) {
-                if (!std::holds_alternative<std::monostate>(value) || expectedRevision.has_value())
+            if (fields.mutationKind == PlatformProgressionMutationKind::UnlockOnce) {
+                if (!std::holds_alternative<std::monostate>(fields.value) || fields.expectedRevision.has_value())
                     return false;
-            } else if (!IsNumeric(value)) {
+            } else if (!IsNumeric(fields.value)) {
                 return false;
             }
 
-            if (RequiresRevision(mutationKind))
-                return expectedRevision.has_value() && *expectedRevision != 0;
-            return !expectedRevision.has_value();
+            if (RequiresRevision(fields.mutationKind))
+                return fields.expectedRevision.has_value() && *fields.expectedRevision != 0;
+            return !fields.expectedRevision.has_value();
         }
 
         [[nodiscard]] Result<void> ValidateCandidate(const PlatformProgressionMutationCandidate &candidate) {
-            if (!candidate.occurrence.IsValid() ||
-                !ValidateSemanticFields(candidate.scope, candidate.definitionKind, candidate.definition, candidate.kind, candidate.value,
-                                        candidate.expectedRevision, candidate.authority, candidate.policy))
+            if (!candidate.occurrence.IsValid() || !ValidateSemanticFields(SemanticFields{.scope = candidate.scope,
+                                                                                          .definitionKind = candidate.definitionKind,
+                                                                                          .definition = candidate.definition,
+                                                                                          .mutationKind = candidate.kind,
+                                                                                          .value = candidate.value,
+                                                                                          .expectedRevision = candidate.expectedRevision,
+                                                                                          .authority = candidate.authority,
+                                                                                          .policy = candidate.policy}))
                 return Result<void>::Failure(MakeError(PlatformProgressionErrors::InvalidMutation));
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> ValidateEnvelope(const PlatformProgressionMutationEnvelope &envelope) {
-            if (!envelope.mutation.IsValid() ||
-                !ValidateSemanticFields(envelope.scope, envelope.definitionKind, envelope.definition, envelope.kind, envelope.value,
-                                        envelope.expectedRevision, envelope.authority, envelope.policy))
+            if (!envelope.mutation.IsValid())
+                return Result<void>::Failure(MakeError(PlatformProgressionErrors::InvalidMutation));
+            if (!ValidateSemanticFields(SemanticFields{.scope = envelope.scope,
+                                                       .definitionKind = envelope.definitionKind,
+                                                       .definition = envelope.definition,
+                                                       .mutationKind = envelope.kind,
+                                                       .value = envelope.value,
+                                                       .expectedRevision = envelope.expectedRevision,
+                                                       .authority = envelope.authority,
+                                                       .policy = envelope.policy}))
                 return Result<void>::Failure(MakeError(PlatformProgressionErrors::InvalidMutation));
             return Result<void>::Success();
         }
@@ -155,12 +180,15 @@ namespace Horo::PlatformServices {
             writer.AddU64(candidate.definition.value);
             writer.AddByte(static_cast<std::byte>(candidate.kind));
             writer.AddByte(static_cast<std::byte>(candidate.value.index()));
-            if (const auto *signedValue = std::get_if<std::int64_t>(&candidate.value))
-                writer.AddU64(static_cast<std::uint64_t>(*signedValue));
-            else if (const auto *unsignedValue = std::get_if<std::uint64_t>(&candidate.value))
-                writer.AddU64(*unsignedValue);
+            std::visit([&writer](const auto &value) {
+                using Value = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Value, std::int64_t>)
+                    writer.AddU64(static_cast<std::uint64_t>(value));
+                else if constexpr (std::is_same_v<Value, std::uint64_t>)
+                    writer.AddU64(value);
+            }, candidate.value);
             writer.AddByte(static_cast<std::byte>(candidate.expectedRevision.has_value()));
-            if (candidate.expectedRevision)
+            if (candidate.expectedRevision.has_value())
                 writer.AddU64(*candidate.expectedRevision);
             writer.AddByte(static_cast<std::byte>(candidate.authority));
             writer.AddU64(candidate.policy.value);
@@ -169,14 +197,20 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformProgressionMutationEnvelope::IsValid */
     bool PlatformProgressionMutationEnvelope::IsValid() const noexcept {
-        return ValidateSemanticFields(scope, definitionKind, definition, kind, value, expectedRevision, authority, policy) &&
+        return ValidateSemanticFields(SemanticFields{.scope = scope,
+                                                     .definitionKind = definitionKind,
+                                                     .definition = definition,
+                                                     .mutationKind = kind,
+                                                     .value = value,
+                                                     .expectedRevision = expectedRevision,
+                                                     .authority = authority,
+                                                     .policy = policy}) &&
                mutation.IsValid();
     }
 
     /** @copydoc GeneratePlatformProgressionMutationId */
     Result<PlatformProgressionMutationId> GeneratePlatformProgressionMutationId(const PlatformProgressionMutationCandidate &candidate) {
-        const auto valid = ValidateCandidate(candidate);
-        if (valid.HasError())
+        if (const auto valid = ValidateCandidate(candidate); valid.HasError())
             return Result<PlatformProgressionMutationId>::Failure(valid.ErrorValue());
 
         CanonicalWriter writer;
@@ -223,18 +257,18 @@ namespace Horo::PlatformServices {
     Result<PlatformProgressionAdmission> PlatformProgressionIdempotencyStore::Admit(const PlatformProgressionMutationEnvelope &envelope) {
         if (config_.maximumInFlight == 0)
             return Result<PlatformProgressionAdmission>::Failure(MakeError(PlatformProgressionErrors::InvalidConfiguration));
-        const auto valid = ValidateEnvelope(envelope);
-        if (valid.HasError())
+        if (const auto valid = ValidateEnvelope(envelope); valid.HasError())
             return Result<PlatformProgressionAdmission>::Failure(valid.ErrorValue());
 
         std::lock_guard lock(mutex_);
         if (closed_)
             return Result<PlatformProgressionAdmission>::Failure(MakeError(PlatformProgressionErrors::Closed));
 
-        const auto existing = std::ranges::find_if(records_, [&envelope](const Record &record) {
+        if (const auto existing = std::ranges::find_if(records_,
+                                                       [&envelope](const Record &record) {
             return record.envelope.mutation == envelope.mutation;
         });
-        if (existing != records_.end()) {
+            existing != records_.end()) {
             if (existing->envelope != envelope)
                 return Result<PlatformProgressionAdmission>::Failure(MakeError(PlatformProgressionErrors::IdempotencyConflict));
             return Result<PlatformProgressionAdmission>::Success(
@@ -254,8 +288,7 @@ namespace Horo::PlatformServices {
         const PlatformProgressionMutationEnvelope &envelope) {
         if (config_.maximumInFlight == 0)
             return Result<PlatformProgressionRetireDisposition>::Failure(MakeError(PlatformProgressionErrors::InvalidConfiguration));
-        const auto valid = ValidateEnvelope(envelope);
-        if (valid.HasError())
+        if (const auto valid = ValidateEnvelope(envelope); valid.HasError())
             return Result<PlatformProgressionRetireDisposition>::Failure(valid.ErrorValue());
 
         std::lock_guard lock(mutex_);
