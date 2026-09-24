@@ -1208,8 +1208,8 @@ target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
 add_executable(HoroPlatformRequestTests
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
-        unit/platform_services/PlatformProjectConfigurationTests.cpp
         unit/platform_services/PlatformProgressionIdempotencyTests.cpp
+        unit/platform_services/PlatformProjectConfigurationTests.cpp
         unit/platform_services/PlatformRequestTests.cpp
         unit/platform_services/PlatformServicesBackendTests.cpp
         unit/platform_services/PlatformServicesFrontendTests.cpp

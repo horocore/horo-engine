@@ -78,8 +78,8 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/AchievementDefinitionRegistry.h
     Horo/PlatformServices/PlatformDefinitionRegistries.h
-    Horo/PlatformServices/PlatformProjectConfiguration.h
     Horo/PlatformServices/PlatformProgressionIdempotency.h
+    Horo/PlatformServices/PlatformProjectConfiguration.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
     Horo/PlatformServices/PlatformServiceInterfaces.h

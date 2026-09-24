@@ -15,6 +15,10 @@ namespace Horo::PlatformServices {
         class CanonicalWriter final {
         public:
             void AddByte(const std::byte value) noexcept {
+                if (size_ == bytes_.size()) {
+                    overflowed_ = true;
+                    return;
+                }
                 bytes_[size_++] = value;
             }
 
@@ -32,9 +36,14 @@ namespace Horo::PlatformServices {
                 return {bytes_.data(), size_};
             }
 
+            [[nodiscard]] bool IsValid() const noexcept {
+                return !overflowed_;
+            }
+
         private:
             std::array<std::byte, 256> bytes_{};
             std::size_t size_{};
+            bool overflowed_{};
         };
 
         [[nodiscard]] bool IsKnown(const PlatformServiceIdKind kind) noexcept {
@@ -174,6 +183,8 @@ namespace Horo::PlatformServices {
         writer.AddBytes(std::as_bytes(std::span<const char>{MutationDomain.data(), MutationDomain.size()}));
         writer.AddByte(std::byte{1});
         AppendCandidate(writer, candidate);
+        if (!writer.IsValid())
+            return Result<PlatformProgressionMutationId>::Failure(MakeError(PlatformProgressionErrors::InvalidMutation));
         const auto digest = ComputeSha256(writer.Bytes());
 
         PlatformProgressionMutationId mutation;
@@ -204,7 +215,9 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformProgressionIdempotencyStore::PlatformProgressionIdempotencyStore */
     PlatformProgressionIdempotencyStore::PlatformProgressionIdempotencyStore(const PlatformProgressionIdempotencyConfig config)
-        : config_(config) {}
+        : config_(config) {
+        records_.reserve(config_.maximumInFlight);
+    }
 
     /** @copydoc PlatformProgressionIdempotencyStore::Admit */
     Result<PlatformProgressionAdmission> PlatformProgressionIdempotencyStore::Admit(const PlatformProgressionMutationEnvelope &envelope) {
