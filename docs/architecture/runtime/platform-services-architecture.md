@@ -540,6 +540,18 @@ ordinary replacement, while semantic changes or removal without an ADR-132 tombs
 require an explicit migration. Provider mappings remain opaque ADR-132 inputs rather
 than definition fields.
 
+Implementation status for PLS-004.4: `PlatformStatCacheCoordinator` owns the
+provider-neutral read-through stat cache and authoritative write boundary. Cache
+records are bounded and partitioned by the equality-only subject handle plus exact
+provider/session/access generations and the stat-registry fingerprint. A fresh hit
+is explicitly distinguishable from a stale or corrupt record; stale/corrupt state
+produces an explicit provider-query disposition rather than current success.
+Snapshot writes require an exact provider revision, every accepted write carries a
+bounded typed mutation identity, and conflicting reuse is rejected. Successful
+provider evidence refreshes the cache only after the current session and stat schema
+are revalidated. Protected storage may restore detached cache records atomically,
+but this coordinator never serializes raw account identifiers or calls a provider.
+
 ### Cloud Save
 
 Cloud save is authenticated transport of opaque complete objects. It is not a
