@@ -1,18 +1,21 @@
 #include "Horo/Extensions/EditorCommandRegistry.h"
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace Horo::Extensions::Tests {
     namespace {
-        [[nodiscard]] ExtensionCapabilityAdmission Admission() {
+        [[nodiscard]] ExtensionCapabilityAdmission Admission(const std::uint64_t activationGeneration = 3U) {
             const ExtensionAdmissionRequest request{
                 .extensionId = "com.example.extension",
                 .moduleId = "com.example.editor",
-                .activationGeneration = 3,
+                .activationGeneration = activationGeneration,
                 .capabilities = {{{"editor.asset.query"}, {}}},
             };
             const ExtensionAdmissionPolicy policy{
@@ -25,7 +28,8 @@ namespace Horo::Extensions::Tests {
         }
 
         [[nodiscard]] EditorSurfaceContextDescriptor SurfaceContext(const EditorSurfaceKind kind, const std::string &surfaceId,
-                                                                    const std::string &commandId, const bool requiresCapability = false) {
+                                                                    const std::string &commandId, const bool requiresCapability = false,
+                                                                    const std::uint64_t activationGeneration = 3U) {
             const auto placementKind = kind == EditorSurfaceKind::MenuItem        ? EditorSurfacePlacementKind::Menu
                                        : kind == EditorSurfaceKind::ToolbarAction ? EditorSurfacePlacementKind::Toolbar
                                        : kind == EditorSurfaceKind::StatusItem    ? EditorSurfacePlacementKind::StatusBar
@@ -46,7 +50,7 @@ namespace Horo::Extensions::Tests {
                         .placement = EditorSurfacePlacement{placementKind, placementTarget, 10},
                         .requiredCapabilities = requiresCapability ? std::vector<ExtensionCapabilityId>{{"editor.asset.query"}}
                                                                    : std::vector<ExtensionCapabilityId>{},
-                        .provider = EditorSurfaceProviderIdentity{"com.example.extension", "com.example.editor", 3},
+                        .provider = EditorSurfaceProviderIdentity{"com.example.extension", "com.example.editor", activationGeneration},
                     },
                 .commands = {{commandId}},
                 .localization = {{"editor.surface.label"}, {"editor.surface.tooltip"}, {label}, {tooltip}},
@@ -131,9 +135,12 @@ namespace Horo::Extensions::Tests {
 
         auto firstContext =
             Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.first", "editor.save"));
-        auto first = registry.Register(std::move(firstContext), Command("editor.save", "save", "Ctrl+S"));
+        auto first = registry.Register(std::move(firstContext), Command("editor.save", "save", "SHIFT+control+s"));
         REQUIRE(first.HasValue());
         auto firstRegistration = std::move(first).Value();
+        const auto normalizedSnapshot = registry.Snapshot();
+        REQUIRE(normalizedSnapshot.size() == 1U);
+        CHECK(normalizedSnapshot.front().command.shortcut == "Ctrl+Shift+S");
 
         auto duplicateContext =
             Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.duplicate", "editor.save"));
@@ -142,7 +149,7 @@ namespace Horo::Extensions::Tests {
 
         auto shortcutContext =
             Attach(provider, admission, SurfaceContext(EditorSurfaceKind::ToolbarAction, "com.example.toolbar", "editor.run"));
-        RequireError(registry.Register(std::move(shortcutContext), Command("editor.run", "run", "Ctrl+S")),
+        RequireError(registry.Register(std::move(shortcutContext), Command("editor.run", "run", "shift+ctrl+s")),
                      "editor_command_shortcut_conflict");
 
         const auto diagnostics = registry.Diagnostics();
@@ -151,8 +158,116 @@ namespace Horo::Extensions::Tests {
         CHECK(diagnostics[0].commandId == "editor.save");
         CHECK(diagnostics[1].kind == EditorCommandDiagnosticKind::ShortcutConflict);
         CHECK(diagnostics[1].conflictingCommandId == "editor.save");
-        CHECK(diagnostics[1].shortcut == "Ctrl+S");
+        CHECK(diagnostics[1].shortcut == "Ctrl+Shift+S");
         CHECK(firstRegistration.IsRegistered());
+    }
+
+    TEST_CASE("Editor command registry admits higher priority commands at capacity", "[Extensions][EditorCommand]") {
+        ExtensionCapabilityAdmission admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorCommandRegistryLimits limits;
+        limits.maximumCommands = 1U;
+        EditorCommandRegistry registry{limits};
+
+        auto firstContext =
+            Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.first", "editor.first"));
+        auto firstCommand = Command("editor.first", "first");
+        firstCommand.priority = 4;
+        auto first = registry.Register(std::move(firstContext), std::move(firstCommand));
+        REQUIRE(first.HasValue());
+        auto firstRegistration = std::move(first).Value();
+
+        auto lowerContext =
+            Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.lower", "editor.lower"));
+        auto lowerCommand = Command("editor.lower", "lower");
+        lowerCommand.priority = 3;
+        RequireError(registry.Register(std::move(lowerContext), std::move(lowerCommand)), "editor_command_capacity_exceeded");
+        CHECK(firstRegistration.IsRegistered());
+
+        auto tiedContext = Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.tied", "editor.tied"));
+        auto tiedCommand = Command("editor.tied", "tied");
+        tiedCommand.priority = 4;
+        RequireError(registry.Register(std::move(tiedContext), std::move(tiedCommand)), "editor_command_capacity_exceeded");
+        CHECK(firstRegistration.IsRegistered());
+
+        auto higherContext =
+            Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.higher", "editor.higher"));
+        auto higherCommand = Command("editor.higher", "higher");
+        higherCommand.priority = 5;
+        auto higher = registry.Register(std::move(higherContext), std::move(higherCommand));
+        REQUIRE(higher.HasValue());
+        auto higherRegistration = std::move(higher).Value();
+
+        CHECK_FALSE(firstRegistration.IsRegistered());
+        CHECK(higherRegistration.IsRegistered());
+        const auto snapshot = registry.Snapshot();
+        REQUIRE(snapshot.size() == 1U);
+        CHECK(snapshot.front().command.id.value == "editor.higher");
+    }
+
+    TEST_CASE("Editor command invocation does not route to a concurrently admitted replacement", "[Extensions][EditorCommand]") {
+        ExtensionCapabilityAdmission enabledAdmission = Admission(3U);
+        ExtensionCapabilityAdmission disabledAdmission = Admission(4U);
+        EditorSurfaceContextProvider provider;
+        EditorCommandRegistry registry;
+
+        auto initialContext = Attach(provider, enabledAdmission,
+                                     SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.concurrent", "editor.concurrent"));
+        auto initialCommand = Command("editor.concurrent", "concurrent");
+        initialCommand.predicates = {{EditorCommandPredicateKind::SurfaceOpen, "com.example.menu.concurrent", true}};
+        auto initial = registry.Register(std::move(initialContext), std::move(initialCommand));
+        REQUIRE(initial.HasValue());
+        auto currentRegistration = std::move(initial).Value();
+
+        std::vector<std::string_view> openSurfaces(100000U, "com.example.menu.other");
+        openSurfaces.push_back("com.example.menu.concurrent");
+        const EditorCommandEvaluationContext evaluation{.openSurfaceIds = openSurfaces};
+        std::atomic_bool finished{};
+        std::atomic_bool invokerStarted{};
+        std::atomic_bool invokedDisabledReplacement{};
+        std::thread invoker([&registry, &evaluation, &finished, &invokerStarted, &invokedDisabledReplacement] {
+            invokerStarted.store(true, std::memory_order_release);
+            while (!finished.load(std::memory_order_acquire)) {
+                const auto invocation = registry.Invoke("editor.concurrent", evaluation);
+                if (invocation.HasValue() && invocation.Value().provider.activationGeneration == 4U)
+                    invokedDisabledReplacement.store(true, std::memory_order_release);
+            }
+        });
+        while (!invokerStarted.load(std::memory_order_acquire))
+            std::this_thread::yield();
+
+        bool registrationFailed = false;
+        const std::vector<ExtensionCapabilityHandle> noGrants;
+        constexpr std::size_t replacementCount = 10000U;
+        for (std::size_t index = 0; index < replacementCount; ++index) {
+            currentRegistration.Reset();
+            const bool replacementEnabled = index % 2U != 0U;
+            const std::uint64_t generation = replacementEnabled ? 3U : 4U;
+            ExtensionCapabilityAdmission &admission = replacementEnabled ? enabledAdmission : disabledAdmission;
+            auto context = provider.Attach(SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.concurrent", "editor.concurrent",
+                                                          false, generation),
+                                           admission.ActivationLease(), noGrants);
+            if (context.HasError()) {
+                registrationFailed = true;
+                break;
+            }
+            auto command = Command("editor.concurrent", "concurrent");
+            command.predicates = {
+                {EditorCommandPredicateKind::SurfaceOpen, "com.example.menu.concurrent", replacementEnabled},
+            };
+            auto replacement = registry.Register(std::move(context).Value(), std::move(command));
+            if (replacement.HasError()) {
+                registrationFailed = true;
+                break;
+            }
+            currentRegistration = std::move(replacement).Value();
+            std::this_thread::yield();
+        }
+
+        finished.store(true, std::memory_order_release);
+        invoker.join();
+        CHECK_FALSE(registrationFailed);
+        CHECK_FALSE(invokedDisabledReplacement.load(std::memory_order_acquire));
     }
 
     TEST_CASE("Editor command registry accepts menu toolbar and status contributions in explicit order", "[Extensions][EditorCommand]") {

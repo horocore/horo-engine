@@ -49,9 +49,9 @@ namespace Horo::Extensions {
         EditorCommandId id;
         std::string labelLocalizationKey;   /**< Localized command label allowlisted by the surface context. */
         std::string tooltipLocalizationKey; /**< Optional localized command tooltip allowlisted by the surface context. */
-        std::string shortcut;               /**< Optional host-normalized shortcut identity. */
-        std::int32_t order{};               /**< Lower values are presented first. */
-        std::int32_t priority{};            /**< Higher values win host admission under pressure. */
+        std::string shortcut; /**< Optional single-key shortcut; modifiers normalize to Ctrl/Shift/Alt/Meta order and uppercase key text. */
+        std::int32_t order{}; /**< Lower values are presented first. */
+        std::int32_t priority{}; /**< Higher values are retained preferentially at capacity; ties keep existing commands. */
         std::vector<EditorCommandPredicate> predicates;
     };
 

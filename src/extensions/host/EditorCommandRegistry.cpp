@@ -3,8 +3,10 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <string_view>
 #include <utility>
@@ -64,12 +66,97 @@ namespace Horo::Extensions {
             return kind == EditorSurfaceKind::MenuItem || kind == EditorSurfaceKind::ToolbarAction || kind == EditorSurfaceKind::StatusItem;
         }
 
-        [[nodiscard]] bool IsValidShortcut(const std::string_view shortcut, const std::size_t maximumBytes) {
-            if (shortcut.empty() || shortcut.size() > maximumBytes || shortcut.front() == ' ' || shortcut.back() == ' ')
+        [[nodiscard]] bool EqualsAsciiCaseInsensitive(const std::string_view left, const std::string_view right) noexcept {
+            if (left.size() != right.size())
                 return false;
-            return std::ranges::all_of(shortcut, [](const unsigned char character) {
+            for (std::size_t index = 0; index < left.size(); ++index) {
+                const auto lowercase = [](const unsigned char character) {
+                    return character >= 'A' && character <= 'Z' ? static_cast<unsigned char>(character + ('a' - 'A')) : character;
+                };
+                if (lowercase(static_cast<unsigned char>(left[index])) != lowercase(static_cast<unsigned char>(right[index])))
+                    return false;
+            }
+            return true;
+        }
+
+        enum class ShortcutModifier : std::uint8_t {
+            None,
+            Control,
+            Shift,
+            Alt,
+            Meta,
+        };
+
+        [[nodiscard]] ShortcutModifier ParseShortcutModifier(const std::string_view token) noexcept {
+            if (EqualsAsciiCaseInsensitive(token, "ctrl") || EqualsAsciiCaseInsensitive(token, "control"))
+                return ShortcutModifier::Control;
+            if (EqualsAsciiCaseInsensitive(token, "shift"))
+                return ShortcutModifier::Shift;
+            if (EqualsAsciiCaseInsensitive(token, "alt"))
+                return ShortcutModifier::Alt;
+            if (EqualsAsciiCaseInsensitive(token, "meta") || EqualsAsciiCaseInsensitive(token, "cmd") ||
+                EqualsAsciiCaseInsensitive(token, "command"))
+                return ShortcutModifier::Meta;
+            return ShortcutModifier::None;
+        }
+
+        [[nodiscard]] std::optional<std::string> NormalizeShortcut(const std::string_view shortcut, const std::size_t maximumBytes) {
+            if (shortcut.empty())
+                return std::string{};
+            if (shortcut.size() > maximumBytes || shortcut.front() == ' ' || shortcut.back() == ' ' ||
+                !std::ranges::all_of(shortcut, [](const unsigned char character) {
                 return character >= 0x21U && character <= 0x7eU;
-            });
+            }))
+                return std::nullopt;
+
+            std::array<bool, 4> modifiers{};
+            std::string_view key;
+            std::size_t start = 0U;
+            while (start <= shortcut.size()) {
+                const std::size_t separator = shortcut.find('+', start);
+                const std::size_t end = separator == std::string_view::npos ? shortcut.size() : separator;
+                const std::string_view token = shortcut.substr(start, end - start);
+                if (token.empty())
+                    return std::nullopt;
+
+                const ShortcutModifier modifier = ParseShortcutModifier(token);
+                if (modifier == ShortcutModifier::None) {
+                    if (!key.empty())
+                        return std::nullopt;
+                    key = token;
+                } else {
+                    const std::size_t modifierIndex = static_cast<std::size_t>(modifier) - 1U;
+                    if (modifiers[modifierIndex])
+                        return std::nullopt;
+                    modifiers[modifierIndex] = true;
+                }
+
+                if (separator == std::string_view::npos)
+                    break;
+                start = separator + 1U;
+            }
+            if (key.empty())
+                return std::nullopt;
+
+            std::string normalized;
+            normalized.reserve(shortcut.size());
+            constexpr std::array<std::string_view, 4> modifierNames{"Ctrl", "Shift", "Alt", "Meta"};
+            for (std::size_t index = 0; index < modifiers.size(); ++index) {
+                if (!modifiers[index])
+                    continue;
+                if (!normalized.empty())
+                    normalized += '+';
+                normalized += modifierNames[index];
+            }
+            if (!normalized.empty())
+                normalized += '+';
+            for (const unsigned char character : key) {
+                normalized +=
+                    character >= 'a' && character <= 'z' ? static_cast<char>(character - ('a' - 'A')) : static_cast<char>(character);
+            }
+            if (normalized.size() > maximumBytes)
+                return std::nullopt;
+            return normalized;
         }
 
         [[nodiscard]] bool ContainsCapability(const EditorSurfaceDescriptor &surface, const std::string_view capability) {
@@ -78,11 +165,16 @@ namespace Horo::Extensions {
             });
         }
 
-        [[nodiscard]] Result<void> ValidateDescriptor(const EditorSurfaceContext &context, const EditorCommandDescriptor &descriptor,
-                                                      const EditorCommandRegistryLimits &limits) {
+        [[nodiscard]] Result<void> ValidateRegistryLimits(const EditorCommandRegistryLimits &limits) {
             if (limits.maximumCommands == 0U || limits.maximumPredicates == 0U || limits.maximumIdentityBytes == 0U ||
                 limits.maximumShortcutBytes == 0U || limits.maximumLocalizationKeyBytes == 0U || limits.maximumDiagnostics == 0U)
                 return Invalid("Editor command registry limits must be non-zero.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateSurfaceAndCommandId(const EditorSurfaceContext &context,
+                                                               const EditorCommandDescriptor &descriptor,
+                                                               const EditorCommandRegistryLimits &limits) {
             if (!context.IsUsable())
                 return Result<void>::Failure(MakeError(ExtensionErrors::EditorCommandProviderRevoked));
             if (!IsSupportedSurface(context.Surface().kind))
@@ -91,6 +183,11 @@ namespace Horo::Extensions {
                 return Invalid("Editor command ID must be a canonical lowercase identity.");
             if (!context.Allows(EditorSurfaceCommandId{descriptor.id.value}))
                 return Invalid("Editor command ID is not allowlisted by its surface context.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateLocalizationKeys(const EditorSurfaceContext &context, const EditorCommandDescriptor &descriptor,
+                                                            const EditorCommandRegistryLimits &limits) {
             if (!IsCanonicalLocalizationKey(descriptor.labelLocalizationKey, limits.maximumLocalizationKeyBytes) ||
                 !context.Allows(EditorSurfaceLocalizationKey{descriptor.labelLocalizationKey}))
                 return Invalid("Editor command label must be a bounded localization key allowlisted by its surface context.");
@@ -98,8 +195,11 @@ namespace Horo::Extensions {
                 (!IsCanonicalLocalizationKey(descriptor.tooltipLocalizationKey, limits.maximumLocalizationKeyBytes) ||
                  !context.Allows(EditorSurfaceLocalizationKey{descriptor.tooltipLocalizationKey})))
                 return Invalid("Editor command tooltip must be a bounded localization key allowlisted by its surface context.");
-            if (!descriptor.shortcut.empty() && !IsValidShortcut(descriptor.shortcut, limits.maximumShortcutBytes))
-                return Invalid("Editor command shortcut is not a bounded printable identity.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidatePredicates(const EditorSurfaceContext &context, const EditorCommandDescriptor &descriptor,
+                                                      const EditorCommandRegistryLimits &limits) {
             if (descriptor.predicates.size() > limits.maximumPredicates)
                 return Invalid("Editor command predicate count exceeds the configured limit.");
 
@@ -126,6 +226,25 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> ValidateDescriptor(const EditorSurfaceContext &context, EditorCommandDescriptor &descriptor,
+                                                      const EditorCommandRegistryLimits &limits) {
+            if (Result<void> validation = ValidateRegistryLimits(limits); validation.HasError())
+                return validation;
+            if (Result<void> validation = ValidateSurfaceAndCommandId(context, descriptor, limits); validation.HasError())
+                return validation;
+            if (Result<void> validation = ValidateLocalizationKeys(context, descriptor, limits); validation.HasError())
+                return validation;
+            if (!descriptor.shortcut.empty()) {
+                std::optional<std::string> normalizedShortcut = NormalizeShortcut(descriptor.shortcut, limits.maximumShortcutBytes);
+                if (!normalizedShortcut.has_value())
+                    return Invalid("Editor command shortcut is not a valid bounded shortcut identity.");
+                descriptor.shortcut = std::move(*normalizedShortcut);
+            }
+            if (Result<void> validation = ValidatePredicates(context, descriptor, limits); validation.HasError())
+                return validation;
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] std::shared_ptr<EditorCommandEntry> FindEntry(const std::shared_ptr<EditorCommandRegistryState> &state,
                                                                     const std::string_view id) {
             std::scoped_lock lock{state->mutex};
@@ -137,14 +256,16 @@ namespace Horo::Extensions {
 
         void RemoveEntry(const std::shared_ptr<EditorCommandRegistryState> &state,
                          const std::shared_ptr<EditorCommandEntry> &entry) noexcept {
+            bool revokeContext = false;
             if (state != nullptr) {
                 std::scoped_lock lock{state->mutex};
-                entry->registered.store(false, std::memory_order_release);
+                revokeContext = entry->registered.exchange(false, std::memory_order_acq_rel);
                 std::erase(state->entries, entry);
             } else {
-                entry->registered.store(false, std::memory_order_release);
+                revokeContext = entry->registered.exchange(false, std::memory_order_acq_rel);
             }
-            entry->contextRegistration.Reset();
+            if (revokeContext)
+                entry->contextRegistration.Reset();
         }
 
         void AppendDiagnostic(EditorCommandRegistryState &state, EditorCommandDiagnostic diagnostic) {
@@ -254,43 +375,66 @@ namespace Horo::Extensions {
                                                                       EditorCommandDescriptor descriptor) {
         if (state_ == nullptr)
             return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
-        if (const Result<void> validation = ValidateDescriptor(context.Context(), descriptor, state_->limits); validation.HasError())
+        Result<void> validation = ValidateDescriptor(context.Context(), descriptor, state_->limits);
+        if (validation.HasError())
             return Result<EditorCommandRegistration>::Failure(std::move(validation).ErrorValue());
 
-        std::scoped_lock lock{state_->mutex};
-        if (state_->shutdown)
-            return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
-        if (state_->entries.size() >= state_->limits.maximumCommands)
-            return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandCapacityExceeded));
+        std::shared_ptr<EditorCommandEntry> displaced;
+        std::shared_ptr<EditorCommandEntry> entry;
+        {
+            std::scoped_lock lock{state_->mutex};
+            if (state_->shutdown)
+                return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
 
-        const auto duplicate = std::ranges::find_if(state_->entries, [&descriptor](const std::shared_ptr<EditorCommandEntry> &entry) {
-            return entry->descriptor.id.value == descriptor.id.value;
-        });
-        if (duplicate != state_->entries.end()) {
-            AppendDiagnostic(*state_, EditorCommandDiagnostic{.kind = EditorCommandDiagnosticKind::DuplicateId,
-                                                              .commandId = descriptor.id.value,
-                                                              .conflictingCommandId = (*duplicate)->descriptor.id.value,
-                                                              .detail = "The command ID is already published."});
-            return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandDuplicate, descriptor.id.value));
-        }
-        if (!descriptor.shortcut.empty()) {
-            const auto shortcutConflict =
-                std::ranges::find_if(state_->entries, [&descriptor](const std::shared_ptr<EditorCommandEntry> &entry) {
-                return entry->descriptor.shortcut == descriptor.shortcut;
+            if (const auto duplicate = std::ranges::find_if(state_->entries,
+                                                            [&descriptor](const std::shared_ptr<EditorCommandEntry> &registeredEntry) {
+                return registeredEntry->descriptor.id.value == descriptor.id.value;
             });
-            if (shortcutConflict != state_->entries.end()) {
-                AppendDiagnostic(*state_, EditorCommandDiagnostic{.kind = EditorCommandDiagnosticKind::ShortcutConflict,
+                duplicate != state_->entries.end()) {
+                AppendDiagnostic(*state_, EditorCommandDiagnostic{.kind = EditorCommandDiagnosticKind::DuplicateId,
                                                                   .commandId = descriptor.id.value,
-                                                                  .conflictingCommandId = (*shortcutConflict)->descriptor.id.value,
-                                                                  .shortcut = descriptor.shortcut,
-                                                                  .detail = "The shortcut is already claimed by another command."});
-                return Result<EditorCommandRegistration>::Failure(
-                    MakeError(ExtensionErrors::EditorCommandShortcutConflict, descriptor.shortcut));
+                                                                  .conflictingCommandId = (*duplicate)->descriptor.id.value,
+                                                                  .detail = "The command ID is already published."});
+                return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandDuplicate, descriptor.id.value));
             }
+
+            if (state_->entries.size() >= state_->limits.maximumCommands) {
+                const auto lowestPriority = std::ranges::min_element(state_->entries, [](const std::shared_ptr<EditorCommandEntry> &left,
+                                                                                         const std::shared_ptr<EditorCommandEntry> &right) {
+                    return left->descriptor.priority < right->descriptor.priority;
+                });
+                if (lowestPriority == state_->entries.end() || descriptor.priority <= (*lowestPriority)->descriptor.priority)
+                    return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandCapacityExceeded));
+                displaced = *lowestPriority;
+            }
+
+            if (!descriptor.shortcut.empty()) {
+                const auto shortcutConflict =
+                    std::ranges::find_if(state_->entries,
+                                         [&descriptor, &displaced](const std::shared_ptr<EditorCommandEntry> &registeredEntry) {
+                    return registeredEntry != displaced && registeredEntry->descriptor.shortcut == descriptor.shortcut;
+                });
+                if (shortcutConflict != state_->entries.end()) {
+                    AppendDiagnostic(*state_, EditorCommandDiagnostic{.kind = EditorCommandDiagnosticKind::ShortcutConflict,
+                                                                      .commandId = descriptor.id.value,
+                                                                      .conflictingCommandId = (*shortcutConflict)->descriptor.id.value,
+                                                                      .shortcut = descriptor.shortcut,
+                                                                      .detail = "The shortcut is already claimed by another command."});
+                    return Result<EditorCommandRegistration>::Failure(
+                        MakeError(ExtensionErrors::EditorCommandShortcutConflict, descriptor.shortcut));
+                }
+            }
+
+            entry = std::make_shared<EditorCommandEntry>(std::move(descriptor), std::move(context));
+            if (displaced != nullptr) {
+                (void)displaced->registered.exchange(false, std::memory_order_acq_rel);
+                std::erase(state_->entries, displaced);
+            }
+            state_->entries.push_back(entry);
         }
 
-        auto entry = std::make_shared<EditorCommandEntry>(std::move(descriptor), std::move(context));
-        state_->entries.push_back(entry);
+        if (displaced != nullptr)
+            displaced->contextRegistration.Reset();
         return Result<EditorCommandRegistration>::Success(EditorCommandRegistration{state_, std::move(entry)});
     }
 
@@ -310,17 +454,24 @@ namespace Horo::Extensions {
     /** @copydoc EditorCommandRegistry::Invoke */
     Result<EditorCommandInvocation> EditorCommandRegistry::Invoke(const std::string_view id,
                                                                   const EditorCommandEvaluationContext &evaluation) const {
-        const Result<EditorCommandState> state = Evaluate(id, evaluation);
-        if (state.HasError())
-            return Result<EditorCommandInvocation>::Failure(state.ErrorValue());
-        if (!state.Value().enabled)
+        if (state_ == nullptr)
+            return Result<EditorCommandInvocation>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
+        const std::shared_ptr<EditorCommandEntry> entry = FindEntry(state_, id);
+        if (entry == nullptr)
+            return Result<EditorCommandInvocation>::Failure(MakeError(ExtensionErrors::EditorCommandUnknown, std::string{id}));
+        if (!entry->registered.load(std::memory_order_acquire) || !entry->context.IsUsable())
+            return Result<EditorCommandInvocation>::Failure(MakeError(ExtensionErrors::EditorCommandProviderRevoked));
+        if (!IsEnabled(*entry, evaluation))
             return Result<EditorCommandInvocation>::Failure(MakeError(ExtensionErrors::EditorCommandNotEnabled, std::string{id}));
 
-        const std::shared_ptr<EditorCommandEntry> entry = FindEntry(state_, id);
-        if (entry == nullptr || !entry->registered.load(std::memory_order_acquire) || !entry->context.IsUsable())
+        EditorCommandInvocation invocation{
+            .id = entry->descriptor.id,
+            .provider = entry->context.Provider(),
+            .context = entry->context,
+        };
+        if (!entry->registered.load(std::memory_order_acquire) || !entry->context.IsUsable())
             return Result<EditorCommandInvocation>::Failure(MakeError(ExtensionErrors::EditorCommandProviderRevoked));
-        return Result<EditorCommandInvocation>::Success(
-            EditorCommandInvocation{.id = entry->descriptor.id, .provider = entry->context.Provider(), .context = entry->context});
+        return Result<EditorCommandInvocation>::Success(std::move(invocation));
     }
 
     /** @copydoc EditorCommandRegistry::Snapshot */
@@ -331,7 +482,7 @@ namespace Horo::Extensions {
         std::vector<EditorCommandSnapshot> snapshot;
         snapshot.reserve(state_->entries.size());
         for (const std::shared_ptr<EditorCommandEntry> &entry : state_->entries) {
-            if (!entry->registered.load(std::memory_order_acquire) || !entry->context.IsUsable())
+            if (!entry->context.IsUsable())
                 continue;
             snapshot.push_back(EditorCommandSnapshot{
                 .command = entry->descriptor,
