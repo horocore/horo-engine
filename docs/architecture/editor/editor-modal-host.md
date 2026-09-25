@@ -400,7 +400,7 @@ replace the normal confirmation with a shutdown-specific decision surface.
 
 ## Settings Modal
 
-See the HTML reference design: [settings-modal.html](./settings-modal.html).
+See the React mock design: [Settings Modal](../../../mock-studio/designs.md#architecture-editor-settings-modal).
 
 Editor Settings owns a draft settings model:
 
@@ -751,7 +751,7 @@ src/editor/modals/
   authoritative state.
 - [GUI Design System](./ui-design-system.md): modal primitives, focus, tokens,
   and accessibility.
-- [Editor Modal Host Examples](./editor-modal-host-example.html): HTML reference
+- [Editor Modal Host Examples](../../../mock-studio/designs.md#architecture-editor-editor-modal-host-example): React mock reference
   designs for alert, confirmation, and large workspace modals.
 - [GUI Screen Host](./gui-screen-host.md): top-level routes and the distinction
   between screens and modal workflows.

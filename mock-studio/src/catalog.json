@@ -1,0 +1,217 @@
+[
+  {
+    "id": "architecture/editor/asset-browser.html",
+    "title": "Asset Browser",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/localization-editor.html",
+    "title": "Localization",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/editor-modal-host-example.html",
+    "title": "Modal Host Examples",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/new-project-wizard.html",
+    "title": "New Project Wizard",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/project-settings.html",
+    "title": "Project Settings",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/settings-modal.html",
+    "title": "Settings",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/welcome-screen.html",
+    "title": "Welcome",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/editor/editor-workspace.html",
+    "title": "Workspace",
+    "group": "Editor"
+  },
+  {
+    "id": "architecture/extensions/module-config.html",
+    "title": "Gameplay Module",
+    "group": "Extensions"
+  },
+  {
+    "id": "architecture/extensions/plugin-manager.html",
+    "title": "Plugin Manager",
+    "group": "Extensions"
+  },
+  {
+    "id": "architecture/extensions/gameplay-behavior-editor.html",
+    "title": "Visual Behavior Graph",
+    "group": "Extensions"
+  },
+  {
+    "id": "architecture/interfaces/mcp-panel.html",
+    "title": "MCP Panel",
+    "group": "Interfaces"
+  },
+  {
+    "id": "architecture/observability/observability-dashboard.html",
+    "title": "Observability Dashboard",
+    "group": "Observability"
+  },
+  {
+    "id": "architecture/packages/package-manager.html",
+    "title": "Package Manager",
+    "group": "Packages"
+  },
+  {
+    "id": "ui-prototypes/loading-modal.html",
+    "title": "Horo Engine - Loading Project",
+    "group": "Prototypes"
+  },
+  {
+    "id": "architecture/release/release-modal-design.html",
+    "title": "Build & Release Modal",
+    "group": "Release"
+  },
+  {
+    "id": "architecture/runtime/animation-editor.html",
+    "title": "Animation Editor Improved",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/asset-import-modal.html",
+    "title": "Asset Import Modal",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/audio-mixer.html",
+    "title": "Audio Mixer",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/build-output.html",
+    "title": "Build Output",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/character-setup.html",
+    "title": "Character Setup",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/cinematic-sequencer.html",
+    "title": "Cinematic Sequencer",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/console-panel.html",
+    "title": "Console Panel",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/decal-placement.html",
+    "title": "Decal Placement",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/destruction-setup.html",
+    "title": "Destruction Setup",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/input-mapping-editor.html",
+    "title": "Input Mapping Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/lod-debugger.html",
+    "title": "LOD Debugger",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/material-editor.html",
+    "title": "Material Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/navigation-bake.html",
+    "title": "Navigation Bake",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/network-debugger.html",
+    "title": "Network Debugger",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/particle-editor.html",
+    "title": "Particle Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/pcg-graph-editor.html",
+    "title": "PCG Graph Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/physics-debugger.html",
+    "title": "Physics Debugger",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/platform-services-config.html",
+    "title": "Platform Services",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/post-processing-stack.html",
+    "title": "Post-Processing Stack",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/prefab-editor.html",
+    "title": "Prefab Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/render-settings.html",
+    "title": "Render Settings",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/save-load-manager.html",
+    "title": "Save / Load Manager",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/primitives-panel.html",
+    "title": "Scene Primitives",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/shader-graph-editor.html",
+    "title": "Shader Graph Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/ui-canvas-editor.html",
+    "title": "UI Canvas Editor",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/virtual-texturing-debug.html",
+    "title": "Virtual Texturing Debug",
+    "group": "Runtime"
+  },
+  {
+    "id": "architecture/runtime/xr-setup.html",
+    "title": "XR Setup",
+    "group": "Runtime"
+  }
+]

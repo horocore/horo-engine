@@ -409,5 +409,5 @@ Additional required cross-cutting tests:
 - [Quality And CI](../delivery/quality-and-ci.md)
 - [Release Architecture](../release/release.md)
 - [Release Security](../release/release-security.md)
-- [Observability Dashboard](./observability-dashboard.html): HTML reference design
+- [Observability Dashboard](../../../mock-studio/designs.md#architecture-observability-observability-dashboard): React mock design
   for logs, metrics, and profiler presentation surfaces.

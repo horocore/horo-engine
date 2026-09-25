@@ -48,6 +48,12 @@ and `CrashService` are optional because availability depends on host role,
 platform integration, and product policy. An operation requiring an unavailable
 capability returns a typed error.
 
+The graphical editor composes a `NativeDialogs` file and folder picker in its
+application host and lends it to the asset-import modal. The picker returns
+structured native paths; an empty file list or absent folder means the user
+cancelled. The modal holds an input-router `NativeDialog` token for the entire
+synchronous picker call. Headless modal callers omit this optional picker.
+
 The platform layer includes:
 
 - Windows, macOS, Linux, and Android implementations

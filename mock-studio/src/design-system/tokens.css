@@ -1,0 +1,16 @@
+:root {
+  --mock-bg: #11151a;
+  --mock-panel: #15191e;
+  --mock-surface: #1b2026;
+  --mock-input: #20262d;
+  --mock-border: #303740;
+  --mock-border-strong: #48525e;
+  --mock-text: #e3e7eb;
+  --mock-secondary: #b0b8c1;
+  --mock-muted: #87919c;
+  --mock-accent: #04a5fc;
+  --mock-success: #69c59b;
+  --mock-warning: #ffc247;
+  --mock-error: #ff706b;
+  --mock-radius: 5px;
+}
