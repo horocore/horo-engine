@@ -139,6 +139,14 @@ namespace Horo::Cinematic {
     };
 
     /**
+     * @brief Maps validated authored playback defaults to the live activation contract.
+     * @param settings Validated sequence playback settings.
+     * @return Immutable owner-coordination settings; the host still supplies clock evidence and owner hooks.
+     */
+    [[nodiscard]] SequencePlaybackCoordinationSettings MakeSequencePlaybackCoordinationSettings(
+        const SequencePlaybackSettings &settings) noexcept;
+
+    /**
      * @brief Validates clock and pause-domain combinations before owner admission.
      * @param settings Candidate coordination policy.
      * @return Success or a typed invalid activation failure.
@@ -159,6 +167,15 @@ namespace Horo::Cinematic {
         std::uint64_t authorityRevision{};
 
         [[nodiscard]] constexpr auto operator<=>(const SequenceGameplayPauseResult &) const noexcept = default;
+    };
+
+    /** @brief One host-owned absolute clock observation at an owner boundary. */
+    struct SequenceClockSample final {
+        SequenceClockSource source{SequenceClockSource::CommittedSimulation};
+        SequenceTime position{};              /**< Non-negative cumulative time in the selected source domain. */
+        std::uint64_t epoch{1};               /**< Changes on source replacement, seek, or external discontinuity. */
+        SequencePlaybackRate gameplayScale{}; /**< Non-negative rational host scale, used only by ApplyGameplayScale. */
+        bool hostSuspended{};                 /**< Suspended boundaries establish a fresh baseline without evaluation. */
     };
 
     /** @brief Kind of host-owned lease acquired by one playback activation. */
@@ -490,6 +507,22 @@ namespace Horo::Cinematic {
                                                                      const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks);
 
         /**
+         * @brief Evaluates from one absolute host clock sample with domain, pause, and dilation coordination.
+         * @param handle Exact player handle.
+         * @param sample Host-owned cumulative source clock, epoch, scale, and suspension state.
+         * @param scratch Caller-owned bounded frame storage.
+         * @param hooks Typed destination seams.
+         * @return Evaluated frame or typed invalid-clock/evaluation failure; failed attempts do not advance the baseline.
+         * @note The host samples every active non-simulation clock while gameplay is held, supplies committed simulation
+         * time only after a successful tick, and keeps the source monotonic within an epoch. On suspend/resume or an
+         * external discontinuity, a new baseline suppresses skipped time and events.
+         */
+        [[nodiscard]] Result<SequenceFrameEvaluationResult> EvaluateClock(const SequencePlayerHandle &handle,
+                                                                          const SequenceClockSample &sample,
+                                                                          const SequenceFrameScratch &scratch,
+                                                                          const SequenceFrameHooks &hooks);
+
+        /**
          * @brief Applies one newer host gameplay-pause observation to the active player.
          * @param handle Exact player handle.
          * @param request Monotonic host authority revision and pause state.
@@ -563,7 +596,13 @@ namespace Horo::Cinematic {
             std::optional<SequenceCoordinationLease> hudSuppressionLease;
             std::uint64_t retainedBytes{};
             std::uint64_t gameplayPauseRevision{};
+            SequenceTime clockPosition{};
+            std::uint64_t clockEpoch{};
+            std::uint64_t scaleRemainder{};
+            SequencePlaybackRate appliedScale{};
             bool gameplayPaused{};
+            bool clockBaselineValid{};
+            bool hostWasSuspended{};
             bool resumeBaselinePending{};
             bool suppressNextPlayBoundary{};
             bool restoreApplied{};
