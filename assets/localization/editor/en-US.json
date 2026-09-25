@@ -1603,6 +1603,8 @@
     "asset_import.title": {"text": "Import Assets"},
     "asset_import.subtitle": {"text": "Add files to your project and configure how they are imported."},
     "asset_import.destination": {"text": "Destination"},
+    "asset_import.browse_sources": {"text": "Choose files to import"},
+    "asset_import.browse_destination": {"text": "Choose destination folder"},
     "asset_import.change": {"text": "Change..."},
     "asset_import.list_title": {"text": "Files"},
     "asset_import.remove_file": {"text": "Remove from list"},

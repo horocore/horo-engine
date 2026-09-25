@@ -279,8 +279,12 @@ namespace Horo::Assets {
                         .defaultValue = std::string{"Import from source"},
                         .choices =
                             {
-                                {.id = "import", .labelKey = "asset_import.choice.normals_source", .value = std::string{"Import from source"}},
-                                {.id = "smooth", .labelKey = "asset_import.choice.normals_smooth", .value = std::string{"Calculate smooth"}},
+                                {.id = "import",
+                                 .labelKey = "asset_import.choice.normals_source",
+                                 .value = std::string{"Import from source"}},
+                                {.id = "smooth",
+                                 .labelKey = "asset_import.choice.normals_smooth",
+                                 .value = std::string{"Calculate smooth"}},
                                 {.id = "flat", .labelKey = "asset_import.choice.normals_flat", .value = std::string{"Calculate flat"}},
                             },
                         .includeInPresets = true,

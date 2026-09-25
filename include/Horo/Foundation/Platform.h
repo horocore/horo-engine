@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Horo {
     /**
@@ -170,7 +171,17 @@ namespace Horo {
     };
 
     class CredentialStore;
-    class NativeDialogs;
+
+    /** @brief Optional host-owned native file picker; calls run synchronously on the UI thread. */
+    class NativeDialogs {
+    public:
+        virtual ~NativeDialogs() = default;
+
+        /** @brief Opens a multi-file picker. @param title Localized window title. @return Selected native paths, empty on cancellation. */
+        [[nodiscard]] virtual std::vector<std::filesystem::path> ChooseOpenFiles(std::string_view title) = 0;
+        /** @brief Opens a folder picker. @param title Localized window title. @return Selected native path, or none on cancellation. */
+        [[nodiscard]] virtual std::optional<std::filesystem::path> ChooseFolder(std::string_view title) = 0;
+    };
     class CrashService;
 
     /** @brief Explicitly composed baseline and optional platform services for one host lifetime. */

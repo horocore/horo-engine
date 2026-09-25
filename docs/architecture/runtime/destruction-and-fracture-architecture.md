@@ -486,7 +486,7 @@ work, preview isolation, cancellation and repeated shutdown.
 
 ## Related Documents
 
-- [Destruction Setup UI Reference](./destruction-setup.html)
+- [Destruction Setup UI Reference](../../../mock-studio/designs.md#architecture-runtime-destruction-setup)
 - [Destruction Product Composition Migration](../../guides/destruction-product-composition-migration.md)
 
 - [Physics Architecture](./physics-architecture.md): fracture chunk physics

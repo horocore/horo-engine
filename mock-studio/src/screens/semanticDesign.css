@@ -1,0 +1,67 @@
+.semantic-blocks { display:flex; flex-wrap:wrap; align-content:flex-start; align-items:flex-start; gap:8px 12px; color:var(--mock-text); font-size:13px; }
+.semantic-blocks > .semantic-heading,.semantic-blocks > .semantic-text,.semantic-blocks > .semantic-row,.semantic-blocks > .semantic-card,.semantic-blocks > .semantic-table-scroll,.semantic-blocks > .semantic-visual,.semantic-blocks > .semantic-grid { flex:0 0 100%; min-width:0; }
+.semantic-heading { margin:12px 0 2px; color:var(--mock-text); font-size:13px; font-weight:600; }
+.semantic-text { margin:0; color:var(--mock-secondary); line-height:1.45; }
+.semantic-blocks > .semantic-text + .semantic-text { padding-top:2px; }
+.semantic-row { display:block; width:100%; min-height:30px; padding:6px 9px; border:1px solid transparent; background:transparent; text-align:left; color:var(--mock-text); font-size:12px; white-space:normal; }
+.semantic-row:hover,.semantic-row.selected { border-color:var(--mock-border-strong); background:rgba(4,165,252,.11); }
+.semantic-row.selected { box-shadow:inset 2px 0 var(--mock-accent); }
+.semantic-action { min-height:28px; padding:5px 9px; font-size:12px; }
+.semantic-field { display:flex; flex:1 1 180px; flex-direction:column; gap:5px; min-width:160px; color:var(--mock-secondary); font-size:11px; }
+.semantic-field input,.semantic-field select { width:100%; min-height:31px; padding:5px 8px; color:var(--mock-text); font-size:12px; }
+.semantic-toggle { display:flex; align-items:center; gap:7px; flex:1 1 100%; min-height:29px; color:var(--mock-secondary); font-size:12px; }
+.semantic-toggle input { accent-color:var(--mock-accent); }
+.semantic-table-scroll { overflow:auto; border:1px solid var(--mock-border); border-radius:var(--mock-radius); }
+.semantic-table-scroll table { width:100%; border-collapse:collapse; font-size:12px; }
+.semantic-table-scroll th,.semantic-table-scroll td { padding:8px 9px; border-bottom:1px solid var(--mock-border); text-align:left; white-space:nowrap; }
+.semantic-table-scroll th { color:var(--mock-muted); background:var(--mock-panel); font-weight:500; }
+.semantic-table-scroll td { color:var(--mock-secondary); }
+.semantic-table-scroll tr:hover td { background:rgba(4,165,252,.05); }
+.semantic-card { padding:11px; border:1px solid var(--mock-border); border-radius:var(--mock-radius); background:var(--mock-panel); }
+.semantic-card > h3 { margin:0 0 9px; font-size:12px; font-weight:600; }
+.semantic-kv { margin:0; }
+.semantic-kv > div { display:flex; justify-content:space-between; gap:12px; min-height:26px; padding:5px 0; border-bottom:1px solid var(--mock-border); font-size:11px; }
+.semantic-kv > div:last-child { border-bottom:0; }
+.semantic-kv dt { color:var(--mock-muted); }
+.semantic-kv dd { margin:0; text-align:right; color:var(--mock-text); }
+.semantic-selectable { display:flex; flex-direction:column; gap:7px; min-height:100px; width:100%; text-align:left; }
+.semantic-selectable strong { font-size:12px; }
+.semantic-selectable span { color:var(--mock-muted); font-size:11px; line-height:1.45; }
+.semantic-selectable.selected { border-color:var(--mock-accent); background:rgba(4,165,252,.1); }
+.semantic-grid > .semantic-blocks { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
+.semantic-grid > .semantic-blocks > * { min-width:0; }
+.semantic-visual { display:flex; flex-direction:column; min-height:170px; overflow:hidden; border:1px solid var(--mock-border); border-radius:var(--mock-radius); background:#101419; }
+.semantic-visual-top { padding:7px 10px; border-bottom:1px solid var(--mock-border); color:var(--mock-secondary); font-size:11px; text-transform:capitalize; }
+.semantic-visual-art { display:grid; place-items:center; flex:1; min-height:95px; background:radial-gradient(circle at 50% 50%,rgba(4,165,252,.16),transparent 46%),linear-gradient(90deg,transparent 49.8%,rgba(101,122,137,.12) 50%,transparent 50.2%),linear-gradient(transparent 49.8%,rgba(101,122,137,.12) 50%,transparent 50.2%); background-size:auto,32px 32px,32px 32px; }
+.semantic-visual-art span { color:var(--mock-accent); font-size:38px; }
+.semantic-visual-labels { display:flex; flex-wrap:wrap; gap:5px; padding:8px; }
+.semantic-visual-labels span { padding:3px 6px; border:1px solid var(--mock-border); border-radius:3px; color:var(--mock-secondary); font-size:10px; }
+.semantic-graph-nodes { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); align-content:center; gap:24px 34px; flex:1; min-height:240px; padding:28px; background:radial-gradient(circle,rgba(98,118,132,.25) 1px,transparent 1px) 0 0/16px 16px; }
+.semantic-graph-nodes button { min-height:62px; padding:8px 10px; border:1px solid #39647d; border-top:3px solid var(--mock-accent); border-radius:5px; background:#1b232b; color:var(--mock-text); text-align:left; font-size:11px; box-shadow:0 5px 12px rgba(0,0,0,.25); }
+.semantic-graph-nodes button.selected { outline:2px solid var(--mock-accent); }
+.semantic-graph-nodes small { display:block; margin-bottom:5px; color:var(--mock-muted); font-size:9px; }
+.semantic-timeline-tracks { display:flex; flex-direction:column; gap:1px; flex:1; min-height:200px; padding:14px 9px; background:repeating-linear-gradient(90deg,transparent,transparent 49px,rgba(98,118,132,.16) 50px); }
+.semantic-timeline-tracks > div { display:flex; align-items:center; min-height:29px; border-bottom:1px solid var(--mock-border); }
+.semantic-timeline-tracks > div > span { width:32%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--mock-secondary); font-size:10px; }
+.semantic-timeline-tracks i { display:block; height:9px; border-radius:2px; background:linear-gradient(90deg,var(--mock-accent),#6fc7ac); }
+.wb-side .semantic-blocks,.wb-detail .semantic-blocks { display:flex; flex-direction:column; gap:5px; }
+.wb-side .semantic-blocks > *,.wb-detail .semantic-blocks > * { width:100%; flex:0 0 auto; }
+.wb-side .semantic-visual,.wb-detail .semantic-visual { min-height:120px; }
+.semantic-modal { display:flex; flex-direction:column; width:100%; height:100%; min-height:0; background:var(--mock-bg); }
+.semantic-modal-header { display:flex; align-items:center; justify-content:space-between; gap:10px; flex:0 0 auto; min-height:54px; padding:9px 15px; border-bottom:1px solid var(--mock-border); background:var(--mock-panel); }
+.semantic-modal-header h1 { margin:0; font-size:14px; font-weight:600; }
+.semantic-modal-header p { margin:3px 0 0; color:var(--mock-muted); font-size:11px; }
+.semantic-modal-header > div:last-child { display:flex; gap:6px; }
+.semantic-modal-header button { padding:5px 9px; font-size:11px; }
+.semantic-modal-tabs { display:flex; flex:0 0 auto; min-height:38px; padding:0 11px; overflow-x:auto; border-bottom:1px solid var(--mock-border); }
+.semantic-modal-tabs button { padding:0 12px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--mock-secondary); white-space:nowrap; font-size:12px; }
+.semantic-modal-tabs button.active { border-bottom-color:var(--mock-accent); color:var(--mock-text); }
+.semantic-modal-content { flex:1; min-height:0; overflow:auto; padding:15px; }
+.semantic-modal-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; flex:0 0 auto; min-height:45px; padding:7px 15px; overflow:hidden; border-top:1px solid var(--mock-border); background:var(--mock-panel); color:var(--mock-muted); text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+.semantic-modal-footer > div { display:flex; gap:7px; }
+.semantic-modal-footer button { padding:6px 10px; font-size:12px; }
+.semantic-modal-footer button.primary { border-color:var(--mock-accent); background:var(--mock-accent); color:#07131c; }
+.semantic-modal-footer button:disabled { opacity:.45; cursor:default; }
+.semantic-modal.wizard .semantic-grid > .semantic-blocks { grid-template-columns:repeat(3,minmax(0,1fr)); max-width:900px; }
+@media (max-width:900px) { .semantic-modal.wizard .semantic-grid > .semantic-blocks { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:620px) { .semantic-modal.wizard .semantic-grid > .semantic-blocks { grid-template-columns:1fr; } }

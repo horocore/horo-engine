@@ -12,8 +12,10 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "editor/project_model/RendererAvailability.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <imgui_internal.h>
 #include <memory>
 
 namespace Horo::Editor::Theme {
@@ -111,8 +113,13 @@ namespace {
         modals.OnUpdate(0.016F);
         REQUIRE_FALSE(modals.HasOpenModal());
 
+        const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
+        REQUIRE(gallery != nullptr);
+        const float firstButtonTop = EditorUiPreviewHeaderHeight + 54.0F;
+        const float buttonHeight = 38.0F;
+        const float secondButtonCenter = firstButtonTop + buttonHeight + ImGui::GetStyle().ItemSpacing.y + buttonHeight * 0.5F;
         ImGuiIO &io = ImGui::GetIO();
-        io.AddMousePosEvent(120.0F, 137.0F);
+        io.AddMousePosEvent(gallery->Pos.x + EditorUiPreviewSidebarWidth * 0.5F, gallery->Pos.y + secondButtonCenter);
         imgui.BeginFrame();
         host.Draw();
         imgui.EndFrame();

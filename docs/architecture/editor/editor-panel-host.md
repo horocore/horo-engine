@@ -1192,15 +1192,15 @@ src/editor/design_system/components/
 
 ## See Also
 
-- [Editor Workspace Layout](./editor-workspace.html): HTML reference design for the
+- [Editor Workspace Layout](../../../mock-studio/designs.md#architecture-editor-editor-workspace): React mock design for the
   full editor workspace with menu bar, toolbar, docks, viewport, and status bar.
-- [Welcome Screen](./welcome-screen.html): HTML reference design for the startup
+- [Welcome Screen](../../../mock-studio/designs.md#architecture-editor-welcome-screen): React mock design for the startup
   surface with recent projects, new/open actions, and news feed.
-- [Asset Browser](./asset-browser.html): HTML reference design for the main asset
+- [Asset Browser](../../../mock-studio/designs.md#architecture-editor-asset-browser): React mock design for the main asset
   browser with folder tree, asset grid, and preview pane.
 - [Editor Data Bus](./editor-data-bus.md)
 - [Editor Modal Host](./editor-modal-host.md)
-- [Settings Modal](./settings-modal.html): HTML reference design for the editor
+- [Settings Modal](../../../mock-studio/designs.md#architecture-editor-settings-modal): React mock design for the editor
   settings workflow surface.
 - [Editor Document Model](./editor-document-model.md)
 - [GUI Screen Host](./gui-screen-host.md)

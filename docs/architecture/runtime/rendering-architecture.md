@@ -1802,7 +1802,7 @@ Required tests cover:
 
 - [Coordinate Precision And Origin Rebasing](./coordinate-precision-and-origin-rebasing.md)
 - [ADR-026: Large-World Precision and Floating Origin Strategy](../../adr/026-large-world-precision-and-floating-origin-strategy.md)
-- [Render Settings UI Reference](./render-settings.html): quality presets, render feature toggles, resolution, and GPU profiler panel.
+- [Render Settings UI Reference](../../../mock-studio/designs.md#architecture-runtime-render-settings): quality presets, render feature toggles, resolution, and GPU profiler panel.
 - [Render Backend Parity Contract](./render-backend-parity-contract.md)
 - [Renderer Distribution And Availability](./renderer-distribution-and-availability.md)
 - [Renderer Module Package Manifest](./renderer-module-package-manifest.md)

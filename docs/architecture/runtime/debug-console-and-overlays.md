@@ -559,7 +559,7 @@ Required tests cover:
 
 - [ADR-018: Command Registration, Permissions, Threading and Packaged-Build Policy](../../adr/018-command-registration-permissions-threading-and-packaged-build-policy.md)
 - [ADR-010: Job Waiting and Operation Store Ownership](../../adr/010-job-waiting-and-operation-store-ownership.md)
-- [Console Panel](./console-panel.html): HTML reference design for the editor
+- [Console Panel](../../../mock-studio/designs.md#architecture-runtime-console-panel): React mock design for the editor
   console tab, command input, log filtering, and record details.
 - [Runtime Lifecycle](./runtime-lifecycle.md)
 - [Input Architecture](./input-architecture.md)

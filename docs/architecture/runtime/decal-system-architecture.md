@@ -161,7 +161,7 @@ Decal placement tools in the editor:
 
 ## Related Documents
 
-- [Decal Placement UI Reference](./decal-placement.html)
+- [Decal Placement UI Reference](../../../mock-studio/designs.md#architecture-runtime-decal-placement)
 
 - [Rendering Architecture](./rendering-architecture.md): GBuffer and decal render pass
 - [Material And Shader Model](./material-and-shader-model.md): decal material domain

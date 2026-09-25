@@ -1174,7 +1174,7 @@ architecture-only change:
   Normative semantic binding, allocation-free playback, budget, overload and sleep/wake contract.
 - [ADR-129: VFX Editor Document, Live Preview and Module Authoring](../../adr/129-vfx-editor-document-live-preview-and-module-authoring.md):
   Normative effect document, stack/graph authoring, preview parity and decal editor contract.
-- [Particle Editor UI Reference](./particle-editor.html): Emitter stack, curve editing,
+- [Particle Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-particle-editor): Emitter stack, curve editing,
   and live preview panel.
 - [Material And Shader Model](./material-and-shader-model.md): Particle and decal materials.
 - [Rendering Architecture](./rendering-architecture.md): Render graph and pass extraction.

@@ -509,7 +509,7 @@ replacement snapshot requires the replacement graph revision and runtime contrac
 - [PCG Cross-System Authority, Readiness and Commit Boundary](../../adr/154-pcg-cross-system-authority-readiness-and-commit-boundary.md)
 - [PCG Graph Document, Preview, Bake and Undo Ownership](../../adr/155-pcg-graph-document-preview-bake-and-undo-ownership.md)
 - [PCG Scale Budgets, Trust and Release Scope](../../adr/156-pcg-scale-budgets-trust-and-release-scope.md)
-- [PCG Graph Editor UI Reference](./pcg-graph-editor.html)
+- [PCG Graph Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-pcg-graph-editor)
 
 - [Scene Runtime](./scene-runtime.md): generated objects as entities
 - [Terrain And Foliage Architecture](./terrain-and-foliage-architecture.md): terrain and foliage as PCG inputs/outputs

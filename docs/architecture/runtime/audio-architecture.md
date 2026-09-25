@@ -2033,7 +2033,7 @@ or feature plan must be updated in the same change.
 
 ## Related Documents
 
-- [Audio Mixer UI Reference](./audio-mixer.html): bus routing, DSP chains, meters, and middleware bridge status panel.
+- [Audio Mixer UI Reference](../../../mock-studio/designs.md#architecture-runtime-audio-mixer): bus routing, DSP chains, meters, and middleware bridge status panel.
 
 - [Asset Pipeline](./asset-pipeline.md)
 - [Runtime Lifecycle](./runtime-lifecycle.md)

@@ -1,7 +1,7 @@
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
-#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Foundation/Paths.h"
+#include "Horo/Gameplay/GameplayErrors.h"
 
 #include <algorithm>
 #include <array>
