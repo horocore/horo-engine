@@ -109,13 +109,18 @@ namespace Horo::Cinematic {
 
     using SequenceEventOccurrenceHook = void (*)(void *context, const SequenceFrameEventOccurrence &occurrence) noexcept;
     using SequenceCameraCutHook = void (*)(void *context, const SequenceFrameCameraCutRequest &request) noexcept;
+    using SequenceFinishedHook = void (*)(void *context, const SequencePlayerHandle &player) noexcept;
 
-    /** @brief Typed destination hooks injected by the owning runtime composition. */
+    /** @brief Typed destination hooks injected by the owning runtime composition. The finished hook is invoked by the runtime
+     * service only after a Once player naturally reaches its directional end and becomes Stopped. Infinite Loop and PingPong
+     * players never finish; explicit stop, cancellation, failure, and owner shutdown do not invoke it. */
     struct SequenceFrameHooks final {
         void *eventContext{};
         SequenceEventOccurrenceHook eventHook{};
         void *cameraContext{};
         SequenceCameraCutHook cameraHook{};
+        void *finishedContext{};
+        SequenceFinishedHook finishedHook{};
     };
 
     /** @brief Caller-owned fixed-capacity storage used by one hot evaluation. */

@@ -408,6 +408,8 @@ namespace Horo::Cinematic {
             if (auto stopped = instance.player.FinishStop(handle); stopped.HasError())
                 return Result<SequenceFrameEvaluationResult>::Failure(stopped.ErrorValue());
             ReleaseCoordination(instance);
+            if (hooks.finishedHook != nullptr)
+                hooks.finishedHook(hooks.finishedContext, handle);
         }
         return Result<SequenceFrameEvaluationResult>::Success(result);
     }
