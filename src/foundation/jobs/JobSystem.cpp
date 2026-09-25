@@ -696,6 +696,9 @@ namespace Horo {
 
     /** @copydoc TaskGroup::SpawnContext */
     Result<JobId> TaskGroup::SpawnContext(JobDescriptor descriptor, ContextJobFunction work) const {
+        // Keep the callback alive until after the group lock is released: immediate cancellation
+        // or admission rejection may otherwise destroy a capture that reenters this group.
+        const auto ownedWork = std::make_shared<ContextJobFunction>(std::move(work));
         std::lock_guard lock(m_state->mutex);
         if (!m_state->accepting)
             return Result<JobId>::Failure(MakeJobError(JobErrors::TaskGroupClosed, "Task group admission is closed."));
@@ -704,7 +707,7 @@ namespace Horo {
         descriptor.taskGroupId = m_state->id;
         const std::weak_ptr weakState = m_state;
         Result<JobHandle> submitted =
-            m_state->jobs.SubmitContext(std::move(descriptor), [weakState, work = std::move(work)](const JobExecutionContext &context) {
+            m_state->jobs.SubmitContext(std::move(descriptor), [weakState, ownedWork](const JobExecutionContext &context) {
             if (context.Cancellation().IsCancellationRequested())
                 return Result<void>::Failure(MakeJobError(JobErrors::Cancelled, "Task group child was cancelled before execution."));
             const auto failFast = [&weakState] {
@@ -713,7 +716,7 @@ namespace Horo {
             };
             Result<void> outcome = [&] {
                 try {
-                    return work(context);
+                    return (*ownedWork)(context);
                 } catch (...) {
                     failFast();
                     throw;

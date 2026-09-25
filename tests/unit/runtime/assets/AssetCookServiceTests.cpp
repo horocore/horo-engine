@@ -92,6 +92,21 @@ namespace {
         }
     };
 
+    /** @brief Requests cancellation while returning either an acknowledged cook cancellation or a real failure. */
+    class CancellingCooker final : public ICookerStrategy {
+    public:
+        CancellingCooker(CancellationSource &source, const bool fail) : source_(source), fail_(fail) {}
+
+        [[nodiscard]] Result<CookOutputSink> Cook(const CookSourceView &, const CancellationToken &) const override {
+            source_.RequestCancellation();
+            return Result<CookOutputSink>::Failure(Error{ErrorCode{fail_ ? "test.cook.failed" : "asset.cook.cancelled"}});
+        }
+
+    private:
+        CancellationSource &source_;
+        bool fail_;
+    };
+
 }  // namespace
 
 TEST_CASE("AssetCookService empty registry publishes empty generation", "[native]") {
@@ -184,6 +199,61 @@ TEST_CASE("AssetCookService honours cancellation before work", "[native]") {
 
     auto result = service.Cook(request, cancellation);
     REQUIRE((result.HasError()));
+}
+
+TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent failure", "[native]") {
+    for (const bool fail : {false, true}) {
+        TestProject project;
+        TempDir cacheDir;
+        TempDir cookedDir;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
+        CancellationSource source;
+
+        AssetRegistry registry;
+        const auto sourcePath = ProjectPath::Parse("assets/test_mesh.fbx");
+        const auto metadataPath = ProjectPath::Parse("assets/test_mesh.fbx.horo");
+        REQUIRE(sourcePath.HasValue());
+        REQUIRE(metadataPath.HasValue());
+        REQUIRE(registry
+                    .Publish({AssetRecord{.id = Id("00000000-0000-0000-0000-0000000000a1"),
+                                          .type = Type("core.mesh"),
+                                          .sourcePath = sourcePath.Value(),
+                                          .metadataPath = metadataPath.Value()}})
+                    .status == AssetRegistryBuildStatus::Complete);
+
+        CookerCatalog catalog;
+        REQUIRE(catalog
+                    .Register(CookerContribution{.contributionId = "test.cancelling",
+                                                 .assetType = Type("core.mesh"),
+                                                 .targets = {Target("headless-null")},
+                                                 .strategy = std::make_shared<const CancellingCooker>(source, fail)})
+                    .HasValue());
+        const auto catalogSnapshot = catalog.Publish();
+        REQUIRE(catalogSnapshot.HasValue());
+        AssetCookService service(jobs, catalogSnapshot.Value());
+        BuildOutputStore output{8};
+        OperationStore operations{4, 4};
+        AssetCookRequest request{.sourceRoot = project.dir.path,
+                                 .cacheRoot = cacheDir.path,
+                                 .cookedRoot = cookedDir.path,
+                                 .registry = registry.Snapshot(),
+                                 .target = Target("headless-null"),
+                                 .buildOutputStore = &output,
+                                 .operationStore = &operations};
+
+        const auto result = service.Cook(request, source.Token());
+        REQUIRE(result.HasError());
+        REQUIRE(result.ErrorValue().code.Value() == (fail ? "test.cook.failed" : "asset.cook.cancelled"));
+        if (!fail)
+            REQUIRE(ErrorChainContains(result.ErrorValue(), ErrorDomainId{"horo.foundation.jobs"}, ErrorCode{"job.cancelled"}));
+        const auto operationSnapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(operationSnapshot.has_value());
+        REQUIRE(operationSnapshot->operations.front().state == (fail ? OperationState::Failed : OperationState::Cancelled));
+        const auto outputSnapshot = output.SnapshotIfChanged(0);
+        REQUIRE(outputSnapshot.has_value());
+        REQUIRE(outputSnapshot->records.back().result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
+        jobs.Shutdown(ShutdownPolicy::Drain);
+    }
 }
 
 TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[native]") {

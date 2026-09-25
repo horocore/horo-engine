@@ -437,6 +437,47 @@ namespace {
         jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
     }
 
+    TEST_CASE("Pre-Cancelled Task Group Releases Captures Outside Group Lock", "[unit][foundation][jobs][group][cancel][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::CancellationSource parent;
+        parent.RequestCancellation();
+        Horo::TaskGroup group(jobs, Horo::TaskGroupFailurePolicy::FailFast, parent.Token());
+        bool reentered = false;
+        auto capture = std::make_shared<ReentrantCaptureDestructor>([&] {
+            const auto joined = group.Join();
+            reentered =
+                joined.HasError() && Horo::IsJobCancelled(joined.ErrorValue()) && group.Outcome() == Horo::TaskGroupOutcome::Cancelled;
+        });
+        const std::weak_ptr captureProbe = capture;
+        const auto submitted = group.SpawnContext({}, [capture = std::move(capture)](const Horo::JobExecutionContext &) {
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(submitted.HasValue());
+        REQUIRE(captureProbe.expired());
+        REQUIRE(reentered);
+        REQUIRE(jobs.Find(submitted.Value())->state == Horo::JobState::Cancelled);
+        jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+    }
+
+    TEST_CASE("Closed Task Group Releases Rejected Captures Outside Group Lock", "[unit][foundation][jobs][group][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::TaskGroup group(jobs);
+        group.RequestCancel();
+        bool reentered = false;
+        auto capture = std::make_shared<ReentrantCaptureDestructor>([&] {
+            reentered = group.Join().HasValue() && group.Outcome() == Horo::TaskGroupOutcome::Completed;
+        });
+        const std::weak_ptr captureProbe = capture;
+        const auto rejected = group.SpawnContext({}, [capture = std::move(capture)](const Horo::JobExecutionContext &) {
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(rejected.HasError());
+        REQUIRE(rejected.ErrorValue().code.Value() == "job.task_group_closed");
+        REQUIRE(captureProbe.expired());
+        REQUIRE(reentered);
+        jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+    }
+
     TEST_CASE("Bounded Wait Times Out Without Changing Running Job State", "[unit][foundation][jobs][wait]") {
         Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
         std::atomic started{false};
