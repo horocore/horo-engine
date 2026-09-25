@@ -506,9 +506,19 @@ platform.offline.abandoned          -- authorized audited stop with no false rol
 
 `platform.provider.failed` carries one normalized category: `Offline`, `NotSignedIn`,
 `Forbidden`, `RateLimited`, `PreconditionFailed`, `QuotaExceeded`, `InvalidResponse`,
-`TransientFailure` or `PermanentFailure`. Bounded redacted native codes may appear as
-diagnostic/cause evidence but never as branching identity. Capability absence, Null,
+`TransientFailure` or `PermanentFailure`. Provider-native codes stay private; stable
+category causes and safe request correlation provide diagnostic evidence. Capability absence, Null,
 cancellation and timeout are never remapped into provider failure.
+
+The `horo.platform.service` error domain registers the provider failure and category
+descriptors at host module composition. `platform.provider.failed` owns one typed
+category cause; an unrecognized provider result maps to `Unknown`, never to an
+invented code. The cause carries only a frontend request ID and generation for
+correlation. Provider callbacks send Horo result codes, not native codes or text;
+failure payload bytes are discarded before entering the request record. Applications
+and hosts use `ClassifyPlatformServiceError` and `PlatformProviderCategory` for
+behavior. They do not inspect provider prose or SDK codes. A cancelled or timed-out
+completion retains its dedicated request state and error code.
 
 ### Ordering And Coalescing
 

@@ -1,6 +1,7 @@
 #include "HostModuleComposition.h"
 
 #include "Horo/Foundation/ErrorCode.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,12 @@ namespace Horo::Application::Internal {
             return descriptor;
         }
 
+        [[nodiscard]] ModuleDescriptor DescribePlatformServices() {
+            ModuleDescriptor descriptor = Describe("horo.platform.services", {"horo.foundation", "horo.platform"});
+            descriptor.errorDomains.push_back(PlatformServices::PlatformServiceErrorDomain());
+            return descriptor;
+        }
+
         /**
          * @brief Creates a typed failure for an unsupported host composition selection.
          * @tparam T Success value type expected by the caller.
@@ -58,6 +65,7 @@ namespace Horo::Application::Internal {
                 Describe("horo.application", {"horo.foundation"}),
                 Describe("horo.application.project_migrations", {"horo.application"}),
                 Describe("horo.platform", {"horo.foundation"}),
+                DescribePlatformServices(),
                 Describe("horo.runtime", {"horo.foundation"}),
                 Describe("horo.assets", {"horo.foundation"}),
                 Describe("horo.input", {"horo.foundation"}),
@@ -100,10 +108,11 @@ namespace Horo::Application::Internal {
                     "The current headless host does not link an interactive renderer or OpenTelemetry module.");
             }
             std::vector<ModuleDescriptor> modules;
-            modules.reserve(7);
+            modules.reserve(8);
             modules.push_back(Describe("horo.foundation"));
             modules.push_back(Describe("horo.security", {"horo.foundation"}));
             modules.push_back(Describe("horo.platform", {"horo.foundation", "horo.security"}));
+            modules.push_back(DescribePlatformServices());
             modules.push_back(Describe("horo.assets", {"horo.foundation"}));
             modules.push_back(Describe("horo.application", {"horo.foundation"}));
             modules.push_back(Describe("horo.extensions", {"horo.foundation", "horo.platform", "horo.assets", "horo.security"}));
