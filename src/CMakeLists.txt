@@ -672,6 +672,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
         physics/PhysicsWorldScene.cpp
         physics/PhysicsWorldTickHelpers.h
