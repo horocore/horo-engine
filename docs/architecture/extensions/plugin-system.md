@@ -302,6 +302,13 @@ Initial editor and tool extension points:
 | `project.browser_action` | Add project-browser actions. | Host owns selected project context and confirmation UI. |
 | `mcp.tool` | Add MCP tools subject to permission policy. | MCP host owns transport, schema, and authorization. |
 
+The host-owned `EditorSurfaceRegistry` now borrows registry limits and provider
+status keys during construction and status updates, then copies the values it
+retains. Existing source callers use the same call form; consumers holding exact
+constructor or member-function signatures must update those signatures. No
+caller-owned reference survives either call. This narrows copies without changing
+the registry's provider or workspace ownership.
+
 `AssetCookerRegistry` is the synchronous typed host boundary for `asset.cooker`.
 Each publication declares one stable contribution identity, an exact provider
 generation, one imported asset type, sorted target identities, and the cooker
