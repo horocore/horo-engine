@@ -10,6 +10,7 @@
 #include "Horo/Foundation/Result.h"
 
 #include <memory>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -51,7 +52,9 @@ namespace Horo::Application::Internal {
     /**
      * @brief Registers, validates, and activates the selected host module graph.
      * @param selection Host and optional-module choices made by the composition root.
+     * @param contributions Settings supplied explicitly for selected modules.
      * @return Owning module host, or a failure with no partially active module set.
      */
-    [[nodiscard]] Result<std::unique_ptr<ModuleHost>> ComposeHostModules(const HostModuleSelection &selection);
+    [[nodiscard]] Result<std::unique_ptr<ModuleHost>> ComposeHostModules(
+        const HostModuleSelection &selection, std::span<const ModuleConfigurationContribution> contributions = {});
 }  // namespace Horo::Application::Internal

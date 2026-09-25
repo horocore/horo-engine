@@ -77,7 +77,98 @@ namespace {
         descriptor.lifecycle = ModuleLifecycleCallbacks{.activate = &LogActivate, .drain = &LogDrain, .deactivate = &LogDeactivate};
         return descriptor;
     }
+
+    [[nodiscard]] ModuleConfigurationContribution Settings(std::string module, std::string owner, std::string key,
+                                                           std::string variable = {}) {
+        ModuleConfigurationContribution contribution{.module = ModuleId{std::move(module)},
+                                                     .ownerPrefix = std::move(owner),
+                                                     .settings = {
+                                                         SettingDescriptor{.key = SettingKey{std::move(key)},
+                                                                           .type = SettingValueType::Integer,
+                                                                           .defaultValue = std::int64_t{42},
+                                                                           .scope = SettingScope::Engine,
+                                                                           .reloadPolicy = ReloadPolicy::NextOperation,
+                                                                           .sensitivity = SettingSensitivity::Public,
+                                                                           .sourcePolicy = ConfigurationSourcePolicy{
+                                                                               .allowedSources = ConfigurationSourceMask::Invocation |
+                                                                                                 ConfigurationSourceMask::Environment}}}};
+        if (!variable.empty())
+            contribution.environmentBindings.push_back({.key = contribution.settings.front().key, .variable = std::move(variable)});
+        return contribution;
+    }
 }  // namespace
+
+TEST_CASE("Module settings registration reports typed conflicts without partial registration",
+          "[unit][foundation][modules][configuration]") {
+    ModuleHost host;
+    const auto first = Settings("horo.alpha", "alpha", "alpha.count", "HORO_ALPHA_COUNT");
+    REQUIRE(host.Register(MakeModule("horo.alpha"), first).HasValue());
+
+    auto duplicate = Settings("horo.beta", "alpha", "alpha.count");
+    auto result = host.Register(MakeModule("horo.beta"), duplicate);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "foundation.module.duplicate_setting");
+    CHECK_FALSE(host.StateOf(ModuleId{"horo.beta"}).has_value());
+
+    auto overlap = Settings("horo.beta", "alpha.child", "alpha.child.count");
+    result = host.Register(MakeModule("horo.beta"), overlap);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "foundation.module.setting_owner_conflict");
+
+    auto binding = Settings("horo.beta", "beta", "beta.count", "HORO_ALPHA_COUNT");
+    result = host.Register(MakeModule("horo.beta"), binding);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "foundation.module.duplicate_environment_binding");
+
+    binding.environmentBindings.front().variable = "HORO_BETA_COUNT";
+    REQUIRE(host.Register(MakeModule("horo.beta"), binding).HasValue());
+}
+
+TEST_CASE("Module settings resolve in stable host order and captured snapshots survive shutdown",
+          "[unit][foundation][modules][configuration]") {
+    const auto makeHost = [](const bool reverse) {
+        auto host = std::make_unique<ModuleHost>();
+        const auto registerOne = [&](const std::string &id, const std::string &owner) {
+            REQUIRE(host->Register(MakeModule(id), Settings(id, owner, owner + ".count",
+                                                            "HORO_" + std::string{id == "horo.alpha" ? "ALPHA" : "BETA"} + "_COUNT"))
+                        .HasValue());
+        };
+        if (reverse) {
+            registerOne("horo.beta", "beta");
+            registerOne("horo.alpha", "alpha");
+        } else {
+            registerOne("horo.alpha", "alpha");
+            registerOne("horo.beta", "beta");
+        }
+        REQUIRE(host->BuildConfigurationSchema().Value().FindDescriptor(SettingKey{"alpha.count"}) == nullptr);
+        REQUIRE(host->ActivateRegistered(nullptr).HasValue());
+        return host;
+    };
+    auto first = makeHost(false);
+    auto second = makeHost(true);
+    CHECK(first->ConfigurationEnvironmentBindings()[0].variable == "HORO_ALPHA_COUNT");
+    CHECK(first->ConfigurationEnvironmentBindings()[1].variable == "HORO_BETA_COUNT");
+    CHECK(first->ConfigurationEnvironmentBindings()[0].variable == second->ConfigurationEnvironmentBindings()[0].variable);
+    CHECK(first->ConfigurationEnvironmentBindings()[1].variable == second->ConfigurationEnvironmentBindings()[1].variable);
+
+    auto schema = first->BuildConfigurationSchema();
+    REQUIRE(schema.HasValue());
+    ConfigurationSchema ownedSchema = std::move(schema).Value();
+    REQUIRE(ownedSchema.FindDescriptor(SettingKey{"alpha.count"}) != nullptr);
+    REQUIRE(ownedSchema.Seal().HasValue());
+    ConfigurationResolutionRequest request;
+    request.invocation.try_emplace(SettingKey{"beta.count"}, ConfigurationInputValue{.value = std::int64_t{7}});
+    auto resolved = ConfigurationResolver::Resolve(ownedSchema, request);
+    REQUIRE(resolved.HasValue());
+    const ConfigurationSnapshot captured = resolved.Value();
+    CHECK(std::get<std::int64_t>(captured.Get(SettingKey{"alpha.count"})) == 42);
+    CHECK(std::get<std::int64_t>(captured.Get(SettingKey{"beta.count"})) == 7);
+
+    first->DeactivateAll();
+    CHECK_FALSE(first->BuildConfigurationSchema().Value().FindDescriptor(SettingKey{"alpha.count"}));
+    CHECK(first->ConfigurationEnvironmentBindings().empty());
+    CHECK(std::get<std::int64_t>(captured.Get(SettingKey{"beta.count"})) == 7);
+}
 
 TEST_CASE("Composition registers and activates modules in validated order", "[unit][foundation][modules][composition]") {
     ResetLog();

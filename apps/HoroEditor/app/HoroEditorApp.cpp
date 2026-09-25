@@ -1240,6 +1240,8 @@ namespace Horo::Editor {
             Log::Logger::Shutdown();
             return 1;
         }
+        const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
+        const std::vector<ModuleConfigurationContribution> settingsContributions{MakeEditorSettingsContribution(initialSettings)};
         auto composedModules = Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
                                                                           .renderer = selectedRenderer.Value(),
 #if defined(HORO_HAS_OPENTELEMETRY)
@@ -1247,13 +1249,20 @@ namespace Horo::Editor {
 #else
                                                                           .includeOpenTelemetry = false
 #endif
-        });
+                                                                         },
+                                                                         settingsContributions);
         if (composedModules.HasError()) {
             LOG_CRITICAL("editor.startup", "Module composition failed: %s", composedModules.ErrorValue().message.c_str());
             Log::Logger::Shutdown();
             return 1;
         }
         std::unique_ptr<ModuleHost> moduleHost = std::move(composedModules).Value();
+        Result<ConfigurationSchema> moduleSchema = moduleHost->BuildConfigurationSchema();
+        if (moduleSchema.HasError()) {
+            LOG_CRITICAL("editor.startup", "Module configuration failed: %s", moduleSchema.ErrorValue().message.c_str());
+            Log::Logger::Shutdown();
+            return 1;
+        }
 
         SDL_Window *w = nullptr;
         if (!InitializeSdlAndCreateWindow(w, moduleInfo->windowRequirements))
@@ -1286,14 +1295,14 @@ namespace Horo::Editor {
         JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256}};
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
-        const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", initialSettings.languageTag.c_str());
         LocalizationService localization{LocaleTag{"en-US"}};
         const bool loadedCatalogs = LoadEditorCatalogResources(localization);
         LOG_INFO("editor.startup", "Catalog resources loaded: %s", loadedCatalogs ? "true" : "false");
         ActivateInitialLocale(initialSettings, localization);
 
-        ConfigurationService configuration = CreateEditorConfigurationService(initialSettings, &engineEvents);
+        ConfigurationService configuration =
+            CreateEditorConfigurationService(initialSettings, &engineEvents, std::move(moduleSchema).Value());
         EditorSettingsService settings{initialSettings, configuration, editorEvents, localization};
 
         const Subscription settingsSub =
