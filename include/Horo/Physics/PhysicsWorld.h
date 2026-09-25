@@ -239,6 +239,14 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<ConstraintHandle> CreateSceneConstraint(const PhysicsConstraintDescriptor &descriptor) const;
         /**
+         * @brief Removes one exact resident joint before retiring either endpoint body.
+         * @param constraint Generation-scoped identity returned by CreateSceneConstraint.
+         * @return Success or typed affinity, lifecycle, foreign-world or stale-handle error.
+         * @pre Active canonical world on its owner thread, outside a fixed tick.
+         * @post Native solver ownership and collision policy are removed; repeated destruction is stale.
+         */
+        [[nodiscard]] Result<void> DestroySceneConstraint(ConstraintHandle constraint) const;
+        /**
          * @brief Executes one immediate query against the current owner-thread broadphase.
          * @param descriptor Exact world/scene query request.
          * @param hits Caller-owned bounded hit storage; no world or native lifetime is retained.
