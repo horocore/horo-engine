@@ -94,6 +94,52 @@ namespace Horo::Physics {
                               .source = PhysicsCommandSourceId::Create(1).Value(),
                               .sourceSequence = sourceSequence}};
         }
+
+        /** @brief Checks that arbitrary floating-point mass bits obey the authored-body bound. */
+        void CheckArbitraryMass(Generator &generator, const PhysicsAuthoredBodyDescriptor &body) {
+            auto arbitraryBody = body;
+            const float mass = std::bit_cast<float>(static_cast<std::uint32_t>(generator.Next()));
+            arbitraryBody.mass = PhysicsMass{mass};
+            const bool admissibleMass = std::isfinite(mass) && mass >= MinimumPhysicsMassKilograms && mass <= MaximumPhysicsMassKilograms;
+            const auto massResult = ValidatePhysicsAuthoredBodyDescriptor(arbitraryBody);
+            REQUIRE(massResult.HasValue() == admissibleMass);
+            if (!admissibleMass)
+                REQUIRE(massResult.ErrorValue().code.Value() == PhysicsErrors::DescriptorInvalid.code.Value());
+        }
+
+        /** @brief Checks deterministic convex cooking and malformed payload/source rejection. */
+        void CheckConvexCase(Generator &generator) {
+            INFO("stage=convex cook/load source=property/hull subresource=5");
+            auto cube = Cube(generator.Bounded(16), 1.0F + generator.Bounded(4));
+            const auto originalCube = cube;
+            const auto hull = CookPhysicsConvexHull(HullRequest(cube));
+            REQUIRE(hull.HasValue());
+            REQUIRE(cube == originalCube);
+            REQUIRE(LoadCookedPhysicsConvexHull(hull.Value().descriptor, Target(), hull.Value().payload).HasValue());
+            auto renamedHullRequest = HullRequest(cube);
+            renamedHullRequest.sourceContext = "property/renamed-hull";
+            const auto renamedHull = CookPhysicsConvexHull(renamedHullRequest);
+            REQUIRE(renamedHull.HasValue());
+            REQUIRE(renamedHull.Value().sourceDigest == hull.Value().sourceDigest);
+            REQUIRE(renamedHull.Value().descriptor.cacheKeyDigest == hull.Value().descriptor.cacheKeyDigest);
+            REQUIRE(renamedHull.Value().payload == hull.Value().payload);
+            const auto truncatedHull =
+                LoadCookedPhysicsConvexHull(hull.Value().descriptor, Target(),
+                                            std::span<const std::uint8_t>{hull.Value().payload.data(),
+                                                                          generator.Next() % hull.Value().payload.size()});
+            REQUIRE(truncatedHull.HasError());
+            REQUIRE(truncatedHull.ErrorValue().code.Value() == PhysicsErrors::ShapeArtifactInvalid.code.Value());
+
+            auto invalidCube = cube;
+            const auto invalidVertex = static_cast<std::size_t>(generator.Next() % invalidCube.size());
+            invalidCube[invalidVertex].x = std::numeric_limits<float>::quiet_NaN();
+            const auto badHull = CookPhysicsConvexHull(HullRequest(invalidCube));
+            REQUIRE(badHull.HasError());
+            REQUIRE(badHull.ErrorValue().code.Value() == PhysicsErrors::ShapeCookSourceInvalid.code.Value());
+            REQUIRE(badHull.ErrorValue().message.find("property/hull") != std::string::npos);
+            REQUIRE(badHull.ErrorValue().message.find(Asset().ToString()) != std::string::npos);
+            REQUIRE(badHull.ErrorValue().message.find("vertex " + std::to_string(invalidVertex)) != std::string::npos);
+        }
     }  // namespace
 
     TEST_CASE("Generated Physics world and body descriptors preserve independent bounds", "[physics][property][headless]") {
@@ -142,15 +188,7 @@ namespace Horo::Physics {
                 REQUIRE(bodyError.ErrorValue().code.Value() == PhysicsErrors::DescriptorInvalid.code.Value());
                 REQUIRE(ValidatePhysicsAuthoredBodyDescriptor(body).HasValue());
 
-                auto arbitraryBody = body;
-                const float mass = std::bit_cast<float>(static_cast<std::uint32_t>(generator.Next()));
-                arbitraryBody.mass = PhysicsMass{mass};
-                const bool admissibleMass =
-                    std::isfinite(mass) && mass >= MinimumPhysicsMassKilograms && mass <= MaximumPhysicsMassKilograms;
-                const auto massResult = ValidatePhysicsAuthoredBodyDescriptor(arbitraryBody);
-                REQUIRE(massResult.HasValue() == admissibleMass);
-                if (!admissibleMass)
-                    REQUIRE(massResult.ErrorValue().code.Value() == PhysicsErrors::DescriptorInvalid.code.Value());
+                CheckArbitraryMass(generator, body);
             }
         }
     }
@@ -161,38 +199,7 @@ namespace Horo::Physics {
             Generator generator(seed);
             for (std::uint32_t index = 0; index < CasesPerSeed; ++index) {
                 INFO("asset=" << Asset().ToString() << " seed=" << seed << " case=" << index);
-                {
-                    INFO("stage=convex cook/load source=property/hull subresource=5");
-                    auto cube = Cube(generator.Bounded(16), 1.0F + generator.Bounded(4));
-                    const auto originalCube = cube;
-                    const auto hull = CookPhysicsConvexHull(HullRequest(cube));
-                    REQUIRE(hull.HasValue());
-                    REQUIRE(cube == originalCube);
-                    REQUIRE(LoadCookedPhysicsConvexHull(hull.Value().descriptor, Target(), hull.Value().payload).HasValue());
-                    auto renamedHullRequest = HullRequest(cube);
-                    renamedHullRequest.sourceContext = "property/renamed-hull";
-                    const auto renamedHull = CookPhysicsConvexHull(renamedHullRequest);
-                    REQUIRE(renamedHull.HasValue());
-                    REQUIRE(renamedHull.Value().sourceDigest == hull.Value().sourceDigest);
-                    REQUIRE(renamedHull.Value().descriptor.cacheKeyDigest == hull.Value().descriptor.cacheKeyDigest);
-                    REQUIRE(renamedHull.Value().payload == hull.Value().payload);
-                    const auto truncatedHull =
-                        LoadCookedPhysicsConvexHull(hull.Value().descriptor, Target(),
-                                                    std::span<const std::uint8_t>{hull.Value().payload.data(),
-                                                                                  generator.Next() % hull.Value().payload.size()});
-                    REQUIRE(truncatedHull.HasError());
-                    REQUIRE(truncatedHull.ErrorValue().code.Value() == PhysicsErrors::ShapeArtifactInvalid.code.Value());
-
-                    auto invalidCube = cube;
-                    const auto invalidVertex = static_cast<std::size_t>(generator.Next() % invalidCube.size());
-                    invalidCube[invalidVertex].x = std::numeric_limits<float>::quiet_NaN();
-                    const auto badHull = CookPhysicsConvexHull(HullRequest(invalidCube));
-                    REQUIRE(badHull.HasError());
-                    REQUIRE(badHull.ErrorValue().code.Value() == PhysicsErrors::ShapeCookSourceInvalid.code.Value());
-                    REQUIRE(badHull.ErrorValue().message.find("property/hull") != std::string::npos);
-                    REQUIRE(badHull.ErrorValue().message.find(Asset().ToString()) != std::string::npos);
-                    REQUIRE(badHull.ErrorValue().message.find("vertex " + std::to_string(invalidVertex)) != std::string::npos);
-                }
+                CheckConvexCase(generator);
 
                 {
                     INFO("stage=triangle cook/load source=property/mesh subresource=6");
