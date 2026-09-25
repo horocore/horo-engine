@@ -95,6 +95,8 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor RequiredServiceUnavailable;
         /** @brief A typed service method was called while its capability was unavailable. */
         extern const ErrorCodeDescriptor ServiceUnavailable;
+        /** @brief Canonical rejection descriptor for explicit Null provider service work. */
+        extern const ErrorCodeDescriptor NullProvider;
         /** @brief A supported service is available, but this exact leaderboard query kind is not. */
         extern const ErrorCodeDescriptor UnsupportedOperation;
     }  // namespace BackendErrors
@@ -125,6 +127,58 @@ namespace Horo::PlatformServices {
         /** @brief Idempotently closes admission, drains provider callbacks, and releases owned state. @return Success or typed
          * retained-resource failure. */
         [[nodiscard]] virtual Result<void> Shutdown() = 0;
+    };
+
+    /**
+     * @brief Explicit backend for headless and product compositions without remote platform services.
+     * @details Every service is unavailable with NullProviderSelected. Reads and writes fail with
+     *          platform.provider.null and never create request, queue, idempotency, or provider state.
+     */
+    class NullPlatformServicesBackend final : public IPlatformServicesBackend {
+    public:
+        /**
+         * @brief Creates an inert Null backend for one provider generation.
+         * @param generation Nonzero generation used to fence frontend composition.
+         */
+        explicit NullPlatformServicesBackend(PlatformProviderGeneration generation = {1}) noexcept;
+
+        /** @copydoc IPlatformServicesBackend::InspectCapabilities */
+        [[nodiscard]] Result<PlatformServiceCapabilitySnapshot> InspectCapabilities() const override;
+        /** @copydoc IPlatformServicesBackend::Activate */
+        [[nodiscard]] Result<void> Activate(const PlatformServicesBackendConfig &config) override;
+        /** @copydoc IPlatformServicesBackend::RequestCancel */
+        [[nodiscard]] Result<void> RequestCancel(PlatformRequestId request, PlatformRequestGeneration generation) override;
+        /** @copydoc IPlatformServicesBackend::Shutdown */
+        [[nodiscard]] Result<void> Shutdown() override;
+
+        /** @copydoc IAchievementService::UnlockAchievement */
+        [[nodiscard]] Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) override;
+        /** @copydoc ILeaderboardStatService::SubmitScore */
+        [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
+        /** @copydoc ILeaderboardStatService::QueryRankedLeaderboard */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) override;
+        /** @copydoc ILeaderboardStatService::QueryLeaderboardAroundSubject */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
+            LeaderboardAroundSubjectQuery query) override;
+        /** @copydoc ILeaderboardStatService::QueryFriendsLeaderboard */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) override;
+        /** @copydoc ILeaderboardStatService::WriteStat */
+        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
+        /** @copydoc ICloudService::ReadCloudObject */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
+        /** @copydoc ICloudService::WriteCloudObject */
+        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) override;
+        /** @copydoc IPresenceService::SetPresence */
+        [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
+        /** @copydoc IPresenceService::ClearPresence */
+        [[nodiscard]] Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) override;
+        /** @copydoc IFriendsService::QueryFriends */
+        [[nodiscard]] Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery query) override;
+        /** @copydoc ISessionService::QueryCurrentSession */
+        [[nodiscard]] Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() override;
+
+    private:
+        PlatformProviderGeneration generation_;
     };
 
     /**

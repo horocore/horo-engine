@@ -333,6 +333,45 @@ namespace Horo::PlatformServices {
         CHECK(backend->TotalCalls() == 0);
     }
 
+    TEST_CASE("A Null frontend rejects every typed read and write before request admission", "[platform-services][frontend][null]") {
+        auto backend = std::make_shared<NullPlatformServicesBackend>(PlatformProviderGeneration{7});
+        PlatformServicesBackendConfig config;
+        auto activated = ActivatePlatformServicesBackend(*backend, config);
+        REQUIRE(activated.HasValue());
+
+        const auto session = Session();
+        auto created = PlatformServicesFrontend::Create(backend, std::move(activated).Value(), session);
+        REQUIRE(created.HasValue());
+        auto frontend = std::move(created).Value();
+        const auto subject = *session.Subject();
+
+        const auto directNull = backend->ReadCloudObject({subject, {1}});
+        const auto routedNull = frontend.ReadCloudObject({subject, {1}});
+        REQUIRE(directNull.HasError());
+        REQUIRE(routedNull.HasError());
+        CHECK(&FrontendErrors::NullProvider == &BackendErrors::NullProvider);
+        CHECK(directNull.ErrorValue().domain.Value() == routedNull.ErrorValue().domain.Value());
+        CHECK(directNull.ErrorValue().code.Value() == routedNull.ErrorValue().code.Value());
+        CHECK(directNull.ErrorValue().severity == routedNull.ErrorValue().severity);
+        CHECK(directNull.ErrorValue().message == routedNull.ErrorValue().message);
+
+        RequireError(frontend.UnlockAchievement({subject, {1}}), FrontendErrors::NullProvider);
+        RequireError(frontend.SubmitScore({subject, {1}, 5}), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryRankedLeaderboard({subject, {1}, 0, 1}), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryLeaderboardAroundSubject({subject, {1}, 0, 0}), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryFriendsLeaderboard({subject, {1}, 0, 1}), FrontendErrors::NullProvider);
+        RequireError(frontend.WriteStat({subject, {1}, 5}), FrontendErrors::NullProvider);
+        RequireError(frontend.ReadCloudObject({subject, {1}}), FrontendErrors::NullProvider);
+        RequireError(frontend.WriteCloudObject({subject, {1}, {}}), FrontendErrors::NullProvider);
+        RequireError(frontend.SetPresence({subject, {1}, ""}), FrontendErrors::NullProvider);
+        RequireError(frontend.ClearPresence(subject), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryFriends({subject, 1}), FrontendErrors::NullProvider);
+        RequireError(frontend.QueryCurrentSession(), FrontendErrors::NullProvider);
+
+        CHECK(frontend.Close().HasValue());
+        CHECK_FALSE(frontend.IsOpen());
+    }
+
     TEST_CASE("Platform Services frontend rejects only the explicitly unsupported leaderboard query kinds",
               "[platform-services][frontend][capability]") {
         auto backend = std::make_shared<RoutingBackend>();

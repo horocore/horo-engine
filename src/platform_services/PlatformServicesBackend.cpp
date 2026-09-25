@@ -124,7 +124,8 @@ namespace Horo::PlatformServices {
     namespace BackendErrors {
         namespace {
             const ErrorDomainId Domain{"horo.platform.backend"};
-        }
+            const ErrorDomainId FrontendDomain{"horo.platform.frontend"};
+        }  // namespace
 
         const ErrorCodeDescriptor InvalidCapabilitySnapshot{Domain,
                                                             ErrorCode{"platform.backend.invalid_capabilities"},
@@ -154,6 +155,13 @@ namespace Horo::PlatformServices {
                                                      "Disable optional use or select a compatible provider.",
                                                      false,
                                                      true};
+        const ErrorCodeDescriptor NullProvider{FrontendDomain,
+                                               ErrorCode{"platform.provider.null"},
+                                               ErrorSeverity::Error,
+                                               "The Null platform provider cannot accept remote service work.",
+                                               "Select an available provider or explicitly suppress the optional intent before submission.",
+                                               false,
+                                               false};
         const ErrorCodeDescriptor UnsupportedOperation{Domain,
                                                        ErrorCode{"platform.capability.operation_unsupported"},
                                                        ErrorSeverity::Error,

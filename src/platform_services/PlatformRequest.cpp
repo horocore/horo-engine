@@ -315,6 +315,12 @@ namespace Horo::PlatformServices {
         return CompleteErased(handle.Id(), handle.Generation(), typeid(void), PlatformRequestState::Succeeded, {}, std::nullopt);
     }
 
+    /** @copydoc PlatformRequestStore::CompleteSuccess */
+    Result<PlatformRequestMutation> PlatformRequestStore::CompleteSuccess(const PlatformRequestId id,
+                                                                          const PlatformRequestGeneration generation) {
+        return CompleteErased(id, generation, typeid(void), PlatformRequestState::Succeeded, {}, std::nullopt);
+    }
+
     /** @copydoc PlatformRequestStore::CompleteFailure */
     Result<PlatformRequestMutation> PlatformRequestStore::CompleteErased(const PlatformRequestId id,
                                                                          const PlatformRequestGeneration generation,

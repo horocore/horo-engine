@@ -133,6 +133,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformRequestErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
+        platform_services/PlatformServicesNullBackend.cpp
         platform_services/PlatformStatCacheErrors.cpp
         platform_services/PlatformStatCacheCoordinator.cpp
         platform_services/PlatformStableIdRegistry.cpp
