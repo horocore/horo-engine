@@ -237,6 +237,10 @@ class PlatformServicesFrontend {
 public:
     Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) const;
     Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) const;
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) const;
+    Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>>
+    QueryLeaderboardAroundSubject(LeaderboardAroundSubjectQuery query) const;
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) const;
     Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) const;
     Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) const;
     Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) const;
@@ -244,14 +248,17 @@ public:
     Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle subject) const;
     Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery query) const;
     Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() const;
+    template <typename T> Result<void> RequestCancel(const PlatformRequestHandle<T>& request) const;
     Result<PlatformServiceLimits> ServiceLimits(PlatformServiceKind service) const;
     Result<void> Close();
 };
 ```
 
-The query, subscription and cancellation surfaces remain owned by the request store
-until the PLS-001.4 completion handoff connects admitted frontend handles to that
-store; they are not frontend methods in this slice.
+The request store owns typed snapshots and subscriptions. The frontend forwards an
+explicit cancellation request to the selected backend for the handle's request and
+generation; cancellation remains best effort and does not change ADR-130 terminal
+semantics. A closed frontend rejects both new queries and cancellation before backend
+shutdown.
 
 Pre-admission validation, permission, lifecycle, capability, session and bounded-
 capacity failure returns `Result` with no request record or provider call. Once admitted,
@@ -477,6 +484,25 @@ monotonic and retryable only when the provider/gateway atomically implements max
 or-equal. Reset/decrement is not a runtime operation. The remote platform owns its
 account projection; querying that projection does not make it trusted gameplay state.
 
+Implementation status for PLS-004.2: `PlatformAchievementCoordinator` validates
+achievement IDs against the immutable authored registry, requires the registered
+authority and progress algebra, and retains a bounded exact mutation-ID ledger.
+Duplicate envelopes join as no-ops while conflicting identity reuse fails; provider
+publication is serialized through Horo-owned tokens. State queries and copied results
+are fenced by subject, provider/session/access generations, provider revision and the
+registered progress total. Session replacement and shutdown discard old work without
+calling provider code.
+The coordinator's mutation and state-query admission methods take request values by
+const reference so validation does not copy large envelopes before admission. Source
+callers keep the same call form; consumers that took member-function pointers must
+update their signatures. The coordinator copies accepted requests into its owned
+publication and query tokens, so caller lifetime is unchanged.
+Provider achievement-state adapters must populate the opaque subject on
+`PlatformAchievementStateSnapshot` from the same query partition. A result with
+another or missing subject is rejected as stale. The only in-repository caller is
+the coordinator test; external adapters must add that field when constructing
+result snapshots. No raw account identity is exposed.
+
 ### Leaderboards And Stats
 
 Leaderboards are also authored once and mapped to platform backends at cook
@@ -532,6 +558,38 @@ generation/revision. Leaderboard order is provider-owned under the cooked defini
 These values support UI and local hints; clients cannot use them as authority for
 shared economy, rewards, simulation or access control.
 
+Leaderboard reads have only three bounded forms: ranked pages, windows around the
+authenticated subject's own entry, and pages of that subject's friends. Ranked and
+friends queries require a zero-based `startIndex` and nonzero `pageSize`; the page size
+cannot exceed the selected service's `maxPageEntries`. Around-subject queries specify
+finite before/after counts, and the center row is included in that same limit. There is
+no unbounded query overload. Providers advertise support for each query kind in the
+capability snapshot; an unsupported kind returns
+`platform.capability.operation_unsupported` before provider dispatch. Friends pages
+also require the session's separate `Friends` access grant.
+
+Page results echo the requested offset and report `hasMore`; the next offset is
+`startIndex + entries.size()`, with overflow rejected at admission. Entries are sorted
+by score direction from the immutable leaderboard definition. Equal scores share a
+one-based competition rank (`1, 1, 3`); private provider tie order is stable for an
+unchanged result set, while no participant or account identifier is returned. Around-
+subject results identify the center by its index in the bounded result and report
+whether earlier or later entries were omitted. Result validators reject an offset,
+count, ordering, score-type or tie-rank contradiction before publication. Ranked
+pages also require every new score group to start at the one-based position implied
+by the requested offset; a leading tie may begin before that page. Friends-page
+offsets count only friends, so their reported ranks need not match those offsets.
+Offset pages remain
+deterministic for an unchanged leaderboard snapshot; a provider without a snapshot
+revision may reflect score changes between separate page requests.
+
+Implementation status on 25 September 2026: PLS-004.3 adds the three Horo-only query
+requests and results, per-kind provider capability facts, pre-dispatch session and
+bound checks, deterministic page-result validation and frontend cancellation routing.
+The backend interface minor version advances to 1.1. Query payloads contain only typed
+leaderboard IDs, bounded offsets/counts, rank and typed signed/unsigned 64-bit score values; provider SDK
+types, account identifiers and fallback selection remain private/absent.
+
 Implementation status on 10 September 2026: PLS-003.4 publishes immutable typed
 `StatDefinitionRegistry` and `LeaderboardDefinitionRegistry` snapshots in
 `HoroEngine::PlatformServices`. Each complete candidate is fenced to one ADR-132
@@ -545,6 +603,23 @@ fails before publication with a field-path diagnostic. Presentation may evolve d
 ordinary replacement, while semantic changes or removal without an ADR-132 tombstone
 require an explicit migration. Provider mappings remain opaque ADR-132 inputs rather
 than definition fields.
+
+Implementation status for PLS-004.4: `PlatformStatCacheCoordinator` owns the
+provider-neutral read-through stat cache and authoritative write boundary. Cache
+records are bounded and partitioned by the equality-only subject handle plus exact
+provider/session/access generations and the stat-registry fingerprint. A fresh hit
+is explicitly distinguishable from a stale or corrupt record; stale/corrupt state
+produces an explicit provider-query disposition rather than current success.
+Snapshot writes require an exact provider revision, every accepted write carries a
+bounded typed mutation identity, and conflicting reuse is rejected. Successful
+provider evidence refreshes the cache only after the current session and stat schema
+are revalidated. Protected storage may restore detached cache records atomically,
+but this coordinator never serializes raw account identifiers or calls a provider.
+Coordinator admission and completion APIs now borrow large request, configuration,
+and optional state values during the call, then copy only accepted values into owned
+tokens. Existing source call sites keep their call form; consumers holding exact
+member-function pointers must update their signatures. No caller-owned reference is
+retained after the call.
 
 ### Cloud Save
 
@@ -926,6 +1001,7 @@ struct PlatformServiceCapability {
     PlatformServiceKind service;
     PlatformServiceAvailability availability;
     PlatformServiceLimits limits;
+    LeaderboardQueryCapabilities leaderboardQueries;
     std::optional<PlatformServiceBindingId> binding;
     std::optional<PlatformServiceUnavailableReason> unavailableReason;
 };
@@ -954,7 +1030,7 @@ exactly one compatible private binding; `Unavailable` has no binding and exactly
 reason. Missing, duplicate or mismatched bindings fail composition. Public callers do
 not inspect provider pointers, backend names or SDK flags.
 
-Implementation status on 10 September 2026: PLS-002.2 publishes the version-1
+Implementation status on 10 September 2026: PLS-002.2 publishes the version-1.0
 backend-neutral capability bundle and typed achievement, leaderboard/stat, cloud,
 presence, friends and session interfaces in `HoroEngine::PlatformServices`. Candidate
 inspection is inert; `ActivatePlatformServicesBackend` validates interface version,
@@ -970,6 +1046,17 @@ reload, session replacement or access-policy change increments the applicable
 generation/revision; stale completion evidence cannot publish into the replacement.
 
 ## Offline And Degraded Behavior
+
+PLS-007.4 adds a bounded `PlatformOfflineQueue` policy core with typed logical
+operations, deterministic per-lane sequence order, operation-specific coalescing,
+per-receipt expiry, explicit terminal outcomes and retention-gated compaction. The
+core is in-memory policy state: it does not report durable acceptance or schedule a
+provider. A durable owner must atomically persist its transitions before publishing
+durable receipts or dispatching work. Expired, superseded and compacted identities
+remain observable as non-success outcomes.
+The owner calls `Expire(now)` before dispatch, cancellation or resumption and persists
+or publishes the returned receipt IDs before the next transition; those lifecycle
+methods leave due receipts untouched when that expiry pass has not occurred.
 
 The ADR-136 `PlatformOfflineQueue` is the only durable owner for replay-eligible
 progression and explicitly opted-in presence desired state. It stores canonical Horo

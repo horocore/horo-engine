@@ -93,10 +93,15 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] Record *FindRecord(const PlatformRequestId id, const PlatformRequestGeneration generation,
                                          const std::type_index type) noexcept {
+            auto *record = FindRecord(id, generation);
+            return record != nullptr && record->type == type ? record : nullptr;
+        }
+
+        [[nodiscard]] Record *FindRecord(const PlatformRequestId id, const PlatformRequestGeneration generation) noexcept {
             if (!id.IsValid() || generation != config.generation)
                 return nullptr;
             const auto found = records.find(id.value);
-            if (found == records.end() || found->second.type != type)
+            if (found == records.end())
                 return nullptr;
             return &found->second;
         }
@@ -131,6 +136,17 @@ namespace Horo::PlatformServices {
                                                                    const std::type_index type, Operation &&operation) {
             std::lock_guard lock(mutex);
             auto *record = FindRecord(id, generation, type);
+            if (record == nullptr)
+                return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::Stale));
+            return std::forward<Operation>(operation)(*record);
+        }
+
+        template <typename Operation>
+        [[nodiscard]] Result<PlatformRequestMutation> MutateRecordUntyped(const PlatformRequestId id,
+                                                                          const PlatformRequestGeneration generation,
+                                                                          Operation &&operation) {
+            std::lock_guard lock(mutex);
+            auto *record = FindRecord(id, generation);
             if (record == nullptr)
                 return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::Stale));
             return std::forward<Operation>(operation)(*record);
@@ -321,6 +337,21 @@ namespace Horo::PlatformServices {
         else if (observation == Observation::Throttled)
             Detail::RecordPlatformThrottledMetric();
         return validated;
+    }
+
+    /** @copydoc PlatformRequestStore::RequestCancel(PlatformRequestId, PlatformRequestGeneration) */
+    Result<PlatformRequestMutation> PlatformRequestStore::RequestCancel(const PlatformRequestId id,
+                                                                        const PlatformRequestGeneration generation) {
+        auto &state = MutableState();
+        return state.MutateRecordUntyped(id, generation, [](State::Record &record) {
+            auto &snapshot = record.snapshot;
+            if (IsTerminal(snapshot.state) || snapshot.cancellationRequested)
+                return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Unchanged);
+            snapshot.cancellationRequested = true;
+            snapshot.timing.cancellationRequestedAt = std::chrono::steady_clock::now();
+            snapshot.state = PlatformRequestState::Cancelling;
+            return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Applied);
+        });
     }
 
     /** @copydoc PlatformRequestStore::CompleteSuccess */

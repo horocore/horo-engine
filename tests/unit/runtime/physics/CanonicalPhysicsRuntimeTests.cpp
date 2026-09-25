@@ -7,8 +7,12 @@
 #include <Jolt/Jolt.h>
 
 // Jolt subsidiary headers require its root definitions first.
+#include "CanonicalPhysicsRuntimeInternal.h"
+
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Memory.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <string>
@@ -281,5 +285,44 @@ namespace Horo::Physics::Detail {
 #ifdef JPH_ENABLE_ASSERTS
         REQUIRE(JPH::AssertFailed == priorAssert);
 #endif
+    }
+
+    TEST_CASE("Canonical joint collision suppression lasts until the final pair joint retires", "[physics][native][constraint]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const auto owner = PhysicsWorldId::Create(601).Value();
+        const ShapeHandle shape = CreateCanonicalSceneShape(world.handle, owner, PhysicsBoxShape{}).Value();
+        PhysicsBodyDescriptor body;
+        body.shape = shape;
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const BodyHandle first = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        body.pose.translation = {2.0F, 0.0F, 0.0F};
+        body.motion = PhysicsMotionType::Dynamic;
+        body.mass = PhysicsMass{1.0F};
+        const BodyHandle second = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
+        const auto contactPolicy = [&] {
+            JPH::BodyLockRead firstLock(canonical.native.system->GetBodyLockInterfaceNoLock(), canonical.scene.bodies[0].nativeBody);
+            JPH::BodyLockRead secondLock(canonical.native.system->GetBodyLockInterfaceNoLock(), canonical.scene.bodies[1].nativeBody);
+            REQUIRE(firstLock.Succeeded());
+            REQUIRE(secondLock.Succeeded());
+            return canonical.contactListener.OnContactValidate(firstLock.GetBody(), secondLock.GetBody(), JPH::RVec3::sZero(),
+                                                               JPH::CollideShapeResult{});
+        };
+        REQUIRE(contactPolicy() == JPH::ValidateResult::AcceptAllContactsForThisBodyPair);
+
+        PhysicsConstraintDescriptor descriptor;
+        descriptor.first = {first, {}};
+        descriptor.second = PhysicsBodyAnchor{second, {}};
+        descriptor.parameters = PhysicsDistanceConstraint{1.0F, 3.0F};
+        const ConstraintHandle distance = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        descriptor.parameters = PhysicsFixedConstraint{};
+        const ConstraintHandle fixed = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        REQUIRE(contactPolicy() == JPH::ValidateResult::RejectAllContactsForThisBodyPair);
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, distance).HasValue());
+        REQUIRE(contactPolicy() == JPH::ValidateResult::RejectAllContactsForThisBodyPair);
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, fixed).HasValue());
+        REQUIRE(contactPolicy() == JPH::ValidateResult::AcceptAllContactsForThisBodyPair);
     }
 }  // namespace Horo::Physics::Detail

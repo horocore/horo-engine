@@ -46,6 +46,9 @@ namespace Horo::Physics {
             return first;
         if (const auto second = ValidateSecondAnchor(descriptor, expectedWorld); second.HasError())
             return second;
+        if (descriptor.collisionPolicy != PhysicsJointCollisionPolicy::DisableBetweenBodies &&
+            descriptor.collisionPolicy != PhysicsJointCollisionPolicy::AllowBetweenBodies)
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Unknown joint collision policy."));
         if (const auto *distance = std::get_if<PhysicsDistanceConstraint>(&descriptor.parameters))
             return ValidateDistance(*distance);
         return Result<void>::Success();
