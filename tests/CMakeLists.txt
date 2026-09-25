@@ -1213,6 +1213,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
         unit/platform_services/PlatformAchievementCoordinatorTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
+        unit/platform_services/PlatformPresenceCoordinatorTests.cpp
         unit/platform_services/PlatformOfflineQueueStorageTests.cpp
         unit/platform_services/PlatformProgressionIdempotencyTests.cpp
         unit/platform_services/PlatformOfflineQueueTests.cpp
