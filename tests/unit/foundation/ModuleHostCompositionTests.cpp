@@ -124,6 +124,26 @@ TEST_CASE("Module settings registration reports typed conflicts without partial 
     REQUIRE(host.Register(MakeModule("horo.beta"), binding).HasValue());
 }
 
+TEST_CASE("Module settings reject invalid local metadata without registering the module", "[unit][foundation][modules][configuration]") {
+    ModuleHost host;
+    auto contribution = Settings("horo.alpha", "alpha", "alpha.count", "HORO_ALPHA_COUNT");
+    contribution.settings.front().sourcePolicy->allowedSources = ConfigurationSourceMask::Invocation;
+    auto result = host.Register(MakeModule("horo.alpha"), contribution);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "foundation.module.invalid_settings_contribution");
+    CHECK_FALSE(host.StateOf(ModuleId{"horo.alpha"}).has_value());
+
+    contribution.settings.front().sourcePolicy->allowedSources = ConfigurationSourceMask::Invocation | ConfigurationSourceMask::Environment;
+    contribution.environmentBindings.push_back({.key = contribution.settings.front().key, .variable = "HORO_ALPHA_OTHER"});
+    result = host.Register(MakeModule("horo.alpha"), contribution);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "foundation.module.invalid_settings_contribution");
+    CHECK_FALSE(host.StateOf(ModuleId{"horo.alpha"}).has_value());
+
+    contribution.environmentBindings.pop_back();
+    REQUIRE(host.Register(MakeModule("horo.alpha"), contribution).HasValue());
+}
+
 TEST_CASE("Module settings resolve in stable host order and captured snapshots survive shutdown",
           "[unit][foundation][modules][configuration]") {
     const auto makeHost = [](const bool reverse) {

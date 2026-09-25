@@ -1192,6 +1192,21 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @brief Composes editor modules with the settings loaded for this startup. */
+    [[nodiscard]] static Result<std::unique_ptr<ModuleHost>> ComposeEditorModules(const Application::Internal::HostRenderer renderer,
+                                                                                  const EditorSettings &initialSettings) {
+        const std::vector settingsContributions{MakeEditorSettingsContribution(initialSettings)};
+        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
+                                                          .renderer = renderer,
+#if defined(HORO_HAS_OPENTELEMETRY)
+                                                          .includeOpenTelemetry = true
+#else
+                                                          .includeOpenTelemetry = false
+#endif
+                                                         },
+                                                         settingsContributions);
+    }
+
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
@@ -1241,16 +1256,7 @@ namespace Horo::Editor {
             return 1;
         }
         const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
-        const std::vector<ModuleConfigurationContribution> settingsContributions{MakeEditorSettingsContribution(initialSettings)};
-        auto composedModules = Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
-                                                                          .renderer = selectedRenderer.Value(),
-#if defined(HORO_HAS_OPENTELEMETRY)
-                                                                          .includeOpenTelemetry = true
-#else
-                                                                          .includeOpenTelemetry = false
-#endif
-                                                                         },
-                                                                         settingsContributions);
+        auto composedModules = ComposeEditorModules(selectedRenderer.Value(), initialSettings);
         if (composedModules.HasError()) {
             LOG_CRITICAL("editor.startup", "Module composition failed: %s", composedModules.ErrorValue().message.c_str());
             Log::Logger::Shutdown();

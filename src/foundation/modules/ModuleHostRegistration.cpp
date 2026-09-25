@@ -11,7 +11,7 @@
 namespace Horo {
     namespace {
         [[nodiscard]] bool Owns(const std::string_view prefix, const std::string_view key) {
-            return key.size() > prefix.size() && key.substr(0, prefix.size()) == prefix && key[prefix.size()] == '.';
+            return key.size() > prefix.size() && key.starts_with(prefix) && key[prefix.size()] == '.';
         }
 
         [[nodiscard]] bool Overlaps(const std::string_view left, const std::string_view right) {
@@ -35,6 +35,38 @@ namespace Horo {
 
         [[nodiscard]] Result<void> ContributionFailure(const ErrorCodeDescriptor &code, const std::string &detail) {
             return Result<void>::Failure(MakeError(code, detail));
+        }
+
+        /** @brief Validates settings and environment bindings without changing host state. */
+        [[nodiscard]] Result<void> ValidateContributionMetadata(const ModuleConfigurationContribution &contribution) {
+            ConfigurationSchema localSchema;
+            std::set<std::string, std::less<>> keys;
+            for (const SettingDescriptor &setting : contribution.settings) {
+                const std::string &key = setting.key.Value();
+                if (!Owns(contribution.ownerPrefix, key) || !setting.sourcePolicy.has_value())
+                    return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
+                                               "Setting '" + key + "' is outside its owner or lacks a source policy.");
+                if (!keys.emplace(key).second)
+                    return ContributionFailure(ModuleDescriptorErrors::DuplicateSetting, "Setting '" + key + "' is duplicated.");
+                if (const Result<void> valid = localSchema.Register(setting); valid.HasError())
+                    return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
+                                               "Setting '" + key + "' has invalid schema metadata.");
+            }
+            std::set<std::string, std::less<>> variables;
+            std::set<std::string, std::less<>> boundKeys;
+            for (const EnvironmentVariableBinding &binding : contribution.environmentBindings) {
+                if (const SettingDescriptor *setting = localSchema.FindDescriptor(binding.key);
+                    !ValidBinding(binding.variable) || setting == nullptr ||
+                    (static_cast<std::uint16_t>(setting->sourcePolicy->allowedSources) &
+                     static_cast<std::uint16_t>(ConfigurationSourceMask::Environment)) == 0 ||
+                    !boundKeys.emplace(binding.key.Value()).second)
+                    return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
+                                               "Environment binding '" + binding.variable + "' is invalid or names an unowned setting.");
+                if (!variables.emplace(binding.variable).second)
+                    return ContributionFailure(ModuleDescriptorErrors::DuplicateEnvironmentBinding,
+                                               "Environment binding '" + binding.variable + "' is duplicated.");
+            }
+            return Result<void>::Success();
         }
 
         [[nodiscard]] bool HasRepeatedDependencies(const ModuleDescriptor &descriptor) {
@@ -66,33 +98,8 @@ namespace Horo {
         if (contribution.module != descriptor.id || !ValidPrefix(contribution.ownerPrefix))
             return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
                                        "Settings contribution owner does not match module '" + descriptor.id.value + "'.");
-        ConfigurationSchema localSchema;
-        std::set<std::string, std::less<>> keys;
-        for (const SettingDescriptor &setting : contribution.settings) {
-            const std::string &key = setting.key.Value();
-            if (!Owns(contribution.ownerPrefix, key) || !setting.sourcePolicy.has_value())
-                return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
-                                           "Setting '" + key + "' is outside its owner or lacks a source policy.");
-            if (!keys.emplace(key).second)
-                return ContributionFailure(ModuleDescriptorErrors::DuplicateSetting, "Setting '" + key + "' is duplicated.");
-            if (const Result<void> valid = localSchema.Register(setting); valid.HasError())
-                return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
-                                           "Setting '" + key + "' has invalid schema metadata.");
-        }
-        std::set<std::string, std::less<>> variables;
-        std::set<std::string, std::less<>> boundKeys;
-        for (const EnvironmentVariableBinding &binding : contribution.environmentBindings) {
-            const SettingDescriptor *setting = localSchema.FindDescriptor(binding.key);
-            if (!ValidBinding(binding.variable) || setting == nullptr ||
-                (static_cast<std::uint16_t>(setting->sourcePolicy->allowedSources) &
-                 static_cast<std::uint16_t>(ConfigurationSourceMask::Environment)) == 0 ||
-                !boundKeys.emplace(binding.key.Value()).second)
-                return ContributionFailure(ModuleDescriptorErrors::InvalidSettingsContribution,
-                                           "Environment binding '" + binding.variable + "' is invalid or names an unowned setting.");
-            if (!variables.emplace(binding.variable).second)
-                return ContributionFailure(ModuleDescriptorErrors::DuplicateEnvironmentBinding,
-                                           "Environment binding '" + binding.variable + "' is duplicated.");
-        }
+        if (const Result<void> valid = ValidateContributionMetadata(contribution); valid.HasError())
+            return valid;
         for (const ModuleConfigurationContribution &existing : m_configurationContributions) {
             if (StateOf(existing.module) == ModuleLifecycleState::Stopped || StateOf(existing.module) == ModuleLifecycleState::Failed)
                 continue;
