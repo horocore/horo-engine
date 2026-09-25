@@ -718,6 +718,10 @@ in-flight provider operation, applies a bounded publication interval, and invali
 pending/in-flight state on sign-out, session/access replacement or close. Provider
 adapters receive only a Horo-owned publication token and normalized completion result;
 provider strings, native values and implicit status fallback are not representable.
+`SubmitClear` borrows its small request by const reference; existing source callers can
+pass the same lvalue or temporary, but binary consumers of the earlier by-value
+signature must rebuild with the updated public header. Set requests remain owned by
+value so bounded detail bytes can move into the retained intent.
 
 PLS-003.4 also publishes the immutable `PresenceDefinitionRegistry`. Every active
 presence-status identity has exactly one definition fixing whether free detail is

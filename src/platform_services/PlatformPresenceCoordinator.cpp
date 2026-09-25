@@ -145,7 +145,7 @@ namespace Horo::PlatformServices {
         return ValidatePlatformSessionAccess(session_, request.subject, request.accessRevision, PlatformServiceKind::Presence);
     }
 
-    PlatformPresenceIntent PlatformPresenceCoordinator::MakeSetIntent(PlatformPresenceSetRequest request) {
+    PlatformPresenceIntent PlatformPresenceCoordinator::MakeSetIntent(PlatformPresenceSetRequest request) const {
         return {.operation = PlatformPresenceOperation::Set,
                 .subject = request.subject,
                 .sessionGeneration = session_.Generation(),
@@ -155,7 +155,7 @@ namespace Horo::PlatformServices {
                 .sequence = nextSequence_};
     }
 
-    PlatformPresenceIntent PlatformPresenceCoordinator::MakeClearIntent(const PlatformPresenceClearRequest &request) {
+    PlatformPresenceIntent PlatformPresenceCoordinator::MakeClearIntent(const PlatformPresenceClearRequest &request) const {
         return {.operation = PlatformPresenceOperation::Clear,
                 .subject = request.subject,
                 .sessionGeneration = session_.Generation(),
@@ -190,14 +190,14 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformPresenceCoordinator::SubmitClear */
-    Result<PlatformPresenceAdmission> PlatformPresenceCoordinator::SubmitClear(PlatformPresenceClearRequest request) {
+    Result<PlatformPresenceAdmission> PlatformPresenceCoordinator::SubmitClear(const PlatformPresenceClearRequest &request) {
         using enum PlatformPresenceAdmission;
         if (closed_)
             return Result<PlatformPresenceAdmission>::Failure(MakeError(PresenceCoordinatorErrors::Closed));
         if (const auto valid = ValidateClear(request); valid.HasError())
             return Result<PlatformPresenceAdmission>::Failure(valid.ErrorValue());
 
-        auto intent = MakeClearIntent(std::move(request));
+        auto intent = MakeClearIntent(request);
         if (pending_ && SameIntent(*pending_, intent))
             return Result<PlatformPresenceAdmission>::Success(IgnoredDuplicate);
         if (!pending_ && inFlight_ && SameIntent(inFlight_->intent, intent))

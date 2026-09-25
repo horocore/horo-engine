@@ -147,7 +147,7 @@ namespace Horo::PlatformServices {
          * @param request Current subject and access-policy evidence.
          * @return Queued, Coalesced, IgnoredDuplicate, or typed validation failure.
          */
-        [[nodiscard]] Result<PlatformPresenceAdmission> SubmitClear(PlatformPresenceClearRequest request);
+        [[nodiscard]] Result<PlatformPresenceAdmission> SubmitClear(const PlatformPresenceClearRequest &request);
 
         /**
          * @brief Takes the latest pending intent when no publication is in flight and rate policy permits it.
@@ -190,8 +190,8 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] Result<void> ValidateSet(const PlatformPresenceSetRequest &request) const;
         [[nodiscard]] Result<void> ValidateClear(const PlatformPresenceClearRequest &request) const;
-        [[nodiscard]] PlatformPresenceIntent MakeSetIntent(PlatformPresenceSetRequest request);
-        [[nodiscard]] PlatformPresenceIntent MakeClearIntent(const PlatformPresenceClearRequest &request);
+        [[nodiscard]] PlatformPresenceIntent MakeSetIntent(PlatformPresenceSetRequest request) const;
+        [[nodiscard]] PlatformPresenceIntent MakeClearIntent(const PlatformPresenceClearRequest &request) const;
         [[nodiscard]] static bool SameIntent(const PlatformPresenceIntent &left, const PlatformPresenceIntent &right) noexcept;
 
         std::shared_ptr<const PresenceDefinitionRegistry> registry_;
