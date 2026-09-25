@@ -564,6 +564,31 @@ namespace Horo::PlatformServices::Tests {
         REQUIRE(host->Close().HasValue());
     }
 
+    TEST_CASE("Queued work expires without native submission or cancellation", "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        unsigned observed{};
+        auto subscription = host->OnComplete(request.Value(), [&](const auto &snapshot) {
+            CHECK(snapshot.state == PlatformRequestState::TimedOut);
+            ++observed;
+        });
+        REQUIRE(subscription.HasValue());
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        CHECK(host->DispatchCompletions(64, deadline) == 0);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        CHECK(observed == 1);
+        CHECK(std::ranges::count(Events(*rig.audit), 'O') == 0);
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 0);
+        REQUIRE(host->Close().HasValue());
+    }
+
     TEST_CASE("Invalid per-service deadline policy fails before native provider creation", "[platform-services][lifecycle][timeout]") {
         Rig rig;
         rig.Publish();
