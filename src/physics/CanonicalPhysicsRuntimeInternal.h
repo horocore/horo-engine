@@ -125,6 +125,7 @@ namespace Horo::Physics::Detail {
     struct CanonicalSceneConstraintRecord final {
         ConstraintHandle handle;
         JPH::Ref<JPH::Constraint> constraint;
+        PhysicsConstraintDescriptor descriptor;
     };
 
     /** @brief Native solver objects retained in dependency order for one world. */

@@ -72,6 +72,17 @@ sequence to the complete tick/world/scene/target/source key; no second legacy
 ordering authority remains. Consumers continue linking `HoroEngine::Physics`, and
 native solver identities or random providers are not exposed.
 
+## Physics Debug Snapshot Boundary
+
+`Horo/Physics/PhysicsDebugSnapshot.h` is owned by `HoroPhysics`. It adds an
+opt-in completed-tick value model and `PhysicsWorld::CaptureDebugSnapshot` without
+changing existing tick or query callers. The world projects current private
+Horo identities and its published event/tick evidence into the new source
+contract; future backend-neutral producers can fill the remaining unavailable
+categories. No compatibility adapter or native solver type is exposed.
+Standalone public-header consumer coverage is generated for the new header by
+the ownership registry.
+
 ## Build-Tree Contract
 
 `cmake/HoroPublicHeaderOwnership.cmake` assigns each public header to one real

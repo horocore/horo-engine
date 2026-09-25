@@ -338,6 +338,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsConvexHullCook.h
     Horo/Physics/PhysicsCookedShapeCache.h
     Horo/Physics/PhysicsCookedShapeDescriptor.h
+    Horo/Physics/PhysicsDebugSnapshot.h
     Horo/Physics/PhysicsDiagnostics.h
     Horo/Physics/PhysicsDeterminismPolicy.h
     Horo/Physics/PhysicsEvents.h

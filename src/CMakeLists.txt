@@ -648,6 +648,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCookedShapeCache.cpp
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
+        physics/PhysicsDebugSnapshot.cpp
         physics/PhysicsDeterminismPolicy.cpp
         physics/PhysicsEventProjection.cpp
         physics/PhysicsEventProjection.h
