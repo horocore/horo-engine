@@ -279,13 +279,13 @@ namespace Horo::PlatformServices {
             return Result<void>::Success();
         }
         PruneExpired(record.capturedTick);
-        if (cache_.size() >= config_.maximumCacheEntries)
-            cache_.erase(cache_.begin());
         try {
             cache_.push_back(std::move(record));
         } catch (const std::bad_alloc &) {
             return Failure(StatCoordinatorErrors::CapacityExceeded);
         }
+        if (cache_.size() > config_.maximumCacheEntries)
+            cache_.erase(cache_.begin());
         return Result<void>::Success();
     }
 
@@ -295,6 +295,8 @@ namespace Horo::PlatformServices {
             return Result<PlatformStatReadDecision>::Failure(MakeError(StatCoordinatorErrors::Closed));
         if (const auto valid = ValidateRead(request); valid.HasError())
             return Result<PlatformStatReadDecision>::Failure(valid.ErrorValue());
+        if (nextQuerySequence_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<PlatformStatReadDecision>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
 
         const PlatformStatQueryIntent query{.request = request,
                                             .providerGeneration = session_.ProviderGeneration(),
@@ -366,18 +368,24 @@ namespace Horo::PlatformServices {
         }
         if (ledger_.size() >= config_.maximumLedgerEntries || pending_.size() >= config_.maximumPendingWrites)
             return Result<PlatformStatWriteAdmission>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
+        if (nextWriteSequence_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<PlatformStatWriteAdmission>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
 
-        const std::uint64_t sequence = nextWriteSequence_++;
+        const std::uint64_t sequence = nextWriteSequence_;
         const PlatformStatWritePublication publication{.request = request,
                                                        .sessionGeneration = session_.Generation(),
                                                        .sequence = sequence};
-        ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
+        bool ledgerInserted = false;
         try {
+            ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
+            ledgerInserted = true;
             pending_.push_back(publication);
         } catch (const std::bad_alloc &) {
-            ledger_.pop_back();
+            if (ledgerInserted)
+                ledger_.pop_back();
             return Result<PlatformStatWriteAdmission>::Failure(MakeError(StatCoordinatorErrors::CapacityExceeded));
         }
+        ++nextWriteSequence_;
         return Result<PlatformStatWriteAdmission>::Success(PlatformStatWriteAdmission::Queued);
     }
 
