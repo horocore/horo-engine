@@ -254,8 +254,12 @@ namespace Horo::Navigation {
                     };
                     TerminalCounter terminal{state};
                     if (cancellation.IsCancellationRequested())
-                        return BakeFailure<void>(NavigationErrors::BakeInputCancelled);
-                    return work(cancellation);
+                        return JobCancelled(MakeError(NavigationErrors::BakeInputCancelled));
+                    Result<void> outcome = work(cancellation);
+                    if (outcome.HasError() && ErrorChainContains(outcome.ErrorValue(), NavigationErrors::BakeInputCancelled.domain,
+                                                                 NavigationErrors::BakeInputCancelled.code))
+                        return JobCancelled(outcome.ErrorValue());
+                    return outcome;
                 });
                     child.HasError()) {
                     group.RequestCancel();
@@ -279,9 +283,10 @@ namespace Horo::Navigation {
 
         [[nodiscard]] Result<void> FinishBatchFailure(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state,
                                                       const Error &error) {
-            if (state->cancellation->Token().IsCancellationRequested()) {
+            if (IsJobCancelled(error) ||
+                ErrorChainContains(error, NavigationErrors::BakeInputCancelled.domain, NavigationErrors::BakeInputCancelled.code)) {
                 Finish(state, NavigationBakeJobState::Cancelled);
-                return BakeFailure<void>(NavigationErrors::BakeInputCancelled);
+                return IsJobCancelled(error) ? Result<void>::Failure(error) : JobCancelled(error);
             }
             Finish(state, NavigationBakeJobState::Failed, error);
             return Result<void>::Failure(error);
@@ -304,7 +309,7 @@ namespace Horo::Navigation {
                 while (cursor != last) {
                     if (state->cancellation->Token().IsCancellationRequested()) {
                         Finish(state, NavigationBakeJobState::Cancelled);
-                        return BakeFailure<void>(NavigationErrors::BakeInputCancelled);
+                        return JobCancelled(MakeError(NavigationErrors::BakeInputCancelled));
                     }
                     auto batch = ExecuteBatch(state, jobs, descriptor, cursor, last);
                     if (batch.HasError())

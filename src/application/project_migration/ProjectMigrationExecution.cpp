@@ -303,8 +303,12 @@ namespace Horo::Application {
                             node.documentStage->Execute(view,
                                                         MigrationStageContext{.definitionId = definition.id, .stageId = descriptor.id},
                                                         childCancellation);
-                        if (changed.HasError())
-                            return Result<void>::Failure(AnnotateStageError(changed.ErrorValue(), definition.id, descriptor.id, view.path));
+                        if (changed.HasError()) {
+                            Error error = AnnotateStageError(changed.ErrorValue(), definition.id, descriptor.id, view.path);
+                            if (ErrorChainContains(error, ProjectErrors::MigrationCancelled.domain, ProjectErrors::MigrationCancelled.code))
+                                return JobCancelled(std::move(error));
+                            return Result<void>::Failure(std::move(error));
+                        }
                         results[index - begin] = std::move(changed).Value();
                         return Result<void>::Success();
                     });
@@ -314,8 +318,15 @@ namespace Horo::Application {
                         return Result<void>::Failure(spawned.ErrorValue());
                     }
                 }
-                if (const Result<void> joined = group.Join(); joined.HasError())
+                if (const Result<void> joined = group.Join(); joined.HasError()) {
+                    if (IsJobCancelled(joined.ErrorValue())) {
+                        if (const Error *cause = joined.ErrorValue().cause.Get())
+                            return Result<void>::Failure(*cause);
+                        return Result<void>::Failure(
+                            MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
+                    }
                     return joined;
+                }
                 if (const auto merged = MergeExecutionResults(results, context); merged.HasError())
                     return merged;
             }

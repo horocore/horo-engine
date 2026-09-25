@@ -401,9 +401,13 @@ namespace Horo::Assets {
 
                 const JobFunction work = [&slot, this, &request](const CancellationToken &jobCancellation) {
                     if (jobCancellation.IsCancellationRequested())
-                        return Result<void>::Failure(Error{CookErrors::Cancelled.code});
+                        return JobCancelled(MakeError(CookErrors::Cancelled));
 
-                    return CookAndEncodeSlot(*catalog_, slot, request.target, jobCancellation);
+                    Result<void> cooked = CookAndEncodeSlot(*catalog_, slot, request.target, jobCancellation);
+                    if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
+                        jobCancellation.IsCancellationRequested())
+                        return JobCancelled(cooked.ErrorValue());
+                    return cooked;
                 };
                 auto spawnResult = group.Spawn({}, work);
                 if (spawnResult.HasError())
