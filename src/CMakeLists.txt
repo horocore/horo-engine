@@ -822,6 +822,7 @@ target_link_libraries(HoroCinematicModel
 
 add_library(HoroCinematicRuntime STATIC
         runtime/cinematic/player/SequenceEvaluation.cpp
+        runtime/cinematic/player/SequenceFrameBlend.cpp
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
         runtime/cinematic/player/SequencePlayer.cpp
         runtime/cinematic/player/SequencePlayerErrors.cpp

@@ -218,6 +218,7 @@ namespace Horo::Cinematic {
         TargetMissing,
         StaleGeneration,
         WriteRejected,
+        KeptFinalDueToMissingTarget,
         Count
     };
 
@@ -236,6 +237,7 @@ namespace Horo::Cinematic {
         std::size_t missing{};
         std::size_t stale{};
         std::size_t rejected{};
+        std::size_t keptFinal{}; /**< Surviving targets left untouched because another target was lost. */
 
         [[nodiscard]] constexpr auto operator<=>(const SequenceRestoreResult &) const noexcept = default;
     };
@@ -270,7 +272,7 @@ namespace Horo::Cinematic {
      * @param targets Current owner-safe-point target views; order need not match snapshot entries.
      * @param diagnostics Caller storage with at least snapshot.Size() entries.
      * @return Per-entry typed outcomes; destroyed or replaced targets are never dereferenced.
-     * @note Valid targets may restore when another target was destroyed; no allocation occurs.
+     * @note A missing or stale target leaves all surviving targets at their final values; no allocation occurs.
      */
     [[nodiscard]] Result<SequenceRestoreResult> ApplySequenceRestoreSnapshot(const SequenceRestoreSnapshot &snapshot,
                                                                              std::span<const SequenceRestoreTargetSnapshot> targets,
@@ -554,6 +556,7 @@ namespace Horo::Cinematic {
             SequencePlaybackBlendSettings blend;
             std::optional<SequenceAuthorityPlan> authority;
             std::optional<SequenceRestoreSnapshot> restore;
+            std::vector<float> blendBaselines; /**< Track-order values compiled once at activation. */
             SequencePlaybackCoordinationSettings coordination;
             SequencePlaybackCoordinationHooks coordinationHooks;
             std::optional<SequenceCoordinationLease> gameplayPauseLease;
@@ -566,7 +569,7 @@ namespace Horo::Cinematic {
             bool restoreApplied{};
 
             Instance(SequencePlayer playerValue, const SequenceFrameCursor &cursorValue, SequencePlaybackActivation activationValue,
-                     std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
+                     std::vector<float> baselineValues, std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
                      std::optional<SequenceCoordinationLease> hudSuppressionLeaseValue) noexcept;
         };
 
