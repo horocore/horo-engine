@@ -3,6 +3,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -43,6 +44,35 @@ namespace Horo::Physics {
                                                            records);
             probe.rejected = read.HasError() && read.ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value();
         }
+
+        struct ActiveWorld final {
+            std::unique_ptr<PhysicsRuntime> runtime;
+            std::unique_ptr<PhysicsWorld> world;
+        };
+
+        [[nodiscard]] ActiveWorld MakeActiveWorld(const std::uint64_t worldId) {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+            auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+            REQUIRE(world->Activate(PhysicsWorldId::Create(worldId).Value()).HasValue());
+            return {std::move(runtime), std::move(world)};
+        }
+
+        void PublishTick(PhysicsWorld &world, const std::uint64_t simulationTick) {
+            REQUIRE(world
+                        .AdvanceFixedTick(
+                            {.simulationTick = simulationTick, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                        .HasValue());
+        }
+
+        [[nodiscard]] auto CreateQueryFixture(PhysicsWorld &world, const float z) {
+            return world
+                .CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                     .pose = {.translation = {0, 0, z}, .rotation = Math::Quaternion::Identity()},
+                                     .layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
+                                     .profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value(),
+                                     .channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value()})
+                .Value();
+        }
     }  // namespace
 #endif
 
@@ -54,36 +84,35 @@ namespace Horo::Physics {
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
-    TEST_CASE("Query/event capability validates identity, completion, bounds and revocation", "[physics][query-event-capability]") {
-        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
-        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
-        REQUIRE(world->Activate(PhysicsWorldId::Create(51).Value()).HasValue());
-        auto capability = world->IssueQueryEventCapability().Value();
-        auto copy = capability;
-        auto movable = world->IssueQueryEventCapability().Value();
+    TEST_CASE("Query/event capability validates access and published results", "[physics][query-event-capability]") {
+        auto active = MakeActiveWorld(51);
+        auto &world = *active.world;
+        auto capability = world.IssueQueryEventCapability().Value();
+        auto movable = world.IssueQueryEventCapability().Value();
         auto moved = std::move(movable);
         REQUIRE_FALSE(movable.Identity().world.IsValid());
         REQUIRE(movable.Identity().capabilityGeneration == 0);
         std::array<PhysicsEventRecord, 1> events{};
         std::array<PhysicsQueryHit, 1> hits{};
-        Test::RequireError(movable.ReadEvents(EventsAt(movable, world->PublishedTick()), events), PhysicsErrors::CapabilityStale);
-        Test::RequireError(movable.Submit(RayAt(movable, world->PublishedTick()), hits), PhysicsErrors::CapabilityStale);
-        Test::RequireError(world->RevokeQueryEventCapability(movable), PhysicsErrors::CapabilityStale);
-        REQUIRE(world->RevokeQueryEventCapability(moved).HasValue());
-        Test::RequireError(capability.ReadEvents(EventsAt(capability, world->PublishedTick()), events),
+        Test::RequireError(movable.ReadEvents(EventsAt(movable, world.PublishedTick()), events), PhysicsErrors::CapabilityStale);
+        Test::RequireError(movable.Submit(RayAt(movable, world.PublishedTick()), hits), PhysicsErrors::CapabilityStale);
+        Test::RequireError(world.RevokeQueryEventCapability(movable), PhysicsErrors::CapabilityStale);
+        REQUIRE(world.RevokeQueryEventCapability(moved).HasValue());
+        Test::RequireError(capability.ReadEvents(EventsAt(capability, world.PublishedTick()), events),
                            PhysicsErrors::CapabilityUnavailable);
-        Test::RequireError(capability.Submit(RayAt(capability, world->PublishedTick()), hits), PhysicsErrors::CapabilityUnavailable);
+        Test::RequireError(capability.Submit(RayAt(capability, world.PublishedTick()), hits), PhysicsErrors::CapabilityUnavailable);
+        Test::RequireError(capability.SubmitBatch(std::array{RayAt(capability, world.PublishedTick())}),
+                           PhysicsErrors::CapabilityUnavailable);
 
-        const auto tick = Duration::FromNanoseconds(16'666'667);
         CallbackProbe probe{.capability = &capability};
         REQUIRE(world
-                    ->AdvanceFixedTick({.simulationTick = 1,
-                                        .sceneGeneration = 7,
-                                        .fixedDelta = tick,
-                                        .observer = {.context = &probe, .phase = ReadDuringTick}})
+                    .AdvanceFixedTick({.simulationTick = 1,
+                                       .sceneGeneration = 7,
+                                       .fixedDelta = Duration::FromNanoseconds(16'666'667),
+                                       .observer = {.context = &probe, .phase = ReadDuringTick}})
                     .HasValue());
         REQUIRE(probe.rejected);
-        const auto published = world->PublishedTick();
+        const auto published = world.PublishedTick();
         REQUIRE(published.eventTick == 1);
         const auto read = capability.ReadEvents(EventsAt(capability, published), events);
         REQUIRE(read.HasValue());
@@ -95,6 +124,17 @@ namespace Horo::Physics {
         REQUIRE(query.HasValue());
         REQUIRE(query.Value().completedTick == 1);
         REQUIRE(query.Value().publicationRevision == published.publicationRevision);
+    }
+
+    TEST_CASE("Query/event capability rejects foreign identity and stale publication", "[physics][query-event-capability]") {
+        auto active = MakeActiveWorld(51);
+        auto &world = *active.world;
+        auto capability = world.IssueQueryEventCapability().Value();
+        auto copy = capability;
+        PublishTick(world, 1);
+        const auto published = world.PublishedTick();
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
 
         auto foreign = EventsAt(capability, published);
         foreign.identity.world = PhysicsWorldId::Create(52).Value();
@@ -105,28 +145,28 @@ namespace Horo::Physics {
         foreign = EventsAt(capability, published);
         foreign.maximumRecords = 0;
         Test::RequireError(capability.ReadEvents(foreign, events), PhysicsErrors::CapacityExceeded);
-        foreign.maximumRecords = world->Settings().Values().budgets.maximumEvents + 1;
+        foreign.maximumRecords = world.Settings().Values().budgets.maximumEvents + 1;
         Test::RequireError(capability.ReadEvents(foreign, events), PhysicsErrors::CapacityExceeded);
         auto foreignQuery = RayAt(capability, published);
         foreignQuery.descriptor.world = PhysicsWorldId::Create(52).Value();
         Test::RequireError(capability.Submit(foreignQuery, hits), PhysicsErrors::HandleWorldMismatch);
 
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = tick}).HasValue());
+        PublishTick(world, 2);
         Test::RequireError(capability.ReadEvents(EventsAt(capability, published), events), PhysicsErrors::QuerySnapshotStale);
         Test::RequireError(capability.Submit(RayAt(capability, published), hits), PhysicsErrors::QuerySnapshotStale);
-        REQUIRE(world->RevokeQueryEventCapability(capability).HasValue());
-        Test::RequireError(copy.ReadEvents(EventsAt(copy, world->PublishedTick()), events), PhysicsErrors::CapabilityRevoked);
-        Test::RequireError(copy.Submit(RayAt(copy, world->PublishedTick()), hits), PhysicsErrors::CapabilityRevoked);
+        REQUIRE(world.RevokeQueryEventCapability(capability).HasValue());
+        Test::RequireError(copy.ReadEvents(EventsAt(copy, world.PublishedTick()), events), PhysicsErrors::CapabilityRevoked);
+        Test::RequireError(copy.Submit(RayAt(copy, world.PublishedTick()), hits), PhysicsErrors::CapabilityRevoked);
 
-        auto replacement = world->IssueQueryEventCapability().Value();
+        auto replacement = world.IssueQueryEventCapability().Value();
         REQUIRE(replacement.Identity().capabilityGeneration != capability.Identity().capabilityGeneration);
-        REQUIRE(world->Reset().HasValue());
+        REQUIRE(world.Reset().HasValue());
         Test::RequireError(replacement.ReadEvents(EventsAt(replacement, published), events), PhysicsErrors::CapabilityStale);
-        REQUIRE(world->Activate(PhysicsWorldId::Create(53).Value()).HasValue());
-        auto newCapability = world->IssueQueryEventCapability().Value();
+        REQUIRE(world.Activate(PhysicsWorldId::Create(53).Value()).HasValue());
+        auto newCapability = world.IssueQueryEventCapability().Value();
         REQUIRE(newCapability.Identity().world != replacement.Identity().world);
-        REQUIRE(world->UnloadScene().HasValue());
-        world.reset();
+        REQUIRE(world.UnloadScene().HasValue());
+        active.world.reset();
         Test::RequireError(newCapability.ReadEvents(EventsAt(newCapability, published), events), PhysicsErrors::CapabilityStale);
     }
 
@@ -151,13 +191,11 @@ namespace Horo::Physics {
     }
 
     TEST_CASE("Query/event access rejects structural edits, unloaded fixtures and foreign threads", "[physics][query-event-capability]") {
-        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
-        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
-        REQUIRE(world->Activate(PhysicsWorldId::Create(55).Value()).HasValue());
-        auto capability = world->IssueQueryEventCapability().Value();
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                    .HasValue());
-        const auto before = world->PublishedTick();
+        auto active = MakeActiveWorld(55);
+        auto &world = *active.world;
+        auto capability = world.IssueQueryEventCapability().Value();
+        PublishTick(world, 1);
+        const auto before = world.PublishedTick();
         std::array<PhysicsEventRecord, 1> events{};
         std::array<PhysicsQueryHit, 1> hits{};
 
@@ -169,15 +207,8 @@ namespace Horo::Physics {
         reader.join();
         REQUIRE(rejectedThread);
 
-        const auto fixture =
-            world
-                ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
-                                      .pose = {.translation = {0, 0, -5}, .rotation = Math::Quaternion::Identity()},
-                                      .layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
-                                      .profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value(),
-                                      .channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value()})
-                .Value();
-        const auto admitted = world->PublishedTick();
+        const auto fixture = CreateQueryFixture(world, -5);
+        const auto admitted = world.PublishedTick();
         REQUIRE(admitted.publicationRevision > before.publicationRevision);
         REQUIRE(admitted.eventTick == 0);
         Test::RequireError(capability.Submit(RayAt(capability, before), hits), PhysicsErrors::QuerySnapshotStale);
@@ -187,54 +218,36 @@ namespace Horo::Physics {
         REQUIRE(query.Value().result.hitCount == 1);
         REQUIRE(hits[0].body == fixture.body);
 
-        REQUIRE(world->DestroyQueryFixture(fixture).HasValue());
-        const auto removed = world->PublishedTick();
+        REQUIRE(world.DestroyQueryFixture(fixture).HasValue());
+        const auto removed = world.PublishedTick();
         REQUIRE(removed.publicationRevision > admitted.publicationRevision);
         Test::RequireError(capability.Submit(RayAt(capability, admitted), hits), PhysicsErrors::QuerySnapshotStale);
         const auto empty = capability.Submit(RayAt(capability, removed), hits);
         REQUIRE(empty.HasValue());
         REQUIRE(empty.Value().result.hitCount == 0);
-        Test::RequireError(world->DestroyQueryFixture(fixture), PhysicsErrors::HandleStale);
-        REQUIRE(world->PublishedTick().publicationRevision == removed.publicationRevision);
+        Test::RequireError(world.DestroyQueryFixture(fixture), PhysicsErrors::HandleStale);
+        REQUIRE(world.PublishedTick().publicationRevision == removed.publicationRevision);
 
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                    .HasValue());
-        const auto republished = world->PublishedTick();
+        PublishTick(world, 2);
+        const auto republished = world.PublishedTick();
         REQUIRE(republished.eventTick == 2);
         REQUIRE(republished.publicationRevision > removed.publicationRevision);
         REQUIRE(capability.ReadEvents(EventsAt(capability, republished), events).HasValue());
 
-        REQUIRE(world->UnloadScene().HasValue());
-        world.reset();
+        REQUIRE(world.UnloadScene().HasValue());
+        active.world.reset();
         Test::RequireError(capability.ReadEvents(EventsAt(capability, removed), events), PhysicsErrors::CapabilityStale);
         Test::RequireError(capability.Submit(RayAt(capability, removed), hits), PhysicsErrors::CapabilityStale);
     }
 
     TEST_CASE("Queued Physics queries publish ordered owned hits only after owner processing", "[physics][query-batch]") {
-        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
-        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
-        REQUIRE(world->Activate(PhysicsWorldId::Create(56).Value()).HasValue());
-        const auto layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value();
-        const auto profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value();
-        const auto channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value();
-        const auto first = world
-                               ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
-                                                     .pose = {.translation = {0, 0, -5}, .rotation = Math::Quaternion::Identity()},
-                                                     .layer = layer,
-                                                     .profile = profile,
-                                                     .channel = channel})
-                               .Value();
-        const auto second = world
-                                ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
-                                                      .pose = {.translation = {0, 0, -8}, .rotation = Math::Quaternion::Identity()},
-                                                      .layer = layer,
-                                                      .profile = profile,
-                                                      .channel = channel})
-                                .Value();
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                    .HasValue());
-        auto capability = world->IssueQueryEventCapability().Value();
-        const auto publication = world->PublishedTick();
+        auto active = MakeActiveWorld(56);
+        auto &world = *active.world;
+        const auto first = CreateQueryFixture(world, -5);
+        const auto second = CreateQueryFixture(world, -8);
+        PublishTick(world, 1);
+        auto capability = world.IssueQueryEventCapability().Value();
+        const auto publication = world.PublishedTick();
         std::array commands{RayAt(capability, publication), RayAt(capability, publication)};
         std::get<PhysicsRayQuery>(commands[0].descriptor.geometry).maximumDistanceMeters = 6;
         std::get<PhysicsRayQuery>(commands[1].descriptor.geometry).origin = {0, 0, -6};
@@ -245,7 +258,7 @@ namespace Horo::Physics {
         Test::RequireError(capability.SubmitBatch(commands), PhysicsErrors::CapacityExceeded);
         bool foreignPumpRejected{};
         std::thread worker([&] {
-            const auto result = world->ProcessQueryBatch();
+            const auto result = world.ProcessQueryBatch();
             foreignPumpRejected =
                 result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
         });
@@ -259,7 +272,7 @@ namespace Horo::Physics {
         });
         foreignSubmit.join();
         REQUIRE(foreignSubmitRejected);
-        REQUIRE(world->ProcessQueryBatch().HasValue());
+        REQUIRE(world.ProcessQueryBatch().HasValue());
         const auto result = batch.Poll();
         REQUIRE(result.HasValue());
         REQUIRE(result.Value());
@@ -271,19 +284,17 @@ namespace Horo::Physics {
         REQUIRE(result.Value()->entries[0].completion.publicationRevision == publication.publicationRevision);
         REQUIRE_FALSE(batch.Cancel());
         REQUIRE(batch.Poll().Value()->entries.size() == 2);
-        REQUIRE(world->UnloadScene().HasValue());
-        world.reset();
+        REQUIRE(world.UnloadScene().HasValue());
+        active.world.reset();
         REQUIRE(batch.Poll().Value()->entries[0].hits[0].body == first.body);
     }
 
-    TEST_CASE("Queued Physics queries cancel, stale and bound all requested results", "[physics][query-batch]") {
-        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
-        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
-        REQUIRE(world->Activate(PhysicsWorldId::Create(57).Value()).HasValue());
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                    .HasValue());
-        auto capability = world->IssueQueryEventCapability().Value();
-        const auto publication = world->PublishedTick();
+    TEST_CASE("Queued Physics queries cancel and reject stale publications", "[physics][query-batch]") {
+        auto active = MakeActiveWorld(57);
+        auto &world = *active.world;
+        PublishTick(world, 1);
+        auto capability = world.IssueQueryEventCapability().Value();
+        const auto publication = world.PublishedTick();
         std::array commands{RayAt(capability, publication), RayAt(capability, publication)};
         auto cancelled = capability.SubmitBatch(commands).Value();
         bool workerCancelled{};
@@ -293,50 +304,50 @@ namespace Horo::Physics {
         worker.join();
         REQUIRE(workerCancelled);
         Test::RequireError(cancelled.Poll(), PhysicsErrors::QueryCancelled);
-        REQUIRE(world->ProcessQueryBatch().HasValue());
+        REQUIRE(world.ProcessQueryBatch().HasValue());
         REQUIRE_FALSE(cancelled.Cancel());
 
         auto stale = capability.SubmitBatch(commands).Value();
-        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                    .HasValue());
-        REQUIRE(world->ProcessQueryBatch().HasValue());
+        PublishTick(world, 2);
+        REQUIRE(world.ProcessQueryBatch().HasValue());
         Test::RequireError(stale.Poll(), PhysicsErrors::QuerySnapshotStale);
         Test::RequireError(capability.SubmitBatch(commands), PhysicsErrors::QuerySnapshotStale);
 
-        auto structurallyStale = capability.SubmitBatch(std::array{RayAt(capability, world->PublishedTick())}).Value();
-        REQUIRE(world
-                    ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
-                                          .pose = {.translation = {0, 0, -5}, .rotation = Math::Quaternion::Identity()},
-                                          .layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
-                                          .profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value(),
-                                          .channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value()})
-                    .HasValue());
-        REQUIRE(world->ProcessQueryBatch().HasValue());
+        auto structurallyStale = capability.SubmitBatch(std::array{RayAt(capability, world.PublishedTick())}).Value();
+        (void)CreateQueryFixture(world, -5);
+        REQUIRE(world.ProcessQueryBatch().HasValue());
         Test::RequireError(structurallyStale.Poll(), PhysicsErrors::QuerySnapshotStale);
+    }
 
-        const auto current = world->PublishedTick();
-        commands = {RayAt(capability, current), RayAt(capability, current)};
+    TEST_CASE("Queued Physics queries bound hit capacity and retire pending results", "[physics][query-batch]") {
+        auto active = MakeActiveWorld(59);
+        auto &world = *active.world;
+        PublishTick(world, 1);
+        auto capability = world.IssueQueryEventCapability().Value();
+        (void)CreateQueryFixture(world, -5);
+        const auto current = world.PublishedTick();
+        std::array commands{RayAt(capability, current), RayAt(capability, current)};
         auto multiHit = RayAt(capability, current);
         multiHit.descriptor.collection = PhysicsQueryCollection::All;
         multiHit.descriptor.maximumHitCount = MaximumPhysicsQueryHits;
         std::array acceptedHits{multiHit, multiHit, multiHit, multiHit};
         REQUIRE(acceptedHits.size() * MaximumPhysicsQueryHits == MaximumPhysicsQueryBatchHits);
         auto accepted = capability.SubmitBatch(acceptedHits).Value();
-        REQUIRE(world->ProcessQueryBatch().HasValue());
+        REQUIRE(world.ProcessQueryBatch().HasValue());
         REQUIRE(accepted.Poll().HasValue());
         REQUIRE(accepted.Poll().Value()->entries.size() == acceptedHits.size());
         std::array tooManyHits{multiHit, multiHit, multiHit, multiHit, multiHit};
         Test::RequireError(capability.SubmitBatch(tooManyHits), PhysicsErrors::CapacityExceeded);
-        const std::vector<PhysicsQueryCommand> tooManyQueries(world->Settings().Values().budgets.maximumQueriesPerTick + 1,
+        const std::vector<PhysicsQueryCommand> tooManyQueries(world.Settings().Values().budgets.maximumQueriesPerTick + 1,
                                                               RayAt(capability, current));
         Test::RequireError(capability.SubmitBatch(tooManyQueries), PhysicsErrors::CapacityExceeded);
         std::array<PhysicsQueryCommand, 0> empty{};
         Test::RequireError(capability.SubmitBatch(empty), PhysicsErrors::CapacityExceeded);
 
         auto retired = capability.SubmitBatch(commands).Value();
-        REQUIRE(world->Reset().HasValue());
+        REQUIRE(world.Reset().HasValue());
         Test::RequireError(retired.Poll(), PhysicsErrors::CapabilityStale);
-        REQUIRE(world->ProcessQueryBatch().HasValue());
+        REQUIRE(world.ProcessQueryBatch().HasValue());
     }
 
     TEST_CASE("Revocation and shutdown terminate queued Physics batches without native retention", "[physics][query-batch]") {

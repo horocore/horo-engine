@@ -41,11 +41,15 @@ namespace Horo::Physics {
     struct PhysicsQueryBatchState final {
         std::vector<PhysicsQueryCommand> commands;
         std::shared_ptr<PhysicsQueryEventCapabilityState> access;
-        mutable std::mutex terminalMutex;
-        bool terminal{};
-        const ErrorCodeDescriptor *failureCode{};
-        std::optional<Error> failure;
-        std::shared_ptr<const PhysicsQueryBatchCompletion> completion;
+
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() const {
+            std::lock_guard lock(terminalMutex);
+            if (failureCode)
+                return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(MakeError(*failureCode));
+            if (failure)
+                return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(*failure);
+            return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Success(completion);
+        }
 
         [[nodiscard]] bool Fail(Error error) {
             std::lock_guard lock(terminalMutex);
@@ -79,6 +83,13 @@ namespace Horo::Physics {
             std::lock_guard lock(terminalMutex);
             return terminal;
         }
+
+    private:
+        mutable std::mutex terminalMutex;
+        bool terminal{};
+        const ErrorCodeDescriptor *failureCode{};
+        std::optional<Error> failure;
+        std::shared_ptr<const PhysicsQueryBatchCompletion> completion;
     };
 
     namespace Detail {

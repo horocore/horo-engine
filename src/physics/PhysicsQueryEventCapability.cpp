@@ -20,6 +20,99 @@ namespace Horo::Physics {
                 return Result<PhysicsWorld *>::Failure(MakeError(PhysicsErrors::CapabilityStale));
             return Result<PhysicsWorld *>::Success(state.world);
         }
+
+        struct QueryBatchAdmission final {
+            PhysicsPublishedTick published;
+            std::uint32_t admittedThisTick{};
+        };
+
+        template <typename WorldImpl>
+        [[nodiscard]] Result<QueryBatchAdmission> ValidateBatchAdmission(PhysicsWorld &world, WorldImpl &impl,
+                                                                         const std::size_t commandCount) {
+            if (impl.state != PhysicsWorldState::ActiveSolver || impl.runtime->state != PhysicsRuntimeState::Ready)
+                return Result<QueryBatchAdmission>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+            if (impl.stepping)
+                return Result<QueryBatchAdmission>::Failure(MakeError(PhysicsErrors::InvalidState));
+            const auto &budgets = impl.settings.Values().budgets;
+            if (commandCount == 0 || commandCount > budgets.maximumQueriesPerTick || commandCount > budgets.maximumQueries)
+                return Result<QueryBatchAdmission>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            if (impl.pendingQueryBatch) {
+                if (!impl.pendingQueryBatch->IsTerminal())
+                    return Result<QueryBatchAdmission>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+                impl.pendingQueryBatch.reset();
+            }
+            const auto published = world.PublishedTick();
+            if (published.completedTick == 0)
+                return Result<QueryBatchAdmission>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+            const auto admittedThisTick = impl.queryBatchTick == published.completedTick ? impl.queryBatchAdmissions : 0;
+            if (commandCount > budgets.maximumQueriesPerTick - admittedThisTick)
+                return Result<QueryBatchAdmission>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            return Result<QueryBatchAdmission>::Success({published, admittedThisTick});
+        }
+
+        template <typename WorldImpl>
+        [[nodiscard]] Result<void> ValidateBatchCommands(const PhysicsQueryEventCapabilityState &state, WorldImpl &impl,
+                                                         const std::span<const PhysicsQueryCommand> commands,
+                                                         const PhysicsPublishedTick published) {
+            std::uint64_t hitCapacity{};
+            for (const auto &command : commands) {
+                if (command.identity.world != state.identity.world)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::HandleWorldMismatch));
+                if (command.identity.capabilityGeneration != state.identity.capabilityGeneration)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityStale));
+                if (command.expectedPublicationRevision != published.publicationRevision)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+                if (const auto valid = ValidatePhysicsQueryDescriptor(command.descriptor, impl.identity, impl.querySceneGeneration);
+                    valid.HasError())
+                    return Result<void>::Failure(valid.ErrorValue());
+                hitCapacity += command.descriptor.maximumHitCount;
+                if (hitCapacity > MaximumPhysicsQueryBatchHits)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            }
+            return Result<void>::Success();
+        }
+
+        template <typename WorldImpl>
+        [[nodiscard]] Result<std::shared_ptr<PhysicsQueryBatchState>> QueueQueryBatch(
+            PhysicsWorld &world, WorldImpl &impl, const std::shared_ptr<PhysicsQueryEventCapabilityState> &access,
+            const std::span<const PhysicsQueryCommand> commands) {
+            const auto admission = ValidateBatchAdmission(world, impl, commands.size());
+            if (admission.HasError())
+                return Result<std::shared_ptr<PhysicsQueryBatchState>>::Failure(admission.ErrorValue());
+            const auto validation = ValidateBatchCommands(*access, impl, commands, admission.Value().published);
+            if (validation.HasError())
+                return Result<std::shared_ptr<PhysicsQueryBatchState>>::Failure(validation.ErrorValue());
+            try {
+                auto batch = std::make_shared<PhysicsQueryBatchState>();
+                batch->commands.assign(commands.begin(), commands.end());
+                batch->access = access;
+                impl.pendingQueryBatch = batch;
+                impl.queryBatchTick = admission.Value().published.completedTick;
+                impl.queryBatchAdmissions = admission.Value().admittedThisTick + static_cast<std::uint32_t>(commands.size());
+                return Result<std::shared_ptr<PhysicsQueryBatchState>>::Success(std::move(batch));
+            } catch (const std::bad_alloc &) {
+                return Result<std::shared_ptr<PhysicsQueryBatchState>>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            }
+        }
+
+        [[nodiscard]] bool PrepareBatchEntries(const PhysicsWorld &world, const std::shared_ptr<PhysicsQueryBatchState> &batch,
+                                               const PhysicsPublishedTick published, PhysicsQueryBatchCompletion &completed) {
+            for (const auto &command : batch->commands) {
+                if (batch->IsTerminal())
+                    return false;
+                PhysicsQueryBatchEntry entry;
+                entry.hits.resize(command.descriptor.maximumHitCount);
+                const auto result = world.Query(command.descriptor, entry.hits);
+                if (result.HasError()) {
+                    (void)batch->Fail(result.ErrorValue());
+                    return false;
+                }
+                entry.hits.resize(result.Value().hitCount);
+                entry.completion = {result.Value(), published.completedTick, published.publicationRevision};
+                completed.entries.push_back(std::move(entry));
+            }
+            return true;
+        }
     }  // namespace
 
     /** @copydoc PhysicsQueryEventCapability::Identity */
@@ -36,12 +129,7 @@ namespace Horo::Physics {
     Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> PhysicsQueryBatchHandle::Poll() const {
         if (!state_)
             return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(MakeError(PhysicsErrors::CapabilityStale));
-        std::lock_guard lock(state_->terminalMutex);
-        if (state_->failureCode)
-            return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(MakeError(*state_->failureCode));
-        if (state_->failure)
-            return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(*state_->failure);
-        return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Success(state_->completion);
+        return state_->Poll();
     }
 
     /** @copydoc PhysicsWorld::IssueQueryEventCapability */
@@ -104,51 +192,10 @@ namespace Horo::Physics {
         if (access.HasError())
             return Result<PhysicsQueryBatchHandle>::Failure(access.ErrorValue());
         PhysicsWorld &world = *access.Value();
-        auto &impl = *world.impl_;
-        if (impl.state != PhysicsWorldState::ActiveSolver || impl.runtime->state != PhysicsRuntimeState::Ready)
-            return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
-        if (impl.stepping)
-            return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
-        const auto &budgets = impl.settings.Values().budgets;
-        if (commands.empty() || commands.size() > budgets.maximumQueriesPerTick || commands.size() > budgets.maximumQueries)
-            return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        if (impl.pendingQueryBatch) {
-            if (!impl.pendingQueryBatch->IsTerminal())
-                return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-            impl.pendingQueryBatch.reset();
-        }
-        const auto published = world.PublishedTick();
-        if (published.completedTick == 0)
-            return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
-        const std::uint32_t admittedThisTick = impl.queryBatchTick == published.completedTick ? impl.queryBatchAdmissions : 0;
-        if (commands.size() > budgets.maximumQueriesPerTick - admittedThisTick)
-            return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        std::uint64_t hitCapacity{};
-        for (const auto &command : commands) {
-            if (command.identity.world != state_->identity.world)
-                return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::HandleWorldMismatch));
-            if (command.identity.capabilityGeneration != state_->identity.capabilityGeneration)
-                return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapabilityStale));
-            if (command.expectedPublicationRevision != published.publicationRevision)
-                return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
-            if (const auto valid = ValidatePhysicsQueryDescriptor(command.descriptor, impl.identity, impl.querySceneGeneration);
-                valid.HasError())
-                return Result<PhysicsQueryBatchHandle>::Failure(valid.ErrorValue());
-            hitCapacity += command.descriptor.maximumHitCount;
-            if (hitCapacity > MaximumPhysicsQueryBatchHits)
-                return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        }
-        try {
-            auto batch = std::make_shared<PhysicsQueryBatchState>();
-            batch->commands.assign(commands.begin(), commands.end());
-            batch->access = state_;
-            impl.pendingQueryBatch = batch;
-            impl.queryBatchTick = published.completedTick;
-            impl.queryBatchAdmissions = admittedThisTick + static_cast<std::uint32_t>(commands.size());
-            return Result<PhysicsQueryBatchHandle>::Success(PhysicsQueryBatchHandle{std::move(batch)});
-        } catch (const std::bad_alloc &) {
-            return Result<PhysicsQueryBatchHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        }
+        auto batch = QueueQueryBatch(world, *world.impl_, state_, commands);
+        if (batch.HasError())
+            return Result<PhysicsQueryBatchHandle>::Failure(batch.ErrorValue());
+        return Result<PhysicsQueryBatchHandle>::Success(PhysicsQueryBatchHandle{std::move(batch.Value())});
     }
 
     /** @copydoc PhysicsWorld::ProcessQueryBatch */
@@ -183,20 +230,8 @@ namespace Horo::Physics {
         try {
             auto completed = std::make_shared<PhysicsQueryBatchCompletion>();
             completed->entries.reserve(batch->commands.size());
-            for (const auto &command : batch->commands) {
-                if (batch->IsTerminal())
-                    return Result<void>::Success();
-                PhysicsQueryBatchEntry entry;
-                entry.hits.resize(command.descriptor.maximumHitCount);
-                const auto result = Query(command.descriptor, entry.hits);
-                if (result.HasError()) {
-                    (void)batch->Fail(result.ErrorValue());
-                    return Result<void>::Success();
-                }
-                entry.hits.resize(result.Value().hitCount);
-                entry.completion = {result.Value(), published.completedTick, published.publicationRevision};
-                completed->entries.push_back(std::move(entry));
-            }
+            if (!PrepareBatchEntries(*this, batch, published, *completed))
+                return Result<void>::Success();
             (void)batch->Complete(std::move(completed));
         } catch (const std::bad_alloc &) {
             (void)batch->FailCode(PhysicsErrors::CapacityExceeded);
