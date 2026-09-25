@@ -333,6 +333,8 @@ namespace Horo::PlatformServices {
         const auto definition = FindDefinition(query.request.achievement);
         if (definition.HasError())
             return Result<void>::Failure(definition.ErrorValue());
+        if (!state.subject.IsValid() || state.subject != query.request.subject)
+            return Failure(AchievementCoordinatorErrors::StaleState);
         if (state.achievement != query.request.achievement || state.providerGeneration != query.providerGeneration ||
             state.sessionGeneration != query.sessionGeneration || state.accessRevision != query.request.accessRevision ||
             state.providerRevision == 0 || state.progress > definition.Value()->progress.total ||

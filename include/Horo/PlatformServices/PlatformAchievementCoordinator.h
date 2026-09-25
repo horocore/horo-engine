@@ -52,6 +52,7 @@ namespace Horo::PlatformServices {
 
     /** @brief Provider-neutral achievement state returned at one captured generation. */
     struct PlatformAchievementStateSnapshot final {
+        PlatformSubjectHandle subject; /**< Opaque subject captured by the provider result. */
         AchievementId achievement;
         PlatformProviderGeneration providerGeneration;
         PlatformSessionGeneration sessionGeneration;

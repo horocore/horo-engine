@@ -62,14 +62,15 @@ namespace Horo::PlatformServices {
             }
         };
 
-        PlatformSessionSnapshot ActiveSession(const std::uint64_t generation = 5, const std::uint64_t accessRevision = 3) {
+        PlatformSessionSnapshot ActiveSession(const std::uint64_t generation = 5, const std::uint64_t accessRevision = 3,
+                                              const std::byte nonceByte = std::byte{1}) {
             PlatformSessionCandidate candidate{.phase = PlatformSessionPhase::Active,
                                                .generation = {generation},
                                                .providerGeneration = {7},
                                                .accessRevision = {accessRevision}};
             candidate.capabilities.services.fill(PlatformSessionAccessState::Granted);
             PlatformSubjectNonce nonce;
-            nonce.bytes.back() = std::byte{1};
+            nonce.bytes.back() = nonceByte;
             candidate.subjectNonce = nonce;
             auto built = BuildPlatformSessionSnapshot(candidate);
             REQUIRE(built.HasValue());
@@ -171,8 +172,13 @@ namespace Horo::PlatformServices {
         REQUIRE(query.HasValue());
 
         const PlatformAchievementStateSnapshot
-            valid{fixture.progress, session.ProviderGeneration(), session.Generation(), session.AccessRevision(), 12, 3, false};
+            valid{subject, fixture.progress, session.ProviderGeneration(), session.Generation(), session.AccessRevision(), 12, 3, false};
         REQUIRE(coordinator.ValidateStateResult(query.Value(), valid).HasValue());
+
+        auto wrongSubject = valid;
+        const auto otherSession = ActiveSession(5, 3, std::byte{2});
+        wrongSubject.subject = *otherSession.Subject();
+        RequireError(coordinator.ValidateStateResult(query.Value(), wrongSubject), AchievementCoordinatorErrors::StaleState);
 
         auto malformed = valid;
         malformed.progress = 6;

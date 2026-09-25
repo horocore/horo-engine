@@ -484,6 +484,11 @@ const reference so validation does not copy large envelopes before admission. So
 callers keep the same call form; consumers that took member-function pointers must
 update their signatures. The coordinator copies accepted requests into its owned
 publication and query tokens, so caller lifetime is unchanged.
+Provider achievement-state adapters must populate the opaque subject on
+`PlatformAchievementStateSnapshot` from the same query partition. A result with
+another or missing subject is rejected as stale. The only in-repository caller is
+the coordinator test; external adapters must add that field when constructing
+result snapshots. No raw account identity is exposed.
 
 ### Leaderboards And Stats
 
