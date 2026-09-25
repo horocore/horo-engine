@@ -129,6 +129,9 @@ namespace Horo::Cinematic {
         std::span<SequenceFrameEventOccurrence> events;
         std::span<SequenceFrameCameraCutRequest> cameraCuts;
         std::size_t maximumBoundaryOccurrences{}; /**< Optional aggregate event/camera ceiling; zero leaves only span capacities active. */
+        std::span<const float> blendBaselines{};  /**< Canonical track-order pre-playback values; empty disables edge blending. */
+        SequenceTime blendInDuration{};           /**< Zero selects a cut at the starting edge. */
+        SequenceTime blendOutDuration{};          /**< Zero selects a cut at the finishing edge. */
     };
 
     /** @brief Session-owned event cursor and exact rational remainder for one player. */
@@ -220,6 +223,8 @@ namespace Horo::Cinematic {
 
         /** @brief Returns immutable track count. @return Number of compiled tracks. */
         [[nodiscard]] std::size_t TrackCount() const noexcept;
+        /** @brief Returns descriptors in evaluation order. @return Borrowed immutable track descriptors. */
+        [[nodiscard]] std::span<const SequenceFrameTrackDescriptor> Tracks() const noexcept;
         /** @brief Returns the inclusive compiled duration. @return Positive sequence duration. */
         [[nodiscard]] SequenceTime Duration() const noexcept;
         /** @brief Returns immutable event-key count. @return Number of compiled event keys. */

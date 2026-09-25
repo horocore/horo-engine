@@ -152,6 +152,21 @@ player generation. Repeating an already-satisfied Play, Pause, Stop, Close or Fa
 an explicit no-change result and emits no signal. Invalid transitions fail without
 changing state or control revision.
 
+For a finite `Once` activation, Cinematic Runtime retains the owner's captured
+pre-playback scalar values in the player instance. Blend-in and blend-out sample
+weights are clamped linear functions of distance from the directional playback
+edges; overlapping windows use the smaller weight. Sampling and blending use
+caller-owned frame storage and allocate nothing. The snapshot belongs to the
+activation, even when terminal policy keeps the final state. Loop and PingPong
+activations cannot request finite edge blend windows.
+
+At a terminal owner safe point, `RestorePrePlayback` preflights every surviving
+target's generation and owner revision before applying captured values. If any
+target was destroyed or replaced, the entire activation keeps its final state,
+with typed per-target diagnostics including the surviving targets skipped by the
+fallback. `KeepFinalState` does not invoke restore accessors. Snapshot storage is
+released with the player after its terminal restore decision.
+
 Stop and close deliberately differ. Stop closes future evaluation/event admission and
 drains occurrences already admitted by the owning boundary. Close is cancellation,
 scene/session loss or shutdown: it closes admission immediately and discards pending,

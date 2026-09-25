@@ -1,6 +1,7 @@
 #include "Horo/Cinematic/SequenceEvaluationErrors.h"
 #include "Horo/Cinematic/SequencePlaybackRuntime.h"
 #include "Horo/Cinematic/SequencePlaybackRuntimeErrors.h"
+#include "support/AllocationProbe.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -49,6 +50,21 @@ namespace Horo::Cinematic {
 
         bool RejectRestore(void *, float) noexcept {
             return false;
+        }
+
+        struct ValueProbe final {
+            float value{4.0F};
+            std::size_t writes{};
+        };
+
+        Result<float> SampleValue(const void *, const SequenceTime time) {
+            return Result<float>::Success(10.0F + static_cast<float>(time));
+        }
+
+        void ApplyValue(void *context, const float value) noexcept {
+            auto &probe = *static_cast<ValueProbe *>(context);
+            probe.value = value;
+            ++probe.writes;
         }
 
         struct CoordinationProbe final {
@@ -261,9 +277,11 @@ namespace Horo::Cinematic {
         std::array<SequenceRestoreDiagnostic, 2> diagnostics{};
         auto result = ApplySequenceRestoreSnapshot(snapshot.Value(), current, diagnostics);
         REQUIRE(result.HasValue());
-        CHECK(result.Value().restored == 1);
+        CHECK(result.Value().restored == 0);
         CHECK(result.Value().missing == 1);
-        CHECK(restored.value == 3.0F);
+        CHECK(result.Value().keptFinal == 1);
+        CHECK(restored.value == 0.0F);
+        CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::KeptFinalDueToMissingTarget);
         CHECK(diagnostics[1].outcome == SequenceRestoreOutcome::TargetMissing);
 
         const std::array reordered{SequenceRestoreTargetSnapshot{RestoreTarget(200), 7, &restored, ApplyRestore},
@@ -278,6 +296,7 @@ namespace Horo::Cinematic {
         result = ApplySequenceRestoreSnapshot(snapshot.Value(), stale, diagnostics);
         REQUIRE(result.HasValue());
         CHECK(result.Value().stale == 1);
+        CHECK(result.Value().keptFinal == 1);
         CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::StaleGeneration);
 
         const std::array rejected{SequenceRestoreTargetSnapshot{RestoreTarget(100), 4, &restored, RejectRestore},
@@ -289,6 +308,86 @@ namespace Horo::Cinematic {
 
         const std::array duplicate{entries[0], SequenceRestoreEntry{TrackId{3, 1}, RestoreTarget(100), 4, 9.0F}};
         RequireError(SequenceRestoreSnapshot::Create(duplicate), SequencePlaybackRuntimeErrors::RestoreInvalid);
+    }
+
+    TEST_CASE("Playback blends both edges from the captured owner value and restores exactly",
+              "[unit][cinematic][playback][blend][restore]") {
+        ValueProbe probe{};
+        const std::array tracks{SequenceFrameTrackDescriptor{TrackId{1, 1}, SequenceApplyStage::Property, &probe, SampleValue, ApplyValue}};
+        auto plan = SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, tracks, {}, {});
+        REQUIRE(plan.HasValue());
+        const std::array captured{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(900), 2, probe.value}};
+        auto restore = SequenceRestoreSnapshot::Create(captured);
+        REQUIRE(restore.HasValue());
+        SequencePlaybackActivation activation{{Handle(90), 10, 0, {1, 1}}, std::move(plan).Value()};
+        activation.blend = {{SequenceBlendMode::Blend, 4}, {SequenceBlendMode::Blend, 4}, SequenceRestorePolicy::RestorePrePlayback};
+        activation.restore = std::move(restore).Value();
+        auto service = Service();
+        const auto admitted = service.Activate(std::move(activation));
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        std::array<SequenceSampledValue, 1> values{};
+        const SequenceFrameScratch scratch{values, {}, {}};
+        REQUIRE(service.Play(handle).HasValue());
+        const std::size_t allocationsBefore = Horo::Tests::AllocationProbe::Count();
+        auto first = service.Evaluate(handle, 2, scratch, {});
+        const std::size_t allocationsAfter = Horo::Tests::AllocationProbe::Count();
+        REQUIRE(first.HasValue());
+        CHECK(allocationsAfter == allocationsBefore);
+        CHECK(probe.value == 8.0F);
+        REQUIRE(service.Evaluate(handle, 3, scratch, {}).HasValue());
+        CHECK(probe.value == 15.0F);
+        REQUIRE(service.Evaluate(handle, 3, scratch, {}).HasValue());
+        CHECK(probe.value == 11.0F);
+        REQUIRE(service.Evaluate(handle, 2, scratch, {}).HasValue());
+        CHECK(probe.value == 4.0F);
+        RequireError(service.Release(handle), SequencePlaybackRuntimeErrors::RestoreRequired);
+        probe.value = 99.0F;
+        const std::array targets{SequenceRestoreTargetSnapshot{RestoreTarget(900), 2, &probe, [](void *context, float value) noexcept {
+            ApplyValue(context, value);
+            return true;
+        }}};
+        std::array<SequenceRestoreDiagnostic, 1> diagnostics{};
+        auto result = service.Restore(handle, targets, diagnostics);
+        REQUIRE(result.HasValue());
+        CHECK(result.Value().restored == 1);
+        CHECK(probe.value == 4.0F);
+        CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::Restored);
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Destroyed restore target keeps every final value and emits typed diagnostics", "[unit][cinematic][playback][restore]") {
+        const std::array entries{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(1), 2, 1.0F},
+                                 SequenceRestoreEntry{TrackId{2, 1}, RestoreTarget(2), 3, 2.0F}};
+        auto snapshot = SequenceRestoreSnapshot::Create(entries);
+        REQUIRE(snapshot.HasValue());
+        RestoreProbe surviving{10.0F};
+        const std::array targets{SequenceRestoreTargetSnapshot{RestoreTarget(1), 2, &surviving, ApplyRestore}};
+        std::array<SequenceRestoreDiagnostic, 2> diagnostics{};
+        auto outcome = ApplySequenceRestoreSnapshot(snapshot.Value(), targets, diagnostics);
+        REQUIRE(outcome.HasValue());
+        CHECK(outcome.Value().restored == 0);
+        CHECK(outcome.Value().missing == 1);
+        CHECK(outcome.Value().keptFinal == 1);
+        CHECK(surviving.value == 10.0F);
+        CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::KeptFinalDueToMissingTarget);
+        CHECK(diagnostics[1].outcome == SequenceRestoreOutcome::TargetMissing);
+
+        SequencePlaybackActivation activation{{Handle(91), 10, 0, {1, 1}}, Plan()};
+        activation.blend.restorePolicy = SequenceRestorePolicy::RestorePrePlayback;
+        activation.restore = std::move(snapshot).Value();
+        auto service = Service();
+        auto admitted = service.Activate(std::move(activation));
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        REQUIRE(service.Stop(handle).HasValue());
+        REQUIRE(service.FinishStop(handle).HasValue());
+        RequireError(service.Release(handle), SequencePlaybackRuntimeErrors::RestoreRequired);
+        auto terminal = service.Restore(handle, targets, diagnostics);
+        REQUIRE(terminal.HasValue());
+        CHECK(terminal.Value().keptFinal == 1);
+        CHECK(surviving.value == 10.0F);
+        REQUIRE(service.Release(handle).HasValue());
     }
 
     TEST_CASE("Authority plans return typed gameplay conflict outcomes", "[unit][cinematic][playback][authority]") {
