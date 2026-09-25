@@ -440,6 +440,32 @@ namespace Horo::Extensions::Tests {
         CHECK(sessionSnapshot->opaqueState == std::vector<std::uint8_t>{1, 2, 3});
     }
 
+    TEST_CASE("Editor surfaces reject per-entry and total opaque-state overflow without mutation",
+              "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry{EditorSurfaceRegistryLimits{
+            .maximumSurfaces = 2,
+            .maximumOpaqueStateBytes = 4,
+            .maximumTotalStateBytes = 5,
+        }};
+        auto first = RegisterSurface(registry, provider, admission, ContextDescriptor("com.example.tools.first"));
+        auto second = RegisterSurface(registry, provider, admission, ContextDescriptor("com.example.tools.second"));
+        const std::array<std::uint8_t, 3> valid{1, 2, 3};
+        const std::array<std::uint8_t, 5> oversized{1, 2, 3, 4, 5};
+        REQUIRE(registry.SetOpaqueState(first.Id(), valid).HasValue());
+        RequireErrorCode(registry.SetOpaqueState(first.Id(), oversized), "editor_surface_registry_state_invalid");
+        RequireErrorCode(registry.SetOpaqueState(second.Id(), valid), "editor_surface_registry_state_invalid");
+
+        const auto snapshots = registry.Snapshot();
+        const auto *firstSnapshot = FindSnapshot(snapshots, first.Id());
+        const auto *secondSnapshot = FindSnapshot(snapshots, second.Id());
+        REQUIRE(firstSnapshot != nullptr);
+        REQUIRE(secondSnapshot != nullptr);
+        CHECK(firstSnapshot->opaqueState == std::vector<std::uint8_t>{1, 2, 3});
+        CHECK(secondSnapshot->opaqueState.empty());
+    }
+
     TEST_CASE("External editor surface registry rejects overflowing preservation limits", "[Extensions][EditorSurface][Registry]") {
         auto admission = Admission();
         EditorSurfaceContextProvider provider;
