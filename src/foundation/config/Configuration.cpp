@@ -434,6 +434,23 @@ namespace Horo {
                    left.sensitivity == right.sensitivity;
         }
 
+        [[nodiscard]] bool PermitsReload(const ReloadPolicy policy, const ConfigurationReloadPoint point) noexcept {
+            using enum ConfigurationReloadPoint;
+            switch (policy) {
+                case ReloadPolicy::Immediate:
+                    return true;
+                case ReloadPolicy::NextFrame:
+                    return point == NextFrame || point == NextFrameAndOperation || point == ProjectReopen || point == ProcessRestart;
+                case ReloadPolicy::NextOperation:
+                    return point == NextOperation || point == NextFrameAndOperation || point == ProjectReopen || point == ProcessRestart;
+                case ReloadPolicy::ProjectReopen:
+                    return point == ProjectReopen || point == ProcessRestart;
+                case ReloadPolicy::ProcessRestart:
+                    return point == ProcessRestart;
+            }
+            return false;
+        }
+
         [[nodiscard]] bool DraftWithinLimits(const ConfigurationDraft &draft, const ConfigurationLimits &limits = {}) noexcept {
             if (draft.proposedValues.size() > limits.maximumKeysPerSource)
                 return false;
@@ -682,6 +699,7 @@ namespace Horo {
             candidate->revision = m_active->revision + 1;
             revision = candidate->revision;
             m_active = std::move(candidate);
+            m_pendingReload.reset();
         }
         if (m_events != nullptr) {
             ConfigurationChangedEvent event{.revision = revision};
@@ -716,6 +734,7 @@ namespace Horo {
             if (m_active->revision != before.Revision())
                 return Result<void>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
             m_active = resolved.Value().m_data;
+            m_pendingReload.reset();
         }
         if (m_events != nullptr) {
             std::ranges::sort(changed, {}, [](const SettingKey &key) -> const std::string & {
@@ -726,6 +745,75 @@ namespace Horo {
                                                         .changedKeys = std::move(changed)});
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc ConfigurationService::StageReload */
+    Result<void> ConfigurationService::StageReload(const ConfigurationResolutionRequest &request, const ConfigurationLimits &limits) {
+        ConfigurationRevision baseRevision{};
+        std::uint64_t sequence{};
+        std::shared_ptr<const ConfigurationSnapshot::Data> active;
+        {
+            std::lock_guard lock(m_mutex);
+            baseRevision = m_active->revision;
+            active = m_active;
+            sequence = ++m_reloadSequence;
+            m_pendingReload.reset();
+        }
+
+        Result<ConfigurationSnapshot> resolved = ConfigurationResolver::Resolve(m_schema, request, baseRevision + 1, limits);
+        if (resolved.HasError()) {
+            std::lock_guard lock(m_mutex);
+            if (sequence == m_reloadSequence)
+                m_pendingReload.reset();
+            return Result<void>::Failure(resolved.ErrorValue());
+        }
+        auto candidate = std::move(resolved).Value().m_data;
+        std::vector<SettingKey> changed;
+        for (const auto &[key, value] : candidate->values) {
+            const auto previous = active->values.find(key);
+            if (previous == active->values.end() || !SameResolved(previous->second, value))
+                changed.push_back(key);
+        }
+        std::ranges::sort(changed, {}, [](const SettingKey &key) -> const std::string & {
+            return key.Value();
+        });
+        std::lock_guard lock(m_mutex);
+        if (sequence != m_reloadSequence || baseRevision != m_active->revision)
+            return Result<void>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
+        m_pendingReload = PendingReload{.snapshot = std::move(candidate), .changedKeys = std::move(changed), .baseRevision = baseRevision};
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ConfigurationService::ActivateReload */
+    Result<bool> ConfigurationService::ActivateReload(const ConfigurationReloadPoint point) {
+        std::unique_lock lock(m_mutex);
+        if (!m_pendingReload.has_value())
+            return Result<bool>::Success(false);
+        if (m_pendingReload->baseRevision != m_active->revision) {
+            m_pendingReload.reset();
+            return Result<bool>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
+        }
+
+        for (const SettingKey &key : m_pendingReload->changedKeys) {
+            const SettingDescriptor *descriptor = m_schema.FindDescriptor(key);
+            HORO_INVARIANT_MSG(descriptor != nullptr, "Resolved reload candidates contain only registered settings.");
+            if (!PermitsReload(descriptor->reloadPolicy, point))
+                return Result<bool>::Success(false);
+        }
+        PendingReload pending = std::move(*m_pendingReload);
+        m_pendingReload.reset();
+        if (pending.changedKeys.empty())
+            return Result<bool>::Success(false);
+
+        m_active = std::move(pending.snapshot);
+        if (m_events != nullptr) {
+            ConfigurationChangedEvent event{.revision = m_active->revision,
+                                            .domain = ConfigurationDomain::All,
+                                            .changedKeys = std::move(pending.changedKeys)};
+            lock.unlock();
+            m_events->PublishAsync(std::move(event));
+        }
+        return Result<bool>::Success(true);
     }
 
     /** @copydoc ConfigurationService::LoadJson */

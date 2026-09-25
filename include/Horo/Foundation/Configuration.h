@@ -67,6 +67,15 @@ namespace Horo {
         ProjectReopen,
         ProcessRestart
     };
+    /** @brief Host-owned point at which a staged reload may become visible. */
+    enum class ConfigurationReloadPoint : std::uint8_t {
+        Immediate,
+        NextFrame,
+        NextOperation,
+        NextFrameAndOperation,
+        ProjectReopen,
+        ProcessRestart
+    };
     enum class SettingSensitivity : std::uint8_t {
         Public,
         SecretReference
@@ -286,6 +295,20 @@ namespace Horo {
         [[nodiscard]] Result<void> Commit(const ConfigurationDraft &draft);
         /** @brief Resolves and atomically publishes a complete multi-source candidate. */
         [[nodiscard]] Result<void> ResolveAndCommit(const ConfigurationResolutionRequest &request, const ConfigurationLimits &limits = {});
+        /**
+         * @brief Validates a complete reload candidate and replaces any older pending candidate.
+         * @param request Complete captured source set.
+         * @param limits Untrusted-input limits.
+         * @return Validation findings or success; the active snapshot is unchanged.
+         */
+        [[nodiscard]] Result<void> StageReload(const ConfigurationResolutionRequest &request, const ConfigurationLimits &limits = {});
+        /**
+         * @brief Activates the latest staged candidate when every changed descriptor permits this synchronization point.
+         * @param point Host-owned activation boundary; call only off frame/job hot paths.
+         * @return True for a committed snapshot, false for no pending change or a deferred policy.
+         * @note Notifications are queued on EngineDataBus and delivered by its owner through DispatchQueued().
+         */
+        [[nodiscard]] Result<bool> ActivateReload(ConfigurationReloadPoint point);
         /** @brief Parses a versioned JSON document as user configuration and atomically commits it. */
         [[nodiscard]] Result<void> LoadJson(const std::string &jsonString);
         /** @brief Legacy direct file ingress is disabled; use Platform::ConfigurationFileStore. */
@@ -294,9 +317,17 @@ namespace Horo {
         [[nodiscard]] Result<void> SaveFile(const std::string &path) const;
 
     private:
+        struct PendingReload {
+            std::shared_ptr<const ConfigurationSnapshot::Data> snapshot;
+            std::vector<SettingKey> changedKeys;
+            ConfigurationRevision baseRevision = 0;
+        };
+
         ConfigurationSchema m_schema;
         mutable std::mutex m_mutex;
         std::shared_ptr<const ConfigurationSnapshot::Data> m_active;
+        std::optional<PendingReload> m_pendingReload;
+        std::uint64_t m_reloadSequence = 0;
         EngineDataBus *m_events = nullptr; /**< Borrowed process-owned notification bus. */
     };
 }  // namespace Horo
