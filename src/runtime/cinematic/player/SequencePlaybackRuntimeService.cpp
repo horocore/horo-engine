@@ -176,6 +176,7 @@ namespace Horo::Cinematic {
             if (auto synchronized = SynchronizeCursor(instance, SequenceCursorResetPolicy::SuppressCurrentBoundary);
                 synchronized.HasError())
                 return Result<SequencePlayerTransition>::Failure(synchronized.ErrorValue());
+            instance.resumeBaselinePending = true;
         }
         return transition;
     }
@@ -398,8 +399,10 @@ namespace Horo::Cinematic {
             auto acquired = activation.coordinationHooks.acquire(activation.coordinationHooks.context, activation.player.handle, kind);
             if (acquired.HasError())
                 return Result<void>::Failure(acquired.ErrorValue());
-            if (!acquired.Value().IsValid() || acquired.Value().player != activation.player.handle || acquired.Value().kind != kind)
+            if (!acquired.Value().IsValid() || acquired.Value().player != activation.player.handle || acquired.Value().kind != kind) {
+                activation.coordinationHooks.release(activation.coordinationHooks.context, acquired.Value());
                 return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
+            }
             destination = std::move(acquired).Value();
             return Result<void>::Success();
         };
