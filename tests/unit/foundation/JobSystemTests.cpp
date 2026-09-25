@@ -11,6 +11,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -261,11 +262,15 @@ namespace {
 
     TEST_CASE("Terminal Result Remains Immutable Under Late Cancellation", "[unit][foundation][jobs][result]") {
         Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 1}};
-        auto submitted = jobs.Submit({}, [](const Horo::CancellationToken &) {
+        Horo::CancellationToken observedToken;
+        auto submitted = jobs.Submit({}, [&observedToken](const Horo::CancellationToken &cancellation) {
+            observedToken = cancellation;
         });
         REQUIRE(submitted.HasValue());
         REQUIRE(submitted.Value().Wait().HasValue());
+        REQUIRE_FALSE(observedToken.IsCancellationRequested());
         REQUIRE(submitted.Value().RequestCancel().HasValue());
+        REQUIRE_FALSE(observedToken.IsCancellationRequested());
         const auto snapshot = submitted.Value().Snapshot();
         REQUIRE(snapshot->state == Horo::JobState::Succeeded);
         REQUIRE(snapshot->terminalResult->state == Horo::JobState::Succeeded);
@@ -328,6 +333,7 @@ namespace {
         });
         REQUIRE(child.HasValue());
         REQUIRE(group.Join().HasValue());
+        REQUIRE(group.Outcome() == Horo::TaskGroupOutcome::Completed);
         REQUIRE(observedGroup.load() != 0);
         REQUIRE(group.Id().value == observedGroup.load());
         const auto snapshot = jobs.Find(child.Value());
@@ -405,6 +411,71 @@ namespace {
     TEST_CASE("Queued Termination Releases Captures Outside Job System Locks", "[unit][foundation][jobs][lifetime]") {
         VerifyReentrantCaptureRelease(ReentrantReleasePath::RequestCancel);
         VerifyReentrantCaptureRelease(ReentrantReleasePath::ShutdownCancel);
+    }
+
+    TEST_CASE("Pre-Cancelled Submission Releases Captures Outside Scheduler Locks", "[unit][foundation][jobs][cancel][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::CancellationSource parent;
+        parent.RequestCancellation();
+        bool reentered = false;
+        auto capture = std::make_shared<ReentrantCaptureDestructor>([&] {
+            auto next = jobs.Submit({}, [](const Horo::CancellationToken &) {
+            });
+            reentered = next.HasValue();
+            if (next.HasValue())
+                static_cast<void>(next.Value().RequestCancel());
+        });
+        const std::weak_ptr captureProbe = capture;
+        auto cancelled =
+            jobs.SubmitContext({.parentCancellation = parent.Token()}, [capture = std::move(capture)](const Horo::JobExecutionContext &) {
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(captureProbe.expired());
+        REQUIRE(reentered);
+        REQUIRE(cancelled.Value().Snapshot()->state == Horo::JobState::Cancelled);
+        jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+    }
+
+    TEST_CASE("Pre-Cancelled Task Group Releases Captures Outside Group Lock", "[unit][foundation][jobs][group][cancel][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::CancellationSource parent;
+        parent.RequestCancellation();
+        Horo::TaskGroup group(jobs, Horo::TaskGroupFailurePolicy::FailFast, parent.Token());
+        bool reentered = false;
+        auto capture = std::make_shared<ReentrantCaptureDestructor>([&] {
+            const auto joined = group.Join();
+            reentered =
+                joined.HasError() && Horo::IsJobCancelled(joined.ErrorValue()) && group.Outcome() == Horo::TaskGroupOutcome::Cancelled;
+        });
+        const std::weak_ptr captureProbe = capture;
+        const auto submitted = group.SpawnContext({}, [capture = std::move(capture)](const Horo::JobExecutionContext &) {
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(submitted.HasValue());
+        REQUIRE(captureProbe.expired());
+        REQUIRE(reentered);
+        REQUIRE(jobs.Find(submitted.Value())->state == Horo::JobState::Cancelled);
+        jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+    }
+
+    TEST_CASE("Closed Task Group Releases Rejected Captures Outside Group Lock", "[unit][foundation][jobs][group][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::TaskGroup group(jobs);
+        group.RequestCancel();
+        bool reentered = false;
+        auto capture = std::make_shared<ReentrantCaptureDestructor>([&] {
+            reentered = group.Join().HasValue() && group.Outcome() == Horo::TaskGroupOutcome::Completed;
+        });
+        const std::weak_ptr captureProbe = capture;
+        const auto rejected = group.SpawnContext({}, [capture = std::move(capture)](const Horo::JobExecutionContext &) {
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(rejected.HasError());
+        REQUIRE(rejected.ErrorValue().code.Value() == "job.task_group_closed");
+        REQUIRE(captureProbe.expired());
+        REQUIRE(reentered);
+        jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
     }
 
     TEST_CASE("Bounded Wait Times Out Without Changing Running Job State", "[unit][foundation][jobs][wait]") {
@@ -608,11 +679,13 @@ namespace {
         waiter.join();
         REQUIRE((waitError == "job.wait_timed_out"));
         REQUIRE_FALSE((childExecuted.load()));
+        REQUIRE_FALSE(group.Outcome().has_value());
 
         gate.Release();
         REQUIRE((blocker.Value().Wait().HasValue()));
         REQUIRE((group.Join().HasValue()));
         REQUIRE((group.Join().HasValue()));
+        REQUIRE(group.Outcome() == Horo::TaskGroupOutcome::Completed);
         REQUIRE((childExecuted.load()));
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
@@ -797,28 +870,268 @@ namespace {
             return Horo::Result<void>::Success();
         }).HasValue()));
         REQUIRE((group.Join().HasError()));
+        REQUIRE(group.Outcome() == Horo::TaskGroupOutcome::Cancelled);
         REQUIRE((!executed.load()));
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Pre-Cancelled Parent Creates A Cancelled Record Without Queue Execution", "[unit][foundation][jobs][cancel]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        auto occupying = jobs.Submit({}, [](const Horo::CancellationToken &) {
+        });
+        REQUIRE(occupying.HasValue());
+        Horo::CancellationSource parent;
+        parent.RequestCancellation();
+        bool executed = false;
+        auto submitted = jobs.SubmitResult({.parentCancellation = parent.Token()}, [&](const Horo::CancellationToken &) {
+            executed = true;
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(submitted.HasValue());
+        const auto waited = submitted.Value().Wait();
+        REQUIRE(waited.HasError());
+        REQUIRE(waited.ErrorValue().code.Value() == "job.cancelled");
+        REQUIRE_FALSE(executed);
+        REQUIRE(submitted.Value().Snapshot()->state == Horo::JobState::Cancelled);
+        REQUIRE(occupying.Value().RequestCancel().HasValue());
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Parent Cancellation While Queued Wins Exact Record Claim", "[unit][foundation][jobs][cancel][race]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::CancellationSource parent;
+        bool executed = false;
+        auto submitted = jobs.SubmitResult({.parentCancellation = parent.Token()}, [&](const Horo::CancellationToken &) {
+            executed = true;
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(submitted.HasValue());
+        parent.RequestCancellation();
+        const auto waited = submitted.Value().Wait(
+            {.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)});
+        REQUIRE(waited.HasError());
+        REQUIRE(waited.ErrorValue().code.Value() == "job.cancelled");
+        REQUIRE_FALSE(executed);
+        REQUIRE(submitted.Value().Snapshot()->state == Horo::JobState::Cancelled);
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Running Cancellation Cannot Relabel Committed Success Or Failure", "[unit][foundation][jobs][cancel][race]") {
+        for (const bool fails : {false, true}) {
+            Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
+            ManualJobBlocker gate;
+            std::atomic observedCancellation{false};
+            auto submitted = jobs.SubmitResult({}, [&](const Horo::CancellationToken &cancellation) {
+                gate.Block();
+                observedCancellation.store(cancellation.IsCancellationRequested());
+                return fails ? Horo::Result<void>::Failure(Horo::MakeError(TestFailure)) : Horo::Result<void>::Success();
+            });
+            REQUIRE(submitted.HasValue());
+            gate.WaitUntilStarted();
+            REQUIRE(submitted.Value().Snapshot()->state == Horo::JobState::Running);
+            REQUIRE(submitted.Value().RequestCancel().HasValue());
+            gate.Release();
+            const auto waited = submitted.Value().Wait();
+            const auto snapshot = submitted.Value().Snapshot();
+            REQUIRE(observedCancellation.load());
+            REQUIRE(snapshot->state == (fails ? Horo::JobState::Failed : Horo::JobState::Succeeded));
+            REQUIRE(snapshot->terminalResult->state == snapshot->state);
+            REQUIRE(waited.HasError() == fails);
+            if (fails)
+                REQUIRE(waited.ErrorValue().code.Value() == "test.job_system.child_failed");
+            REQUIRE(submitted.Value().RequestCancel().HasValue());
+            REQUIRE(submitted.Value().Snapshot()->state == snapshot->state);
+            jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+        }
+    }
+
+    TEST_CASE("Explicit Cancellation Retains Its Cause And Never Becomes Failure", "[unit][foundation][jobs][cancel]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
+        auto submitted = jobs.SubmitResult({}, [](const Horo::CancellationToken &) {
+            return Horo::JobCancelled(Horo::MakeError(TestFailure));
+        });
+        REQUIRE(submitted.HasValue());
+        const auto waited = submitted.Value().Wait();
+        REQUIRE(waited.HasError());
+        REQUIRE(waited.ErrorValue().code.Value() == "job.cancelled");
+        REQUIRE(Horo::IsJobCancelled(waited.ErrorValue()));
+        REQUIRE(waited.ErrorValue().cause.Get() != nullptr);
+        REQUIRE(waited.ErrorValue().cause.Get()->code.Value() == "test.job_system.child_failed");
+        const auto snapshot = submitted.Value().Snapshot();
+        REQUIRE(snapshot->state == Horo::JobState::Cancelled);
+        REQUIRE(snapshot->terminalResult->state == Horo::JobState::Cancelled);
+        REQUIRE(snapshot->error->code.Value() == "job.cancelled");
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Foreign Cancellation-Looking Failure Stays Failed", "[unit][foundation][jobs][cancel]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
+        auto submitted = jobs.SubmitResult({}, [](const Horo::CancellationToken &) {
+            Horo::Error error = Horo::MakeError(TestFailure);
+            error.code = Horo::ErrorCode{"job.cancelled"};
+            return Horo::Result<void>::Failure(std::move(error));
+        });
+        REQUIRE(submitted.HasValue());
+        const auto waited = submitted.Value().Wait();
+        REQUIRE(waited.HasError());
+        REQUIRE(waited.ErrorValue().domain.Value() == "test.job_system");
+        REQUIRE_FALSE(Horo::IsJobCancelled(waited.ErrorValue()));
+        REQUIRE(submitted.Value().Snapshot()->state == Horo::JobState::Failed);
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Task Group Cancellation Does Not Trigger Fail Fast", "[unit][foundation][jobs][group][cancel]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 2}};
+        Horo::TaskGroup group(jobs, Horo::TaskGroupFailurePolicy::FailFast);
+        bool siblingExecuted = false;
+        const auto cancelled = group.Spawn({}, [](const Horo::CancellationToken &) {
+            return Horo::JobCancelled();
+        });
+        const auto sibling = group.Spawn({}, [&](const Horo::CancellationToken &cancellation) {
+            siblingExecuted = !cancellation.IsCancellationRequested();
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(sibling.HasValue());
+        const auto joined =
+            group.Join({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)});
+        REQUIRE(joined.HasError());
+        REQUIRE(joined.ErrorValue().code.Value() == "job.cancelled");
+        REQUIRE(group.Outcome() == Horo::TaskGroupOutcome::Cancelled);
+        REQUIRE(siblingExecuted);
+        REQUIRE(jobs.Find(sibling.Value())->state == Horo::JobState::Succeeded);
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Task Group Failure Wins Over Earlier Cancellation And Cancels Queued Siblings", "[unit][foundation][jobs][group][cancel]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 3}};
+        Horo::TaskGroup group(jobs, Horo::TaskGroupFailurePolicy::FailFast);
+        bool siblingExecuted = false;
+        const auto cancelled = group.Spawn({}, [](const Horo::CancellationToken &) {
+            return Horo::JobCancelled();
+        });
+        const auto failed = group.Spawn({}, [](const Horo::CancellationToken &) {
+            return Horo::Result<void>::Failure(Horo::MakeError(TestFailure));
+        });
+        const auto sibling = group.Spawn({}, [&](const Horo::CancellationToken &) {
+            siblingExecuted = true;
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(failed.HasValue());
+        REQUIRE(sibling.HasValue());
+        const auto joined =
+            group.Join({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)});
+        REQUIRE(joined.HasError());
+        REQUIRE(joined.ErrorValue().code.Value() == "test.job_system.child_failed");
+        REQUIRE(group.Outcome() == Horo::TaskGroupOutcome::Failed);
+        REQUIRE_FALSE(siblingExecuted);
+        REQUIRE(jobs.Find(cancelled.Value())->state == Horo::JobState::Cancelled);
+        REQUIRE(jobs.Find(failed.Value())->state == Horo::JobState::Failed);
+        REQUIRE(jobs.Find(sibling.Value())->state == Horo::JobState::Cancelled);
+        REQUIRE(group.Join().ErrorValue().code.Value() == "test.job_system.child_failed");
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Thrown Task Group Failure Cancels Queued Siblings", "[unit][foundation][jobs][group][cancel]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 2}};
+        Horo::TaskGroup group(jobs, Horo::TaskGroupFailurePolicy::FailFast);
+        bool siblingExecuted = false;
+        const auto failed = group.Spawn({}, [](const Horo::CancellationToken &) -> Horo::Result<void> {
+            throw std::runtime_error("child threw");
+        });
+        const auto sibling = group.Spawn({}, [&](const Horo::CancellationToken &) {
+            siblingExecuted = true;
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(failed.HasValue());
+        REQUIRE(sibling.HasValue());
+        const auto joined =
+            group.Join({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)});
+        REQUIRE(joined.HasError());
+        REQUIRE(joined.ErrorValue().code.Value() == "job.failed");
+        REQUIRE(group.Outcome() == Horo::TaskGroupOutcome::Failed);
+        REQUIRE_FALSE(siblingExecuted);
+        REQUIRE(jobs.Find(sibling.Value())->state == Horo::JobState::Cancelled);
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Shutdown Cancels Queued Work Before Joining Running Work", "[unit][foundation][jobs][cancel][shutdown][race]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
+        std::atomic started{false};
+        std::atomic observedCancellation{false};
+        bool queuedExecuted = false;
+        auto running = jobs.SubmitResult({}, [&](const Horo::CancellationToken &cancellation) {
+            started.store(true, std::memory_order_release);
+            while (!cancellation.IsCancellationRequested())
+                std::this_thread::yield();
+            observedCancellation.store(true);
+            return Horo::JobCancelled();
+        });
+        REQUIRE(running.HasValue());
+        while (!started.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        auto queued = jobs.SubmitResult({}, [&](const Horo::CancellationToken &) {
+            queuedExecuted = true;
+            return Horo::Result<void>::Success();
+        });
+        REQUIRE(queued.HasValue());
+        std::thread shutdown([&] {
+            jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
+        });
+        shutdown.join();
+        REQUIRE(observedCancellation.load());
+        REQUIRE_FALSE(queuedExecuted);
+        REQUIRE(running.Value().Snapshot()->state == Horo::JobState::Cancelled);
+        REQUIRE(queued.Value().Snapshot()->state == Horo::JobState::Cancelled);
+        REQUIRE(running.Value().Wait().ErrorValue().code.Value() == "job.cancelled");
+        REQUIRE(queued.Value().Wait().ErrorValue().code.Value() == "job.cancelled");
+        REQUIRE(jobs.Submit({},
+                            [](const Horo::CancellationToken &) {
+        })
+                    .ErrorValue()
+                    .code.Value() == "job.shutdown");
     }
 
     TEST_CASE("Destructor Cancels And Joins Children", "[unit][foundation]") {
         Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
         std::atomic started{false};
         std::atomic stopped{false};
+        Horo::JobId childId{};
         {
             Horo::TaskGroup group(jobs);
-            REQUIRE((group
-                         .Spawn({}, [&started, &stopped](const Horo::CancellationToken &cancellation) {
+            const auto child = group.Spawn({}, [&started, &stopped](const Horo::CancellationToken &cancellation) {
                 started.store(true);
                 while (!cancellation.IsCancellationRequested())
                     std::this_thread::yield();
                 stopped.store(true);
-                return Horo::Result<void>::Success();
-            }).HasValue()));
+                return Horo::JobCancelled();
+            });
+            REQUIRE(child.HasValue());
+            childId = child.Value();
             while (!started.load())
                 std::this_thread::yield();
         }
         REQUIRE((stopped.load()));
+        REQUIRE(jobs.Find(childId)->state == Horo::JobState::Cancelled);
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Task Group Destructor Cancels Queued Children Without Running Them", "[unit][foundation][jobs][group][cancel][lifetime]") {
+        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+        Horo::JobId childId{};
+        bool executed = false;
+        {
+            Horo::TaskGroup group(jobs);
+            const auto child = group.Spawn({}, [&](const Horo::CancellationToken &) {
+                executed = true;
+                return Horo::Result<void>::Success();
+            });
+            REQUIRE(child.HasValue());
+            childId = child.Value();
+        }
+        REQUIRE_FALSE(executed);
+        REQUIRE(jobs.Find(childId)->state == Horo::JobState::Cancelled);
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 }  // namespace

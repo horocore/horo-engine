@@ -35,26 +35,24 @@ namespace Horo::Physics {
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (impl_->nextQueryEventCapabilityGeneration == 0)
+        if (impl_->queryEvents.nextCapabilityGeneration == 0)
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
-        impl_->queryEventCapabilities.erase(std::remove_if(impl_->queryEventCapabilities.begin(), impl_->queryEventCapabilities.end(),
-                                                           [](const auto &weak) {
+        std::erase_if(impl_->queryEvents.capabilities, [](const auto &weak) {
             const auto access = weak.lock();
             return !access || access->revoked;
-        }),
-                                            impl_->queryEventCapabilities.end());
-        if (impl_->queryEventCapabilities.size() >= MaximumPhysicsQueryEventCapabilitiesPerWorld)
+        });
+        if (impl_->queryEvents.capabilities.size() >= MaximumPhysicsQueryEventCapabilitiesPerWorld)
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         try {
             auto state = std::make_shared<PhysicsQueryEventCapabilityState>();
             state->world = this;
-            state->identity = {impl_->identity, impl_->nextQueryEventCapabilityGeneration};
+            state->identity = {impl_->identity, impl_->queryEvents.nextCapabilityGeneration};
             state->ownerThread = impl_->runtime->ownerThread;
-            impl_->queryEventCapabilities.push_back(state);
-            impl_->nextQueryEventCapabilityGeneration =
-                impl_->nextQueryEventCapabilityGeneration == std::numeric_limits<std::uint64_t>::max()
+            impl_->queryEvents.capabilities.push_back(state);
+            impl_->queryEvents.nextCapabilityGeneration =
+                impl_->queryEvents.nextCapabilityGeneration == std::numeric_limits<std::uint64_t>::max()
                     ? 0
-                    : impl_->nextQueryEventCapabilityGeneration + 1;
+                    : impl_->queryEvents.nextCapabilityGeneration + 1;
             return Result<PhysicsQueryEventCapability>::Success(PhysicsQueryEventCapability{std::move(state)});
         } catch (const std::bad_alloc &) {
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
@@ -62,7 +60,7 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsWorld::RevokeQueryEventCapability */
-    Result<void> PhysicsWorld::RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability) {
+    Result<void> PhysicsWorld::RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability) const {
         if (impl_->runtime->ownerThread != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (!capability.state_)
@@ -85,7 +83,7 @@ namespace Horo::Physics {
         const auto access = ResolveAccess(*state_, command.identity);
         if (access.HasError())
             return Result<PhysicsQueryCompletion>::Failure(access.ErrorValue());
-        PhysicsWorld &world = *access.Value();
+        const PhysicsWorld &world = *access.Value();
         const auto &impl = *world.impl_;
         if (impl.state != PhysicsWorldState::ActiveSolver || impl.runtime->state != PhysicsRuntimeState::Ready)
             return Result<PhysicsQueryCompletion>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
@@ -125,8 +123,8 @@ namespace Horo::Physics {
         if (published.completedTick == 0)
             return Result<PhysicsEventReadCompletion>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         if (command.completedTick != published.eventTick || command.publicationRevision != published.publicationRevision ||
-            impl.events.PublishedTick() != published.eventTick)
+            impl.queryEvents.events.PublishedTick() != published.eventTick)
             return Result<PhysicsEventReadCompletion>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
-        return Result<PhysicsEventReadCompletion>::Success(impl.events.CopyPublishedEvents(records, command.maximumRecords));
+        return Result<PhysicsEventReadCompletion>::Success(impl.queryEvents.events.CopyPublishedEvents(records, command.maximumRecords));
     }
 }  // namespace Horo::Physics

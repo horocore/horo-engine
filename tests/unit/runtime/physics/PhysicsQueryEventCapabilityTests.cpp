@@ -54,12 +54,11 @@ namespace Horo::Physics {
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
-    TEST_CASE("Query/event capability validates move, completion and revocation", "[physics][query-event-capability]") {
+    TEST_CASE("Query/event capability handles moved copies and completed ticks", "[physics][query-event-capability]") {
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
         REQUIRE(world->Activate(PhysicsWorldId::Create(51).Value()).HasValue());
         auto capability = world->IssueQueryEventCapability().Value();
-        auto copy = capability;
         auto movable = world->IssueQueryEventCapability().Value();
         auto moved = std::move(movable);
         REQUIRE_FALSE(movable.Identity().world.IsValid());
@@ -97,17 +96,17 @@ namespace Horo::Physics {
         REQUIRE(query.Value().publicationRevision == published.publicationRevision);
     }
 
-    TEST_CASE("Query/event capability rejects foreign identity, stale snapshots and revocation", "[physics][query-event-capability]") {
+    TEST_CASE("Query/event capability validates identity, bounds and world retirement", "[physics][query-event-capability]") {
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
         REQUIRE(world->Activate(PhysicsWorldId::Create(51).Value()).HasValue());
         auto capability = world->IssueQueryEventCapability().Value();
         auto copy = capability;
-        std::array<PhysicsEventRecord, 1> events{};
-        std::array<PhysicsQueryHit, 1> hits{};
         const auto tick = Duration::FromNanoseconds(16'666'667);
         REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = tick}).HasValue());
         const auto published = world->PublishedTick();
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
 
         auto foreign = EventsAt(capability, published);
         foreign.identity.world = PhysicsWorldId::Create(52).Value();

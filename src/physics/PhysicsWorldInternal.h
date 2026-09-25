@@ -36,6 +36,17 @@ namespace Horo::Physics {
         bool stale{};
     };
 
+    /** @brief Keeps completed events and their world-scoped access registrations together. */
+    struct PhysicsQueryEventState final {
+        explicit PhysicsQueryEventState(const PhysicsWorldSettings &settings)
+            : events(settings.Values().budgets.maximumEvents, settings.Values().budgets.maximumInFlightPairs,
+                     settings.Values().budgets.eventOverflow) {}
+
+        Detail::PhysicsEventProjection events;
+        std::vector<std::weak_ptr<PhysicsQueryEventCapabilityState>> capabilities;
+        std::uint64_t nextCapabilityGeneration{1};
+    };
+
     namespace Detail {
         [[nodiscard]] inline std::array<PhysicsDiagnosticContextEntry, 3> DiagnosticContext(const PhysicsWorldId world,
                                                                                             const std::uint64_t sceneGeneration,
@@ -80,9 +91,7 @@ namespace Horo::Physics {
     struct PhysicsWorld::Impl final {
         Impl(std::shared_ptr<PhysicsRuntime::Impl> runtimeOwner, const PhysicsWorldSettings &worldSettings)
             : runtime(std::move(runtimeOwner)), settings(worldSettings), commands(worldSettings.Values().budgets.maximumCommands),
-              sourceOrder(worldSettings.Values().budgets.maximumCommands),
-              events(worldSettings.Values().budgets.maximumEvents, worldSettings.Values().budgets.maximumInFlightPairs,
-                     worldSettings.Values().budgets.eventOverflow) {
+              sourceOrder(worldSettings.Values().budgets.maximumCommands), queryEvents(worldSettings) {
             runtime->identities.push_back(&identity);
         }
 
@@ -106,7 +115,7 @@ namespace Horo::Physics {
             std::ranges::fill(commands, PhysicsStructuralCommand{});
             commandHead = 0;
             commandCount = 0;
-            events.Reset();
+            queryEvents.events.Reset();
             statistics.pendingCommands = 0;
             std::erase(runtime->identities, &identity);
             runtime->ReleaseNativeWhenIdle();
@@ -146,7 +155,7 @@ namespace Horo::Physics {
             querySceneGeneration = 0;
             commandOrderDirty = false;
             stepping = false;
-            events.Reset();
+            queryEvents.events.Reset();
             {
                 Detail::PublicationGuard publicationGuard{publicationLock};
                 published = {};
@@ -158,13 +167,13 @@ namespace Horo::Physics {
         }
 
         void InvalidateQueryEventCapabilities() noexcept {
-            for (const auto &weak : queryEventCapabilities) {
+            for (const auto &weak : queryEvents.capabilities) {
                 if (const auto access = weak.lock()) {
                     access->stale = true;
                     access->world = nullptr;
                 }
             }
-            queryEventCapabilities.clear();
+            queryEvents.capabilities.clear();
         }
 
         [[nodiscard]] Result<void> CheckPublicationRevisionCapacity() const {
@@ -235,9 +244,7 @@ namespace Horo::Physics {
         Detail::CanonicalWorldHandle native;
         std::vector<PhysicsStructuralCommand> commands;
         std::vector<std::uint32_t> sourceOrder;
-        Detail::PhysicsEventProjection events;
-        std::vector<std::weak_ptr<PhysicsQueryEventCapabilityState>> queryEventCapabilities;
-        std::uint64_t nextQueryEventCapabilityGeneration{1};
+        PhysicsQueryEventState queryEvents;
         std::uint32_t commandHead{};
         std::uint32_t commandCount{};
         std::uint64_t activeTick{};

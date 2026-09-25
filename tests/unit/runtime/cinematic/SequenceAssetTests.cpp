@@ -91,11 +91,32 @@ namespace Horo::Cinematic {
         const SequenceAssetData &data = parsed.Value().Data();
         CHECK(data.name == "Intro");
         CHECK(data.playback.clockSource == SequenceClockSource::CommittedSimulation);
+        CHECK_FALSE(data.playback.pauseGameplay);
+        CHECK_FALSE(data.playback.hideHud);
         REQUIRE(data.tracks.size() == 1);
         CHECK(data.tracks.front().type == SequenceTrackType::Audio);
         CHECK(data.tracks.front().keyframeCount == 2);
         REQUIRE(data.tracks.front().references.size() == 1);
         CHECK(data.tracks.front().references.front() == SequenceAssetReference{Asset('2'), SequenceReferenceKind::AudioClip});
+    }
+
+    TEST_CASE("Sequence parser admits optional gameplay pause and HUD settings", "[unit][cinematic][sequence-parser]") {
+        std::string source = ValidJson();
+        ReplaceFirst(source, R"("clockSource":"committedSimulation","pausePolicy":"followGameplay")",
+                     R"("clockSource":"unscaledFixedControl","pausePolicy":"playerOnly")");
+        ReplaceFirst(source, R"("dilationPolicy":"sourceNative")",
+                     R"("dilationPolicy":"sourceNative","pauseGameplay":true,"hideHUD":true)");
+        auto parsed = ParseSequenceAsset(source);
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().Data().playback.pauseGameplay);
+        CHECK(parsed.Value().Data().playback.hideHud);
+
+        std::string invalid = source;
+        ReplaceFirst(invalid, R"("hideHUD":true)", R"("hideHUD":"yes")");
+        RequireError(ParseSequenceAsset(invalid), CinematicErrors::SequenceSchemaMalformed);
+        invalid = source;
+        ReplaceFirst(invalid, R"("pausePolicy":"playerOnly")", R"("pausePolicy":"followGameplay")");
+        RequireError(ParseSequenceAsset(invalid), CinematicErrors::SequenceSchemaMalformed);
     }
 
     TEST_CASE("Sequence parser rejects malformed duplicate and unknown source fields", "[unit][cinematic][sequence-parser]") {
@@ -179,6 +200,9 @@ namespace Horo::Cinematic {
 
         data = ValidData();
         data.playback.pausePolicy = SequencePausePolicy::PlayerOnly;
+        RequireError(SequenceAsset::Create(data), CinematicErrors::SequenceSchemaMalformed);
+        data = ValidData();
+        data.playback.pauseGameplay = true;
         RequireError(SequenceAsset::Create(data), CinematicErrors::SequenceSchemaMalformed);
         data = ValidData();
         data.playback.clockSource = SequenceClockSource::External;
