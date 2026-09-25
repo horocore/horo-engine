@@ -148,6 +148,15 @@ namespace Horo::Log {
          */
         static void Write(std::string_view category, Level level, std::string_view message, std::span<const Telemetry::Field> fields);
 
+        /**
+         * @brief Writes an emergency record directly to standard error, bypassing filters and queued sinks.
+         * @param category Stable hierarchical record category.
+         * @param level Record severity, normally `Critical` for a fail-fast condition.
+         * @param message Human-readable context, truncated to the emergency output bound.
+         * @note This is a reporting path only and never returns an operation result.
+         */
+        static void WriteEmergency(std::string_view category, Level level, std::string_view message) noexcept;
+
         /** @brief Emits the startup system-information snapshot. */
         static void DumpStartupInfo();
 

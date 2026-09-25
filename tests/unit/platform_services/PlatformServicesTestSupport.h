@@ -23,6 +23,9 @@ namespace Horo::PlatformServices::TestSupport {
                                         .limits = limits,
                                         .binding = PlatformServiceBindingId{index + 1}};
         }
+        snapshot.services[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)].leaderboardQueries = {.ranked = true,
+                                                                                                                     .aroundSubject = true,
+                                                                                                                     .friends = true};
         return snapshot;
     }
 }  // namespace Horo::PlatformServices::TestSupport

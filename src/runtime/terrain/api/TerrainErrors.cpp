@@ -208,15 +208,102 @@ namespace Horo::Terrain::TerrainErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor RegistryDescriptorInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.descriptor_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage registry descriptor or limit profile is malformed.",
+        .remediationHint = "Use valid typed identities, bounded records, and an explicit closed-vocabulary capability set.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RegistryDuplicate{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.duplicate"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage registry publication already contains this identity.",
+        .remediationHint = "Use replacement with a newer typed revision or choose a distinct stable identity.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RegistryClosed{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.closed"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The Terrain/Foliage registry no longer admits mutation or snapshot capture.",
+        .remediationHint = "Stop submitting work and retain only already-issued immutable snapshots during shutdown.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RegistryGenerationExhausted{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.generation_exhausted"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "A Terrain/Foliage registry publication generation cannot advance.",
+        .remediationHint = "Close and recreate the host-owned registry; never wrap its publication identity.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RegistryHandleInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.handle_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage registry handle is malformed or outside its snapshot.",
+        .remediationHint = "Use the typed handle returned by the same immutable registry snapshot.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RegistryHandleStale{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.handle_stale"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "A Terrain/Foliage registry handle belongs to another immutable publication.",
+        .remediationHint = "Capture a current snapshot and resolve the stable identity again.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CapabilityUnsupported{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.capability.unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage request requires a capability absent from the explicit host composition.",
+        .remediationHint = "Install the capability explicitly or reject the request; do not silently fall back.",
+        .retryable = false,
+        .userActionable = true,
+    };
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static constexpr std::array descriptors{
-            &IdentityInvalid,    &SerializedIdentityInvalid, &DerivationInvalid,         &IdentityConflict,        &IdentityUnknown,
-            &GenerationStale,    &GenerationExhausted,       &CapacityExceeded,          &LifecycleUnavailable,    &DescriptorInvalid,
-            &TierInvalid,        &TierUnsupported,           &LimitProfileInvalid,       &LimitExceeded,           &RevisionStale,
-            &ReplacementInvalid, &FoliageDefinitionInvalid,  &FoliageFeatureUnsupported, &FoliagePlacementInvalid, &FoliageCullingInvalid,
-            &FoliageWindInvalid, &FoliageCollisionInvalid,
+            &IdentityInvalid,
+            &SerializedIdentityInvalid,
+            &DerivationInvalid,
+            &IdentityConflict,
+            &IdentityUnknown,
+            &GenerationStale,
+            &GenerationExhausted,
+            &CapacityExceeded,
+            &LifecycleUnavailable,
+            &DescriptorInvalid,
+            &TierInvalid,
+            &TierUnsupported,
+            &LimitProfileInvalid,
+            &LimitExceeded,
+            &RevisionStale,
+            &ReplacementInvalid,
+            &FoliageDefinitionInvalid,
+            &FoliageFeatureUnsupported,
+            &FoliagePlacementInvalid,
+            &FoliageCullingInvalid,
+            &FoliageWindInvalid,
+            &FoliageCollisionInvalid,
+            &RegistryDescriptorInvalid,
+            &RegistryDuplicate,
+            &RegistryClosed,
+            &RegistryGenerationExhausted,
+            &RegistryHandleInvalid,
+            &RegistryHandleStale,
+            &CapabilityUnsupported,
         };
         return descriptors;
     }

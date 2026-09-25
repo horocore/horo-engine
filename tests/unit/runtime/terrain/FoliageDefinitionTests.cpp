@@ -289,7 +289,7 @@ namespace Horo::Terrain {
 
     TEST_CASE("Foliage errors are stable TerrainApi registry contributions", "[unit][terrain][foliage]") {
         const auto descriptors = TerrainErrors::Descriptors();
-        CHECK(descriptors.size() == 22);
+        CHECK(descriptors.size() == 29);
         CHECK(TerrainErrors::FoliageDefinitionInvalid.code.Value() == std::string_view{"terrain.foliage.definition_invalid"});
         CHECK(TerrainErrors::FoliageFeatureUnsupported.code.Value() == std::string_view{"terrain.foliage.feature_unsupported"});
         CHECK(TerrainErrors::FoliagePlacementInvalid.code.Value() == std::string_view{"terrain.foliage.placement_invalid"});
