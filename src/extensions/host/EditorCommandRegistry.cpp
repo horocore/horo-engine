@@ -530,15 +530,18 @@ namespace Horo::Extensions {
     void EditorCommandRegistry::BeginShutdown() noexcept {  // NOSONAR(cpp:S5817) Shutdown mutates shared registry state.
         if (state_ == nullptr)
             return;
-        auto lock = state_->Lock();
-        if (state_->shutdown)
-            return;
-        state_->shutdown = true;
-        for (const std::shared_ptr<EditorCommandEntry> &entry : state_->entries) {
+        std::vector<std::shared_ptr<EditorCommandEntry>> retired;
+        {
+            auto lock = state_->Lock();
+            if (state_->shutdown)
+                return;
+            state_->shutdown = true;
+            retired = std::move(state_->entries);
+        }
+        for (const std::shared_ptr<EditorCommandEntry> &entry : retired) {
             entry->registered.store(false, std::memory_order_release);
             entry->contextRegistration.Reset();
         }
-        state_->entries.clear();
     }
 
     /** @copydoc EditorCommandRegistry::IsShutdown */
