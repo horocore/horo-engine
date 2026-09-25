@@ -32,6 +32,14 @@ namespace Horo::Telemetry {
         Timing
     };
 
+    /** @brief Canonical unit carried by a metric descriptor. */
+    enum class MetricUnit : std::uint8_t {
+        Count,
+        Bytes,
+        Seconds,
+        Ratio
+    };
+
     /** @brief Host-selected amount of metric instrumentation admitted at registration. */
     enum class MetricCollectionLevel : std::uint8_t {
         Off,
@@ -85,14 +93,23 @@ namespace Horo::Telemetry {
         std::string_view value;
     };
 
+    /** @brief Hard host admission limits for descriptor text, dimensions, series, and registered instruments. */
     inline constexpr std::size_t MaximumMetricDimensions = 4;
+    inline constexpr std::size_t MaximumMetricNameBytes = 96;
+    inline constexpr std::size_t MaximumMetricSubsystemBytes = 64;
+    inline constexpr std::size_t MaximumMetricDescriptionBytes = 256;
+    inline constexpr std::size_t MaximumMetricDimensionKeyBytes = 48;
+    inline constexpr std::size_t MaximumMetricDimensionValueBytes = 32;
+    inline constexpr std::size_t MaximumMetricDimensionValues = 16;
+    inline constexpr std::uint32_t MaximumMetricSeries = 256;
+    inline constexpr std::size_t MaximumMetricInstruments = 256;
 
     /** @brief Stable pre-registered metric identity and unit. */
     struct InstrumentDescriptor {
         InstrumentKind kind{InstrumentKind::Counter};
         std::string name;
         std::string subsystem;
-        std::string unit;
+        MetricUnit unit{MetricUnit::Count}; /**< Canonical unit; arbitrary unit strings are not accepted. */
         std::string description;
         std::vector<DimensionDescriptor> dimensions;
         std::uint32_t maxSeries{1};
@@ -209,6 +226,37 @@ namespace Horo::Telemetry {
         std::uint64_t shutdownTimeouts{};
         std::uint64_t invalidInstrumentRegistrations{};
         std::uint64_t rejectedMetricSeries{};
+    };
+
+    /** @brief Runtime state for one registered metric, identified only by a process-local instrument index. */
+    enum class MetricAvailabilityState : std::uint8_t {
+        Available,
+        TemporarilyUnavailable,
+        UnsupportedByPlatform,
+        UnsupportedByBackend,
+        DisabledByProfile,
+        PermissionDenied,
+        SamplerFailed
+    };
+
+    /**
+     * @brief Privacy-safe availability row containing no descriptor text or producer payload.
+     * @details The process-local instrument index correlates with a handle's InstrumentId only while the snapshot and handle
+     *          RuntimeGeneration values match.
+     */
+    struct MetricAvailabilityRecord {
+        std::uint32_t instrumentId{}; /**< Process-local registration index; never an account or user identity. */
+        MetricAvailabilityState state{MetricAvailabilityState::Available}; /**< Current host-reported state. */
+    };
+
+    /** @brief Fixed-capacity telemetry health and metric availability view for host diagnostics. */
+    struct DiagnosticSnapshot {
+        Statistics statistics; /**< Process-lifetime scalar telemetry health counters. */
+        std::array<MetricAvailabilityRecord, MaximumMetricInstruments> availability{}; /**< Active metric state rows. */
+        std::uint64_t availabilityRevision{}; /**< Advances when registration or availability changes. */
+        std::uint32_t runtimeGeneration{};    /**< Identifies this process-local telemetry runtime. */
+        std::uint16_t availabilityCount{};    /**< Number of populated availability rows. */
+        bool runtimeEnabled{};                /**< Whether the runtime currently accepts records. */
     };
 
     class Counter;
@@ -349,12 +397,48 @@ namespace Horo::Telemetry {
          */
         [[nodiscard]] static Statistics GetStatistics() noexcept;
 
+        /**
+         * @brief Copies bounded telemetry health and availability without descriptor text or record payloads.
+         * @return Fixed-capacity snapshot containing only counters, process-local instrument indices, and enum states.
+         */
+        [[nodiscard]] static DiagnosticSnapshot GetDiagnosticSnapshot() noexcept;
+
+        /**
+         * @brief Updates a registered counter's typed availability state outside the metric fast path.
+         * @param instrument Registered counter handle.
+         * @param state Current availability state.
+         * @return True when the handle belongs to the active runtime and the state is valid.
+         */
+        [[nodiscard]] static bool SetAvailability(const Counter &instrument, MetricAvailabilityState state) noexcept;
+        /**
+         * @brief Updates a registered gauge's typed availability state outside the metric fast path.
+         * @param instrument Registered gauge handle.
+         * @param state Current availability state.
+         * @return True when the handle belongs to the active runtime and the state is valid.
+         */
+        [[nodiscard]] static bool SetAvailability(const Gauge &instrument, MetricAvailabilityState state) noexcept;
+        /**
+         * @brief Updates a registered histogram's typed availability state outside the metric fast path.
+         * @param instrument Registered histogram handle.
+         * @param state Current availability state.
+         * @return True when the handle belongs to the active runtime and the state is valid.
+         */
+        [[nodiscard]] static bool SetAvailability(const Histogram &instrument, MetricAvailabilityState state) noexcept;
+        /**
+         * @brief Updates a registered timing instrument's typed availability state outside the metric fast path.
+         * @param instrument Registered timing handle.
+         * @param state Current availability state.
+         * @return True when the handle belongs to the active runtime and the state is valid.
+         */
+        [[nodiscard]] static bool SetAvailability(const Timing &instrument, MetricAvailabilityState state) noexcept;
+
     private:
         Runtime() = delete;
         friend class Counter;
         friend class Gauge;
         friend class Histogram;
         friend class Timing;
+        static bool SetAvailability(std::uint32_t instrumentId, std::uint32_t generation, MetricAvailabilityState state) noexcept;
         static bool BindMetric(std::uint32_t instrumentId, std::uint32_t generation, InstrumentKind kind,
                                std::span<const DimensionValue> dimensions, std::array<std::uint16_t, MaximumMetricDimensions> &valueIds,
                                std::uint8_t &dimensionCount) noexcept;
@@ -381,6 +465,22 @@ namespace Horo::Telemetry {
         /** @brief Returns whether this handle references a registered instrument. */
         [[nodiscard]] explicit operator bool() const noexcept {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
+        }
+
+        /**
+         * @brief Returns the process-local instrument index used by diagnostic availability rows.
+         * @return Registration index, or zero when this handle is empty.
+         */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /**
+         * @brief Returns the telemetry runtime generation that owns this handle.
+         * @return Runtime generation, or zero when this handle is empty.
+         */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
         }
 
         /**
@@ -423,6 +523,16 @@ namespace Horo::Telemetry {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
         }
 
+        /** @brief Returns the process-local availability-row index, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /** @brief Returns the owning telemetry runtime generation, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
+        }
+
         /** @brief Resolves one bounded low-cardinality series outside the update fast path. */
         [[nodiscard]] Gauge WithDimensions(std::span<const DimensionValue> dimensions) const;
 
@@ -459,6 +569,16 @@ namespace Horo::Telemetry {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
         }
 
+        /** @brief Returns the process-local availability-row index, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /** @brief Returns the owning telemetry runtime generation, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
+        }
+
         /** @brief Resolves one bounded low-cardinality series outside the update fast path. */
         [[nodiscard]] Histogram WithDimensions(std::span<const DimensionValue> dimensions) const;
 
@@ -486,6 +606,16 @@ namespace Horo::Telemetry {
 #endif
         [[nodiscard]] explicit operator bool() const noexcept {
             return instrumentId_ != 0 && dimensionCount_ == requiredDimensionCount_;
+        }
+
+        /** @brief Returns the process-local availability-row index, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t InstrumentId() const noexcept {
+            return instrumentId_;
+        }
+
+        /** @brief Returns the owning telemetry runtime generation, or zero for an empty handle. */
+        [[nodiscard]] std::uint32_t RuntimeGeneration() const noexcept {
+            return generation_;
         }
 
         /** @brief Resolves one bounded low-cardinality series outside the update fast path. */
