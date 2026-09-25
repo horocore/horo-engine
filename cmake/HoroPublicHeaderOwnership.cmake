@@ -86,6 +86,7 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformOfflineQueueStorage.h
     Horo/PlatformServices/PlatformProgressionIdempotency.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
+    Horo/PlatformServices/PlatformProviderManifestCook.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
     Horo/PlatformServices/PlatformServiceInterfaces.h

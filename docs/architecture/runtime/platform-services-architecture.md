@@ -995,6 +995,24 @@ keys/aliases once and emits typed IDs into provider-neutral artifacts; provider
 manifests are deterministic derived outputs from that same snapshot. Any revision
 change invalidates the candidate.
 
+PLS-003.6 implements a bounded synchronous cook over immutable validated snapshots.
+It emits two version-1, big-endian byte streams: a provider-neutral stream containing
+the project identity, host profile, registry/policy/definition fingerprints, service
+requirements and complete ID-sorted semantic definitions; and a mapping handoff
+containing the same registry/policy fingerprints, exact selected Horo provider,
+mapping revision, required-kind policy and kind/ID-sorted opaque provider-value
+digests. Every variable-length text field has a 32-bit big-endian byte length. A
+domain-separated SHA-256 over the two length-prefixed streams binds them into one
+cook generation. Adapter-owned native values and reverse maps are never part of
+either stream. The private adapter uses the handoff to verify and generate its own
+native manifest without loading an SDK during this common cook step. Explicit Null
+emits a zero-provider, zero-revision, empty mapping stream. A project configuration
+with explicit Null and any Required service is rejected before cook, and mapping
+policy cannot override that rule. Cook returns detached owned bytes only after all
+validation and cancellation checks, including one after final fingerprinting, pass;
+the host must recheck cancellation and source revisions before atomically publishing
+both streams or discarding both.
+
 Runtime loads bounded sorted tables with the expected fingerprint and performs only
 typed numeric lookup. It never hashes strings, reads editor aliases or asks a provider
 to allocate identity. Registry generations remain pinned by admitted requests and
