@@ -27,8 +27,9 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 1,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 2,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
+    HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
 };
 
 enum HoroExtensionStatusCode {  // NOSONAR(cpp:S3642) C ABI constants; wire values use uint32_t.
@@ -38,6 +39,7 @@ enum HoroExtensionStatusCode {  // NOSONAR(cpp:S3642) C ABI constants; wire valu
     HORO_EXTENSION_ERROR_INVALID_ARGS = 3,
     HORO_EXTENSION_ERROR_CANCELLED = 4,
     HORO_EXTENSION_ERROR_OUTPUT_REJECTED = 5,
+    HORO_EXTENSION_ERROR_BUSY = 6,
 };
 
 typedef uint32_t HoroExtensionStatus;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
@@ -228,6 +230,62 @@ typedef struct HoroAssetImporterDescriptor HoroAssetImporterDescriptor;  // NOSO
 typedef HoroExtensionStatus (*HoroRegisterAssetImporterFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
     void *hostContext, const HoroAssetImporterDescriptor *descriptor);
 
+/** @brief Exact OS bits in a platform-services provider claim. */
+enum HoroPlatformProviderPlatformBits {  // NOSONAR(cpp:S3642) Shared C11 ABI requires an unscoped enum.
+    HORO_PLATFORM_PROVIDER_WINDOWS = 1U << 0U,
+    HORO_PLATFORM_PROVIDER_MACOS = 1U << 1U,
+    HORO_PLATFORM_PROVIDER_LINUX = 1U << 2U,
+};
+
+/** @brief Exact product profile bits in a platform-services provider claim. */
+enum HoroPlatformProviderProfileBits {  // NOSONAR(cpp:S3642) Shared C11 ABI requires an unscoped enum.
+    HORO_PLATFORM_PROVIDER_INTERACTIVE = 1U << 0U,
+    HORO_PLATFORM_PROVIDER_HEADLESS = 1U << 1U,
+    HORO_PLATFORM_PROVIDER_COOK = 1U << 2U,
+    HORO_PLATFORM_PROVIDER_CERTIFICATION = 1U << 3U,
+};
+
+/** @brief Create one opaque provider candidate; output ownership remains with this module. */
+typedef HoroExtensionStatus (*HoroPlatformProviderCreateFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    void *factoryContext, void **outCandidate);
+/** @brief Close candidate admission, cancel work and report success only after callbacks have drained. */
+typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+/** @brief Destroy a fully retired candidate on its required owner thread. */
+typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
+/**
+ * @brief Borrowed provider contribution copied during module load; version 1 is a factory/lifetime profile.
+ * @details The host copies every claim and retains module code across candidate creation and retirement. A candidate must not
+ * be destroyed or its code unloaded while Retire returns BUSY. This profile does not expose service operation pointers;
+ * those belong to a separately versioned operation profile.
+ */
+struct HoroPlatformServicesProviderDescriptor {
+    uint32_t structSize;
+    uint32_t abiVersion;
+    HoroExtensionStringView providerKey;
+    uint64_t providerId;
+    uint32_t platformMask;
+    uint32_t profileMask;
+    uint32_t serviceMask;
+    uint32_t interfaceMajor;
+    uint32_t interfaceMinor;
+    uint32_t contractMajor;
+    uint32_t contractMinor;
+    uint32_t contractPatch;
+    const HoroExtensionStringView *permissions;
+    uint32_t permissionCount;
+    void *factoryContext;
+    HoroPlatformProviderCreateFunc createCandidate;
+    HoroPlatformProviderRetireFunc retireCandidate;
+    HoroPlatformProviderDestroyFunc destroyCandidate;
+};
+typedef struct HoroPlatformServicesProviderDescriptor  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    HoroPlatformServicesProviderDescriptor;
+
+/** @brief Stages one provider claim during the module load transaction. */
+typedef HoroExtensionStatus (*HoroRegisterPlatformServicesProviderFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor);
+
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
     uint32_t structSize;
@@ -239,6 +297,8 @@ struct HoroExtensionHostApi {
     uint32_t abiMinorVersion;
     /** @brief Reserved for append-only negotiation; must be zero. */
     uint32_t reserved;
+    /** @brief Appended in 1.2; present only when structSize covers this field. */
+    HoroRegisterPlatformServicesProviderFunc registerPlatformServicesProvider;
 };
 typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
@@ -253,6 +313,7 @@ typedef struct HoroExtensionModuleApi HoroExtensionModuleApi;  // NOSONAR(cpp:S5
 
 enum {  // NOSONAR(cpp:S3642) C ABI function requirement bits.
     HORO_EXTENSION_REQUIRES_ASSET_IMPORTER = 1,
+    HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER = 2,
 };
 
 /**

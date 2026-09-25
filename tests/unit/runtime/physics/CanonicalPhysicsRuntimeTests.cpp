@@ -7,10 +7,17 @@
 #include <Jolt/Jolt.h>
 
 // Jolt subsidiary headers require its root definitions first.
+#include "CanonicalPhysicsRuntimeInternal.h"
+
 #include <Jolt/Core/Factory.h>
 #include <Jolt/Core/Memory.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <string>
 #include <thread>
 #include <vector>
@@ -281,5 +288,96 @@ namespace Horo::Physics::Detail {
 #ifdef JPH_ENABLE_ASSERTS
         REQUIRE(JPH::AssertFailed == priorAssert);
 #endif
+    }
+
+    TEST_CASE("Canonical joint collision suppression lasts until the final pair joint retires", "[physics][native][constraint]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const auto owner = PhysicsWorldId::Create(601).Value();
+        const ShapeHandle shape = CreateCanonicalSceneShape(world.handle, owner, PhysicsBoxShape{}).Value();
+        PhysicsBodyDescriptor body;
+        body.shape = shape;
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const BodyHandle first = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        body.pose.translation = {2.0F, 0.0F, 0.0F};
+        body.motion = PhysicsMotionType::Dynamic;
+        body.mass = PhysicsMass{1.0F};
+        const BodyHandle second = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
+        const auto contactPolicy = [&] {
+            JPH::BodyLockRead firstLock(canonical.native.system->GetBodyLockInterfaceNoLock(), canonical.scene.bodies[0].nativeBody);
+            JPH::BodyLockRead secondLock(canonical.native.system->GetBodyLockInterfaceNoLock(), canonical.scene.bodies[1].nativeBody);
+            REQUIRE(firstLock.Succeeded());
+            REQUIRE(secondLock.Succeeded());
+            return canonical.contactListener.OnContactValidate(firstLock.GetBody(), secondLock.GetBody(), JPH::RVec3::sZero(),
+                                                               JPH::CollideShapeResult{});
+        };
+        REQUIRE(contactPolicy() == JPH::ValidateResult::AcceptAllContactsForThisBodyPair);
+
+        PhysicsConstraintDescriptor descriptor;
+        descriptor.first = {first, {}};
+        descriptor.second = PhysicsBodyAnchor{second, {}};
+        descriptor.parameters = PhysicsDistanceConstraint{1.0F, 3.0F};
+        const ConstraintHandle distance = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        descriptor.parameters = PhysicsFixedConstraint{};
+        const ConstraintHandle fixed = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        REQUIRE(contactPolicy() == JPH::ValidateResult::RejectAllContactsForThisBodyPair);
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, distance).HasValue());
+        REQUIRE(contactPolicy() == JPH::ValidateResult::RejectAllContactsForThisBodyPair);
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, fixed).HasValue());
+        REQUIRE(contactPolicy() == JPH::ValidateResult::AcceptAllContactsForThisBodyPair);
+    }
+
+    TEST_CASE("Canonical single-axis joints preserve hard limits and signed runtime coordinates", "[physics][native][constraint]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const auto owner = PhysicsWorldId::Create(602).Value();
+        const ShapeHandle shape = CreateCanonicalSceneShape(world.handle, owner, PhysicsBoxShape{}).Value();
+        PhysicsBodyDescriptor body;
+        body.shape = shape;
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const BodyHandle first = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        body.pose.translation = {2.0F, 0.0F, 0.0F};
+        body.motion = PhysicsMotionType::Dynamic;
+        body.mass = PhysicsMass{1.0F};
+        const BodyHandle second = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
+
+        PhysicsConstraintDescriptor descriptor;
+        descriptor.first = {first, {}};
+        descriptor.second = PhysicsBodyAnchor{second, {}};
+        descriptor.parameters = PhysicsHingeConstraint{-0.5F, 0.75F};
+        const ConstraintHandle hinge = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        const auto *nativeHinge = static_cast<const JPH::HingeConstraint *>(canonical.scene.constraints.back().constraint.GetPtr());
+        REQUIRE(nativeHinge->HasLimits());
+        REQUIRE(nativeHinge->GetLimitsMin() == -0.5F);
+        REQUIRE(nativeHinge->GetLimitsMax() == 0.75F);
+
+        descriptor.parameters = PhysicsSliderConstraint{-3.0F, 4.0F};
+        const ConstraintHandle slider = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        const auto *nativeSlider = static_cast<const JPH::SliderConstraint *>(canonical.scene.constraints.back().constraint.GetPtr());
+        REQUIRE(nativeSlider->HasLimits());
+        REQUIRE(nativeSlider->GetLimitsMin() == -3.0F);
+        REQUIRE(nativeSlider->GetLimitsMax() == 4.0F);
+        REQUIRE(ReadCanonicalSceneJointState(world.handle, slider).Value().coordinate == 2.0F);
+
+        canonical.native.system->GetBodyInterface().SetPosition(canonical.scene.bodies[1].nativeBody, JPH::RVec3{-2.0F, 0.0F, 0.0F},
+                                                                JPH::EActivation::DontActivate);
+        const auto negative = ReadCanonicalSceneJointState(world.handle, slider);
+        REQUIRE(negative.HasValue());
+        REQUIRE(negative.Value().kind == PhysicsJointCoordinateKind::PositionMeters);
+        REQUIRE(negative.Value().coordinate == -2.0F);
+        canonical.native.system->GetBodyInterface().SetRotation(canonical.scene.bodies[1].nativeBody,
+                                                                JPH::Quat::sRotation(JPH::Vec3::sAxisY(), 0.25F),
+                                                                JPH::EActivation::DontActivate);
+        REQUIRE(std::abs(ReadCanonicalSceneJointState(world.handle, hinge).Value().coordinate - 0.25F) < 0.0001F);
+        canonical.native.system->GetBodyInterface().SetRotation(canonical.scene.bodies[1].nativeBody,
+                                                                JPH::Quat::sRotation(JPH::Vec3::sAxisY(), -0.25F),
+                                                                JPH::EActivation::DontActivate);
+        REQUIRE(std::abs(ReadCanonicalSceneJointState(world.handle, hinge).Value().coordinate + 0.25F) < 0.0001F);
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, hinge).HasValue());
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, slider).HasValue());
     }
 }  // namespace Horo::Physics::Detail

@@ -126,6 +126,36 @@ namespace Horo::Cinematic {
             return left + right;
         }
 
+        /** @brief Scaled source interval and fractional carry for the next clock sample. */
+        struct ScaledClockDelta final {
+            SequenceTime value{};
+            std::uint64_t remainder{};
+        };
+
+        /** @brief Scales a non-negative source interval without overflowing an intermediate product. */
+        [[nodiscard]] Result<ScaledClockDelta> ScaleClockDelta(const SequenceTime rawDelta, const SequencePlaybackRate scale,
+                                                               const std::uint64_t remainder) {
+            const auto numerator = static_cast<std::uint64_t>(scale.numerator);
+            const auto denominator = static_cast<std::uint64_t>(scale.denominator);
+            const auto whole = static_cast<std::uint64_t>(rawDelta) / denominator;
+            const auto fraction = static_cast<std::uint64_t>(rawDelta) % denominator;
+            // The bounded 32-bit ratio fields keep this product and carry within uint64_t.
+            const std::uint64_t fractionalProduct = fraction * numerator + remainder;
+            if (const auto wholeLimit = static_cast<std::uint64_t>(std::numeric_limits<SequenceTime>::max());
+                numerator != 0 && whole > (wholeLimit - fractionalProduct / denominator) / numerator)
+                return Failed<ScaledClockDelta>(SequencePlaybackRuntimeErrors::ClockInvalid);
+            return Result<ScaledClockDelta>::Success(
+                {static_cast<SequenceTime>(whole * numerator + fractionalProduct / denominator), fractionalProduct % denominator});
+        }
+
+        /** @brief Checks source identity, scale shape, and monotonic ordering within an epoch. */
+        [[nodiscard]] bool IsValidClockSample(const SequenceClockSample &sample, const SequenceClockSource source, const bool baselineValid,
+                                              const std::uint64_t epoch, const SequenceTime position) noexcept {
+            return sample.source == source && sample.position >= 0 && sample.epoch != 0 && sample.gameplayScale.numerator >= 0 &&
+                   sample.gameplayScale.denominator != 0 &&
+                   (!baselineValid || (sample.epoch >= epoch && (sample.epoch != epoch || sample.position >= position)));
+        }
+
         [[nodiscard]] SequenceEvaluationUsage AddUsage(const SequenceEvaluationUsage &left, const SequenceEvaluationUsage &right) noexcept {
             return {SaturatingAdd(left.activePlayers, right.activePlayers), SaturatingAdd(left.aggregateTracks, right.aggregateTracks),
                     SaturatingAdd(left.boundaryOccurrences, right.boundaryOccurrences),
@@ -468,10 +498,8 @@ namespace Horo::Cinematic {
         if (const SequencePlaybackState state = instance.player.Snapshot().state;
             state == SequencePlaybackState::Closing || state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed)
             return Failed<SequenceFrameEvaluationResult>(SequencePlaybackRuntimeErrors::ActivationInvalid);
-        if (sample.source != instance.coordination.clockSource || sample.position < 0 || sample.epoch == 0 ||
-            sample.gameplayScale.numerator < 0 || sample.gameplayScale.denominator == 0 ||
-            (instance.clockBaselineValid &&
-             (sample.epoch < instance.clockEpoch || (sample.epoch == instance.clockEpoch && sample.position < instance.clockPosition))))
+        if (!IsValidClockSample(sample, instance.coordination.clockSource, instance.clockBaselineValid, instance.clockEpoch,
+                                instance.clockPosition))
             return Failed<SequenceFrameEvaluationResult>(SequencePlaybackRuntimeErrors::ClockInvalid);
 
         const SequencePlayerSnapshot player = instance.player.Snapshot();
@@ -507,30 +535,32 @@ namespace Horo::Cinematic {
             return unchanged();
         }
 
+        return EvaluateClockDelta(handle, sample, scratch, hooks, instance);
+    }
+
+    /** @copydoc CinematicRuntimeService::EvaluateClockDelta */
+    Result<SequenceFrameEvaluationResult> CinematicRuntimeService::EvaluateClockDelta(const SequencePlayerHandle &handle,
+                                                                                      const SequenceClockSample &sample,
+                                                                                      const SequenceFrameScratch &scratch,
+                                                                                      const SequenceFrameHooks &hooks,
+                                                                                      const Instance &instance) {
         const SequenceTime rawDelta = sample.position - instance.clockPosition;
         SequenceTime sourceDelta = rawDelta;
         std::uint64_t nextRemainder = instance.scaleRemainder;
         if (instance.coordination.dilationPolicy == SequenceDilationPolicy::ApplyGameplayScale) {
             if (sample.gameplayScale != instance.appliedScale)
                 nextRemainder = 0;
-            const auto numerator = static_cast<std::uint64_t>(sample.gameplayScale.numerator);
-            const auto denominator = static_cast<std::uint64_t>(sample.gameplayScale.denominator);
-            const auto whole = static_cast<std::uint64_t>(rawDelta) / denominator;
-            const auto fraction = static_cast<std::uint64_t>(rawDelta) % denominator;
-            // fraction * numerator + remainder fits uint64_t for the bounded 32-bit ratio fields.
-            const std::uint64_t fractionalProduct = fraction * numerator + nextRemainder;
-            const std::uint64_t wholeLimit = static_cast<std::uint64_t>(std::numeric_limits<SequenceTime>::max());
-            if (numerator != 0 && whole > (wholeLimit - fractionalProduct / denominator) / numerator)
-                return Failed<SequenceFrameEvaluationResult>(SequencePlaybackRuntimeErrors::ClockInvalid);
-            sourceDelta = static_cast<SequenceTime>(whole * numerator + fractionalProduct / denominator);
-            nextRemainder = fractionalProduct % denominator;
+            auto scaled = ScaleClockDelta(rawDelta, sample.gameplayScale, nextRemainder);
+            if (scaled.HasError())
+                return Result<SequenceFrameEvaluationResult>::Failure(scaled.ErrorValue());
+            sourceDelta = scaled.Value().value;
+            nextRemainder = scaled.Value().remainder;
         }
         auto evaluated = Evaluate(handle, sourceDelta, scratch, hooks);
         if (evaluated.HasError())
             return evaluated;
         // A completion hook may retire this player at the terminal boundary.
-        auto current = ResolveSlot(handle);
-        if (current.HasValue()) {
+        if (auto current = ResolveSlot(handle); current.HasValue()) {
             Instance &live = *slots_[current.Value()].instance;
             live.clockPosition = sample.position;
             live.clockEpoch = sample.epoch;

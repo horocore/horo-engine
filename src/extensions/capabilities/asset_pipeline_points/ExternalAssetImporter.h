@@ -3,6 +3,7 @@
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Extensions/ExtensionAbi.h"
 #include "Horo/Extensions/ExtensionManifest.h"
+#include "Horo/Extensions/ExtensionPlatformProvider.h"
 #include "Horo/Platform/DynamicLibrary.h"
 
 #include <memory>
@@ -51,6 +52,7 @@ namespace Horo::Extensions {
         const ExtensionModuleManifest *extensionModule{};
         std::shared_ptr<ExtensionModuleLifetime> lifetime;
         std::vector<Assets::AssetImporterContribution> contributions;
+        std::vector<ExtensionPlatformProviderCandidate> platformProviders;
         Error error;
         bool failed{};
     };
