@@ -1603,6 +1603,8 @@
     "asset_import.title": {"text": "Varlıkları İçe Aktar"},
     "asset_import.subtitle": {"text": "Projene dosya ekle ve nasıl içe aktarılacaklarını yapılandır."},
     "asset_import.destination": {"text": "Hedef"},
+    "asset_import.browse_sources": {"text": "İçe aktarılacak dosyaları seç"},
+    "asset_import.browse_destination": {"text": "Hedef klasörü seç"},
     "asset_import.change": {"text": "Değiştir..."},
     "asset_import.list_title": {"text": "Dosyalar"},
     "asset_import.remove_file": {"text": "Listeden kaldır"},

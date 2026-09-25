@@ -10,7 +10,7 @@
 namespace Horo::Assets {
     struct AssetImportItem;
     struct AssetImporterContribution;
-}
+}  // namespace Horo::Assets
 
 namespace Horo::Editor {
     class IEditorGuiRenderer;
@@ -26,7 +26,13 @@ namespace Horo::Editor {
 
     private:
         struct ResultState;
+        struct PreviewRequest;
         void Clear() noexcept;
+        void StartPreview(const Assets::AssetImportItem &item, const Assets::AssetImporterContribution &contribution,
+                          const std::string &path);
+        void UploadFinished();
+        [[nodiscard]] static Result<void> GeneratePreview(const std::shared_ptr<ResultState> &state, const PreviewRequest &request,
+                                                          const CancellationToken &cancellation);
 
         JobSystem &jobs_;
         IEditorGuiRenderer &renderer_;

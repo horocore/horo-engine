@@ -170,7 +170,7 @@ namespace {
     }
 }  // namespace
 
-TEST_CASE("Transform gizmo linear handles remain selectable", "[unit][editor][viewport][gizmo]") {
+TEST_CASE("Transform gizmo linear and plane handles remain selectable", "[unit][editor][viewport][gizmo]") {
     ImGuiGizmoGeometryTestContext context;
     ImDrawList &drawList = context.DrawList();
 
@@ -190,6 +190,11 @@ TEST_CASE("Transform gizmo linear handles remain selectable", "[unit][editor][vi
     const Result<TransformGizmoFrameGeometry> plane = DrawTransformGizmoGeometry(drawList, planeRequest);
     REQUIRE(plane.HasValue());
     REQUIRE(plane.Value().hoveredAxis == 6);
+}
+
+TEST_CASE("Transform gizmo projected handles remain selectable across camera angles", "[unit][editor][viewport][gizmo]") {
+    ImGuiGizmoGeometryTestContext context;
+    ImDrawList &drawList = context.DrawList();
 
     EditorViewportCamera distantCamera = context.camera;
     distantCamera.position = {0.0F, 0.0F, 8.0F};
@@ -199,7 +204,7 @@ TEST_CASE("Transform gizmo linear handles remain selectable", "[unit][editor][vi
                                                        .space = EditorTransformSpace::World,
                                                        .width = 400.0F,
                                                        .height = 400.0F,
-                                                       .pointer = planeRequest.pointer,
+                                                       .pointer = {222.0F, 222.0F},
                                                        .hovered = true};
     const Result<TransformGizmoFrameGeometry> distantPlane = DrawTransformGizmoGeometry(drawList, distantRequest);
     REQUIRE(distantPlane.HasValue());

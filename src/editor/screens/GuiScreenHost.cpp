@@ -86,12 +86,12 @@ namespace Horo::Editor {
                                  const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
                                  WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace)
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, NativeDialogs *nativeDialogs)
 
         : context_(&context), modalHost_(&modalHost), settingsService_(&settingsService), localization_(&localization),
           engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
-          extensionMarketplace_(extensionMarketplace), screenRegistry_(std::move(screenRegistry)),
-          workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
+          extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs), inputRouter_(&inputRouter),
+          screenRegistry_(std::move(screenRegistry)), workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
         services_.Register(*this);
         services_.RegisterConst(context);
         services_.Register(modalHost);
@@ -490,9 +490,10 @@ namespace Horo::Editor {
                 return;
             case ImportAssets:
                 if (context_ && modalHost_ && !modalHost_->HasOpenModal()) {
-                    auto modal = std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
-                                                                    services_.TryGet<Assets::AssetRegistry>(),
-                                                                    services_.TryGet<OperationStore>(), localization_);
+                    auto modal =
+                        std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
+                                                           services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>(),
+                                                           localization_, nativeDialogs_, inputRouter_);
                     modal->SetProjectRoot(CurrentProjectRoot());
                     if (invocation.assetDestination.has_value())
                         modal->SetDefaultDestination(*invocation.assetDestination);

@@ -1,0 +1,46 @@
+{
+  "title": "M_Rock_Master.horomat",
+  "subtitle": "assets/materials/rock/M_Rock_Master.horomat — Node-based material authoring, domain validation, generated shader variants, and tier compatibility",
+  "graphs": [
+    { "domain": "Surface Domain · PBR", "name": "M_Rock_Master", "summary": "Albedo, normal, roughness, metallic" },
+    { "domain": "Decal Domain", "name": "D_BulletHole", "summary": "Opacity mask, normal fade" },
+    { "domain": "Post Process Domain", "name": "PP_ColorGrade", "summary": "LUT, curves, bloom threshold" },
+    { "domain": "Surface Domain · PBR", "name": "M_Water_River", "summary": "Flow map, refraction, foam" }
+  ],
+  "nodes": [
+    { "title": "Texture Sample", "summary": "albedo · T_Rock_Diffuse", "x": 32, "y": 52 },
+    { "title": "Normal Blend", "summary": "detail normal · T_Rock_N", "x": 220, "y": 124 },
+    { "title": "Roughness", "summary": "scalar · 0.72", "x": 430, "y": 28 },
+    { "title": "Metallic", "summary": "scalar · 0.08", "x": 430, "y": 200 },
+    { "title": "Material Output", "summary": "Surface / PBR", "x": 610, "y": 110 }
+  ],
+  "edges": [
+    "M192 72 C260 72 260 140 220 140",
+    "M380 144 C410 144 410 48 430 48",
+    "M380 144 C410 144 410 220 430 220",
+    "M590 48 C650 48 650 126 610 126",
+    "M590 220 C650 220 650 140 610 140"
+  ],
+  "variants": [
+    { "title": "Standard", "tier": "dx12", "summary": "Full PBR, parallax, detail normals" },
+    { "title": "Mobile", "tier": "es3", "summary": "Simplified BRDF, 4 sampled textures" },
+    { "title": "Shadow Caster", "tier": "all", "summary": "Depth-only, alpha test if masked" },
+    { "title": "Depth Prepass", "tier": "all", "summary": "No color output, early-z" },
+    { "title": "Tessellated", "tier": "dx11+", "summary": "Displacement, adaptive subdivision" },
+    { "title": "Forward+", "tier": "dx12", "summary": "Clustered forward, light culling" }
+  ],
+  "validation": [
+    { "label": "Domain", "value": "Surface" },
+    { "label": "Tier", "value": "dx11+" },
+    { "label": "Variants", "value": "6 active" },
+    { "label": "Pipeline cache", "value": "842 / 856" },
+    { "label": "Compile errors", "value": "0" }
+  ],
+  "inspector": [
+    { "label": "Domain", "value": "Surface" },
+    { "label": "Blend Mode", "value": "Opaque" },
+    { "label": "Tier", "value": "dx11+" },
+    { "label": "Generated Variants", "value": "6" }
+  ],
+  "status": ["M_Rock_Master.horomat", "Domain: Surface / PBR", "6 generated variants", "Shader cache: 842 / 856", "0 errors"]
+}

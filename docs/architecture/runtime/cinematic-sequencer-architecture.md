@@ -1062,7 +1062,7 @@ These are required implementation acceptance tests, not tests added by this ADR:
 - [ADR-120: Cinematic Event Dispatch and Audio Coupling Boundary](../../adr/120-cinematic-event-dispatch-and-audio-coupling-boundary.md)
 - [ADR-121: Cinematic Editor Document and Authoring Context](../../adr/121-cinematic-editor-document-and-authoring-context.md)
 - [ADR-122: Cinematic Trigger Sources and Capability Policy](../../adr/122-cinematic-trigger-sources-and-capability-policy.md)
-- [Cinematic Sequencer UI Reference](./cinematic-sequencer.html)
+- [Cinematic Sequencer UI Reference](../../../mock-studio/designs.md#architecture-runtime-cinematic-sequencer)
 - [Scene Runtime Architecture](./scene-runtime.md)
 - [Animation Architecture](./animation-architecture.md)
 - [Character Controller Architecture](./character-controller-architecture.md)

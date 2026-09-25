@@ -1,0 +1,42 @@
+{
+  "architecture/runtime/network-debugger.html": {
+    "title": "Network Debugger",
+    "subtitle": "Replication inspector · bandwidth monitor · RPC log · latency sim",
+    "status": ["Protocol: authenticated typed", "Schema: v7", "Server tick: 64 Hz", "Client: Player2", "3 connected"],
+    "tabs": [
+      { "title": "Overview", "blocks": [
+        { "type": "metrics", "items": [{ "label": "PING", "value": "24", "unit": "ms" }, { "label": "IN", "value": "14.2", "unit": "KB/s" }, { "label": "OUT", "value": "8.7", "unit": "KB/s" }, { "label": "PKT LOSS", "value": "0.1", "unit": "%" }] },
+        { "type": "table", "title": "Replicated Objects", "headers": ["Object", "Replication"], "rows": [["PlayerPawn 01", "12 props · owner"], ["PlayerPawn 02", "12 props · simulated"], ["Weapon Rifle 01", "4 props · owner"], ["Door 03", "2 props · replicated"]] }
+      ] },
+      { "title": "Replication", "blocks": [{ "type": "table", "title": "Replicated Objects", "headers": ["Object", "Replication"], "rows": [["PlayerPawn 01", "12 props · owner"], ["PlayerPawn 02", "12 props · simulated"], ["Weapon Rifle 01", "4 props · owner"], ["Door 03", "2 props · replicated"]] }] },
+      { "title": "RPC Log", "blocks": [{ "type": "empty", "title": "RPC Log" }] },
+      { "title": "Simulation", "blocks": [{ "type": "empty", "title": "Latency Simulation" }] }
+    ]
+  },
+  "architecture/runtime/platform-services-config.html": {
+    "title": "Platform Services",
+    "subtitle": "Achievements · leaderboards · cloud saves · presence · friends",
+    "sidebarTitle": "Services",
+    "sidebar": [{ "label": "Achievements", "value": "enabled" }, { "label": "Leaderboards", "value": "enabled" }, { "label": "Cloud Save", "value": "enabled" }, { "label": "Presence", "value": "enabled" }, { "label": "Friends", "value": "disabled" }],
+    "status": ["Auth: platform token", "Privacy: compliant", "Steamworks SDK 1.60", "Stats received", "Cloud save: dirty"],
+    "tabs": [
+      { "title": "Steam", "blocks": [{ "type": "form", "title": "Steam Configuration", "fields": [{ "label": "App ID", "value": "480" }, { "label": "Depot ID", "value": "481" }, { "label": "Achievement Count", "value": "24" }, { "label": "Leaderboard Count", "value": "5" }, { "label": "Auto Cloud Save", "value": "Yes", "options": ["Yes", "No"] }, { "label": "Rich Presence", "value": "Enabled", "options": ["Enabled", "Disabled"] }] }] },
+      { "title": "PSN", "blocks": [{ "type": "empty", "title": "PSN Configuration" }] },
+      { "title": "Xbox Live", "blocks": [{ "type": "empty", "title": "Xbox Live Configuration" }] },
+      { "title": "Generic", "blocks": [{ "type": "empty", "title": "Generic Platform Configuration" }] }
+    ]
+  },
+  "architecture/editor/localization-editor.html": {
+    "title": "Localization Editor",
+    "subtitle": "String table · locale switcher · missing translations · CSV import/export",
+    "sidebarTitle": "Locales",
+    "sidebar": [{ "label": "en-US", "value": "source" }, { "label": "tr-TR", "value": "92%" }, { "label": "de-DE", "value": "78%" }, { "label": "ja-JP", "value": "45%" }],
+    "status": ["342 strings", "en-US source", "tr-TR 92% · 28 missing"],
+    "tabs": [
+      { "title": "Strings", "blocks": [{ "type": "table", "title": "String Table", "searchable": true, "headers": ["Key", "en-US", "Translation"], "rows": [["menu.play", "Play", "tr: Oyna"], ["menu.settings", "Settings", "tr: Ayarlar"], ["menu.quit", "Quit", "tr: —"], ["hud.health", "Health", "tr: Can"], ["hud.ammo", "Ammo", "de: — ja: —"]] }, { "type": "actions", "labels": ["+ Add String", "Import CSV", "Export All"] }] },
+      { "title": "Locales", "blocks": [{ "type": "table", "title": "Locales", "headers": ["Locale", "Coverage"], "rows": [["en-US", "source"], ["tr-TR", "92%"], ["de-DE", "78%"], ["ja-JP", "45%"]] }] },
+      { "title": "Missing", "blocks": [{ "type": "table", "title": "Missing Translations", "headers": ["Key", "en-US", "Missing"], "rows": [["menu.quit", "Quit", "tr-TR"], ["hud.ammo", "Ammo", "de-DE, ja-JP"]] }] },
+      { "title": "Import", "blocks": [{ "type": "actions", "labels": ["Import CSV", "Export All"] }] }
+    ]
+  }
+}

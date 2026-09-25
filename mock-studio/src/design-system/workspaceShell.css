@@ -1,0 +1,37 @@
+.wb-shell { display:flex; flex-direction:column; width:100%; height:100%; min-height:0; background:var(--mock-bg); color:var(--mock-text); font-size:13px; }
+.wb-shell * { box-sizing:border-box; }
+.wb-header { display:flex; align-items:center; justify-content:space-between; gap:15px; min-height:58px; padding:8px 14px; border-bottom:1px solid var(--mock-border); background:var(--mock-panel); }
+.wb-title { min-width:0; }
+.wb-title h1 { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:14px; font-weight:600; }
+.wb-title p { margin:5px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--mock-muted); font-size:11px; }
+.wb-header-actions { display:flex; align-items:center; gap:7px; flex:0 0 auto; }
+.wb-header-actions button,.wb-toolbar button { padding:5px 9px; font-size:12px; white-space:nowrap; }
+.wb-header-actions button.primary,.wb-toolbar button.primary { border-color:var(--mock-accent); background:var(--mock-accent); color:#06131c; font-weight:600; }
+.wb-badge { padding:4px 7px; border:1px solid var(--mock-border-strong); border-radius:var(--mock-radius); color:var(--mock-success); font-size:11px; white-space:nowrap; }
+.wb-badge.blue { color:var(--mock-accent); }
+.wb-badge.warning { color:var(--mock-warning); }
+.wb-tabs { display:flex; align-items:stretch; flex:0 0 35px; padding:0 11px; overflow-x:auto; border-bottom:1px solid var(--mock-border); }
+.wb-tabs button { flex:0 0 auto; padding:0 12px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--mock-secondary); font-size:12px; }
+.wb-tabs button.active { border-bottom-color:var(--mock-accent); color:var(--mock-text); }
+.wb-layout { display:grid; grid-template-columns:34px 220px minmax(0,1fr) 255px 34px; flex:1; min-height:0; overflow:hidden; }
+.wb-shell.left-closed .wb-layout { grid-template-columns:34px minmax(0,1fr) 255px 34px; }
+.wb-shell.right-closed .wb-layout { grid-template-columns:34px 220px minmax(0,1fr) 34px; }
+.wb-shell.left-closed.right-closed .wb-layout { grid-template-columns:34px minmax(0,1fr) 34px; }
+.wb-rail { display:flex; flex-direction:column; gap:6px; padding:8px 4px; border-right:1px solid var(--mock-border); background:var(--mock-bg); }
+.wb-rail.right { border-right:0; border-left:1px solid var(--mock-border); }
+.wb-rail button { width:25px; height:25px; padding:0; border:1px solid transparent; background:transparent; color:var(--mock-muted); }
+.wb-rail button[aria-pressed="true"] { color:var(--mock-accent); background:rgba(4,165,252,.14); }
+.wb-side,.wb-detail { min-width:0; min-height:0; overflow:auto; background:var(--mock-panel); }
+.wb-side { border-right:1px solid var(--mock-border); }
+.wb-detail { border-left:1px solid var(--mock-border); }
+.wb-side>h2,.wb-detail>h2 { position:sticky; top:0; z-index:1; margin:0; padding:10px 12px; border-bottom:1px solid var(--mock-border); background:var(--mock-panel); color:var(--mock-muted); font-size:11px; font-weight:600; text-transform:uppercase; }
+.wb-side>div,.wb-detail>div { padding:10px; }
+.wb-center { display:flex; flex-direction:column; min-width:0; min-height:0; }
+.wb-toolbar { display:flex; align-items:center; gap:7px; min-height:39px; padding:5px 9px; overflow-x:auto; border-bottom:1px solid var(--mock-border); background:var(--mock-panel); }
+.wb-toolbar label { display:flex; align-items:center; gap:5px; color:var(--mock-secondary); font-size:11px; white-space:nowrap; }
+.wb-toolbar select,.wb-toolbar input { padding:5px 7px; font-size:11px; }
+.wb-content { flex:1; min-height:0; min-width:0; overflow:auto; padding:12px; }
+.wb-status { display:flex; align-items:center; gap:13px; min-height:29px; padding:0 12px; overflow:hidden; border-top:1px solid var(--mock-border); color:var(--mock-muted); font-size:11px; white-space:nowrap; }
+.wb-status span:last-child { margin-left:auto; }
+@media (max-width:950px) { .wb-layout,.wb-shell.right-closed .wb-layout { grid-template-columns:34px 185px minmax(0,1fr) 34px; } .wb-shell.left-closed .wb-layout,.wb-shell.left-closed.right-closed .wb-layout { grid-template-columns:34px minmax(0,1fr) 34px; } .wb-detail { display:none; } }
+@media (max-width:660px) { .wb-layout,.wb-shell.left-closed .wb-layout,.wb-shell.right-closed .wb-layout,.wb-shell.left-closed.right-closed .wb-layout { grid-template-columns:34px minmax(0,1fr) 34px; } .wb-side { display:none; } .wb-header { flex-wrap:wrap; } }

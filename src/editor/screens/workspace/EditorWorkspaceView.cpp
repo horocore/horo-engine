@@ -806,61 +806,67 @@ namespace Horo::Editor {
         ImGui::PopStyleColor(2);
     }
 
+    /** @copydoc EditorWorkspaceView::DrawDocumentTab */
+    void EditorWorkspaceView::DrawDocumentTab(const TabStackNode &stack, const std::string &panelId,
+                                              EditorWorkspaceViewCommandData &outCommand) {
+        const auto &panels = m_panelRegistry.GetAllPanels();
+        const auto panel = std::ranges::find_if(panels, [&panelId](const auto &candidate) {
+            return candidate->GetId() == panelId;
+        });
+        ImGui::PushID(panelId.c_str());
+        const char *title =
+            panel == panels.end() ? panelId.c_str() : m_context.localization.Get("editor", (*panel)->GetDisplayName()).c_str();
+        const float scale = Theme::GetActiveTokens().sizes.uiScale;
+        const float tabHeight = 28.0F * scale;
+        const float textInset = 10.0F * scale;
+        const float closeWidth = 24.0F * scale;
+        const bool closable = panelId != "horo.viewport";
+        const float tabWidth = ImGui::CalcTextSize(title).x + textInset * 2.0F + (closable ? closeWidth : 0.0F);
+        const ImVec2 tabMin = ImGui::GetCursorScreenPos();
+        const ImVec2 tabMax{tabMin.x + tabWidth, tabMin.y + tabHeight};
+        const bool clicked = ImGui::InvisibleButton("##DocumentTab", {tabWidth, tabHeight});
+        const bool hovered = ImGui::IsItemHovered();
+        ImDrawList *drawList = ImGui::GetWindowDrawList();
+        drawList->AddRectFilled(tabMin, tabMax,
+                                Theme::U32(stack.activeTab == panelId ? Theme::Bg2()
+                                           : hovered                  ? Theme::Hover()
+                                                                      : Theme::Bg1()),
+                                4.0F * scale);
+        drawList->AddRect(tabMin, tabMax, Theme::U32(Theme::Border()), 4.0F * scale);
+        const ImVec2 textSize = ImGui::CalcTextSize(title);
+        drawList->AddText({tabMin.x + textInset, tabMin.y + (tabHeight - textSize.y) * 0.5F}, Theme::U32(Theme::Text()), title);
+        if (closable) {
+            const ImVec2 closeCenter{tabMax.x - closeWidth * 0.5F, tabMin.y + tabHeight * 0.5F};
+            const float arm = 4.0F * scale;
+            drawList->AddLine({closeCenter.x - arm, closeCenter.y - arm}, {closeCenter.x + arm, closeCenter.y + arm},
+                              Theme::U32(Theme::Muted()), 1.5F * scale);
+            drawList->AddLine({closeCenter.x - arm, closeCenter.y + arm}, {closeCenter.x + arm, closeCenter.y - arm},
+                              Theme::U32(Theme::Muted()), 1.5F * scale);
+        }
+        if (clicked) {
+            if (closable && ImGui::GetMousePos().x >= tabMax.x - closeWidth) {
+                outCommand.command = EditorWorkspaceViewCommand::CloseWorkspacePanel;
+            } else {
+                outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+                outCommand.targetIndex = 3;
+            }
+            outCommand.stringPayload = panelId;
+        }
+        if (panel != panels.end())
+            DrawActivityPanelDragSource(panelId, *panel);
+        ImGui::SameLine();
+        ImGui::PopID();
+    }
+
     void EditorWorkspaceView::DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) {
         const TabStackNode *stack = viewModel.workspacePanelHost.Layout().FindTabStack("workspace.document");
         if (stack == nullptr)
             return;
 
         const float scale = Theme::GetActiveTokens().sizes.uiScale;
-        const float tabHeight = 28.0F * scale;
-        const float textInset = 10.0F * scale;
-        const float closeWidth = 24.0F * scale;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0F * scale, 0.0F));
-        for (const std::string &panelId : stack->tabs) {
-            const auto &panels = m_panelRegistry.GetAllPanels();
-            const auto panel = std::ranges::find_if(panels, [&panelId](const auto &candidate) {
-                return candidate->GetId() == panelId;
-            });
-            ImGui::PushID(panelId.c_str());
-            const char *title =
-                panel == panels.end() ? panelId.c_str() : m_context.localization.Get("editor", (*panel)->GetDisplayName()).c_str();
-            const bool closable = panelId != "horo.viewport";
-            const float tabWidth = ImGui::CalcTextSize(title).x + textInset * 2.0F + (closable ? closeWidth : 0.0F);
-            const ImVec2 tabMin = ImGui::GetCursorScreenPos();
-            const ImVec2 tabMax{tabMin.x + tabWidth, tabMin.y + tabHeight};
-            const bool clicked = ImGui::InvisibleButton("##DocumentTab", {tabWidth, tabHeight});
-            const bool hovered = ImGui::IsItemHovered();
-            ImDrawList *drawList = ImGui::GetWindowDrawList();
-            drawList->AddRectFilled(tabMin, tabMax,
-                                    Theme::U32(stack->activeTab == panelId ? Theme::Bg2()
-                                               : hovered                   ? Theme::Hover()
-                                                                           : Theme::Bg1()),
-                                    4.0F * scale);
-            drawList->AddRect(tabMin, tabMax, Theme::U32(Theme::Border()), 4.0F * scale);
-            const ImVec2 textSize = ImGui::CalcTextSize(title);
-            drawList->AddText({tabMin.x + textInset, tabMin.y + (tabHeight - textSize.y) * 0.5F}, Theme::U32(Theme::Text()), title);
-            if (closable) {
-                const ImVec2 closeCenter{tabMax.x - closeWidth * 0.5F, tabMin.y + tabHeight * 0.5F};
-                const float arm = 4.0F * scale;
-                drawList->AddLine({closeCenter.x - arm, closeCenter.y - arm}, {closeCenter.x + arm, closeCenter.y + arm},
-                                  Theme::U32(Theme::Muted()), 1.5F * scale);
-                drawList->AddLine({closeCenter.x - arm, closeCenter.y + arm}, {closeCenter.x + arm, closeCenter.y - arm},
-                                  Theme::U32(Theme::Muted()), 1.5F * scale);
-            }
-            if (clicked) {
-                if (closable && ImGui::GetMousePos().x >= tabMax.x - closeWidth) {
-                    outCommand.command = EditorWorkspaceViewCommand::CloseWorkspacePanel;
-                } else {
-                    outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
-                    outCommand.targetIndex = 3;
-                }
-                outCommand.stringPayload = panelId;
-            }
-            if (panel != panels.end())
-                DrawActivityPanelDragSource(panelId, *panel);
-            ImGui::SameLine();
-            ImGui::PopID();
-        }
+        for (const std::string &panelId : stack->tabs)
+            DrawDocumentTab(*stack, panelId, outCommand);
         ImGui::PopStyleVar();
     }
 

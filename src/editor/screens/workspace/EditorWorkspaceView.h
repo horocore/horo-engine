@@ -94,6 +94,8 @@ namespace Horo::Editor {
         void DrawDockArea(WorkspaceDockArea area, const char *windowId, const ImVec2 &pos, const ImVec2 &size,
                           std::string_view activePanelId, const EditorWorkspaceViewModel &viewModel,
                           EditorWorkspaceViewCommandData &outCommand);
+        /** @brief Draws one persistent document tab and emits its select or close command. */
+        void DrawDocumentTab(const TabStackNode &stack, const std::string &panelId, EditorWorkspaceViewCommandData &outCommand);
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         void DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,
                                       EditorWorkspaceViewCommandData &outCommand);

@@ -644,25 +644,26 @@ dependency direction in [System Design](./foundation/system-design.md).
 
 ## UI Reference Designs
 
-HTML reference designs are static panel, modal, or screen mockups that live next
-to their owning architecture documents. Panel/tab references do not include the
-application menu bar; app-level screen references do.
+Interactive mock designs live in the standalone [Mock Studio](../../mock-studio/README.md).
+The links below point to its [React design index](../../mock-studio/designs.md).
+Architecture files remain in this directory; mock implementation and assets are
+owned by the studio.
 
-- Runtime panels and screens: [Physics Debugger](./runtime/physics-debugger.html),
-  [Animation Editor](./runtime/animation-editor.html), [Particle Editor](./runtime/particle-editor.html),
-  [Audio Mixer](./runtime/audio-mixer.html), [Input Mapping Editor](./runtime/input-mapping-editor.html),
-  [Prefab Editor](./runtime/prefab-editor.html), [Material Editor](./runtime/material-editor.html),
-  [Network Debugger](./runtime/network-debugger.html), [Platform Services Config](./runtime/platform-services-config.html),
-  [Render Settings](./runtime/render-settings.html), [Character Setup](./runtime/character-setup.html),
-  [UI Canvas Editor](./runtime/ui-canvas-editor.html), [Scene Primitives](./runtime/primitives-panel.html),
-  [Build Output](./runtime/build-output.html), [Cinematic Sequencer](./runtime/cinematic-sequencer.html),
-  [Navigation Bake](./runtime/navigation-bake.html), [Save/Load Manager](./runtime/save-load-manager.html),
-  [Post-Processing Stack](./runtime/post-processing-stack.html), [LOD Debugger](./runtime/lod-debugger.html),
-  [PCG Graph Editor](./runtime/pcg-graph-editor.html), [Decal Placement](./runtime/decal-placement.html),
-  [Destruction Setup](./runtime/destruction-setup.html), [Virtual Texturing Debug](./runtime/virtual-texturing-debug.html),
-  [XR Setup](./runtime/xr-setup.html), and [Shader Graph](./runtime/shader-graph-editor.html).
-- Editor/extension panels: [Localization Editor](./editor/localization-editor.html),
-  [Project Settings](./editor/project-settings.html), and [Gameplay Integration Config](./extensions/module-config.html).
+- Runtime panels and screens: [Physics Debugger](../../mock-studio/designs.md#architecture-runtime-physics-debugger),
+  [Animation Editor](../../mock-studio/designs.md#architecture-runtime-animation-editor), [Particle Editor](../../mock-studio/designs.md#architecture-runtime-particle-editor),
+  [Audio Mixer](../../mock-studio/designs.md#architecture-runtime-audio-mixer), [Input Mapping Editor](../../mock-studio/designs.md#architecture-runtime-input-mapping-editor),
+  [Prefab Editor](../../mock-studio/designs.md#architecture-runtime-prefab-editor), [Material Editor](../../mock-studio/designs.md#architecture-runtime-material-editor),
+  [Network Debugger](../../mock-studio/designs.md#architecture-runtime-network-debugger), [Platform Services Config](../../mock-studio/designs.md#architecture-runtime-platform-services-config),
+  [Render Settings](../../mock-studio/designs.md#architecture-runtime-render-settings), [Character Setup](../../mock-studio/designs.md#architecture-runtime-character-setup),
+  [UI Canvas Editor](../../mock-studio/designs.md#architecture-runtime-ui-canvas-editor), [Scene Primitives](../../mock-studio/designs.md#architecture-runtime-primitives-panel),
+  [Build Output](../../mock-studio/designs.md#architecture-runtime-build-output), [Cinematic Sequencer](../../mock-studio/designs.md#architecture-runtime-cinematic-sequencer),
+  [Navigation Bake](../../mock-studio/designs.md#architecture-runtime-navigation-bake), [Save/Load Manager](../../mock-studio/designs.md#architecture-runtime-save-load-manager),
+  [Post-Processing Stack](../../mock-studio/designs.md#architecture-runtime-post-processing-stack), [LOD Debugger](../../mock-studio/designs.md#architecture-runtime-lod-debugger),
+  [PCG Graph Editor](../../mock-studio/designs.md#architecture-runtime-pcg-graph-editor), [Decal Placement](../../mock-studio/designs.md#architecture-runtime-decal-placement),
+  [Destruction Setup](../../mock-studio/designs.md#architecture-runtime-destruction-setup), [Virtual Texturing Debug](../../mock-studio/designs.md#architecture-runtime-virtual-texturing-debug),
+  [XR Setup](../../mock-studio/designs.md#architecture-runtime-xr-setup), and [Shader Graph](../../mock-studio/designs.md#architecture-runtime-shader-graph-editor).
+- Editor/extension panels: [Localization Editor](../../mock-studio/designs.md#architecture-editor-localization-editor),
+  [Project Settings](../../mock-studio/designs.md#architecture-editor-project-settings), and [Gameplay Integration Config](../../mock-studio/designs.md#architecture-extensions-module-config).
 
 ## Core Rules
 

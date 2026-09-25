@@ -1434,7 +1434,7 @@ snapshot-pinned importer again, and performs an identity-preserving reimport.
 
 ## Related Documents
 
-- [Plugin Manager UI](./plugin-manager.html): HTML reference design for installed
+- [Plugin Manager UI](../../../mock-studio/designs.md#architecture-extensions-plugin-manager): React mock design for installed
   plugins, marketplace, updates, and dependency diagnostics.
 - [Configuration System](../foundation/configuration-system.md)
 - [Application Security](../security/application-security.md)

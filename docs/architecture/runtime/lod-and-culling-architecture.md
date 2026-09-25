@@ -239,7 +239,7 @@ switches backend, silently drops candidates or changes gameplay visibility.
 
 ## Related Documents
 
-- [LOD Debugger UI Reference](./lod-debugger.html)
+- [LOD Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-lod-debugger)
 
 - [Rendering Architecture](./rendering-architecture.md): draw call submission and indirect draws
 - [Terrain And Foliage Architecture](./terrain-and-foliage-architecture.md): foliage LOD and impostors

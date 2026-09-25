@@ -1,7 +1,8 @@
 /** @brief Asset import UI commands and setting-state translation. */
-#include "AssetImportFileDialog.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
+#include "Horo/Foundation/Platform.h"
+#include "Horo/Runtime/Input.h"
 #include "editor/menu/EditorMenuPlatform.h"
 
 #include <charconv>
@@ -116,15 +117,27 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::BrowseSourceFiles */
     void AssetImportModal::BrowseSourceFiles() {
-        if (!m_readOnlyPresentation)
-            AddSourceFiles(ChooseAssetImportFiles());
+        if (m_readOnlyPresentation || m_nativeDialogs == nullptr || m_inputRouter == nullptr)
+            return;
+        std::vector<std::filesystem::path> selected;
+        {
+            auto nativeDialogContext = m_inputRouter->PushContext(Input::InputContextId{"editor.native_dialog.asset_import_source"},
+                                                                  Input::InputContextKind::NativeDialog);
+            selected = m_nativeDialogs->ChooseOpenFiles(Localized("asset_import.browse_sources", "Choose files to import"));
+        }
+        AddSourceFiles(selected);
     }
 
     /** @copydoc AssetImportModal::BrowseDestination */
     void AssetImportModal::BrowseDestination() {
-        if (m_readOnlyPresentation || m_projectRoot.empty())
+        if (m_readOnlyPresentation || m_projectRoot.empty() || m_nativeDialogs == nullptr || m_inputRouter == nullptr)
             return;
-        const auto selected = ChooseAssetImportFolder();
+        std::optional<std::filesystem::path> selected;
+        {
+            auto nativeDialogContext = m_inputRouter->PushContext(Input::InputContextId{"editor.native_dialog.asset_import_destination"},
+                                                                  Input::InputContextKind::NativeDialog);
+            selected = m_nativeDialogs->ChooseFolder(Localized("asset_import.browse_destination", "Choose destination folder"));
+        }
         if (!selected)
             return;
         SetDefaultDestination(*selected);

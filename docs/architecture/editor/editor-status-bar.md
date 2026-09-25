@@ -9,7 +9,7 @@ Editor Workspace, a panel, or a document page.
 This document defines the current in-process registry contract and the boundary
 that future `editor.status_item` extension adapters must preserve.
 
-Visual reference: [`editor-workspace.html`](./editor-workspace.html).
+Visual reference: [Editor Workspace](../../../mock-studio/designs.md#architecture-editor-editor-workspace).
 
 ## Core Decisions
 
@@ -31,7 +31,7 @@ Visual reference: [`editor-workspace.html`](./editor-workspace.html).
   updating while status item input is disabled.
 - The status bar reports only authoritative metrics. A GPU duration is not shown
   until the active renderer provides a real timestamp-query result.
-- The bottom-dock toggle shown in the HTML reference is outside the first status
+- The bottom-dock toggle shown in the React mock reference is outside the first status
   contribution contract.
 
 ## Ownership

@@ -971,7 +971,7 @@ Required tests cover:
 
 ## Related Documents
 
-- [UI Canvas Editor UI Reference](./ui-canvas-editor.html): widget palette, hierarchy, anchors, and design-time canvas preview panel.
+- [UI Canvas Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-ui-canvas-editor): widget palette, hierarchy, anchors, and design-time canvas preview panel.
 
 - [Runtime Lifecycle](./runtime-lifecycle.md): frame phases, pause, suspension and
   shutdown order specialized by ADR-073.

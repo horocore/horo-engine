@@ -261,19 +261,27 @@ observer and never changes job lifetime.
 
 ## Build & Release Modal Design
 
-`BuildReleaseModal` is hosted by `EditorModalHost` and presents the release job
-as a three-pane workspace:
+`BuildReleaseModal` is hosted by `EditorModalHost`. The developer first selects
+one product profile and one platform/architecture/configuration target, then
+supplies the version and project-relative release-notes path. Optional build and
+package settings remain available without interrupting the primary path.
+Delivery settings specify the local output root and references to configured
+signing and archive-protection profiles. The derived candidate path is previewed
+as `<output-root>/<version>_<platform>_<architecture>_<configuration>/`.
 
-- left sidebar: product profile, target platform/architecture/configuration, and
-  security settings
-- top stage track: Validate → Configure → Build → Cook → Package → Pre-Verify →
-  Sign → Finalize → Final Verify → Publish
-- main area: summary bar and structured per-stage log panel
+Before submission, a review step presents the complete request and the checks
+the service will perform. Submission starts one service-owned job; the modal
+then observes its stage track (Validate → Configure → Build → Cook → Package →
+Pre-Verify → Sign → Finalize → Final Verify) and structured activity. The
+developer promotes a final-verified immutable candidate to a publication
+destination through a separate decision. Editing publication channels does not
+silently publish a candidate during construction.
 
-The modal owns exclusive editor focus while a job is active. Closing the modal
-does not cancel a running job; cancellation is explicit.
+The footer stays visible while only form or activity content scrolls. The modal
+owns exclusive editor focus while open. Closing an active job offers an explicit
+keep-running or cancellation path; closing never silently cancels the job.
 
-[Build & Release Modal reference design](./release-modal-design.html)
+[Build & Release Modal reference design](../../../mock-studio/designs.md#architecture-release-release-modal-design)
 
 ## Target Model
 
@@ -544,11 +552,11 @@ artifact integrity follow [Release Security](./release-security.md).
 
 ## Related Documents
 
-- [Build Output UI Reference](../runtime/build-output.html)
+- [Build Output UI Reference](../../../mock-studio/designs.md#architecture-runtime-build-output)
 
 - [Editor Modal Host](../editor/editor-modal-host.md): Build & Release presentation,
   focus, close policy, and job reconnection.
-- [Release Modal Design](./release-modal-design.html): HTML reference design for the
+- [Release Modal Design](../../../mock-studio/designs.md#architecture-release-release-modal-design): React mock design for the
   `BuildReleaseModal` workflow surface.
 - [Engine Data Bus](../foundation/engine-data-bus.md): release/build lifecycle
   notifications.

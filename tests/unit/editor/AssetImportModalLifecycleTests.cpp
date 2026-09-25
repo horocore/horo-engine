@@ -6,6 +6,7 @@
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Input.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -39,6 +40,32 @@ namespace {
 
         std::function<void()> m_prepareFn;
         bool m_preparedCalled{false};
+    };
+
+    /** @brief Checks that picker calls retain the native-dialog input context. */
+    class RecordingNativeDialogs final : public NativeDialogs {
+    public:
+        explicit RecordingNativeDialogs(Input::InputRouter &router) : router_(router) {}
+
+        std::vector<std::filesystem::path> ChooseOpenFiles(std::string_view title) override {
+            CHECK(title == "Choose files to import");
+            CHECK(router_.HasHigherPriorityContext(Input::InputContextKind::ModalRoot));
+            ++fileCalls;
+            return {};
+        }
+
+        std::optional<std::filesystem::path> ChooseFolder(std::string_view title) override {
+            CHECK(title == "Choose destination folder");
+            CHECK(router_.HasHigherPriorityContext(Input::InputContextKind::ModalRoot));
+            ++folderCalls;
+            return std::nullopt;
+        }
+
+        int fileCalls{};
+        int folderCalls{};
+
+    private:
+        Input::InputRouter &router_;
     };
 
     [[nodiscard]] AssetImporterContribution BasicContribution() {
@@ -122,6 +149,22 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("AssetImportModal picker keeps native input context for both browse actions", "[native]") {
+    Input::InputRouter inputRouter;
+    RecordingNativeDialogs dialogs{inputRouter};
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, nullptr, nullptr, &dialogs, &inputRouter};
+    modal.SetProjectRoot(std::filesystem::current_path());
+
+    modal.BrowseSourceFiles();
+    modal.BrowseDestination();
+
+    CHECK(dialogs.fileCalls == 1);
+    CHECK(dialogs.folderCalls == 1);
+    CHECK_FALSE(inputRouter.HasHigherPriorityContext(Input::InputContextKind::ModalRoot));
+}
 
 TEST_CASE("AssetImportModal lifecycle completes the visible operation before the modal closes", "[native]") {
     const ScopedTempDirectory project{"horo-asset-import-modal-lifecycle"};
@@ -379,6 +422,11 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
     CHECK_FALSE(modal.IsItemIncluded(1));
     CHECK(modal.IncludedItemCount() == 0);
     REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
+    CHECK_FALSE(modal.IsImportComplete());
+    modal.SetItemIncluded(0, true);
+    modal.SetItemIncluded(1, true);
+    CHECK(modal.IncludedItemCount() == 2);
+    REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
     CHECK(modal.IsImportComplete());
     REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
     CHECK_FALSE(modal.SourceFileSize(99).has_value());
@@ -399,9 +447,9 @@ TEST_CASE("AssetImportModal rejects unresolved conflicts and invalid batch items
         std::ofstream output{source};
         output << "source";
     }
-    std::filesystem::create_directories(project.Path() / "assets");
+    std::filesystem::create_directories(project.Path() / "Assets");
     {
-        std::ofstream existing{project.Path() / "assets/source.horoasset"};
+        std::ofstream existing{project.Path() / "Assets/source.horoasset"};
         existing << "existing";
     }
 

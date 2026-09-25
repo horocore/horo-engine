@@ -1,0 +1,281 @@
+{
+  "title": "Physics Debugger",
+  "subtitle": "Collision visualization · contact pairs · solver stats · raycast inspector",
+  "sidebarTitle": "Visualization",
+  "sidebar": [
+    {
+      "label": "Colliders",
+      "value": "● On"
+    },
+    {
+      "label": "Contacts",
+      "value": "● On"
+    },
+    {
+      "label": "Center of Mass",
+      "value": "● Off"
+    },
+    {
+      "label": "Joint Limits",
+      "value": "● Off"
+    },
+    {
+      "label": "Broadphase",
+      "value": "● Off"
+    }
+  ],
+  "collisionLayers": {
+    "labels": [
+      "Def",
+      "Char",
+      "Env",
+      "Proj",
+      "Trig"
+    ],
+    "rows": [
+      {
+        "label": "Default",
+        "enabled": [
+          true,
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      {
+        "label": "Character",
+        "enabled": [
+          true,
+          false,
+          true,
+          false,
+          true
+        ]
+      },
+      {
+        "label": "Enviro",
+        "enabled": [
+          true,
+          true,
+          false,
+          false,
+          true
+        ]
+      },
+      {
+        "label": "Projectile",
+        "enabled": [
+          true,
+          false,
+          false,
+          false,
+          false
+        ]
+      },
+      {
+        "label": "Trigger",
+        "enabled": [
+          true,
+          true,
+          true,
+          false,
+          false
+        ]
+      }
+    ]
+  },
+  "tabs": [
+    {
+      "title": "Visualization",
+      "cards": [
+        {
+          "title": "Live Counters",
+          "fields": [
+            {
+              "label": "Active Rigidbodies",
+              "kind": "display",
+              "value": "142"
+            },
+            {
+              "label": "Contact Pairs",
+              "kind": "display",
+              "value": "847"
+            },
+            {
+              "label": "Solver Iterations",
+              "kind": "display",
+              "value": "8"
+            }
+          ]
+        },
+        {
+          "title": "Selected Body: floor 000",
+          "fields": [
+            {
+              "label": "Type",
+              "kind": "display",
+              "value": "Static"
+            },
+            {
+              "label": "Collider",
+              "kind": "display",
+              "value": "BoxCollider (10×0.5×10)"
+            },
+            {
+              "label": "Layer",
+              "kind": "display",
+              "value": "Default"
+            },
+            {
+              "label": "Mass",
+              "kind": "display",
+              "value": "∞ (static)"
+            },
+            {
+              "label": "Friction",
+              "kind": "display",
+              "value": "0.6"
+            },
+            {
+              "label": "Restitution",
+              "kind": "display",
+              "value": "0.1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Bodies",
+      "cards": [
+        {
+          "title": "Bodies",
+          "fields": [
+            {
+              "label": "floor_000",
+              "kind": "display",
+              "value": "Static · Default · BoxCollider"
+            },
+            {
+              "label": "player_capsule",
+              "kind": "display",
+              "value": "Dynamic · Character · awake"
+            },
+            {
+              "label": "crate_017",
+              "kind": "display",
+              "value": "Dynamic · Props · sleeping"
+            },
+            {
+              "label": "trigger_checkpoint_a",
+              "kind": "display",
+              "value": "Trigger · Gameplay · 2 overlaps"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Contacts",
+      "cards": [
+        {
+          "title": "Contact Pairs",
+          "fields": [
+            {
+              "label": "player_capsule ↔ floor_000",
+              "kind": "display",
+              "value": "persist · depth 0.018m"
+            },
+            {
+              "label": "crate_017 ↔ floor_000",
+              "kind": "display",
+              "value": "persist · 4 manifold points"
+            },
+            {
+              "label": "projectile_004 ↔ wall_east",
+              "kind": "display",
+              "value": "begin · normal (-1,0,0)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Pipeline",
+      "cards": [
+        {
+          "title": "Pipeline",
+          "fields": [
+            {
+              "label": "Apply Deferred Commands",
+              "kind": "display",
+              "value": "0.03 ms"
+            },
+            {
+              "label": "Broadphase",
+              "kind": "display",
+              "value": "0.21 ms · 1,248 pairs"
+            },
+            {
+              "label": "Narrowphase",
+              "kind": "display",
+              "value": "0.46 ms · 847 contacts"
+            },
+            {
+              "label": "Solver",
+              "kind": "display",
+              "value": "0.82 ms · 8 iterations"
+            },
+            {
+              "label": "Event Buffer",
+              "kind": "display",
+              "value": "42 / 512 · dropped 0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Stats",
+      "cards": [
+        {
+          "title": "Stats",
+          "fields": [
+            {
+              "label": "Active / Sleeping",
+              "kind": "display",
+              "value": "142 / 318 bodies"
+            },
+            {
+              "label": "Shapes",
+              "kind": "display",
+              "value": "486 colliders"
+            },
+            {
+              "label": "Constraints",
+              "kind": "display",
+              "value": "24 joints"
+            },
+            {
+              "label": "Command Buffer",
+              "kind": "display",
+              "value": "7 pending"
+            },
+            {
+              "label": "Snapshot Tick",
+              "kind": "display",
+              "value": "18492 · fresh"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "status": [
+    "PhysX 5.3 · solver warm start",
+    "16.7ms step",
+    "12 jobs",
+    "PVD connected"
+  ]
+}

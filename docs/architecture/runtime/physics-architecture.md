@@ -873,7 +873,7 @@ Required tests cover:
 
 ## Related Documents
 
-- [Physics Debugger UI Reference](./physics-debugger.html): collision layers, contact pairs, rigidbody inspection, and solver diagnostics panel.
+- [Physics Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-physics-debugger): collision layers, contact pairs, rigidbody inspection, and solver diagnostics panel.
 
 - [Coordinate Precision And Origin Rebasing](./coordinate-precision-and-origin-rebasing.md)
 - [ADR-026: Large-World Precision and Floating Origin Strategy](../../adr/026-large-world-precision-and-floating-origin-strategy.md)

@@ -726,19 +726,21 @@ add_executable(HoroPrimitiveMeshTests
 find_package(Threads REQUIRED)
 target_compile_features(HoroPrimitiveMeshTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrimitiveMeshTests PRIVATE HoroEngine::SceneModel Threads::Threads)
-add_executable(HoroEditorWelcomeControllerTests
-        unit/editor/WelcomeControllerTests.cpp
-        unit/editor/WelcomeProjectListTests.cpp
-)
+if (HORO_BUILD_EDITOR_GUI)
+    add_executable(HoroEditorWelcomeControllerTests
+            unit/editor/WelcomeControllerTests.cpp
+            unit/editor/WelcomeProjectListTests.cpp
+    )
 
-target_compile_features(HoroEditorWelcomeControllerTests PRIVATE cxx_std_20)
-target_include_directories(HoroEditorWelcomeControllerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(HoroEditorWelcomeControllerTests
-        PRIVATE
-        HoroEngine::EditorServices
-        HoroEngine::Gui
-        HoroThirdParty::ImGui
-)
+    target_compile_features(HoroEditorWelcomeControllerTests PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorWelcomeControllerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(HoroEditorWelcomeControllerTests
+            PRIVATE
+            HoroEngine::EditorServices
+            HoroEngine::Gui
+            HoroThirdParty::ImGui
+    )
+endif ()
 add_executable(HoroEditorModalHostTests
         unit/editor/EditorModalHostTests.cpp
 )

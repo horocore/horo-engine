@@ -1494,8 +1494,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportModalLifecycle.cpp
             editor/modals/asset_import/AssetImportModalActions.cpp
             editor/modals/asset_import/AssetImportSourcePreview.cpp
-            editor/modals/asset_import/AssetImportFileDialog.cpp
             editor/modals/asset_import/AssetImportModalPresentation.cpp
+            editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
             editor/ui_preview/AssetImportPreviewModal.cpp
             editor/ui_preview/EditorUiPreviewGallery.cpp
             editor/ui_preview/GuiScreenHostUiPreview.cpp

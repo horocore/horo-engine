@@ -664,7 +664,7 @@ device release gate.
 - [XR Interaction, Runtime UI, Locomotion and Accessibility Ownership](../../adr/161-xr-interaction-runtime-ui-locomotion-and-accessibility-ownership.md)
 - [Mixed-Reality Ownership, Privacy and Capability Tier](../../adr/162-mixed-reality-ownership-privacy-and-capability-tier.md)
 - [XR Tooling, Diagnostics, Privacy and Qualification Ownership](../../adr/163-xr-tooling-diagnostics-privacy-and-qualification-ownership.md)
-- [XR Setup UI Reference](./xr-setup.html)
+- [XR Setup UI Reference](../../../mock-studio/designs.md#architecture-runtime-xr-setup)
 - [Rendering Architecture](./rendering-architecture.md)
 - [Render Backend Parity Contract](./render-backend-parity-contract.md)
 - [Input Architecture](./input-architecture.md)

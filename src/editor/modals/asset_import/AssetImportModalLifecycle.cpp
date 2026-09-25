@@ -2,6 +2,7 @@
  * @copydoc AssetImportModal.h
  */
 
+#include "AssetImportSourcePreview.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
@@ -10,7 +11,6 @@
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Sha256.h"
 #include "runtime/assets/importer/ProjectAssetImportCommitter.h"
-#include "AssetImportSourcePreview.h"
 
 #include <algorithm>
 #include <array>
@@ -159,9 +159,10 @@ namespace Horo::Editor {
     AssetImportModal::AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs,
                                        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
                                        Assets::AssetRegistry *assetRegistry, OperationStore *operationStore,
-                                       const ILocalizationService *localization) noexcept
+                                       const ILocalizationService *localization, NativeDialogs *nativeDialogs,
+                                       Input::InputRouter *inputRouter) noexcept
         : m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(assetRegistry), m_operationStore(operationStore),
-          m_localization(localization) {}
+          m_localization(localization), m_nativeDialogs(nativeDialogs), m_inputRouter(inputRouter) {}
 
     /** @copydoc AssetImportModal::~AssetImportModal */
     AssetImportModal::~AssetImportModal() = default;
@@ -392,8 +393,7 @@ namespace Horo::Editor {
         }
         const std::string candidate = relative.generic_string();
         const std::string assetRootName = ProjectLayout::AssetRoot(m_projectRoot).filename().string();
-        if (ProjectPath::Parse(candidate).HasValue() &&
-            (candidate == assetRootName || candidate.starts_with(assetRootName + "/"))) {
+        if (ProjectPath::Parse(candidate).HasValue() && (candidate == assetRootName || candidate.starts_with(assetRootName + "/"))) {
             m_defaultDestinationFolder = candidate;
         }
     }
@@ -493,10 +493,9 @@ namespace Horo::Editor {
         }
 
         if (m_operationStore != nullptr && m_visibleOperationId.has_value())
-            static_cast<void>(m_operationStore->Update(*m_visibleOperationId,
-                                                       OperationUpdate{.state = OperationState::Running,
-                                                                       .phase = "import",
-                                                                       .message = "Importing selected assets"}));
+            static_cast<void>(m_operationStore->Update(*m_visibleOperationId, OperationUpdate{.state = OperationState::Running,
+                                                                                              .phase = "import",
+                                                                                              .message = "Importing selected assets"}));
 
         for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
             if (m_itemCompleted[index])
@@ -507,10 +506,9 @@ namespace Horo::Editor {
                 return result;
         }
         if (m_operationStore != nullptr && m_visibleOperationId.has_value() && !HasPendingConflicts() && !IsImportComplete())
-            static_cast<void>(m_operationStore->Update(*m_visibleOperationId,
-                                                       OperationUpdate{.state = OperationState::Waiting,
-                                                                       .phase = "selection",
-                                                                       .message = "Waiting for file selection"}));
+            static_cast<void>(m_operationStore->Update(*m_visibleOperationId, OperationUpdate{.state = OperationState::Waiting,
+                                                                                              .phase = "selection",
+                                                                                              .message = "Waiting for file selection"}));
         return Result<void>::Success();
     }
 
@@ -521,8 +519,7 @@ namespace Horo::Editor {
         for (std::size_t index = 0; index < m_snapshot.items.size(); ++index) {
             if (!IsItemIncluded(index) || m_itemCompleted[index])
                 continue;
-            if (ImporterFor(index) == nullptr ||
-                ValidateImportItem(m_snapshot, index, true).HasError())
+            if (ImporterFor(index) == nullptr || ValidateImportItem(m_snapshot, index, true).HasError())
                 return false;
         }
         return true;

@@ -1702,8 +1702,8 @@ adapters only; they do not own pipeline policy.
   Terrain import/cook contribution, cache, publication and generation-pinning boundary.
 - [Release Architecture](../release/release.md): packaging and verification.
 - [Horo Package System](../packages/package-system.md): bulk asset import from packages.
-- [Asset Import Modal](./asset-import-modal.html): HTML reference design for the
+- [Asset Import Modal](../../../mock-studio/designs.md#architecture-runtime-asset-import-modal): React mock design for the
   import queue, diagnostics, and per-importer settings.
-- [Asset Browser](../editor/asset-browser.html): HTML reference design for the main asset
+- [Asset Browser](../../../mock-studio/designs.md#architecture-editor-asset-browser): React mock design for the main asset
   browser with folder tree, grid/list views, and preview pane.
 - [Testing Architecture](../delivery/testing-architecture.md): import and cook tests.

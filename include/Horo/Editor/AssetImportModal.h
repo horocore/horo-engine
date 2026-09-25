@@ -26,6 +26,14 @@ namespace Horo::Editor::Theme {
     struct Fonts;
 }
 
+namespace Horo {
+    class NativeDialogs;
+}
+
+namespace Horo::Input {
+    class InputRouter;
+}
+
 namespace Horo::Assets {
     class AssetImporterCatalogSnapshot;
     class ProjectAssetImportCommitter;
@@ -57,10 +65,13 @@ namespace Horo::Editor {
          * @param assetRegistry Optional mutable asset registry updated by committed imports.
          * @param operationStore Optional user-facing operation authority.
          * @param localization Optional editor localization service used by presentation copy.
+         * @param nativeDialogs Optional host-owned file picker, valid for the modal lifetime.
+         * @param inputRouter Input context owner used while a native picker is open.
          */
         AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs, std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
                          Assets::AssetRegistry *assetRegistry = nullptr, OperationStore *operationStore = nullptr,
-                         const ILocalizationService *localization = nullptr) noexcept;
+                         const ILocalizationService *localization = nullptr, NativeDialogs *nativeDialogs = nullptr,
+                         Input::InputRouter *inputRouter = nullptr) noexcept;
 
         /** @brief Destroys the modal and its target-private project committer. */
         ~AssetImportModal() override;
@@ -161,16 +172,14 @@ namespace Horo::Editor {
          * @param setting Descriptor supplied by the selected importer.
          * @return Typed current value, or the descriptor default when no valid value is stored.
          */
-        [[nodiscard]] Assets::ImportSettingValue SettingValue(std::size_t index,
-                                                              const Assets::ImportSettingDescriptor &setting) const;
+        [[nodiscard]] Assets::ImportSettingValue SettingValue(std::size_t index, const Assets::ImportSettingDescriptor &setting) const;
         /**
          * @brief Stores a typed setting value for an editable item.
          * @param index Queue index.
          * @param setting Descriptor supplied by the selected importer.
          * @param value Typed value selected by the view.
          */
-        void SetSettingValue(std::size_t index, const Assets::ImportSettingDescriptor &setting,
-                             const Assets::ImportSettingValue &value);
+        void SetSettingValue(std::size_t index, const Assets::ImportSettingDescriptor &setting, const Assets::ImportSettingValue &value);
 
         /** @brief Opens the native file picker and queues its selected source files. */
         void BrowseSourceFiles();
@@ -185,12 +194,13 @@ namespace Horo::Editor {
 
         /** @brief Host-owned advanced options edited as one item value. */
         struct ItemOptions {
-            std::string assetName;          /**< Destination asset name without extension. */
+            std::string assetName;         /**< Destination asset name without extension. */
             int folderStrategy{};          /**< Existing folder strategy selection. */
             int assetIdStrategy{};         /**< Existing asset ID strategy selection. */
             bool createMetaSidecar{};      /**< Whether to create a metadata sidecar. */
             bool overwriteWithoutPrompt{}; /**< Whether to resolve conflicts by overwriting. */
         };
+
         /** @brief Reads advanced options for one item. @param index Queue index. @return Option value or empty defaults. */
         [[nodiscard]] ItemOptions OptionsFor(std::size_t index) const;
         /** @brief Updates advanced options on an editable item. @param index Queue index. @param options New option value. */
@@ -333,8 +343,7 @@ namespace Horo::Editor {
          * @param canvasInsets Left and top insets reserved by an embedding canvas.
          * @param advancedOpen Initial state of the Advanced section.
          */
-        void PresentReadOnlySnapshot(Assets::AssetImportSnapshot snapshot,
-                                     std::vector<std::optional<std::uintmax_t>> sourceFileSizes,
+        void PresentReadOnlySnapshot(Assets::AssetImportSnapshot snapshot, std::vector<std::optional<std::uintmax_t>> sourceFileSizes,
                                      std::filesystem::path projectRoot, std::string defaultDestinationFolder,
                                      std::pair<float, float> canvasInsets, bool advancedOpen);
 
@@ -345,6 +354,8 @@ namespace Horo::Editor {
         Assets::AssetRegistry *m_assetRegistry{};
         OperationStore *m_operationStore{};
         const ILocalizationService *m_localization{};
+        NativeDialogs *m_nativeDialogs{};
+        Input::InputRouter *m_inputRouter{};
         std::optional<OperationId> m_visibleOperationId;
         std::uint64_t m_historyRevision{};
         OperationId m_lastTerminalImportId{};

@@ -272,7 +272,7 @@ debugging.
 
 ## Related Documents
 
-- [Post-Processing Stack UI Reference](./post-processing-stack.html)
+- [Post-Processing Stack UI Reference](../../../mock-studio/designs.md#architecture-runtime-post-processing-stack)
 
 - [Rendering Architecture](./rendering-architecture.md): render graph and pass definitions
 - [Advanced Rendering Architecture](./advanced-rendering-architecture.md): ray-traced effects

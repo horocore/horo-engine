@@ -1,0 +1,29 @@
+.welcome-design { display:grid; place-items:center; width:100%; height:100%; min-height:0; padding:25px; background:radial-gradient(circle at 50% 40%,#1e2934,#101419 65%); }
+.welcome-frame { display:grid; grid-template-columns:245px minmax(0,1fr); width:min(980px,100%); min-height:min(590px,100%); overflow:hidden; border:1px solid var(--mock-border-strong); border-radius:8px; background:var(--mock-panel); box-shadow:0 20px 55px rgba(0,0,0,.28); }
+.welcome-side { padding:27px 20px; border-right:1px solid var(--mock-border); background:#131a21; }
+.welcome-logo { display:flex; flex-direction:column; align-items:center; gap:7px; margin:24px 0 38px; }
+.welcome-logo img { width:52px; height:52px; object-fit:contain; }
+.welcome-logo strong { font-size:23px; letter-spacing:.12em; }
+.welcome-logo span { color:var(--mock-muted); font-size:12px; }
+.welcome-actions { display:flex; flex-direction:column; gap:9px; }
+.welcome-actions button { display:flex; align-items:center; gap:11px; min-height:36px; padding:7px 10px; text-align:left; font-size:12px; }
+.welcome-actions button.primary { border-color:var(--mock-accent); background:var(--mock-accent); color:#06131c; font-weight:600; }
+.welcome-actions button span { width:17px; text-align:center; font-size:15px; }
+.welcome-main { min-width:0; padding:32px; }
+.welcome-section-heading { display:flex; align-items:center; justify-content:space-between; margin:0 0 12px; }
+.welcome-section-heading h2 { margin:0; font-size:14px; font-weight:600; }
+.welcome-section-heading button { padding:0; border:0; background:transparent; color:var(--mock-accent); font-size:11px; }
+.welcome-projects { display:flex; flex-direction:column; gap:7px; margin-bottom:32px; }
+.welcome-projects button { display:flex; align-items:center; gap:11px; width:100%; padding:8px; border:1px solid var(--mock-border); background:#1a2026; text-align:left; }
+.welcome-projects button:hover { border-color:var(--mock-accent); }
+.welcome-project-thumb { display:grid; place-items:center; width:45px; height:40px; border-radius:4px; background:#1a3546; color:var(--mock-accent); font-size:19px; }
+.welcome-projects strong,.welcome-projects small { display:block; }
+.welcome-projects strong { font-size:12px; font-weight:600; }
+.welcome-projects small { margin-top:4px; color:var(--mock-muted); font-size:11px; }
+.welcome-projects time { margin-left:auto; color:var(--mock-muted); font-size:10px; }
+.welcome-news { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.welcome-news article { min-height:118px; padding:12px; border:1px solid var(--mock-border); border-radius:5px; background:#1a2026; }
+.welcome-news small { color:var(--mock-accent); font-size:10px; }
+.welcome-news h3 { margin:9px 0 6px; font-size:12px; }
+.welcome-news p { margin:0; color:var(--mock-muted); font-size:11px; line-height:1.5; }
+@media (max-width:700px) { .welcome-frame { grid-template-columns:1fr; } .welcome-side { padding:15px; border-right:0; border-bottom:1px solid var(--mock-border); } .welcome-logo { margin:0 0 15px; } .welcome-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } .welcome-main { padding:18px; } }

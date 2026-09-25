@@ -745,9 +745,9 @@ Required coverage:
 
 ## Related Documents
 
-- [Project Settings UI Reference](./project-settings.html)
+- [Project Settings UI Reference](../../../mock-studio/designs.md#architecture-editor-project-settings)
 
-- [New Project Wizard](./new-project-wizard.html): HTML reference design for
+- [New Project Wizard](../../../mock-studio/designs.md#architecture-editor-new-project-wizard): React mock design for
   project creation, template selection, path validation, and initial settings.
 - [System Design](../foundation/system-design.md): host and module boundaries.
 - [Asset Pipeline](../runtime/asset-pipeline.md): source to cooked asset flow.

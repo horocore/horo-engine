@@ -89,7 +89,8 @@ namespace Horo::Editor {
         }
         error.clear();
 
-        if (const std::filesystem::path scenesDir = ProjectLayout::ScenesRoot(projectRoot); !std::filesystem::is_directory(scenesDir, error)) {
+        if (const std::filesystem::path scenesDir = ProjectLayout::ScenesRoot(projectRoot);
+            !std::filesystem::is_directory(scenesDir, error)) {
             report.issues.push_back(ProjectIntegrityIssue{
                 .kind = ProjectIntegrityIssueKind::MissingScenesDirectory,
                 .targetPath = scenesDir,

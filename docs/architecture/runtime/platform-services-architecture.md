@@ -1541,7 +1541,7 @@ Platform-specific backend tests live in the private platform repositories.
 - [ADR-136](../../adr/136-platform-offline-queue-ownership-replay-and-cloud-intent-boundary.md):
   single-owner offline durability, admission/replay/expiry/shutdown semantics and the
   Save-owned cloud intent boundary.
-- [Platform Services Config UI Reference](./platform-services-config.html): achievements, leaderboards, cloud saves, presence, and platform adapters panel.
+- [Platform Services Config UI Reference](../../../mock-studio/designs.md#architecture-runtime-platform-services-config): achievements, leaderboards, cloud saves, presence, and platform adapters panel.
 
 - [Audio Architecture](./audio-architecture.md)
 - [Input Architecture](./input-architecture.md)

@@ -551,7 +551,7 @@ Required tests cover:
 
 ## Related Documents
 
-- [Input Mapping Editor UI Reference](./input-mapping-editor.html): action maps, bindings, device preview, and conflict detection panel.
+- [Input Mapping Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-input-mapping-editor): action maps, bindings, device preview, and conflict detection panel.
 
 - [Input Layer and Modal Ownership](./input-layer-ownership.md): layer ownership table, context kind priority, `EditorInteractionScope` mapping, frame-order invariants, and per-layer testing obligations.
 - [Runtime Lifecycle](./runtime-lifecycle.md)

@@ -951,10 +951,10 @@ play-session or process restart rather than attempting unsafe live mutation.
 
 ## Related Documents
 
-- [Gameplay Behavior Editor](./gameplay-behavior-editor.html): HTML reference
+- [Gameplay Behavior Editor](../../../mock-studio/designs.md#architecture-extensions-gameplay-behavior-editor): React mock reference
   design for the node-based behavior graph editor (behavior tree, state machine,
   and visual scripting surfaces).
-- [Editor Workspace Layout](../editor/editor-workspace.html): HTML reference design for
+- [Editor Workspace Layout](../../../mock-studio/designs.md#architecture-editor-editor-workspace): React mock design for
   the embedded Inspector dock and behavior component fields.
 - [Gameplay Module Overview](./gameplay-module.md)
 - [Gameplay Module Boundary](./gameplay-module-boundary.md)
