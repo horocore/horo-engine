@@ -190,6 +190,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor CapabilityRevoked{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.capability.revoked"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The physics client capability has been revoked.",
+        .remediationHint = "Request a newly issued capability from the owning host before accessing Physics again.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor QuerySnapshotStale{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.query.snapshot_stale"},
@@ -295,6 +304,7 @@ namespace Horo::Physics::PhysicsErrors {
             &ProfileUnsupported,
             &CapacityExceeded,
             &CapabilityStale,
+            &CapabilityRevoked,
             &QuerySnapshotStale,
             &InitializationFailed,
             &ShapeCookSourceInvalid,

@@ -570,6 +570,29 @@ do not extend world, schema, shape or material leases. A missing geometric hit i
 a successful zero-hit result; stale world/scene/filter generations and malformed
 evidence are typed errors.
 
+The Physics-owned query/event capability is issued by an active canonical world.
+Each copy names one exact world generation and a never-reused capability generation.
+At most 256 usable capability states may be issued by one world at once; expired or
+explicitly revoked states release their admission slot.
+The host decides which client receives it and may explicitly revoke it; Physics
+does not decide module permissions. A command carries that identity and the exact
+completed publication revision. Query submission is synchronous owner-thread
+immediate execution and returns the completed tick/revision with bounded hit
+metadata. Snapshot and asynchronous submission remain unsupported until a
+qualified snapshot provider exists. World reset, retirement or replacement makes
+retained capabilities stale; explicit revocation returns a distinct error.
+The query revision prevents an unnoticed fixed-tick publication change between
+capture and admission; the query still samples the current owner-thread
+broadphase, whose own generation is reported in `PhysicsQueryResult`.
+
+The event reader accepts only the latest completed tick and revision, copying at
+most the caller's bound into caller-owned records and reporting truncation and
+the published dropped-record count. Earlier ticks are not readable through this
+capability. It cannot run during stepping or from a solver/tick callback, and
+returns no borrowed projection span. Both paths validate capability and world identity on
+every access. They share Physics's owner-thread boundary; no client handle extends
+the world or solver lifetime.
+
 Immediate queries execute on the physics owner thread outside a step. Parallel
 or asynchronous queries use a read-only broadphase snapshot with documented
 staleness.

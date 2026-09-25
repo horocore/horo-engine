@@ -26,6 +26,15 @@
 #include <vector>
 
 namespace Horo::Physics {
+    /** @brief Shared only by copied client handles; the world invalidates its borrowed pointer before retirement. */
+    struct PhysicsQueryEventCapabilityState final {
+        PhysicsWorld *world{};
+        PhysicsQueryEventIdentity identity;
+        std::thread::id ownerThread;
+        bool revoked{};
+        bool stale{};
+    };
+
     namespace Detail {
         [[nodiscard]] inline std::array<PhysicsDiagnosticContextEntry, 3> DiagnosticContext(const PhysicsWorldId world,
                                                                                             const std::uint64_t sceneGeneration,
@@ -86,6 +95,7 @@ namespace Horo::Physics {
         void Retire(const PhysicsWorldLifecycleCause cause) noexcept {
             if (state == PhysicsWorldState::Destroyed)
                 return;
+            InvalidateQueryEventCapabilities();
             Detail::DestroyCanonicalWorld(native);
             native = {};
             state = PhysicsWorldState::Destroyed;
@@ -126,6 +136,7 @@ namespace Horo::Physics {
         }
 
         void ClearForReset() noexcept {
+            InvalidateQueryEventCapabilities();
             identity = {};
             std::ranges::fill(commands, PhysicsStructuralCommand{});
             commandHead = 0;
@@ -143,6 +154,16 @@ namespace Horo::Physics {
             lastFailure.reset();
             lastDiagnostic.reset();
             lifecycleCause = PhysicsWorldLifecycleCause::Reset;
+        }
+
+        void InvalidateQueryEventCapabilities() noexcept {
+            for (const auto &weak : queryEventCapabilities) {
+                if (const auto access = weak.lock()) {
+                    access->stale = true;
+                    access->world = nullptr;
+                }
+            }
+            queryEventCapabilities.clear();
         }
 
         [[nodiscard]] Result<void> Reinitialize() {
@@ -197,6 +218,8 @@ namespace Horo::Physics {
         std::vector<PhysicsStructuralCommand> commands;
         std::vector<std::uint32_t> sourceOrder;
         Detail::PhysicsEventProjection events;
+        std::vector<std::weak_ptr<PhysicsQueryEventCapabilityState>> queryEventCapabilities;
+        std::uint64_t nextQueryEventCapabilityGeneration{1};
         std::uint32_t commandHead{};
         std::uint32_t commandCount{};
         std::uint64_t activeTick{};
