@@ -480,7 +480,9 @@ namespace Horo::Cinematic {
          * @param sourceDelta Non-negative source-clock delta.
          * @param scratch Caller-owned bounded values/events/camera storage.
          * @param hooks Typed destination seams; required only for crossed occurrences.
-         * @return Atomic frame result; Once players terminalize after reaching their end.
+         * @return Atomic frame result; Once players terminalize and invoke finishedHook once after reaching their directional end.
+         * @note Loop and PingPong repeat indefinitely until their owner stops or cancels them. Neither they nor explicit
+         * stop, cancel, failure, or shutdown invoke finishedHook. The hook runs after terminal publication and token release.
          */
         [[nodiscard]] Result<SequenceFrameEvaluationResult> Evaluate(const SequencePlayerHandle &handle, SequenceTime sourceDelta,
                                                                      const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks);

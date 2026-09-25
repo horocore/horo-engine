@@ -165,6 +165,30 @@ without dispatching the crossed interval. Playback rate is a bounded exact ratio
 Zero rate leaves a player `Playing` with a frozen clock and is observably different
 from `Paused`; negative rate remains available for reverse-capable clocks.
 
+### End behavior and completion notification
+
+The compiled `Once` mode is the Stop end behavior. A forward player completes at
+`duration`; a reverse player completes at zero. The final crossed interval dispatches
+its events, then the runtime service publishes `Stopped`, releases coordination
+leases, and invokes the optional `finishedHook` once for that player generation.
+Repeated evaluation cannot finish it again because `Stopped` is terminal. Explicit
+Stop/FinishStop, cancellation, failure, and owner shutdown are disposal paths, not
+natural completion; they do not invoke `finishedHook`.
+
+`Loop` and `PingPong` have no natural end and never invoke `finishedHook`. Loop
+dispatches the arriving end key and the next traversal's start key with distinct
+traversal ordinals; each crossed interior key retriggers on every pass. PingPong
+changes direction at each end; a turn key belongs only to the arriving interval,
+while reverse travel fires only keys marked `fireInReverse`. Both modes remain owned
+by their runtime service until explicit stop, cancellation, failure, or session/scene
+shutdown. Scene replacement closes the old service before admitting a new session,
+and old generation handles cannot address the replacement.
+
+Migration: existing callers may keep their four-field `SequenceFrameHooks`
+initializers and receive no completion callback. Callers that observe completion
+append `finishedContext` and `finishedHook`; they must keep that context alive
+through the evaluating owner boundary. The hook is not retained by the service.
+
 ## Trigger Sources And Admission
 
 Gameplay scripts/native behaviors, scene-load autoplay descriptors, committed
