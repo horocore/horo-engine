@@ -4,6 +4,29 @@
 
 static uint32_t loadCount;
 
+#if HORO_ABI_FIXTURE_MODE == 10
+static uint32_t providerRetired;
+
+static HoroExtensionStatus CreateProvider(void *context, void **outCandidate) {
+    *outCandidate = context;
+    return HORO_EXTENSION_SUCCESS;
+}
+
+static HoroExtensionStatus RetireProvider(void *candidate) {
+    (void)candidate;
+    ++providerRetired;
+    return HORO_EXTENSION_SUCCESS;
+}
+
+static void DestroyProvider(void *candidate) {
+    (void)candidate;
+}
+
+HORO_EXTENSION_EXPORT uint32_t horo_test_provider_retired(void) {
+    return providerRetired;
+}
+#endif
+
 #if HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5 || HORO_ABI_FIXTURE_MODE == 8
 static HoroExtensionStatus ImportAsset(void *context, const HoroAssetImportRequest *request, HoroAssetImportResponse *response) {
     (void)context;
@@ -48,14 +71,22 @@ HORO_EXTENSION_EXPORT uint32_t horo_test_load_count(void) {
 #if HORO_ABI_FIXTURE_MODE != 0
 /** @brief Return a valid or deliberately incompatible inert requirements table. */
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequirements *requirements) {
-    *requirements = (HoroExtensionRequirements){.structSize = sizeof(HoroExtensionRequirements),
-                                                .abiMajorVersion = HORO_EXTENSION_ABI_VERSION,
-                                                .minimumHostMinor = HORO_ABI_FIXTURE_MODE == 2 ? 99 : 0,
-                                                .requiredHostApiSize = offsetof(HoroExtensionHostApi, abiMinorVersion),
-                                                .requiredFunctions =
-                                                    HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5 || HORO_ABI_FIXTURE_MODE == 8
-                                                        ? HORO_EXTENSION_REQUIRES_ASSET_IMPORTER
-                                                        : 0};
+    *requirements =
+        (HoroExtensionRequirements){.structSize = sizeof(HoroExtensionRequirements),
+                                    .abiMajorVersion = HORO_EXTENSION_ABI_VERSION,
+                                    .minimumHostMinor = HORO_ABI_FIXTURE_MODE == 2    ? 99
+                                                        : HORO_ABI_FIXTURE_MODE == 10 ? 2
+                                                        : HORO_ABI_FIXTURE_MODE == 9  ? 1
+                                                                                      : 0,
+                                    .requiredHostApiSize = HORO_ABI_FIXTURE_MODE == 10 ? sizeof(HoroExtensionHostApi)
+                                                           : HORO_ABI_FIXTURE_MODE == 9
+                                                               ? offsetof(HoroExtensionHostApi, registerPlatformServicesProvider)
+                                                               : offsetof(HoroExtensionHostApi, abiMinorVersion),
+                                    .requiredFunctions =
+                                        HORO_ABI_FIXTURE_MODE == 10 ? HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER
+                                        : HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5 || HORO_ABI_FIXTURE_MODE == 8
+                                            ? HORO_EXTENSION_REQUIRES_ASSET_IMPORTER
+                                            : 0};
     return HORO_EXTENSION_SUCCESS;
 }
 #endif
@@ -63,6 +94,28 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequ
 /** @brief Return a legacy module prefix or a deliberately truncated result. */
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensionHostApi *host, HoroExtensionModuleApi *outModule) {
     ++loadCount;
+#if HORO_ABI_FIXTURE_MODE == 10
+    static const char key[] = "example.provider";
+    const HoroPlatformServicesProviderDescriptor provider = {
+        .structSize = sizeof(HoroPlatformServicesProviderDescriptor),
+        .abiVersion = HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION,
+        .providerKey = {key, sizeof(key) - 1},
+        .providerId = 42,
+        .platformMask = HORO_PLATFORM_PROVIDER_LINUX | HORO_PLATFORM_PROVIDER_MACOS | HORO_PLATFORM_PROVIDER_WINDOWS,
+        .profileMask = HORO_PLATFORM_PROVIDER_HEADLESS,
+        .serviceMask = 1,
+        .interfaceMajor = 1,
+        .interfaceMinor = 1,
+        .contractMajor = 1,
+        .factoryContext = &providerRetired,
+        .createCandidate = CreateProvider,
+        .retireCandidate = RetireProvider,
+        .destroyCandidate = DestroyProvider,
+    };
+    const HoroExtensionStatus providerStatus = host->registerPlatformServicesProvider(host->hostContext, &provider);
+    if (providerStatus != HORO_EXTENSION_SUCCESS)
+        return providerStatus;
+#endif
 #if HORO_ABI_FIXTURE_MODE == 4 || HORO_ABI_FIXTURE_MODE == 5 || HORO_ABI_FIXTURE_MODE == 8
     const HoroExtensionStatus registrationStatus = RegisterFixtureImporters(host);
     if (registrationStatus != HORO_EXTENSION_SUCCESS)

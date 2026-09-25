@@ -152,6 +152,21 @@ player generation. Repeating an already-satisfied Play, Pause, Stop, Close or Fa
 an explicit no-change result and emits no signal. Invalid transitions fail without
 changing state or control revision.
 
+For a finite `Once` activation, Cinematic Runtime retains the owner's captured
+pre-playback scalar values in the player instance. Blend-in and blend-out sample
+weights are clamped linear functions of distance from the directional playback
+edges; overlapping windows use the smaller weight. Sampling and blending use
+caller-owned frame storage and allocate nothing. The snapshot belongs to the
+activation, even when terminal policy keeps the final state. Loop and PingPong
+activations cannot request finite edge blend windows.
+
+At a terminal owner safe point, `RestorePrePlayback` preflights every surviving
+target's generation and owner revision before applying captured values. If any
+target was destroyed or replaced, the entire activation keeps its final state,
+with typed per-target diagnostics including the surviving targets skipped by the
+fallback. `KeepFinalState` does not invoke restore accessors. Snapshot storage is
+released with the player after its terminal restore decision.
+
 Stop and close deliberately differ. Stop closes future evaluation/event admission and
 drains occurrences already admitted by the owning boundary. Close is cancellation,
 scene/session loss or shutdown: it closes admission immediately and discards pending,
@@ -164,6 +179,30 @@ directly; it never advances from the prior cursor. Its signal resets event trave
 without dispatching the crossed interval. Playback rate is a bounded exact rational.
 Zero rate leaves a player `Playing` with a frozen clock and is observably different
 from `Paused`; negative rate remains available for reverse-capable clocks.
+
+### End behavior and completion notification
+
+The compiled `Once` mode is the Stop end behavior. A forward player completes at
+`duration`; a reverse player completes at zero. The final crossed interval dispatches
+its events, then the runtime service publishes `Stopped`, releases coordination
+leases, and invokes the optional `finishedHook` once for that player generation.
+Repeated evaluation cannot finish it again because `Stopped` is terminal. Explicit
+Stop/FinishStop, cancellation, failure, and owner shutdown are disposal paths, not
+natural completion; they do not invoke `finishedHook`.
+
+`Loop` and `PingPong` have no natural end and never invoke `finishedHook`. Loop
+dispatches the arriving end key and the next traversal's start key with distinct
+traversal ordinals; each crossed interior key retriggers on every pass. PingPong
+changes direction at each end; a turn key belongs only to the arriving interval,
+while reverse travel fires only keys marked `fireInReverse`. Both modes remain owned
+by their runtime service until explicit stop, cancellation, failure, or session/scene
+shutdown. Scene replacement closes the old service before admitting a new session,
+and old generation handles cannot address the replacement.
+
+Migration: existing callers may keep their four-field `SequenceFrameHooks`
+initializers and receive no completion callback. Callers that observe completion
+append `finishedContext` and `finishedHook`; they must keep that context alive
+through the evaluating owner boundary. The hook is not retained by the service.
 
 ## Trigger Sources And Admission
 

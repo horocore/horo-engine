@@ -20,6 +20,19 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PLS-002.3 Migration Notes
+
+`HoroEngine::Extensions` owns the additive `ExtensionPlatformProvider.h` candidate
+handoff and the 1.2 tail of `ExtensionAbi.h`; existing 1.1 modules negotiate their
+original host-table prefix without source changes. A provider module that opts in
+requires the new callback and version-1 factory descriptor. The new
+`HoroEngine::PlatformServicesExtension` composition target owns
+`Horo/PlatformServices/PlatformProviderAdmission.h` and publicly links only
+Platform Services and Extensions. Hosts adopting provider packages construct
+that bridge beside their two existing registries and call owner-thread retirement
+finalization before releasing the bridge. Importer-only callers do not migrate.
+The generated public-header consumers cover both newly owned headers.
+
 ## EXT-002.11 Migration Notes
 
 `HoroEngine::Extensions` owns the new
@@ -343,6 +356,17 @@ identities, and validation admits only bounded inert contributions from those mo
 Constructing or validating policy performs no discovery, registration, lifecycle call,
 SDK initialization or ambient-state mutation. Existing callers require no signature
 migration because this is the first published project configuration contract.
+
+## PLS-003.6 Migration Notes
+
+`HoroEngine::PlatformServices` additionally owns
+`Horo/PlatformServices/PlatformProviderManifestCook.h`. Cook composition passes
+validated immutable ledger, definition and policy snapshots with one exact mapping
+revision. The synchronous cook owns both output buffers; no borrowed snapshot or
+adapter value survives in them. Hosts recheck the captured source revisions and
+atomically publish the two outputs together. Existing callers have no signature
+migration. Provider adapters retain native values and produce their private manifests
+from the canonical mapping handoff; SDK loading is outside this cook boundary.
 
 ## PLS-004.3 Migration Notes
 

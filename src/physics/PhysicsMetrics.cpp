@@ -31,14 +31,15 @@ namespace Horo::Physics {
             return result;
         }
 
-        [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(Telemetry::InstrumentKind kind, std::string name, std::string unit,
-                                                                 std::string description, Telemetry::MetricCollectionLevel level,
+        [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(Telemetry::InstrumentKind kind, std::string name,
+                                                                 const Telemetry::MetricUnit unit, std::string description,
+                                                                 Telemetry::MetricCollectionLevel level,
                                                                  std::vector<Telemetry::DimensionDescriptor> dimensions = {}) {
             const auto maximumSeries = dimensions.empty() ? 1U : static_cast<std::uint32_t>(dimensions.front().allowedValues.size());
             return {.kind = kind,
                     .name = std::move(name),
                     .subsystem = "physics",
-                    .unit = std::move(unit),
+                    .unit = unit,
                     .description = std::move(description),
                     .dimensions = std::move(dimensions),
                     .maxSeries = maximumSeries,
@@ -109,27 +110,27 @@ namespace Horo::Physics {
             return handles;
 
         handles.fixedStepDuration = Telemetry::Runtime::RegisterHistogram(
-            Descriptor(Telemetry::InstrumentKind::Histogram, "horo.physics.fixed_step.duration", "seconds",
+            Descriptor(Telemetry::InstrumentKind::Histogram, "horo.physics.fixed_step.duration", Telemetry::MetricUnit::Seconds,
                        "Host-measured duration of one committed Physics fixed step.", Core));
 
-        auto countRoot =
-            Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.physics.count", "items",
-                                                         "Current bounded Physics item count.", Core, {Dimension("kind", kCountValues)}));
+        auto countRoot = Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.physics.count",
+                                                                      Telemetry::MetricUnit::Count, "Current bounded Physics item count.",
+                                                                      Core, {Dimension("kind", kCountValues)}));
         BindHandles(handles.counts, countRoot, "kind", kCountValues);
 
-        auto depthRoot =
-            Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.physics.queue.depth", "items",
-                                                         "Current bounded Physics queue depth.", Core, {Dimension("kind", kDepthValues)}));
+        auto depthRoot = Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.physics.queue.depth",
+                                                                      Telemetry::MetricUnit::Count, "Current bounded Physics queue depth.",
+                                                                      Core, {Dimension("kind", kDepthValues)}));
         BindHandles(handles.depths, depthRoot, "kind", kDepthValues);
 
-        auto eventRoot = Telemetry::Runtime::RegisterCounter(Descriptor(Telemetry::InstrumentKind::Counter, "horo.physics.event", "events",
-                                                                        "Physics observation loss and overflow events.", Core,
-                                                                        {Dimension("kind", kEventValues)}));
+        auto eventRoot = Telemetry::Runtime::RegisterCounter(
+            Descriptor(Telemetry::InstrumentKind::Counter, "horo.physics.event", Telemetry::MetricUnit::Count,
+                       "Physics observation loss and overflow events.", Core, {Dimension("kind", kEventValues)}));
         BindHandles(handles.events, eventRoot, "kind", kEventValues);
 
         if (level == Detailed) {
             auto stageRoot = Telemetry::Runtime::RegisterHistogram(
-                Descriptor(Telemetry::InstrumentKind::Histogram, "horo.physics.stage.duration", "seconds",
+                Descriptor(Telemetry::InstrumentKind::Histogram, "horo.physics.stage.duration", Telemetry::MetricUnit::Seconds,
                            "Host or adapter measured Physics pipeline stage duration.", Detailed, {Dimension("stage", kStageValues)}));
             BindHandles(handles.stageDurations, stageRoot, "stage", kStageValues);
         }

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <utility>
 
 namespace Horo::Cinematic {
@@ -18,17 +19,35 @@ namespace Horo::Cinematic {
         [[nodiscard]] bool IsTerminal(const SequencePlaybackState state) noexcept {
             return state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed;
         }
+
+        /** @brief Requires complete restore evidence for the bounded one-shot blend profile. */
+        [[nodiscard]] Result<void> ValidateBlendRestore(const SequencePlaybackActivation &activation) {
+            if (activation.blend.restorePolicy == SequenceRestorePolicy::RestorePrePlayback && !activation.restore.has_value())
+                return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+            if (activation.blend.blendIn.mode != SequenceBlendMode::Blend && activation.blend.blendOut.mode != SequenceBlendMode::Blend)
+                return Result<void>::Success();
+            if (activation.plan.LoopMode() != SequenceLoopMode::Once || !activation.restore.has_value())
+                return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+            for (const SequenceFrameTrackDescriptor &track : activation.plan.Tracks()) {
+                if (std::ranges::count_if(activation.restore->Entries(), [&](const SequenceRestoreEntry &entry) {
+                    return entry.track == track.track;
+                }) != 1)
+                    return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     CinematicRuntimeService::Instance::Instance(SequencePlayer playerValue, const SequenceFrameCursor &cursorValue,
-                                                SequencePlaybackActivation activationValue,
+                                                SequencePlaybackActivation activationValue, std::vector<float> baselineValues,
                                                 std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
                                                 std::optional<SequenceCoordinationLease> hudSuppressionLeaseValue) noexcept
         : player(std::move(playerValue)), plan(std::move(activationValue.plan)), cursor(cursorValue), blend(activationValue.blend),
           authority(std::move(activationValue.authority)), restore(std::move(activationValue.restore)),
-          coordination(activationValue.coordination), coordinationHooks(activationValue.coordinationHooks),
-          gameplayPauseLease(std::move(gameplayPauseLeaseValue)), hudSuppressionLease(std::move(hudSuppressionLeaseValue)),
-          retainedBytes(activationValue.retainedBytes) {}
+          blendBaselines(std::move(baselineValues)), coordination(activationValue.coordination),
+          coordinationHooks(activationValue.coordinationHooks), gameplayPauseLease(std::move(gameplayPauseLeaseValue)),
+          hudSuppressionLease(std::move(hudSuppressionLeaseValue)),
+          retainedBytes(activationValue.retainedBytes + blendBaselines.size() * sizeof(float)) {}
 
     CinematicRuntimeService::CinematicRuntimeService(const CinematicRuntimeSessionId session, const SequenceEvaluationBudget &budget,
                                                      std::vector<Slot> slots) noexcept
@@ -102,6 +121,17 @@ namespace Horo::Cinematic {
         if (auto admitted = AdmitActivation(activation, additional, slotIndex); admitted.HasError())
             return Result<SequencePlayerHandle>::Failure(admitted.ErrorValue());
 
+        std::vector<float> baselines;
+        if (activation.blend.blendIn.mode == SequenceBlendMode::Blend || activation.blend.blendOut.mode == SequenceBlendMode::Blend) {
+            baselines.reserve(activation.plan.TrackCount());
+            for (const SequenceFrameTrackDescriptor &track : activation.plan.Tracks()) {
+                const auto found = std::ranges::find_if(activation.restore->Entries(), [&](const SequenceRestoreEntry &entry) {
+                    return entry.track == track.track;
+                });
+                baselines.push_back(found->value);  // Activation validation proved unique coverage.
+            }
+        }
+
         std::optional<SequenceCoordinationLease> gameplayPauseLease;
         std::optional<SequenceCoordinationLease> hudSuppressionLease;
         if (auto acquired = AcquireCoordinationLeases(activation, gameplayPauseLease, hudSuppressionLease); acquired.HasError())
@@ -109,7 +139,7 @@ namespace Horo::Cinematic {
 
         const SequencePlayerHandle handle = activation.player.handle;
         auto playerValue = std::move(player).Value();
-        slots_[slotIndex].instance.emplace(std::move(playerValue), std::move(cursor).Value(), std::move(activation),
+        slots_[slotIndex].instance.emplace(std::move(playerValue), std::move(cursor).Value(), std::move(activation), std::move(baselines),
                                            std::move(gameplayPauseLease), std::move(hudSuppressionLease));
         usage_.activePlayers += additional.activePlayers;
         usage_.aggregateTracks += additional.aggregateTracks;
@@ -308,8 +338,8 @@ namespace Horo::Cinematic {
         if ((activation.coordination.pauseGameplay || activation.coordination.hideHud) &&
             (activation.coordinationHooks.acquire == nullptr || activation.coordinationHooks.release == nullptr))
             return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
-        if (activation.blend.restorePolicy == SequenceRestorePolicy::RestorePrePlayback && !activation.restore.has_value())
-            return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+        if (auto restore = ValidateBlendRestore(activation); restore.HasError())
+            return restore;
         if (activation.plan.Duration() != activation.player.duration)
             return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         if (activation.plan.TrackCount() > budget_.maximumTracksPerPlayer || activation.plan.TrackCount() > MaximumFrameEvaluationTracks ||
@@ -336,8 +366,13 @@ namespace Horo::Cinematic {
     Result<void> CinematicRuntimeService::AdmitActivation(const SequencePlaybackActivation &activation, SequenceEvaluationUsage &additional,
                                                           std::size_t &slotIndex) const {
         const std::size_t occurrenceCount = activation.plan.EventCount() + activation.plan.CameraCutCount();
+        const bool blending =
+            activation.blend.blendIn.mode == SequenceBlendMode::Blend || activation.blend.blendOut.mode == SequenceBlendMode::Blend;
+        const std::uint64_t baselineBytes = blending ? activation.plan.TrackCount() * sizeof(float) : 0;
+        if (activation.retainedBytes > std::numeric_limits<std::uint64_t>::max() - baselineBytes)
+            return Failed<void>(SequencePlaybackRuntimeErrors::CapacityExceeded);
         additional = {1, static_cast<std::uint32_t>(activation.plan.TrackCount()), static_cast<std::uint32_t>(occurrenceCount),
-                      activation.retainedBytes, static_cast<std::uint32_t>(activation.plan.MaximumLoopCrossings())};
+                      activation.retainedBytes + baselineBytes, static_cast<std::uint32_t>(activation.plan.MaximumLoopCrossings())};
         if (auto admitted = AdmitSequenceEvaluationUsage(usage_, additional, budget_); admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         const auto freeSlot = std::ranges::find_if(slots_, [](const Slot &slot) {

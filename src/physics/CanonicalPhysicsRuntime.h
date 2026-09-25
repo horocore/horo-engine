@@ -123,6 +123,8 @@ namespace Horo::Physics::Detail {
                                                                           const PhysicsConstraintDescriptor &descriptor);
     /** @brief Removes one exact resident native joint at the owner-thread structural safe point. */
     [[nodiscard]] Result<void> DestroyCanonicalSceneConstraint(CanonicalWorldHandle world, ConstraintHandle constraint);
+    /** @brief Reads a hinge/slider coordinate from an exact resident native joint on the owner thread. */
+    [[nodiscard]] Result<PhysicsJointState> ReadCanonicalSceneJointState(CanonicalWorldHandle world, ConstraintHandle constraint);
     /** @brief Exercises the same bounded callback inbox from native-boundary tests. */
     void SubmitCanonicalDiagnosticForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message) noexcept;
     /** @brief Invokes the installed native callback hook under a bounded test route. */
