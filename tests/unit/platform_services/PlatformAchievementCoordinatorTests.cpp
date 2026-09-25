@@ -231,4 +231,33 @@ namespace Horo::PlatformServices {
                                            AchievementProgressKind::SetProgressMaximum, 2, Mutation(9)}),
                      AchievementCoordinatorErrors::CapacityExceeded);
     }
+
+    TEST_CASE("Failed and cancelled achievement publications remain terminal and do not release mutation identity",
+              "[platform-services][achievement][lifecycle]") {
+        const AchievementFixture fixture;
+        const auto session = ActiveSession();
+        const PlatformAchievementMutationRequest request{*session.Subject(),
+                                                         session.AccessRevision(),
+                                                         fixture.unlock,
+                                                         ProgressionAuthorityMode::LocalProduct,
+                                                         AchievementProgressKind::UnlockOnce,
+                                                         1,
+                                                         Mutation(10)};
+        for (const auto outcome : {PlatformAchievementPublicationOutcome::Failed, PlatformAchievementPublicationOutcome::Cancelled}) {
+            auto coordinator = Coordinator(fixture, session);
+            REQUIRE(coordinator.SubmitMutation(request).Value() == PlatformAchievementMutationAdmission::Queued);
+            const auto publication = coordinator.TakeNextMutation();
+            REQUIRE(publication.HasValue());
+            REQUIRE(publication.Value().has_value());
+            REQUIRE(coordinator.CompleteMutation(*publication.Value(), outcome).HasValue());
+            CHECK_FALSE(coordinator.HasInFlight());
+            CHECK(coordinator.PendingCount() == 0);
+            CHECK(coordinator.SubmitMutation(request).Value() == PlatformAchievementMutationAdmission::IgnoredDuplicate);
+            RequireError(coordinator.CompleteMutation(*publication.Value(), outcome), AchievementCoordinatorErrors::StalePublication);
+            REQUIRE(coordinator.Close().HasValue());
+            RequireError(coordinator.SubmitMutation(request), AchievementCoordinatorErrors::Closed);
+            RequireError(coordinator.MakeStateQuery({*session.Subject(), session.AccessRevision(), fixture.unlock}),
+                         AchievementCoordinatorErrors::Closed);
+        }
+    }
 }  // namespace Horo::PlatformServices
