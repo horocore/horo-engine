@@ -1,6 +1,7 @@
 #include "Horo/PlatformServices/PlatformAchievementCoordinator.h"
 
 #include <algorithm>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -244,18 +245,24 @@ namespace Horo::PlatformServices {
         }
         if (ledger_.size() >= config_.maximumLedgerEntries || pending_.size() >= config_.maximumPendingMutations)
             return Result<PlatformAchievementMutationAdmission>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
+        if (nextSequence_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<PlatformAchievementMutationAdmission>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
 
-        const std::uint64_t sequence = nextSequence_++;
+        const std::uint64_t sequence = nextSequence_;
         const PlatformAchievementMutationPublication publication{.request = request,
                                                                  .sessionGeneration = session_.Generation(),
                                                                  .sequence = sequence};
-        ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
+        bool ledgerInserted = false;
         try {
+            ledger_.push_back({.request = request, .sequence = sequence, .state = LedgerState::Pending});
+            ledgerInserted = true;
             pending_.push_back(publication);
         } catch (const std::bad_alloc &) {
-            ledger_.pop_back();
+            if (ledgerInserted)
+                ledger_.pop_back();
             return Result<PlatformAchievementMutationAdmission>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
         }
+        ++nextSequence_;
         return Result<PlatformAchievementMutationAdmission>::Success(PlatformAchievementMutationAdmission::Queued);
     }
 
@@ -304,6 +311,8 @@ namespace Horo::PlatformServices {
             return Result<PlatformAchievementQueryIntent>::Failure(MakeError(AchievementCoordinatorErrors::Closed));
         if (const auto valid = ValidateQuery(request); valid.HasError())
             return Result<PlatformAchievementQueryIntent>::Failure(valid.ErrorValue());
+        if (nextQuerySequence_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<PlatformAchievementQueryIntent>::Failure(MakeError(AchievementCoordinatorErrors::CapacityExceeded));
         return Result<PlatformAchievementQueryIntent>::Success({.request = request,
                                                                 .providerGeneration = session_.ProviderGeneration(),
                                                                 .sessionGeneration = session_.Generation(),
