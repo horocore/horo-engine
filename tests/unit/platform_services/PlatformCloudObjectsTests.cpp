@@ -81,13 +81,18 @@ namespace Horo::PlatformServices {
                                     .objects = {Head(std::byte{1}, std::byte{11}, 0), Head(std::byte{2}, std::byte{12}, 3)},
                                     .hasMore = true};
         page.next = cursor.Value();
-        REQUIRE(ValidateCloudObjectPage(page, subject).HasValue());
+        REQUIRE(ValidateCloudObjectPage(page, request, subject).HasValue());
+
+        page.objects.push_back(Head(std::byte{3}, std::byte{13}, 4));
+        RequireError(ValidateCloudObjectPage(page, request, subject), CloudObjectErrors::InvalidPage);
+        page.objects.pop_back();
+        RequireError(ValidateCloudObjectPage(page, request, Subject(5, std::byte{1})), CloudObjectErrors::StaleSession);
 
         page.objects[1].key = page.objects[0].key;
-        RequireError(ValidateCloudObjectPage(page, subject), CloudObjectErrors::InvalidPage);
+        RequireError(ValidateCloudObjectPage(page, request, subject), CloudObjectErrors::InvalidPage);
         page.objects[1].key = Key(std::byte{2});
         page.subject = Subject(5, std::byte{2});
-        RequireError(ValidateCloudObjectPage(page, subject), CloudObjectErrors::StaleSession);
+        RequireError(ValidateCloudObjectPage(page, request, subject), CloudObjectErrors::StaleSession);
     }
 
     TEST_CASE("Cloud reads publish only complete matching bytes for the current session", "[platform-services][cloud][read]") {

@@ -134,14 +134,15 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc ValidateCloudObjectPage */
-    Result<void> ValidateCloudObjectPage(const CloudObjectPage &page, const PlatformSubjectHandle &expectedSubject,
-                                         const CloudObjectContractLimits &limits) {
-        if (ValidateCloudObjectContractLimits(limits).HasError())
-            return Failure(CloudObjectErrors::InvalidLimits);
-        if (!expectedSubject.IsValid() || !page.subject.IsValid() || page.subject != expectedSubject ||
-            page.sessionGeneration != expectedSubject.SessionGeneration())
+    Result<void> ValidateCloudObjectPage(const CloudObjectPage &page, const CloudListRequest &request,
+                                         const PlatformSubjectHandle &currentSubject, const CloudObjectContractLimits &limits) {
+        const auto requestValidation = ValidateCloudListRequest(request, limits);
+        if (requestValidation.HasError())
+            return requestValidation;
+        if (!currentSubject.IsValid() || currentSubject != request.subject || !page.subject.IsValid() || page.subject != request.subject ||
+            page.sessionGeneration != currentSubject.SessionGeneration())
             return Failure(CloudObjectErrors::StaleSession);
-        if (page.objects.size() > limits.maxPageEntries || page.hasMore != page.next.has_value())
+        if (page.objects.size() > request.pageSize || page.hasMore != page.next.has_value())
             return Failure(CloudObjectErrors::InvalidPage);
 
         std::uint64_t totalMetadataBytes{};

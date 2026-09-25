@@ -193,14 +193,16 @@ namespace Horo::PlatformServices {
                                                             const CloudObjectContractLimits &limits = {});
 
     /**
-     * @brief Validates one metadata page against the exact session that requested it.
+     * @brief Validates one metadata page against the admitted request and current session.
      * @param page Provider completion evidence.
-     * @param expectedSubject Subject captured at admission.
+     * @param request Original bounded list request.
+     * @param currentSubject Current authenticated subject at publication time.
      * @param limits Selected provider limits.
      * @return Success or StaleSession/InvalidPage.
      * @post No caller may publish page entries when validation fails.
      */
-    [[nodiscard]] Result<void> ValidateCloudObjectPage(const CloudObjectPage &page, const PlatformSubjectHandle &expectedSubject,
+    [[nodiscard]] Result<void> ValidateCloudObjectPage(const CloudObjectPage &page, const CloudListRequest &request,
+                                                       const PlatformSubjectHandle &currentSubject,
                                                        const CloudObjectContractLimits &limits = {});
 
     /**
