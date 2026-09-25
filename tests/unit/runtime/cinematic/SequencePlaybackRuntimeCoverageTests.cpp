@@ -1,8 +1,10 @@
 #include "Horo/Cinematic/SequencePlaybackRuntime.h"
 #include "Horo/Cinematic/SequencePlaybackRuntimeErrors.h"
+#include "support/AllocationProbe.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -45,6 +47,11 @@ namespace Horo::Cinematic {
         bool ApplyRestore(void *context, const float value) noexcept {
             static_cast<RestoreProbe *>(context)->value = value;
             return true;
+        }
+
+        /** @brief Counts synchronous event delivery during repeated cancellation. */
+        void CountEvent(void *context, const SequenceFrameEventOccurrence &) noexcept {
+            ++*static_cast<std::size_t *>(context);
         }
 
         struct CoordinationProbe final {
@@ -283,5 +290,125 @@ namespace Horo::Cinematic {
         RequireError(service.Activate({{Handle(81), 10, 0, {1, 1}}, Plan()}), SequencePlaybackRuntimeErrors::AdmissionClosed);
         REQUIRE(service.BeginShutdown().HasValue());
         REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Cancelled playback preflights destroyed and replaced restore targets as one activation",
+              "[unit][cinematic][playback][lifecycle][restore]") {
+        const std::array entries{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(1), 4, 3.0F},
+                                 SequenceRestoreEntry{TrackId{2, 1}, RestoreTarget(2), 7, 8.0F}};
+
+        struct Case final {
+            SequenceRestoreTargetId second;
+            std::uint64_t revision;
+            SequenceRestoreOutcome outcome;
+            std::size_t missing;
+            std::size_t stale;
+        };
+
+        const std::array cases{Case{{}, 0, SequenceRestoreOutcome::TargetMissing, 1, 0},
+                               Case{RestoreTarget(2, 2), 7, SequenceRestoreOutcome::StaleGeneration, 0, 1},
+                               Case{RestoreTarget(2), 8, SequenceRestoreOutcome::StaleGeneration, 0, 1},
+                               Case{RestoreTarget(2), 7, SequenceRestoreOutcome::Restored, 0, 0}};
+        for (std::size_t index = 0; index < cases.size(); ++index) {
+            auto service = Service();
+            auto captured = SequenceRestoreSnapshot::Create(entries);
+            REQUIRE(captured.HasValue());
+            const auto handle = Handle(100 + index);
+            SequencePlaybackActivation activation{{handle, 10, 0, {1, 1}}, Plan()};
+            activation.blend.restorePolicy = SequenceRestorePolicy::RestorePrePlayback;
+            activation.restore = std::move(captured).Value();
+            REQUIRE(service.Activate(std::move(activation)).HasValue());
+            REQUIRE(service.Play(handle).HasValue());
+            const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, std::span<SequenceFrameEventOccurrence>{},
+                                               std::span<SequenceFrameCameraCutRequest>{}};
+            REQUIRE(service.Evaluate(handle, 3, scratch, {}).HasValue());
+            REQUIRE(service.Cancel(handle).HasValue());
+            RestoreProbe surviving{10.0F};
+            RestoreProbe replacement{20.0F};
+            const std::array targets{SequenceRestoreTargetSnapshot{RestoreTarget(1), 4, &surviving, ApplyRestore},
+                                     SequenceRestoreTargetSnapshot{cases[index].second, cases[index].revision,
+                                                                   cases[index].outcome == SequenceRestoreOutcome::TargetMissing
+                                                                       ? nullptr
+                                                                       : &replacement,
+                                                                   ApplyRestore}};
+            std::array<SequenceRestoreDiagnostic, 2> diagnostics{};
+            const auto result = service.Restore(handle, targets, diagnostics);
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().missing == cases[index].missing);
+            CHECK(result.Value().stale == cases[index].stale);
+            CHECK(diagnostics[1].outcome == cases[index].outcome);
+            CHECK(diagnostics[0].outcome ==
+                  (index == cases.size() - 1 ? SequenceRestoreOutcome::Restored : SequenceRestoreOutcome::KeptFinalDueToMissingTarget));
+            CHECK(surviving.value == (index == cases.size() - 1 ? 3.0F : 10.0F));
+            CHECK(replacement.value == (index == cases.size() - 1 ? 8.0F : 20.0F));
+            REQUIRE(service.Release(handle).HasValue());
+            CHECK(service.ServiceSnapshot().usage == SequenceEvaluationUsage{});
+        }
+    }
+
+    TEST_CASE("Destroying a session mid-play retires owner leases and fences old handles", "[unit][cinematic][playback][lifecycle]") {
+        CoordinationProbe probe;
+        const auto oldHandle = Handle(150);
+        {
+            auto service = Service();
+            SequencePlaybackActivation activation{{oldHandle, 10, 0, {1, 1}}, Plan()};
+            activation.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                       SequenceDilationPolicy::SourceNative, true, true};
+            activation.coordinationHooks = {&probe, AcquireCoordination, ReleaseCoordination};
+            REQUIRE(service.Activate(std::move(activation)).HasValue());
+            REQUIRE(service.Play(oldHandle).HasValue());
+            const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, std::span<SequenceFrameEventOccurrence>{},
+                                               std::span<SequenceFrameCameraCutRequest>{}};
+            REQUIRE(service.Evaluate(oldHandle, 4, scratch, {}).HasValue());
+            CHECK(service.Snapshot(oldHandle).Value().state == SequencePlaybackState::Playing);
+            CHECK(probe.released == 0);
+        }
+        CHECK(probe.acquired == 2);
+        CHECK(probe.released == 2);
+        const CinematicRuntimeSessionId nextSession{Session().stableValue, Session().generation + 1};
+        auto replacement = CinematicRuntimeService::Create({nextSession, SequenceCookTier::Standard});
+        REQUIRE(replacement.HasValue());
+        auto next = std::move(replacement).Value();
+        RequireError(next.Snapshot(oldHandle), SequencePlaybackRuntimeErrors::HandleStale);
+        RequireError(next.Cancel(oldHandle), SequencePlaybackRuntimeErrors::HandleStale);
+        CHECK(next.ServiceSnapshot().usage == SequenceEvaluationUsage{});
+    }
+
+    TEST_CASE("Repeated play and cancellation retire leases and reservations without frame allocations",
+              "[unit][cinematic][playback][lifecycle][soak]") {
+        auto service = Service();
+        CoordinationProbe probe;
+        std::array<SequenceFrameEventOccurrence, 1> occurrences{};
+        const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, occurrences, std::span<SequenceFrameCameraCutRequest>{}};
+        const std::array events{SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{1, 1}, 2, true}};
+        std::size_t delivered{};
+        const SequenceFrameHooks hooks{&delivered, CountEvent, nullptr, nullptr};
+        constexpr std::uint32_t cycles = 512;
+        for (std::uint32_t generation = 1; generation <= cycles; ++generation) {
+            const auto handle = Handle(200, generation);
+            auto plan = SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, {}, events, {});
+            REQUIRE(plan.HasValue());
+            SequencePlaybackActivation activation{{handle, 10, 0, {1, 1}}, std::move(plan).Value()};
+            activation.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                       SequenceDilationPolicy::SourceNative, true, true};
+            activation.coordinationHooks = {&probe, AcquireCoordination, ReleaseCoordination};
+            REQUIRE(service.Activate(std::move(activation)).HasValue());
+            REQUIRE(service.Play(handle).HasValue());
+            const std::size_t before = Horo::Tests::AllocationProbe::Count();
+            REQUIRE(service.Evaluate(handle, 3, scratch, hooks).HasValue());
+            CHECK(Horo::Tests::AllocationProbe::Count() == before);
+            CHECK(delivered == generation);
+            REQUIRE(service.Cancel(handle).HasValue());
+            REQUIRE(service.Cancel(handle).HasValue());
+            CHECK(service.Evaluate(handle, 1, scratch, hooks).HasError());
+            CHECK(delivered == generation);
+            CHECK(probe.released == 2 * generation);
+            REQUIRE(service.Release(handle).HasValue());
+            CHECK(service.ServiceSnapshot().usage == SequenceEvaluationUsage{});
+            CHECK(service.ActivePlayerCount() == 0);
+            RequireError(service.Snapshot(handle), SequencePlaybackRuntimeErrors::HandleStale);
+        }
+        CHECK(probe.acquired == 2 * cycles);
+        CHECK(probe.released == probe.acquired);
     }
 }  // namespace Horo::Cinematic
