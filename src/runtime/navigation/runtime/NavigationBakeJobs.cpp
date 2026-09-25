@@ -188,7 +188,8 @@ namespace Horo::Navigation {
         };
 
         /** @brief Executes one bake item and translates its typed cancellation into a job acknowledgement. */
-        [[nodiscard]] Result<void> ExecuteBakeWork(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state, JobFunction &work,
+        template <typename Work>
+        [[nodiscard]] Result<void> ExecuteBakeWork(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state, const Work &work,
                                                    const CancellationToken &cancellation) {
             TerminalCounter terminal{state};
             if (cancellation.IsCancellationRequested())
@@ -264,7 +265,7 @@ namespace Horo::Navigation {
                 auto &item = descriptor.work[cursor];
                 auto work = std::move(item.execute);
                 if (auto child = group.Spawn({},
-                                             [state, work = std::move(work)](const CancellationToken &cancellation) mutable {
+                                             [state, work = std::move(work)](const CancellationToken &cancellation) {
                     return ExecuteBakeWork(state, work, cancellation);
                 });
                     child.HasError()) {

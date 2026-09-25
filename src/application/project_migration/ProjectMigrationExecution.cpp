@@ -278,7 +278,7 @@ namespace Horo::Application {
         }
 
         /** @brief Restores the migration error carried by a cancelled child after joining its batch. */
-        [[nodiscard]] Result<void> JoinMigrationBatch(TaskGroup &group) {
+        [[nodiscard]] Result<void> JoinMigrationBatch(const TaskGroup &group) {
             const Result<void> joined = group.Join();
             if (!joined.HasError() || !IsJobCancelled(joined.ErrorValue()))
                 return joined;
