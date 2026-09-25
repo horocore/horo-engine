@@ -119,6 +119,12 @@ namespace Horo::Network {
             hash.AddInteger(input.transport.capabilities.requiredMaximumMessageBytes);
             hash.AddInteger(static_cast<std::uint8_t>(input.transport.capabilities.deadline));
             hash.AddInteger(input.transport.capabilities.requiredMaximumDeadlineMilliseconds);
+            const auto endpointDiagnostic = input.defaultEndpoint.Diagnostic();
+            const auto endpoint = input.defaultEndpoint.IsValid() ? endpointDiagnostic.View() : std::string_view{};
+            hash.AddInteger(static_cast<std::uint16_t>(endpoint.size()));
+            for (const char character : endpoint)
+                hash.AddByte(static_cast<std::uint8_t>(character));
+            hash.AddInteger(input.credentialRequirementId);
             const auto value = hash.Value() == 0 ? 1 : hash.Value();
             return NetworkProjectSettingsFingerprint::Create(value).Value();
         }
@@ -137,6 +143,11 @@ namespace Horo::Network {
 
             if (!IsProfileCapacityCoherent(input.profile))
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
+
+            if (input.defaultEndpoint.Kind() != NetworkAddressKind::Count && !input.defaultEndpoint.IsValid())
+                return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
+            if (input.supportedRoles == NetworkProjectRoleSet::Standalone && input.credentialRequirementId != 0)
+                return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
 
             return Result<void>::Success();
         }
@@ -205,6 +216,16 @@ namespace Horo::Network {
     /** @copydoc NetworkProjectSettings::Transport */
     const NetworkProjectTransportPolicy &NetworkProjectSettings::Transport() const noexcept {
         return input_.transport;
+    }
+
+    /** @copydoc NetworkProjectSettings::DefaultEndpoint */
+    const NetworkAddress &NetworkProjectSettings::DefaultEndpoint() const noexcept {
+        return input_.defaultEndpoint;
+    }
+
+    /** @copydoc NetworkProjectSettings::CredentialRequirementId */
+    std::uint32_t NetworkProjectSettings::CredentialRequirementId() const noexcept {
+        return input_.credentialRequirementId;
     }
 
     /** @copydoc NetworkProjectSettingsAuthority::Create */

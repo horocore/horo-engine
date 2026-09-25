@@ -3,6 +3,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <nlohmann/json.hpp>
+#include <string>
 #include <utility>
 
 namespace {
@@ -125,5 +127,96 @@ namespace {
         REQUIRE(closedResult.HasError());
         REQUIRE(closedResult.ErrorValue().code.Value() == "network.project_settings.shutting_down");
         REQUIRE(authority.Snapshot().settings.Revision().Value() == 2);
+    }
+
+    TEST_CASE("Network project schema round-trips and migrates legacy defaults deterministically", "[unit][network][settings]") {
+        using namespace Horo::Network;
+        auto input = ValidInput();
+        input.defaultEndpoint = NetworkAddress::Parse("example.com:31337").Value();
+        input.credentialRequirementId = 42;
+        const auto original = NetworkProjectSettings::Create(input);
+        REQUIRE(original.HasValue());
+        const auto encoded = SerializeNetworkProjectSettings(original.Value());
+        const auto decoded = ParseNetworkProjectSettings(encoded);
+        REQUIRE(decoded.HasValue());
+        const auto roundTrip = NetworkProjectSettings::Create(decoded.Value());
+        REQUIRE(roundTrip.HasValue());
+        REQUIRE(SerializeNetworkProjectSettings(roundTrip.Value()) == encoded);
+        REQUIRE(roundTrip.Value().Fingerprint() == original.Value().Fingerprint());
+
+        auto legacy = nlohmann::json::parse(encoded);
+        legacy["contractVersion"] = 1;
+        legacy.erase("defaultEndpoint");
+        legacy.erase("credentialRequirementId");
+        const auto migrated = ParseNetworkProjectSettings(legacy.dump());
+        REQUIRE(migrated.HasValue());
+        REQUIRE(migrated.Value().contractVersion == 2);
+        REQUIRE(migrated.Value().credentialRequirementId == 0);
+        REQUIRE_FALSE(migrated.Value().defaultEndpoint.IsValid());
+        const auto migratedAuthority = NetworkProjectSettings::Create(migrated.Value());
+        REQUIRE(migratedAuthority.HasValue());
+        REQUIRE(SerializeNetworkProjectSettings(migratedAuthority.Value()) ==
+                SerializeNetworkProjectSettings(NetworkProjectSettings::Create(migrated.Value()).Value()));
+    }
+
+    TEST_CASE("Invalid schema and capability preflight preserve the accepted configuration", "[unit][network][settings]") {
+        using namespace Horo::Network;
+        auto authorityResult = NetworkProjectSettingsAuthority::Create(ValidInput());
+        REQUIRE(authorityResult.HasValue());
+        auto authority = std::move(authorityResult).Value();
+        const auto prior = authority.Snapshot().settings.Fingerprint();
+        auto invalid = nlohmann::json::parse(SerializeNetworkProjectSettings(authority.Snapshot().settings));
+        invalid["profile"]["maxRelevantObjectsPerConnection"] = 3000;
+        REQUIRE(ParseNetworkProjectSettings(invalid.dump()).HasError());
+        invalid = nlohmann::json::parse(SerializeNetworkProjectSettings(authority.Snapshot().settings));
+        invalid["credentialReference"] = "private-store-ref";
+        REQUIRE(ParseNetworkProjectSettings(invalid.dump()).HasError());
+        REQUIRE(ParseNetworkProjectSettings("{\"contractVersion\":1,\"contractVersion\":1}").HasError());
+        invalid = nlohmann::json::parse(SerializeNetworkProjectSettings(authority.Snapshot().settings));
+        invalid["contractVersion"] = 3;
+        REQUIRE(ParseNetworkProjectSettings(invalid.dump()).HasError());
+        invalid["contractVersion"] = 2;
+        invalid["profile"]["networkTickRate"] = -1;
+        REQUIRE(ParseNetworkProjectSettings(invalid.dump()).HasError());
+        REQUIRE(ParseNetworkProjectSettings(std::string(65'537, 'x')).HasError());
+        REQUIRE(authority.Snapshot().settings.Fingerprint() == prior);
+
+        auto successor = ValidInput(2);
+        successor.profile.maxRelevantObjectsPerConnection.value = 3000;
+        const auto rejected = authority.Apply({.expectedRevision = authority.Snapshot().settings.Revision(), .candidate = successor});
+        REQUIRE(rejected.HasError());
+        REQUIRE(authority.Snapshot().settings.Fingerprint() == prior);
+
+        TransportCapabilities unavailable;
+        unavailable.revision = 1;
+        const auto release =
+            PreflightNetworkProjectSettings(authority.Snapshot().settings, NetworkProjectRole::DedicatedServer, unavailable);
+        REQUIRE(release.HasError());
+        REQUIRE(PreflightNetworkProjectSettings(authority.Snapshot().settings, NetworkProjectRole::Standalone, unavailable).HasValue());
+        REQUIRE(authority.Snapshot().settings.Fingerprint() == prior);
+    }
+
+    TEST_CASE("Standalone defaults and release automation enforce exact packaged roles", "[unit][network][settings]") {
+        using namespace Horo::Network;
+        const auto defaults = DefaultNetworkProjectSettings(NetworkProjectSettingsId::Create(99).Value());
+        REQUIRE(defaults.HasValue());
+        const auto accepted = NetworkProjectSettings::Create(defaults.Value());
+        REQUIRE(accepted.HasValue());
+        REQUIRE(accepted.Value().ContractVersion() == NetworkProjectSettingsInput::CurrentContractVersion);
+        REQUIRE(ParseNetworkProjectSettings(SerializeNetworkProjectSettings(accepted.Value())).HasValue());
+        REQUIRE(SerializeNetworkProjectSettings(accepted.Value()).find("credentialReference") == std::string::npos);
+
+        TransportCapabilities unavailable;
+        unavailable.revision = 1;
+        REQUIRE(PreflightNetworkProjectSettings(accepted.Value(), NetworkProjectRole::Standalone, unavailable).HasValue());
+        REQUIRE(PreflightNetworkProjectSettings(accepted.Value(), NetworkProjectRole::DedicatedServer, unavailable).HasError());
+
+        auto packaged = ValidInput();
+        packaged.supportedRoles = NetworkProjectRoleSet::Client;
+        packaged.defaultRole = NetworkProjectRole::Client;
+        const auto packageSettings = NetworkProjectSettings::Create(packaged);
+        REQUIRE(packageSettings.HasValue());
+        REQUIRE(PreflightNetworkProjectSettings(packageSettings.Value(), NetworkProjectRole::DedicatedServer, unavailable).HasError());
+        REQUIRE(PreflightNetworkProjectSettings(packageSettings.Value(), NetworkProjectRole::Client, unavailable).HasError());
     }
 }  // namespace

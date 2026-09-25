@@ -7,6 +7,7 @@
 
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/StrongId.h"
+#include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ProtocolIdentity.h"
 #include "Horo/Network/TransportCapabilities.h"
@@ -15,6 +16,8 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace Horo::Network {
     namespace Detail {
@@ -245,7 +248,7 @@ namespace Horo::Network {
 
     /** @brief Detached candidate used to construct or replace project network authority. */
     struct NetworkProjectSettingsInput final {
-        static constexpr std::uint32_t CurrentContractVersion = 1;
+        static constexpr std::uint32_t CurrentContractVersion = 2;
 
         std::uint32_t contractVersion{CurrentContractVersion};             /**< Closed project-settings contract version. */
         NetworkProjectSettingsId settings{};                               /**< Stable settings authority identity. */
@@ -255,7 +258,16 @@ namespace Horo::Network {
         NetworkProjectProfileV1 profile{};                                 /**< Complete version-one scheduling profile. */
         NetworkProjectProtocolPolicy protocol{};                           /**< Exact protocol/schema policy. */
         NetworkProjectTransportPolicy transport{};                         /**< Exact transport requirement policy. */
+        NetworkAddress defaultEndpoint{};        /**< Optional portable endpoint; host may override within policy. */
+        std::uint32_t credentialRequirementId{}; /**< Stable public requirement ID, never a credential reference. */
     };
+
+    /**
+     * @brief Constructs documented bounded standalone project defaults for a new identity.
+     * @param settings Non-zero project-settings identity chosen by the project owner.
+     * @return Complete version-one input or an identity error.
+     */
+    [[nodiscard]] Result<NetworkProjectSettingsInput> DefaultNetworkProjectSettings(NetworkProjectSettingsId settings);
 
     /** @brief Immutable validated project network authority. */
     class NetworkProjectSettings final {
@@ -294,6 +306,10 @@ namespace Horo::Network {
         [[nodiscard]] const NetworkProjectProtocolPolicy &Protocol() const noexcept;
         /** @brief Returns the immutable transport policy. @return Exact transport requirement policy. */
         [[nodiscard]] const NetworkProjectTransportPolicy &Transport() const noexcept;
+        /** @brief Returns the optional portable default endpoint. @return Canonical endpoint or invalid when absent. */
+        [[nodiscard]] const NetworkAddress &DefaultEndpoint() const noexcept;
+        /** @brief Returns the public credential requirement identity. @return Zero when no credential is required. */
+        [[nodiscard]] std::uint32_t CredentialRequirementId() const noexcept;
 
     private:
         explicit NetworkProjectSettings(const NetworkProjectSettingsInput &input, NetworkProjectSettingsFingerprint fingerprint) noexcept;
@@ -301,6 +317,30 @@ namespace Horo::Network {
         NetworkProjectSettingsInput input_;
         NetworkProjectSettingsFingerprint fingerprint_;
     };
+
+    /**
+     * @brief Encodes one validated portable project policy as canonical bounded JSON.
+     * @param settings Last-good project policy.
+     * @return Deterministic JSON with public requirement IDs only.
+     */
+    [[nodiscard]] std::string SerializeNetworkProjectSettings(const NetworkProjectSettings &settings);
+
+    /**
+     * @brief Parses version two or migrates the documented version-one policy before validation.
+     * @param document Untrusted portable JSON, limited to 64 KiB and strict known fields.
+     * @return Complete validated candidate or a typed malformed/capacity failure. No state is applied.
+     */
+    [[nodiscard]] Result<NetworkProjectSettingsInput> ParseNetworkProjectSettings(std::string_view document);
+
+    /**
+     * @brief Preflights a selected role and exact transport evidence for configure, cook, start or automation.
+     * @param settings Validated immutable policy.
+     * @param role Product role selected by the caller.
+     * @param capabilities Exact available transport evidence; ignored for standalone.
+     * @return Success or a typed capability/role error without side effects.
+     */
+    [[nodiscard]] Result<void> PreflightNetworkProjectSettings(const NetworkProjectSettings &settings, NetworkProjectRole role,
+                                                               const TransportCapabilities &capabilities);
 
     /** @brief Typed replacement command submitted to the project-settings authority. */
     struct NetworkProjectSettingsCommand final {

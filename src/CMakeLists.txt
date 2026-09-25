@@ -269,6 +269,7 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/NetworkLifecycle.cpp
         runtime/networking/api/NetworkObjectIdentity.cpp
         runtime/networking/api/NetworkProjectSettings.cpp
+        runtime/networking/api/NetworkProjectSettingsSchema.cpp
         runtime/networking/api/NetworkProjectSettingsErrors.cpp
         runtime/networking/api/PacketBuffer.cpp
         runtime/networking/api/PacketQueue.cpp
@@ -287,6 +288,7 @@ add_library(HoroNetworkApi STATIC
 add_library(HoroEngine::NetworkApi ALIAS HoroNetworkApi)
 target_compile_features(HoroNetworkApi PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkApi PUBLIC HoroEngine::Foundation)
+target_include_directories(HoroNetworkApi PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
 
 add_library(HoroNetworkTransportNull STATIC
         runtime/networking/null/DeterministicTransport.cpp

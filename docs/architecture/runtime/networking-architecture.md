@@ -628,6 +628,17 @@ tiers. Runtime mode/provider/exposure changes require ADR-102 host recomposition
 existing sessions keep their negotiated generations until bounded replacement or
 shutdown.
 
+The portable `NetworkProjectSettings` codec accepts a closed, bounded JSON object.
+Version 2 adds a canonical optional default endpoint and a public numeric credential
+requirement ID. Version 1 documents omit those two fields; pure migration supplies
+an absent endpoint and no credential requirement before complete validation. Unknown
+fields, duplicate keys, malformed integers, and future versions fail. The codec
+never stores a private credential binding or secret. Default construction creates
+a standalone-only policy with finite scheduling limits; projects must explicitly
+declare network roles and required transport capability evidence before packaging
+or activation. `PreflightNetworkProjectSettings` validates the selected role and
+exact transport evidence before an operation publishes state.
+
 ## Optional Composition and Product Configurations
 
 Horo Engine products declare only the modes and network targets they can realize:
