@@ -131,6 +131,38 @@ namespace Horo::PlatformServices {
             }
         }
 
+        /** @brief Retires one revoked, unleased candidate on its owner thread; reports pending work. */
+        [[nodiscard]] bool FinalizeCandidate(const std::shared_ptr<PlatformProviderCandidateState> &state,
+                                             const std::shared_ptr<PlatformProviderRetirementState> &retirement) noexcept {
+            {
+                std::scoped_lock lock{state->mutex};
+                if (state->retired || !state->revoked)
+                    return false;
+                if (state->leaseCount != 0 || state->retiring)
+                    return true;
+                state->retiring = true;
+            }
+            HoroExtensionStatus status = HORO_EXTENSION_ERROR_BUSY;
+            try {
+                status = state->retire(state->candidate);
+                if (status == HORO_EXTENSION_SUCCESS)
+                    state->destroy(state->candidate);
+            } catch (...) {
+                status = HORO_EXTENSION_ERROR_INIT_FAILED;
+            }
+            {
+                std::scoped_lock lock{state->mutex};
+                state->retiring = false;
+                if (status == HORO_EXTENSION_SUCCESS) {
+                    state->retired = true;
+                    state->candidate = nullptr;
+                } else if (status != HORO_EXTENSION_ERROR_BUSY) {
+                    retirement->restartRequired.store(true, std::memory_order_release);
+                }
+            }
+            return status == HORO_EXTENSION_ERROR_BUSY;
+        }
+
         [[nodiscard]] PlatformProviderRetirementDisposition FinalizeCandidates(
             const std::shared_ptr<PlatformProviderRetirementState> &retirement) noexcept {
             if (retirement->ownerThread != std::this_thread::get_id())
@@ -145,41 +177,8 @@ namespace Horo::PlatformServices {
                 std::copy(retirement->candidates.begin(), retirement->candidates.end(), snapshot.begin());
             }
             bool busy = false;
-            for (std::size_t index = 0; index < count; ++index) {
-                const auto &state = snapshot[index];
-                {
-                    std::scoped_lock lock{state->mutex};
-                    if (state->retired)
-                        continue;
-                    if (!state->revoked)
-                        continue;
-                    if (state->leaseCount != 0 || state->retiring) {
-                        busy = true;
-                        continue;
-                    }
-                    state->retiring = true;
-                }
-                HoroExtensionStatus status = HORO_EXTENSION_ERROR_BUSY;
-                try {
-                    status = state->retire(state->candidate);
-                    if (status == HORO_EXTENSION_SUCCESS)
-                        state->destroy(state->candidate);
-                } catch (...) {
-                    status = HORO_EXTENSION_ERROR_INIT_FAILED;
-                }
-                {
-                    std::scoped_lock lock{state->mutex};
-                    state->retiring = false;
-                    if (status == HORO_EXTENSION_SUCCESS) {
-                        state->retired = true;
-                        state->candidate = nullptr;
-                    } else if (status == HORO_EXTENSION_ERROR_BUSY) {
-                        busy = true;
-                    } else {
-                        retirement->restartRequired.store(true, std::memory_order_release);
-                    }
-                }
-            }
+            for (std::size_t index = 0; index < count; ++index)
+                busy = FinalizeCandidate(snapshot[index], retirement) || busy;
             {
                 std::scoped_lock lock{retirement->mutex};
                 std::erase_if(retirement->candidates, [](const auto &state) {
@@ -200,6 +199,20 @@ namespace Horo::PlatformServices {
                 return;
             // Self-retain only while a candidate still needs native retirement; finalization breaks the cycle.
             retirement->quarantine = retirement;
+        }
+
+        /** @brief Reclaims drained generations and retains one new candidate generation within the fixed bound. */
+        [[nodiscard]] bool RetainRetirement(std::mutex &mutex, std::vector<std::shared_ptr<PlatformProviderRetirementState>> &retirements,
+                                            const std::shared_ptr<PlatformProviderRetirementState> &retirement) {
+            std::scoped_lock lock{mutex};
+            std::erase_if(retirements, [](const auto &state) {
+                std::scoped_lock stateLock{state->mutex};
+                return state.use_count() == 1 && state->candidates.empty();
+            });
+            if (retirements.size() >= Extensions::ApplicationCapabilityRegistry::MaximumProviders)
+                return false;
+            retirements.push_back(retirement);
+            return true;
         }
     }  // namespace
 
@@ -410,16 +423,8 @@ namespace Horo::PlatformServices {
         auto retirement = std::make_shared<PlatformProviderRetirementState>();
         retirement->ownerThread = std::this_thread::get_id();
         retirement->candidates.reserve(MaximumCandidates);
-        {
-            std::scoped_lock lock{retirementsMutex_};
-            std::erase_if(retirements_, [](const auto &state) {
-                std::scoped_lock stateLock{state->mutex};
-                return state.use_count() == 1 && state->candidates.empty();
-            });
-            if (retirements_.size() >= Extensions::ApplicationCapabilityRegistry::MaximumProviders)
-                return Result<Extensions::ExtensionPlatformProviderPublication>::Failure(Invalid("Provider retirement capacity is full."));
-            retirements_.push_back(retirement);
-        }
+        if (!RetainRetirement(retirementsMutex_, retirements_, retirement))
+            return Result<Extensions::ExtensionPlatformProviderPublication>::Failure(Invalid("Provider retirement capacity is full."));
         Extensions::BackendServiceDescriptor factoryDescriptor{.serviceId = {std::string{FactoryServiceId}},
                                                                .contractId = {std::string{FactoryServiceId}},
                                                                .capability = {std::string{CapabilityId}},

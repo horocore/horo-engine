@@ -30,6 +30,19 @@ namespace Horo::PlatformServices::Tests {
             return 1U << static_cast<std::uint8_t>(HostPlatform());
         }
 
+        /** @brief Stages a native provider fixture and its matching manifest in a temporary package. */
+        [[nodiscard]] bool WriteProviderPackage(const std::filesystem::path &root) {
+            const std::filesystem::path modulePath = root / std::filesystem::path{HORO_PLATFORM_PROVIDER_FIXTURE}.filename();
+            if (!std::filesystem::copy_file(HORO_PLATFORM_PROVIDER_FIXTURE, modulePath))
+                return false;
+            std::ofstream manifest{root / "extension.json"};
+            manifest
+                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
+                << modulePath.filename().generic_string()
+                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
+            return manifest.good();
+        }
+
         struct Audit final {
             std::atomic_bool allowRetire{true};
             std::atomic_int created{};
@@ -242,8 +255,7 @@ namespace Horo::PlatformServices::Tests {
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();
-        PlatformProviderAdmission admission{capabilities, services, policy, HostPlatform(),
-                                            PlatformServicesHostProfile::HeadlessServer};
+        PlatformProviderAdmission admission{capabilities, services, policy, HostPlatform(), PlatformServicesHostProfile::HeadlessServer};
         auto audit = std::make_shared<Audit>();
         std::weak_ptr<Audit> code = audit;
         auto published = admission.Commit(Candidate("example.foreign-revoke", 1, audit));
@@ -256,7 +268,9 @@ namespace Horo::PlatformServices::Tests {
             REQUIRE(backend.HasValue());
             auto request = backend.Value().AcquireRequestLease();
             REQUIRE(request.HasValue());
-            std::thread revokeOnForeignThread([publication = std::move(published).Value()]() mutable { publication.reset(); });
+            std::thread revokeOnForeignThread([publication = std::move(published).Value()]() mutable {
+                publication.reset();
+            });
             revokeOnForeignThread.join();
             audit.reset();
             CHECK_FALSE(code.expired());
@@ -307,16 +321,7 @@ namespace Horo::PlatformServices::Tests {
             }
         } cleanup{root};
 
-        const fs::path modulePath = root / fs::path{HORO_PLATFORM_PROVIDER_FIXTURE}.filename();
-        REQUIRE(fs::copy_file(HORO_PLATFORM_PROVIDER_FIXTURE, modulePath));
-        {
-            std::ofstream manifest{root / "extension.json"};
-            manifest
-                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
-                << modulePath.filename().generic_string()
-                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
-            REQUIRE(manifest.good());
-        }
+        REQUIRE(WriteProviderPackage(root));
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();

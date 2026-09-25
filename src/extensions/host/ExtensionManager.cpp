@@ -38,6 +38,35 @@ namespace Horo::Extensions {
             return (value.data != nullptr || value.length == 0) && value.length <= kMaximumModuleIdentityBytes;
         }
 
+        /** @brief Copies a validated ABI provider descriptor before the module's borrowed inputs expire. */
+        ExtensionPlatformProviderCandidate CopyPlatformProviderCandidate(const AssetImporterRegistrationSession &session,
+                                                                         const HoroPlatformServicesProviderDescriptor &descriptor) {
+            ExtensionPlatformProviderCandidate candidate;
+            candidate.extensionId = session.manifest->id;
+            candidate.moduleId = session.extensionModule->id;
+            candidate.providerKey = View(descriptor.providerKey);
+            candidate.providerId = descriptor.providerId;
+            candidate.platformMask = descriptor.platformMask;
+            candidate.profileMask = descriptor.profileMask;
+            candidate.serviceMask = descriptor.serviceMask;
+            candidate.interfaceMajor = descriptor.interfaceMajor;
+            candidate.interfaceMinor = descriptor.interfaceMinor;
+            candidate.contractMajor = descriptor.contractMajor;
+            candidate.contractMinor = descriptor.contractMinor;
+            candidate.contractPatch = descriptor.contractPatch;
+            for (std::uint32_t index = 0; index < descriptor.permissionCount; ++index) {
+                if (!IsValidBoundedText(descriptor.permissions[index]) || descriptor.permissions[index].length == 0)
+                    throw std::invalid_argument("Invalid provider permission");
+                candidate.permissions.emplace_back(View(descriptor.permissions[index]));
+            }
+            candidate.factoryContext = descriptor.factoryContext;
+            candidate.createCandidate = descriptor.createCandidate;
+            candidate.retireCandidate = descriptor.retireCandidate;
+            candidate.destroyCandidate = descriptor.destroyCandidate;
+            candidate.moduleCodeLease = session.lifetime;
+            return candidate;
+        }
+
         /** @brief Copies a provider claim while all ABI input borrows are live. */
         HoroExtensionStatus RegisterPlatformProvider(void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor) noexcept {
             auto *session = static_cast<AssetImporterRegistrationSession *>(hostContext);
@@ -64,30 +93,7 @@ namespace Horo::Extensions {
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             }
             try {
-                ExtensionPlatformProviderCandidate candidate;
-                candidate.extensionId = session->manifest->id;
-                candidate.moduleId = session->extensionModule->id;
-                candidate.providerKey = View(descriptor->providerKey);
-                candidate.providerId = descriptor->providerId;
-                candidate.platformMask = descriptor->platformMask;
-                candidate.profileMask = descriptor->profileMask;
-                candidate.serviceMask = descriptor->serviceMask;
-                candidate.interfaceMajor = descriptor->interfaceMajor;
-                candidate.interfaceMinor = descriptor->interfaceMinor;
-                candidate.contractMajor = descriptor->contractMajor;
-                candidate.contractMinor = descriptor->contractMinor;
-                candidate.contractPatch = descriptor->contractPatch;
-                for (std::uint32_t index = 0; index < descriptor->permissionCount; ++index) {
-                    if (!IsValidBoundedText(descriptor->permissions[index]) || descriptor->permissions[index].length == 0)
-                        throw std::invalid_argument("Invalid provider permission");
-                    candidate.permissions.emplace_back(View(descriptor->permissions[index]));
-                }
-                candidate.factoryContext = descriptor->factoryContext;
-                candidate.createCandidate = descriptor->createCandidate;
-                candidate.retireCandidate = descriptor->retireCandidate;
-                candidate.destroyCandidate = descriptor->destroyCandidate;
-                candidate.moduleCodeLease = session->lifetime;
-                session->platformProviders.push_back(std::move(candidate));
+                session->platformProviders.push_back(CopyPlatformProviderCandidate(*session, *descriptor));
                 return HORO_EXTENSION_SUCCESS;
             } catch (...) {
                 session->failed = true;
