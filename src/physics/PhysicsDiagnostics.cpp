@@ -100,7 +100,7 @@ namespace Horo::Physics {
             using enum PhysicsDiagnosticContextKey;
             if (entry.key <= Asset)
                 return ValidateIdentityEntry(entry, contextWorld);
-            if (entry.key <= Capacity)
+            if (entry.key <= SceneEntity)
                 return ValidateScalarEntry(entry);
             return false;
         }

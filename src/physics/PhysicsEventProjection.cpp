@@ -168,6 +168,24 @@ namespace Horo::Physics::Detail {
         overflowedDuringTick_ = false;
     }
 
+    /** @copydoc PhysicsEventProjection::SuppressBody */
+    void PhysicsEventProjection::SuppressBody(const BodyHandle body) noexcept {
+        const auto touches = [body](const PhysicsEventPairKey &pair) {
+            return pair.first.body == body || pair.second.body == body;
+        };
+        const std::uint32_t retained = std::min(callbackWrite_.load(std::memory_order::seq_cst), maximumInFlightPairs_);
+        std::uint32_t kept{};
+        for (std::uint32_t index = 0; index < retained; ++index) {
+            if (observations_[index].first.body != body && observations_[index].second.body != body)
+                observations_[kept++] = observations_[index];
+        }
+        callbackWrite_.store(kept, std::memory_order::seq_cst);
+        std::erase_if(previousPairs_, [&](const PairState &pair) { return touches(pair.pair); });
+        std::erase_if(currentPairs_, [&](const PairState &pair) { return touches(pair.pair); });
+        for (auto &buffer : eventBuffers_)
+            std::erase_if(buffer, [&](const PhysicsEventRecord &event) { return touches(event.pair); });
+    }
+
     /** @copydoc PhysicsEventProjection::Reset */
     void PhysicsEventProjection::Reset() noexcept {
         AbortTick();

@@ -65,6 +65,7 @@ namespace Horo::Physics::Detail {
             shapeBindings.reserve(shapeCount);
             bodyHandles.reserve(plan.bodies.size());
             for (const PlannedBody &body : plan.bodies) {
+                const std::size_t firstShapeBinding = shapeBindings.size();
                 std::vector<PhysicsSceneShapeInstance> instances;
                 instances.reserve(body.colliders.size());
                 for (const PlannedCollider &collider : body.colliders) {
@@ -90,12 +91,14 @@ namespace Horo::Physics::Detail {
                                                        .linearVelocity = body.authored.initialLinearVelocity,
                                                        .angularVelocity = body.authored.initialAngularVelocity,
                                                        .motionSafety = body.authored.motionSafety};
-                const Result<BodyHandle> nativeBody = physics.CreateSceneBody({descriptor, body.sensor});
+                const Result<BodyHandle> nativeBody = physics.CreateSceneBody({descriptor, body.sensor, body.object.value});
                 if (nativeBody.HasError())
                     return Result<void>::Failure(
                         AddActivationContext(nativeBody.ErrorValue(), "body", body.object, body.component.value, std::nullopt));
                 bodyHandles.emplace_back(nativeBody.Value());
                 bodyBindings.emplace_back(body.object, body.slot, nativeBody.Value());
+                for (std::size_t index = firstShapeBinding; index < shapeBindings.size(); ++index)
+                    shapeBindings[index].body = nativeBody.Value();
             }
             return Result<void>::Success();
         }

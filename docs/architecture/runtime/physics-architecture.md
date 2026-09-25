@@ -221,7 +221,9 @@ capacity error. Native Jolt allocation cannot unwind through its no-exception fr
 the explicitly installed allocation hooks terminate on heap exhaustion rather than
 returning a null pointer into native code. This is not a recoverable world-creation
 OOM guarantee or a replacement for process-wide memory admission. Body quarantine
-is rejected at native preparation until its safe-point retirement path is implemented.
+retires the corrupt body and attached constraints after the joined solver step,
+before event reduction and publication. The body handle is stale thereafter;
+recovery requires a new body through an explicit scene activation or rebuild.
 Zero body capacity remains a valid descriptor for omitted compositions, but canonical
 preparation rejects it with `OperationUnsupported` before allocation: the pinned
 native broad phase requires storage for its root nodes even in an empty world.
@@ -839,9 +841,21 @@ simulation admission, order, state or determinism. Detailed stage timings are
 profiler-consumable measurements only; this slice does not create a second profiler
 store, arm native capture or claim backend timing support.
 
-NaN or non-finite body state is detected at owned boundaries, associated with
-body/entity identity, and quarantined or treated as fatal according to the
-configured runtime policy.
+NaN or non-finite body state is rejected at descriptor and mutation admission.
+After each joined native step, resident body pose, velocity and bounds are scanned
+before event reduction or publication. The stable `physics.body_state.non_finite`
+diagnostic carries world, body, scene object when supplied, scene generation and
+tick. `SceneEntity` appends to the diagnostic context key vocabulary without
+renumbering existing keys; direct world admission leaves it absent. Scene
+activation passes its authored object ID into the body record. `QuarantineBody`
+retires the native body and attached constraints at the
+owner-thread safe point, suppresses its contact and trigger evidence, invalidates
+query generation, removes authored body/collider/constraint bindings and drops
+future commands for that handle; only the remaining
+finite world may publish the tick. `FailWorld` aborts the tick, preserves the first
+failure through unload/shutdown and publishes no further tick until an explicit
+reset creates a new world generation. Immutable shape resources remain owned by
+the world and are released at normal world teardown.
 
 ## Testing
 

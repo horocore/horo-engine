@@ -188,9 +188,6 @@ namespace Horo::Physics::Detail {
         if (settings.Values().world.capacity.maximumBodies == 0)
             return Result<CanonicalWorldHandle>::Failure(
                 MakeError(PhysicsErrors::OperationUnsupported, "Canonical broad-phase initialization requires non-zero body capacity."));
-        if (settings.Values().nonFinitePolicy != PhysicsNonFinitePolicy::FailWorld)
-            return Result<CanonicalWorldHandle>::Failure(
-                MakeError(PhysicsErrors::OperationUnsupported, "Body quarantine requires a qualified safe-point retirement path."));
         const auto translated = TranslateCanonicalWorldSettings(settings);
         if (translated.HasError())
             return Result<CanonicalWorldHandle>::Failure(translated.ErrorValue());

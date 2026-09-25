@@ -65,6 +65,8 @@ namespace Horo::Physics::Detail {
         [[nodiscard]] Result<PhysicsEventProjectionResult> CompleteTick(std::uint64_t simulationTick);
         /** @brief Abandons the open capture window without changing the prior lifecycle/publication state. */
         void AbortTick() noexcept;
+        /** @brief Retires all copied and published contact/trigger evidence for one quarantined body after callback join. */
+        void SuppressBody(BodyHandle body) noexcept;
         /** @brief Clears lifecycle and publication state at a world reset/unload boundary. */
         void Reset() noexcept;
         /** @brief Returns the most recently published immutable event records until the next publication boundary. */

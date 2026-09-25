@@ -62,6 +62,8 @@ namespace Horo::Physics {
     };
 
     class PhysicsWorld;
+    class PhysicsSceneActivationCandidate;
+    struct PhysicsWorldContainmentTestAccess;
 
     /**
      * @brief One immutable analytic child shape bound to a body-local pose while a scene candidate is staged.
@@ -78,6 +80,7 @@ namespace Horo::Physics {
     struct PhysicsSceneBodyDescriptor final {
         PhysicsBodyDescriptor body;
         bool sensor{};
+        std::uint64_t sceneEntity{}; /**< Stable authored scene object identity, or zero for direct world admission. */
     };
 
     /** @brief Owner-thread reconciliation of retained policy against current native body evidence. */
@@ -187,10 +190,10 @@ namespace Horo::Physics {
         [[nodiscard]] const PhysicsWorldSettings &Settings() const noexcept;
         /** @brief Reads the most recent explicit lifecycle cause. @return None before the first reset, failure or retirement. */
         [[nodiscard]] PhysicsWorldLifecycleCause LifecycleCause() const noexcept;
-        /** @brief Reads the retained fatal/reset failure. @return Typed terminal error, or empty outside Failed. */
+        /** @brief Reads the first terminal failure through teardown until explicit reset. @return Typed terminal error, if any. */
         [[nodiscard]] const std::optional<Error> &LastFailure() const noexcept;
         /** @brief Reads the latest bounded solver diagnostic retained by this world.
-         * @return Owned inert evidence, or empty before a solver finding and after reset/retirement.
+         * @return Owned inert evidence, or empty before a solver finding and after reset/non-fatal retirement.
          * @note A diagnostic is evidence only. LastFailure and State remain control-flow authority.
          */
         [[nodiscard]] const std::optional<PhysicsDiagnosticRecord> &LastDiagnostic() const noexcept;
@@ -287,8 +290,13 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsTickStatistics TickStatistics() const noexcept;
 
     private:
+        friend struct PhysicsWorldContainmentTestAccess;
+        friend class PhysicsSceneActivationCandidate;
         friend class PhysicsRuntime;
         struct Impl;
+        /** @brief Binds aggregate scene tables to native quarantine retirement on the owner thread. */
+        void SetQuarantineSink(void *context, void (*body)(void *, BodyHandle) noexcept,
+                               void (*constraint)(void *, ConstraintHandle) noexcept) noexcept;
         /** @brief Takes one prepared world's ownership. @param impl Owned isolated world state. */
         explicit PhysicsWorld(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;

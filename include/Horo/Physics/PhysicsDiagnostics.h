@@ -48,6 +48,7 @@ namespace Horo::Physics {
         OperationSequence,
         RequestedCount,
         Capacity,
+        SceneEntity,
     };
 
     /** @brief Owned scalar or stable Horo identity allowed in diagnostic context. */

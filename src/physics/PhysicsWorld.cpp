@@ -140,6 +140,12 @@ namespace Horo::Physics {
     /** @copydoc PhysicsWorld::PhysicsWorld */
     PhysicsWorld::PhysicsWorld(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
+    /** @copydoc PhysicsWorld::SetQuarantineSink */
+    void PhysicsWorld::SetQuarantineSink(void *context, void (*body)(void *, BodyHandle) noexcept,
+                                         void (*constraint)(void *, ConstraintHandle) noexcept) noexcept {
+        impl_->quarantineSink = {context, body, constraint};
+    }
+
     /** @copydoc PhysicsWorld::~PhysicsWorld */
     PhysicsWorld::~PhysicsWorld() = default;
 
@@ -397,6 +403,24 @@ namespace Horo::Physics {
         if (const auto stepped = StepCanonicalWorldForTick(*impl_, input); stepped.HasError())
             return Result<void>::Failure(stepped.ErrorValue());
 
+        std::vector<BodyHandle> quarantined;
+        while (const auto corrupt = Detail::FindCanonicalNonFiniteBody(impl_->native)) {
+            Error cause = corrupt->retirable
+                              ? MakeError(PhysicsErrors::BodyStateNonFinite, "Canonical body state contains NaN or infinity.")
+                              : MakeError(PhysicsErrors::SolverFatalCondition, "Resident native body vanished before publication.");
+            if (!corrupt->retirable || impl_->settings.Values().nonFinitePolicy == PhysicsNonFinitePolicy::FailWorld) {
+                impl_->Fail(cause, input.sceneGeneration, input.simulationTick);
+                impl_->RecordNonFiniteDiagnostic(cause, *corrupt, input.sceneGeneration, input.simulationTick);
+                return Result<void>::Failure(std::move(cause));
+            }
+            if (quarantined.empty())
+                impl_->RecordNonFiniteDiagnostic(cause, *corrupt, input.sceneGeneration, input.simulationTick);
+            if (!Detail::CanonicalQueryFixtureUsesBodyHandle(impl_->native, corrupt->body))
+                impl_->events.SuppressBody(corrupt->body);
+            Detail::QuarantineCanonicalSceneBody(impl_->native, corrupt->body, impl_->quarantineSink);
+            quarantined.push_back(corrupt->body);
+        }
+
         Detail::ObservePhase(input, IntegrateBodies);
         Detail::ObservePhase(input, WriteRuntimeTransforms);
         const Result<Detail::PhysicsEventProjectionResult> eventResult = Detail::CompleteEventProjection(*impl_, input);
@@ -409,6 +433,21 @@ namespace Horo::Physics {
         Detail::ObserveCommands(*impl_, input, eligible, PhysicsStructuralCommandKind::Destroy, PhysicsCommandSafePoint::PostStep, applied);
 
         impl_->DiscardCommands(eligible);
+        if (!quarantined.empty()) {
+            std::uint32_t retained{};
+            for (std::uint32_t index = 0; index < impl_->commandCount; ++index) {
+                const PhysicsStructuralCommand &command = impl_->CommandAt(index);
+                const bool retiredTarget = command.order.targetKind == PhysicsCommandTargetKind::Body &&
+                                           std::ranges::any_of(quarantined, [&command](const BodyHandle body) {
+                                               return command.order.targetIdentity == static_cast<std::uint64_t>(body.slot.index) + 1U;
+                                           });
+                if (retiredTarget)
+                    continue;
+                impl_->CommandAt(retained++) = command;
+            }
+            impl_->commandCount = retained;
+            impl_->statistics.pendingCommands = retained;
+        }
         impl_->querySceneGeneration = input.sceneGeneration;
         Detail::CommitPublishedTick(*impl_, input.simulationTick, applied, eventResult.Value());
         impl_->statistics.completedTicks = input.simulationTick;

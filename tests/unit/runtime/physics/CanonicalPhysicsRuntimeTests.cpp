@@ -104,8 +104,8 @@ namespace Horo::Physics::Detail {
         }
     }
 
-    TEST_CASE("Canonical world admission rejects unsupported resource policies before allocation", "[physics][native][lifecycle]") {
-        SECTION("world preflight rejects missing runtime and unimplemented containment before allocation") {
+    TEST_CASE("Canonical world admission validates resources and supports quarantine policy", "[physics][native][lifecycle]") {
+        SECTION("world preflight rejects a missing runtime and admits quarantine") {
             const auto settings = Test::SmallWorldSettings();
             REQUIRE(CreateCanonicalWorld({}, settings).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
             REQUIRE(InspectCanonicalResources({}) == CanonicalResourceCounts{});
@@ -116,9 +116,9 @@ namespace Horo::Physics::Detail {
             descriptor.nonFinitePolicy = PhysicsNonFinitePolicy::QuarantineBody;
             const auto quarantine = PhysicsWorldSettings::Capture(descriptor);
             REQUIRE(quarantine.HasValue());
-            const auto rejected = CreateCanonicalWorld(runtime.handle, quarantine.Value());
-            REQUIRE(rejected.HasError());
-            REQUIRE(rejected.ErrorValue().code.Value() == PhysicsErrors::OperationUnsupported.code.Value());
+            const auto admitted = CreateCanonicalWorld(runtime.handle, quarantine.Value());
+            REQUIRE(admitted.HasValue());
+            DestroyCanonicalWorld(admitted.Value());
             REQUIRE(InspectCanonicalResources(runtime.handle) == CanonicalResourceCounts{});
         }
 

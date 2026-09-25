@@ -117,6 +117,8 @@ namespace Horo::Physics::Detail {
         PhysicsPose pose;
         PhysicsBodyDescriptor policy;
         bool motionStorageReserved{};
+        std::uint64_t sceneEntity{};
+        std::optional<float> injectedStateForTesting;
     };
 
     struct CanonicalConstraintBodies final {

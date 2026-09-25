@@ -62,6 +62,24 @@ namespace Horo::Physics::Detail {
         return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 
+    /** @copydoc FindCanonicalNonFiniteBody */
+    std::optional<CanonicalNonFiniteBody> FindCanonicalNonFiniteBody(const CanonicalWorldHandle) noexcept {
+        return std::nullopt;
+    }
+
+    /** @copydoc CanonicalQueryFixtureUsesBodyHandle */
+    bool CanonicalQueryFixtureUsesBodyHandle(const CanonicalWorldHandle, const BodyHandle) noexcept {
+        return false;
+    }
+
+    /** @copydoc QuarantineCanonicalSceneBody */
+    void QuarantineCanonicalSceneBody(const CanonicalWorldHandle, const BodyHandle, const CanonicalRetirementSink) noexcept {}
+
+    /** @copydoc InjectCanonicalNonFiniteBodyForTesting */
+    bool InjectCanonicalNonFiniteBodyForTesting(const CanonicalWorldHandle, const BodyHandle, const float) noexcept {
+        return false;
+    }
+
     /** @copydoc CreateCanonicalSceneConstraint */
     Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsConstraintDescriptor &) {

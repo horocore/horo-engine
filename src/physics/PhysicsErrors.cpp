@@ -136,6 +136,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor BodyStateNonFinite{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.body_state.non_finite"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "A resident physics body has non-finite solver state.",
+        .remediationHint = "Inspect the affected body and its inputs before rebuilding or continuing the world.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor DescriptorInvalid{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.descriptor.invalid"},
@@ -289,6 +298,7 @@ namespace Horo::Physics::PhysicsErrors {
             &SolverValidationMessage,
             &SolverAssertionFailed,
             &SolverFatalCondition,
+            &BodyStateNonFinite,
             &DescriptorInvalid,
             &CommandOrderInvalid,
             &SeedPolicyInvalid,

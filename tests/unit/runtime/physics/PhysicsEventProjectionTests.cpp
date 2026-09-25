@@ -101,6 +101,22 @@ namespace Horo::Physics::Detail {
         REQUIRE(projection.PublishedEvents()[0].kind == PhysicsEventKind::TriggerExit);
     }
 
+    TEST_CASE("Quarantine suppresses published and pending contacts without a stale exit", "[physics][events][nonfinite]") {
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        REQUIRE(CaptureOne(projection, 1, 1, 2, true));
+        REQUIRE(projection.CompleteTick(1).Value().publishedRecordCount == 1);
+        projection.BeginTick(2);
+        REQUIRE(projection.TryCapture(Observation(2, 1, 2, true)));
+        REQUIRE(projection.TryCapture(Observation(2, 3, 4)));
+        projection.SuppressBody(Endpoint(1).body);
+        REQUIRE(projection.PublishedEvents().empty());
+        REQUIRE(projection.CompleteTick(2).Value().publishedRecordCount == 1);
+        REQUIRE(projection.PublishedEvents()[0].pair.first.body == Endpoint(3).body);
+        projection.BeginTick(3);
+        REQUIRE(projection.CompleteTick(3).Value().publishedRecordCount == 1);
+        REQUIRE(projection.PublishedEvents()[0].pair.first.body == Endpoint(3).body);
+    }
+
     TEST_CASE("Physics event projection rejects stale observations and reconciles interleaved pairs", "[physics][events][projection]") {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
 

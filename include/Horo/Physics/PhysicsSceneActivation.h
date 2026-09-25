@@ -72,6 +72,7 @@ namespace Horo::Physics {
         Runtime::SceneObjectId object;
         Runtime::PhysicsColliderSlotId collider;
         ShapeHandle handle;
+        BodyHandle body; /**< Resident body owning this collider shape. */
     };
 
     /** @brief Stable authored-constraint to resident runtime-constraint binding retained by one scene candidate. */
@@ -112,11 +113,11 @@ namespace Horo::Physics {
 
         /** @brief Returns the exact world generation owned by this candidate. */
         [[nodiscard]] PhysicsWorldId WorldIdentity() const noexcept;
-        /** @brief Returns stable body bindings retained by this candidate. */
+        /** @brief Returns current body bindings; the span is invalidated by quarantine or scene retirement. */
         [[nodiscard]] std::span<const PhysicsSceneBodyBinding> BodyBindings() const noexcept;
-        /** @brief Returns stable collider-shape bindings retained by this candidate. */
+        /** @brief Returns current collider-shape bindings; quarantine retires bindings owned by the affected body. */
         [[nodiscard]] std::span<const PhysicsSceneShapeBinding> ShapeBindings() const noexcept;
-        /** @brief Returns stable constraint bindings retained by this candidate. */
+        /** @brief Returns current constraint bindings; quarantine retires bindings attached to the affected body. */
         [[nodiscard]] std::span<const PhysicsSceneConstraintBinding> ConstraintBindings() const noexcept;
         /** @brief Resolves an authored body binding without allocating or crossing scene generations. */
         [[nodiscard]] std::optional<BodyHandle> FindBody(Runtime::SceneObjectId object, Runtime::PhysicsBodySlotId body) const noexcept;
