@@ -130,6 +130,8 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformDefinitionRegistries.cpp
         platform_services/PlatformOfflineQueueStorageErrors.cpp
         platform_services/PlatformOfflineQueueStorage.cpp
+        platform_services/PlatformProgressionErrors.cpp
+        platform_services/PlatformProgressionIdempotency.cpp
         platform_services/PlatformProjectConfiguration.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestErrors.cpp
