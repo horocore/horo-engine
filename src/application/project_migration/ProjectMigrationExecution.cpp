@@ -276,6 +276,57 @@ namespace Horo::Application {
             return Result<void>::Success();
         }
 
+        /** @brief Restores the migration error carried by a cancelled child after joining its batch. */
+        [[nodiscard]] Result<void> JoinMigrationBatch(TaskGroup &group) {
+            const Result<void> joined = group.Join();
+            if (!joined.HasError() || !IsJobCancelled(joined.ErrorValue()))
+                return joined;
+            if (const Error *cause = joined.ErrorValue().cause.Get())
+                return Result<void>::Failure(*cause);
+            return Result<void>::Failure(MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
+        }
+
+        /** @brief Runs one bounded document batch and publishes its successful changes. */
+        [[nodiscard]] Result<void> ExecuteForEachBatch(const ProjectMigrationDefinition &definition, const ProjectMigrationNode &node,
+                                                       const ProjectMigrationContext &context, JobSystem &jobs,
+                                                       const CancellationToken &cancellation, const MigrationStageDescriptor &descriptor,
+                                                       const std::vector<MigrationDocumentEntry> &documents, const std::size_t begin,
+                                                       const std::size_t end) {
+            std::vector<std::optional<MigrationDocumentChange>> results(end - begin);
+            TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
+            for (std::size_t index = begin; index < end; ++index) {
+                const Result<ProjectDocumentView> source = context.ReadDocument(documents[index].handle);
+                if (source.HasError()) {
+                    group.RequestCancel();
+                    static_cast<void>(group.Join());
+                    return Result<void>::Failure(source.ErrorValue());
+                }
+                const ProjectDocumentView view = source.Value();
+                const auto spawned = group.Spawn({}, [index, begin, view, &node, &definition, &descriptor,
+                                                      &results](const CancellationToken &childCancellation) {
+                    Result<MigrationDocumentChange> changed =
+                        node.documentStage->Execute(view, MigrationStageContext{.definitionId = definition.id, .stageId = descriptor.id},
+                                                    childCancellation);
+                    if (changed.HasError()) {
+                        Error error = AnnotateStageError(changed.ErrorValue(), definition.id, descriptor.id, view.path);
+                        if (ErrorChainContains(error, ProjectErrors::MigrationCancelled.domain, ProjectErrors::MigrationCancelled.code))
+                            return JobCancelled(std::move(error));
+                        return Result<void>::Failure(std::move(error));
+                    }
+                    results[index - begin] = std::move(changed).Value();
+                    return Result<void>::Success();
+                });
+                if (spawned.HasError()) {
+                    group.RequestCancel();
+                    static_cast<void>(group.Join());
+                    return Result<void>::Failure(spawned.ErrorValue());
+                }
+            }
+            if (const Result<void> joined = JoinMigrationBatch(group); joined.HasError())
+                return joined;
+            return MergeExecutionResults(results, context);
+        }
+
         [[nodiscard]] Result<void> ExecuteForEach(const ProjectMigrationDefinition &definition, const ProjectMigrationNode &node,
                                                   const ProjectMigrationContext &context, JobSystem &jobs,
                                                   const ProjectMigrationLimits &limits, const CancellationToken &cancellation) {
@@ -287,48 +338,10 @@ namespace Horo::Application {
                     return Result<void>::Failure(
                         MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
                 const std::size_t end = std::min(documents.size(), begin + batchSize);
-                std::vector<std::optional<MigrationDocumentChange>> results(end - begin);
-                TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
-                for (std::size_t index = begin; index < end; ++index) {
-                    const Result<ProjectDocumentView> source = context.ReadDocument(documents[index].handle);
-                    if (source.HasError()) {
-                        group.RequestCancel();
-                        static_cast<void>(group.Join());
-                        return Result<void>::Failure(source.ErrorValue());
-                    }
-                    const ProjectDocumentView view = source.Value();
-                    const auto spawned = group.Spawn({}, [index, begin, view, &node, &definition, &descriptor,
-                                                          &results](const CancellationToken &childCancellation) {
-                        Result<MigrationDocumentChange> changed =
-                            node.documentStage->Execute(view,
-                                                        MigrationStageContext{.definitionId = definition.id, .stageId = descriptor.id},
-                                                        childCancellation);
-                        if (changed.HasError()) {
-                            Error error = AnnotateStageError(changed.ErrorValue(), definition.id, descriptor.id, view.path);
-                            if (ErrorChainContains(error, ProjectErrors::MigrationCancelled.domain, ProjectErrors::MigrationCancelled.code))
-                                return JobCancelled(std::move(error));
-                            return Result<void>::Failure(std::move(error));
-                        }
-                        results[index - begin] = std::move(changed).Value();
-                        return Result<void>::Success();
-                    });
-                    if (spawned.HasError()) {
-                        group.RequestCancel();
-                        static_cast<void>(group.Join());
-                        return Result<void>::Failure(spawned.ErrorValue());
-                    }
-                }
-                if (const Result<void> joined = group.Join(); joined.HasError()) {
-                    if (IsJobCancelled(joined.ErrorValue())) {
-                        if (const Error *cause = joined.ErrorValue().cause.Get())
-                            return Result<void>::Failure(*cause);
-                        return Result<void>::Failure(
-                            MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
-                    }
-                    return joined;
-                }
-                if (const auto merged = MergeExecutionResults(results, context); merged.HasError())
-                    return merged;
+                if (const Result<void> batch =
+                        ExecuteForEachBatch(definition, node, context, jobs, cancellation, descriptor, documents, begin, end);
+                    batch.HasError())
+                    return batch;
             }
             return Result<void>::Success();
         }

@@ -203,6 +203,28 @@ namespace Horo::Assets {
             return Result<void>::Success();
         }
 
+        /** @brief Runs uncached cook slots as a fail-fast group while preserving cancellation causes. */
+        Result<void> CookUncachedSlots(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
+                                       std::span<CookSlot> slots, const CancellationToken &cancellation) {
+            TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
+            for (CookSlot &slot : slots) {
+                if (slot.cacheHit)
+                    continue;
+                const JobFunction work = [&slot, &catalog, &request](const CancellationToken &jobCancellation) {
+                    if (jobCancellation.IsCancellationRequested())
+                        return JobCancelled(MakeError(CookErrors::Cancelled));
+                    Result<void> cooked = CookAndEncodeSlot(catalog, slot, request.target, jobCancellation);
+                    if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
+                        jobCancellation.IsCancellationRequested())
+                        return JobCancelled(cooked.ErrorValue());
+                    return cooked;
+                };
+                if (auto spawned = group.Spawn({}, work); spawned.HasError())
+                    return Result<void>::Failure(spawned.ErrorValue());
+            }
+            return group.Join();
+        }
+
         Result<AssetCookReport> PublishCookedSlots(const AssetCookRequest &request, const AssetCookCache &cache,
 
                                                    std::vector<CookSlot> &slots, const std::size_t cacheHits,
@@ -393,30 +415,8 @@ namespace Horo::Assets {
 
         if (cacheHits < slots.size()) {
             operation.Update("cook", std::format("Cooking {} assets", slots.size() - cacheHits), 0.4F);
-
-            TaskGroup group(jobs_, TaskGroupFailurePolicy::FailFast, cancellation);
-            for (auto &slot : slots) {
-                if (slot.cacheHit)
-                    continue;
-
-                const JobFunction work = [&slot, this, &request](const CancellationToken &jobCancellation) {
-                    if (jobCancellation.IsCancellationRequested())
-                        return JobCancelled(MakeError(CookErrors::Cancelled));
-
-                    Result<void> cooked = CookAndEncodeSlot(*catalog_, slot, request.target, jobCancellation);
-                    if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
-                        jobCancellation.IsCancellationRequested())
-                        return JobCancelled(cooked.ErrorValue());
-                    return cooked;
-                };
-                auto spawnResult = group.Spawn({}, work);
-                if (spawnResult.HasError())
-                    return Result<AssetCookReport>::Failure(spawnResult.ErrorValue());
-            }
-
-            auto joinResult = group.Join();
-            if (joinResult.HasError())
-                return Result<AssetCookReport>::Failure(joinResult.ErrorValue());
+            if (const auto cooked = CookUncachedSlots(jobs_, *catalog_, request, slots, cancellation); cooked.HasError())
+                return Result<AssetCookReport>::Failure(cooked.ErrorValue());
         }
 
         return PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);

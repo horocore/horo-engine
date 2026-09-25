@@ -425,11 +425,13 @@ namespace {
             if (next.HasValue())
                 static_cast<void>(next.Value().RequestCancel());
         });
+        const std::weak_ptr captureProbe = capture;
         auto cancelled =
             jobs.SubmitContext({.parentCancellation = parent.Token()}, [capture = std::move(capture)](const Horo::JobExecutionContext &) {
             return Horo::Result<void>::Success();
         });
         REQUIRE(cancelled.HasValue());
+        REQUIRE(captureProbe.expired());
         REQUIRE(reentered);
         REQUIRE(cancelled.Value().Snapshot()->state == Horo::JobState::Cancelled);
         jobs.Shutdown(Horo::ShutdownPolicy::Cancel);
