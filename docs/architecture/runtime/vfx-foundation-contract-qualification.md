@@ -38,15 +38,16 @@ ctest --test-dir build/skeleton -R '^HoroVfxApiTests::' --output-on-failure
 |---|---|---|
 | Linux / GCC | Enabled in `.github/workflows/ci.yml` | Required active CI lane. |
 | macOS / Clang | Enabled in `.github/workflows/ci.yml` | Required active CI lane. |
-| Windows / MSVC | Matrix entry is currently commented out in `.github/workflows/ci.yml` | Not qualified by the active workflow. Portable source-path and byte-order tests do not substitute for a Windows execution. |
+| Windows / MSVC | Dedicated `VFX Foundation · Windows / MSVC` job in `.github/workflows/ci.yml` builds and runs `HoroVfxApiTests` | Required focused CI lane. Qualification requires that job to pass on this PR head. |
 
-The missing Windows result is an open qualification deviation, not evidence of a
-pass. Its owner is `abdullahbodur`; follow-up remains tracked by this qualification
-issue, [#1769](https://github.com/horocore/horo-engine/issues/1769). The related
-historical CI tracking item is [CI-006 #2826](https://github.com/horocore/horo-engine/issues/2826),
-closed after cache work in [PR #2828](https://github.com/horocore/horo-engine/pull/2828);
-the Windows matrix entry remains disabled at this revision. Keep Windows marked
-unqualified until a Windows test lane is restored and this target passes there.
+The full Windows matrix entry remains disabled while the full-suite timeout is
+investigated. The dedicated job qualifies this VFX target without waiting for the
+entire Windows suite. Its owner is `abdullahbodur`; the remaining full-suite
+deviation is tracked by this qualification issue,
+[#1769](https://github.com/horocore/horo-engine/issues/1769). Earlier cache work in
+[CI-006 #2826](https://github.com/horocore/horo-engine/issues/2826) is closed and
+does not provide Windows qualification evidence.
+Keep Windows marked unqualified until the dedicated job passes on the PR head.
 
 Deterministic identity bytes, particle IDs, counts, and ordering are exact contracts.
 Floating simulation values are only claimed bit-exact under an explicitly qualified
