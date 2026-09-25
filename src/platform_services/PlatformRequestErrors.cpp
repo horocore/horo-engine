@@ -8,8 +8,9 @@ namespace Horo::PlatformServices::RequestErrors {
     const ErrorCodeDescriptor InvalidConfiguration{.domain = Domain,
                                                    .code = ErrorCode{"platform.request.invalid_configuration"},
                                                    .defaultSeverity = ErrorSeverity::Error,
-                                                   .summary = "Platform request store configuration is invalid.",
-                                                   .remediationHint = "Provide finite nonzero capacities and generation.",
+                                                   .summary = "Platform request configuration is invalid.",
+                                                   .remediationHint =
+                                                       "Provide finite nonzero capacities, generation, and service deadlines.",
                                                    .retryable = false,
                                                    .userActionable = false};
     const ErrorCodeDescriptor CapacityExceeded{.domain = Domain,

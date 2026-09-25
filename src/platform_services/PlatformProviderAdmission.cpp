@@ -572,6 +572,7 @@ namespace Horo::PlatformServices {
         static constexpr std::size_t MaximumPayloadBytes = 4096;
 
         struct Completion final {
+            std::chrono::steady_clock::time_point receivedAt;
             std::uint64_t requestId{};
             std::uint64_t requestGeneration{};
             std::uint64_t sessionRevision{};
@@ -588,19 +589,18 @@ namespace Horo::PlatformServices {
             std::uint64_t sessionRevision{};
             PlatformServiceKind service;
             std::uint32_t operation{};
-            PlatformProviderRequestLease lease;
-
-            InFlight(PlatformRequestId requestId, PlatformRequestGeneration requestGeneration, std::uint64_t revision,
-                     PlatformServiceKind requestService, std::uint32_t requestOperation, PlatformProviderRequestLease requestLease)
-                : id(requestId), generation(requestGeneration), sessionRevision(revision), service(requestService),
-                  operation(requestOperation), lease(std::move(requestLease)) {}
+            std::chrono::steady_clock::time_point deadline;
+            std::array<std::byte, sizeof(std::uint64_t)> payload{};
+            std::optional<PlatformProviderRequestLease> lease;
+            bool cancellationSent{};
         };
 
-        explicit PlatformProviderLifecycleState(const PlatformRequestGeneration generation)
+        explicit PlatformProviderLifecycleState(const PlatformRequestGeneration generation, PlatformProviderRequestPolicy policy)
             : requests({.activeCapacity = MaximumRequests,
                         .terminalCapacity = MaximumRequests,
                         .observerCapacity = MaximumRequests,
-                        .generation = generation}) {
+                        .generation = generation}),
+              requestPolicy(std::move(policy)) {
             inFlight.reserve(MaximumRequests);
         }
 
@@ -628,6 +628,7 @@ namespace Horo::PlatformServices {
         void *candidate{};  // NOSONAR(cpp:S5008) The versioned provider C ABI defines candidates as opaque void pointers.
         std::optional<PlatformProviderCandidateLease> lease;
         PlatformRequestStore requests;
+        PlatformProviderRequestPolicy requestPolicy;
         std::vector<InFlight> inFlight;
         std::uint32_t availableServices{};
         LifecycleStages stages;
@@ -660,6 +661,7 @@ namespace Horo::PlatformServices {
             if (!state.callbackOpen || state.completionCount == state.completions.size())
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             auto &slot = state.completions[(state.completionHead + state.completionCount) % state.completions.size()];
+            slot.receivedAt = std::chrono::steady_clock::now();
             slot.requestId = completion->requestId;
             slot.requestGeneration = completion->requestGeneration;
             slot.sessionRevision = completion->sessionRevision;
@@ -770,7 +772,8 @@ namespace Horo::PlatformServices {
         void CancelNativeInflight(PlatformProviderLifecycleState &state) {
             for (const auto &request : state.inFlight) {
                 static_cast<void>(state.requests.RequestCancel(request.id, request.generation));
-                static_cast<void>(InvokeProvider(state.operations.cancel, state.candidate, request.id.value, request.generation.value));
+                if (request.lease && !request.cancellationSent)
+                    static_cast<void>(InvokeProvider(state.operations.cancel, state.candidate, request.id.value, request.generation.value));
             }
         }
 
@@ -801,13 +804,16 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformProviderLifecycleHost::Start */
     Result<std::unique_ptr<PlatformProviderLifecycleHost>> PlatformProviderLifecycleHost::Start(
-        const PlatformProviderLifecycleStartContext &context) {
+        const PlatformProviderLifecycleStartContext &context, PlatformProviderRequestPolicy requestPolicy) {
         using HostResult = Result<std::unique_ptr<PlatformProviderLifecycleHost>>;
         const auto &configuration = context.configuration;
         const auto &admission = context.admission;
         const auto &identity = context.identity;
         const auto &authority = context.authority;
         const auto &versions = context.versions;
+        for (const auto timeout : requestPolicy.timeouts)
+            if (timeout <= std::chrono::milliseconds::zero() || timeout > std::chrono::hours{24})
+                return HostResult::Failure(MakeError(RequestErrors::InvalidConfiguration));
         if (configuration.UsesNullProvider() || !configuration.SelectedProvider() || !configuration.SelectedModule() ||
             identity.moduleId != configuration.SelectedModule()->value || identity.providerId != configuration.SelectedProviderKey())
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InvalidSelection));
@@ -825,7 +831,8 @@ namespace Horo::PlatformServices {
         if (native.operations.version != HORO_PLATFORM_SERVICES_PROVIDER_OPERATIONS_VERSION ||
             native.operations.structSize != sizeof(HoroPlatformProviderOperations))
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::UnsupportedProfile));
-        auto state = std::make_shared<PlatformProviderLifecycleState>(PlatformRequestGeneration{identity.generation});
+        auto state =
+            std::make_shared<PlatformProviderLifecycleState>(PlatformRequestGeneration{identity.generation}, std::move(requestPolicy));
         state->operations = native.operations;
         state->candidate = native.candidate;
         state->lease.emplace(std::move(candidate));
@@ -874,43 +881,25 @@ namespace Horo::PlatformServices {
             return SubmitResult::Failure(MakeError(PlatformProviderLifecycleErrors::InvalidOperation));
         if (state.inFlight.size() == PlatformProviderLifecycleState::MaximumRequests)
             return SubmitResult::Failure(MakeError(RequestErrors::CapacityExceeded));
-        auto nativeLease = state.lease->AcquireRequestLease();
-        if (nativeLease.HasError())
-            return SubmitResult::Failure(nativeLease.ErrorValue());
         auto admitted = state.requests.Admit<void>();
         if (admitted.HasError())
             return SubmitResult::Failure(admitted.ErrorValue());
         auto handle = std::move(admitted).Value();
-        state.inFlight.emplace_back(handle.Id(), handle.Generation(), sessionRevision, service, operation, std::move(nativeLease).Value());
-        static_cast<void>(state.requests.MarkRunning(handle));
-        const HoroPlatformProviderOperation input{.structSize = sizeof(HoroPlatformProviderOperation),
-                                                  .requestId = handle.Id().value,
-                                                  .requestGeneration = handle.Generation().value,
-                                                  .sessionRevision = sessionRevision,
-                                                  .service = serviceIndex,
-                                                  .operation = operation,
-                                                  // The public C ABI requires a uint8_t byte span.
-                                                  .payload = reinterpret_cast<const std::uint8_t *>(  // NOSONAR(cpp:S6022)
-                                                      payload.data()),
-                                                  .payloadSize = static_cast<std::uint32_t>(payload.size())};
-        if (const HoroExtensionStatus submission = InvokeProvider(state.operations.submit, state.candidate, &input);
-            submission != HORO_EXTENSION_SUCCESS) {
-            if (submission == HORO_EXTENSION_ERROR_CANCELLED) {
-                static_cast<void>(state.requests.RequestCancel(handle));
-                static_cast<void>(state.requests.CompleteCancelled(handle, MakeError(RequestErrors::Cancelled)));
-            } else {
-                static_cast<void>(
-                    state.requests.CompleteFailure(handle, MakePlatformProviderError(PlatformProviderFailureCategory::Unknown,
-                                                                                     handle.Id().value, handle.Generation().value)));
-            }
-            // An adapter may have started native work before reporting failure; its lease retires on callback or drain.
-        }
+        const auto admittedAt = state.requests.Query(handle).Value().timing.admittedAt;
+        PlatformProviderLifecycleState::InFlight entry{.id = handle.Id(),
+                                                       .generation = handle.Generation(),
+                                                       .sessionRevision = sessionRevision,
+                                                       .service = service,
+                                                       .operation = operation,
+                                                       .deadline = admittedAt + state.requestPolicy.timeouts[serviceIndex]};
+        std::ranges::copy(payload, entry.payload.begin());
+        state.inFlight.push_back(std::move(entry));
         return SubmitResult::Success(std::move(handle));
     }
 
     /** @copydoc PlatformProviderLifecycleHost::DispatchCompletions */
-    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(  // NOSONAR(cpp:S5817) Mutates shared lifecycle state.
-        const std::size_t maximum) {
+    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(const std::size_t maximum,
+                                                                   const std::chrono::steady_clock::time_point now) {
         auto &state = *state_;
         std::size_t processed{};
         while (processed < maximum) {
@@ -928,14 +917,16 @@ namespace Horo::PlatformServices {
                 return entry.id.value == completion.requestId && entry.generation.value == completion.requestGeneration &&
                        static_cast<std::uint32_t>(entry.service) == completion.service && entry.operation == completion.operation;
             });
-                found != state.inFlight.end()) {
+                found != state.inFlight.end() && found->lease) {
                 RequestHandle handle{found->id, found->generation};
                 std::uint64_t currentSessionRevision{};
                 {
                     std::scoped_lock lock{state.mutex};
                     currentSessionRevision = state.session.revision;
                 }
-                if (completion.sessionRevision != found->sessionRevision || currentSessionRevision != found->sessionRevision)
+                if (completion.receivedAt > found->deadline)
+                    static_cast<void>(state.requests.CompleteTimedOut(handle, MakeError(RequestErrors::TimedOut)));
+                else if (completion.sessionRevision != found->sessionRevision || currentSessionRevision != found->sessionRevision)
                     static_cast<void>(state.requests.CompleteFailure(handle, MakeError(PlatformSessionErrors::StaleSession)));
                 else if (completion.resultCode == HORO_PLATFORM_PROVIDER_SUCCESS)
                     static_cast<void>(state.requests.CompleteSuccess(handle));
@@ -954,8 +945,107 @@ namespace Horo::PlatformServices {
             }
             ++processed;
         }
+        for (auto entry = state.inFlight.begin(); entry != state.inFlight.end();) {
+            RequestHandle handle{entry->id, entry->generation};
+            const auto snapshot = state.requests.Query(handle);
+            bool hasEligibleIngress{};
+            if (entry->lease && now >= entry->deadline) {
+                std::scoped_lock lock{state.mutex};
+                for (std::size_t index = 0; index < state.completionCount; ++index) {
+                    const auto &pending = state.completions[(state.completionHead + index) % state.completions.size()];
+                    if (pending.requestId == entry->id.value && pending.requestGeneration == entry->generation.value &&
+                        pending.service == static_cast<std::uint32_t>(entry->service) && pending.operation == entry->operation &&
+                        pending.receivedAt <= entry->deadline) {
+                        hasEligibleIngress = true;
+                        break;
+                    }
+                }
+            }
+            if (now >= entry->deadline && !hasEligibleIngress) {
+                static_cast<void>(state.requests.CompleteTimedOut(handle, MakeError(RequestErrors::TimedOut)));
+                if (entry->lease && !entry->cancellationSent) {
+                    entry->cancellationSent = true;
+                    static_cast<void>(InvokeProvider(state.operations.cancel, state.candidate, entry->id.value, entry->generation.value));
+                }
+                if (!entry->lease) {
+                    entry = state.inFlight.erase(entry);
+                    continue;
+                }
+            } else if (entry->lease && snapshot.HasValue() && snapshot.Value().cancellationRequested && !entry->cancellationSent) {
+                entry->cancellationSent = true;
+                static_cast<void>(InvokeProvider(state.operations.cancel, state.candidate, entry->id.value, entry->generation.value));
+            } else if (!entry->lease && !state.closing) {
+                std::uint64_t currentSessionRevision{};
+                {
+                    std::scoped_lock lock{state.mutex};
+                    currentSessionRevision = state.session.revision;
+                }
+                if (currentSessionRevision != entry->sessionRevision) {
+                    static_cast<void>(state.requests.CompleteFailure(handle, MakeError(PlatformSessionErrors::StaleSession)));
+                    entry = state.inFlight.erase(entry);
+                    continue;
+                }
+                auto lease = state.lease->AcquireRequestLease();
+                if (lease.HasError()) {
+                    static_cast<void>(state.requests.CompleteFailure(handle, lease.ErrorValue()));
+                    entry = state.inFlight.erase(entry);
+                    continue;
+                }
+                entry->lease.emplace(std::move(lease).Value());
+                static_cast<void>(state.requests.MarkRunning(handle));
+                const HoroPlatformProviderOperation input{.structSize = sizeof(HoroPlatformProviderOperation),
+                                                          .requestId = entry->id.value,
+                                                          .requestGeneration = entry->generation.value,
+                                                          .sessionRevision = entry->sessionRevision,
+                                                          .service = static_cast<std::uint32_t>(entry->service),
+                                                          .operation = entry->operation,
+                                                          .payload = reinterpret_cast<const std::uint8_t *>(entry->payload.data()),
+                                                          .payloadSize = static_cast<std::uint32_t>(entry->payload.size())};
+                const auto submission = InvokeProvider(state.operations.submit, state.candidate, &input);
+                if (submission != HORO_EXTENSION_SUCCESS) {
+                    if (submission == HORO_EXTENSION_ERROR_CANCELLED) {
+                        static_cast<void>(state.requests.RequestCancel(handle));
+                        static_cast<void>(state.requests.CompleteCancelled(handle, MakeError(RequestErrors::Cancelled)));
+                    } else
+                        static_cast<void>(
+                            state.requests.CompleteFailure(handle, MakePlatformProviderError(PlatformProviderFailureCategory::Unknown,
+                                                                                             entry->id.value, entry->generation.value)));
+                    // A provider may have started work before reporting failure. Keep its lease until callback or drain.
+                }
+            }
+            ++entry;
+        }
         static_cast<void>(state.requests.DispatchCompletions(maximum));
         return processed;
+    }
+
+    /** @copydoc PlatformProviderLifecycleHost::RequestCancel */
+    Result<void> PlatformProviderLifecycleHost::RequestCancel(const RequestHandle &request,
+                                                              const std::chrono::steady_clock::time_point now) {
+        auto &state = *state_;
+        if (state.closing || state.closed)
+            return Result<void>::Failure(MakeError(FrontendErrors::Unavailable));
+        auto snapshot = state.requests.Query(request);
+        if (snapshot.HasError())
+            return Result<void>::Failure(snapshot.ErrorValue());
+        if (IsTerminal(snapshot.Value().state))
+            return Result<void>::Success();
+        const auto found = std::ranges::find_if(state.inFlight, [&](const auto &entry) {
+            return entry.id == request.Id() && entry.generation == request.Generation();
+        });
+        if (found == state.inFlight.end())
+            return Result<void>::Failure(MakeError(RequestErrors::Stale));
+        if (now >= found->deadline && !found->lease) {
+            static_cast<void>(state.requests.CompleteTimedOut(request, MakeError(RequestErrors::TimedOut)));
+            state.inFlight.erase(found);
+            return Result<void>::Success();
+        }
+        static_cast<void>(state.requests.RequestCancel(request));
+        if (!found->lease) {
+            static_cast<void>(state.requests.CompleteCancelled(request, MakeError(RequestErrors::Cancelled)));
+            state.inFlight.erase(found);
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc PlatformProviderLifecycleHost::Query */
