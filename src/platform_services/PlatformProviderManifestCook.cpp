@@ -70,16 +70,18 @@ namespace Horo::PlatformServices {
         }
 
         [[nodiscard]] PlatformServiceKind ServiceFor(const PlatformServiceIdKind kind) noexcept {
+            using enum PlatformServiceIdKind;
+            using enum PlatformServiceKind;
             switch (kind) {
-                case PlatformServiceIdKind::Achievement:
-                    return PlatformServiceKind::Achievements;
-                case PlatformServiceIdKind::Leaderboard:
-                case PlatformServiceIdKind::Stat:
-                    return PlatformServiceKind::LeaderboardsAndStats;
-                case PlatformServiceIdKind::PresenceStatus:
-                    return PlatformServiceKind::Presence;
+                case Achievement:
+                    return Achievements;
+                case Leaderboard:
+                case Stat:
+                    return LeaderboardsAndStats;
+                case PresenceStatus:
+                    return Presence;
             }
-            return PlatformServiceKind::Count;
+            return Count;
         }
 
         [[nodiscard]] bool RequiredPolicyIsCoherent(const PlatformProviderManifestCookInput &input) noexcept {
@@ -179,8 +181,8 @@ namespace Horo::PlatformServices {
             });
             if (const auto required = CheckRequiredMappings(input, sorted); required.HasError())
                 return required;
-            const auto validation = ValidatePlatformProviderMappings(input.stableIds, *provider, input.mappingPolicy, sorted);
-            if (validation.HasError())
+            if (const auto validation = ValidatePlatformProviderMappings(input.stableIds, *provider, input.mappingPolicy, sorted);
+                validation.HasError())
                 return Result<void>::Failure(MakeDiagnostic(PlatformProviderManifestCookErrors::InvalidMapping, "mappings",
                                                             "Mapping evidence contains duplicate or invalid entries."));
             return Result<void>::Success();
