@@ -118,9 +118,9 @@ namespace Horo::PlatformServices {
                         CounterDescriptor("horo.platform_services.frontend.shutdown", "Platform Services frontend shutdown outcomes.",
                                           {MetricDimension("outcome", ShutdownMetricOutcomes)},
                                           static_cast<std::uint32_t>(ShutdownMetricOutcomes.size())));
-                } catch (const std::bad_alloc
-                             &) {  // NOSONAR(cpp:S2486) Metrics are best effort; allocation failure must not affect service work.
-                    // Telemetry registration is best-effort and must not change service admission or shutdown.
+                } catch (const std::bad_alloc &) {
+                    // Never publish a partially registered metric set after allocation failure.
+                    handles_ = {};
                 }
             }
 
