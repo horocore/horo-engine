@@ -86,6 +86,35 @@ namespace Horo::Extensions::Tests {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == code);
         }
+
+        [[nodiscard]] bool ReplaceConcurrentCommand(EditorCommandRegistry &registry, EditorSurfaceContextProvider &provider,
+                                                    ExtensionCapabilityAdmission &enabledAdmission,
+                                                    ExtensionCapabilityAdmission &disabledAdmission,
+                                                    EditorCommandRegistration &currentRegistration) {
+            const std::vector<ExtensionCapabilityHandle> noGrants;
+            constexpr std::size_t replacementCount = 10000U;
+            for (std::size_t index = 0; index < replacementCount; ++index) {
+                currentRegistration.Reset();
+                const bool replacementEnabled = index % 2U != 0U;
+                const std::uint64_t generation = replacementEnabled ? 3U : 4U;
+                ExtensionCapabilityAdmission &admission = replacementEnabled ? enabledAdmission : disabledAdmission;
+                auto context = provider.Attach(SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.concurrent",
+                                                              "editor.concurrent", false, generation),
+                                               admission.ActivationLease(), noGrants);
+                if (context.HasError())
+                    return false;
+                auto command = Command("editor.concurrent", "concurrent");
+                command.predicates = {
+                    {EditorCommandPredicateKind::SurfaceOpen, "com.example.menu.concurrent", replacementEnabled},
+                };
+                auto replacement = registry.Register(std::move(context).Value(), std::move(command));
+                if (replacement.HasError())
+                    return false;
+                currentRegistration = std::move(replacement).Value();
+                std::this_thread::yield();
+            }
+            return true;
+        }
     }  // namespace
 
     TEST_CASE("Editor command registry evaluates localized commands and emits unload-safe invocations", "[Extensions][EditorCommand]") {
@@ -236,37 +265,12 @@ namespace Horo::Extensions::Tests {
         while (!invokerStarted.load(std::memory_order_acquire))
             std::this_thread::yield();
 
-        bool registrationFailed = false;
-        const std::vector<ExtensionCapabilityHandle> noGrants;
-        constexpr std::size_t replacementCount = 10000U;
-        for (std::size_t index = 0; index < replacementCount; ++index) {
-            currentRegistration.Reset();
-            const bool replacementEnabled = index % 2U != 0U;
-            const std::uint64_t generation = replacementEnabled ? 3U : 4U;
-            ExtensionCapabilityAdmission &admission = replacementEnabled ? enabledAdmission : disabledAdmission;
-            auto context = provider.Attach(SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.concurrent", "editor.concurrent",
-                                                          false, generation),
-                                           admission.ActivationLease(), noGrants);
-            if (context.HasError()) {
-                registrationFailed = true;
-                break;
-            }
-            auto command = Command("editor.concurrent", "concurrent");
-            command.predicates = {
-                {EditorCommandPredicateKind::SurfaceOpen, "com.example.menu.concurrent", replacementEnabled},
-            };
-            auto replacement = registry.Register(std::move(context).Value(), std::move(command));
-            if (replacement.HasError()) {
-                registrationFailed = true;
-                break;
-            }
-            currentRegistration = std::move(replacement).Value();
-            std::this_thread::yield();
-        }
+        const bool registrationSucceeded =
+            ReplaceConcurrentCommand(registry, provider, enabledAdmission, disabledAdmission, currentRegistration);
 
         finished.store(true, std::memory_order_release);
         invoker.join();
-        CHECK_FALSE(registrationFailed);
+        CHECK(registrationSucceeded);
         CHECK_FALSE(invokedDisabledReplacement.load(std::memory_order_acquire));
     }
 
