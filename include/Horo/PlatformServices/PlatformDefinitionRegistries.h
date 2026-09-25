@@ -18,22 +18,12 @@
 namespace Horo::PlatformServices {
     inline constexpr std::uint32_t PlatformDefinitionRegistrySchemaVersion = 1;
 
-    /** @brief Portable numeric representation used by authored progression definitions. */
-    enum class ProgressionValueKind : std::uint8_t {
-        SignedInteger64,
-        UnsignedInteger64
-    };
     /** @brief Retry/replay algebra fixed by one stat definition. */
     enum class StatMutationPolicy : std::uint8_t {
         SetMaximum,
         SetMinimum,
         SnapshotAtRevision,
         AddOnce
-    };
-    /** @brief Provider-neutral best-score ordering fixed by one leaderboard definition. */
-    enum class LeaderboardOrdering : std::uint8_t {
-        HighestFirst,
-        LowestFirst
     };
     /** @brief Whether runtime presence detail is forbidden or accepted within a finite bound. */
     enum class PresenceDetailPolicy : std::uint8_t {

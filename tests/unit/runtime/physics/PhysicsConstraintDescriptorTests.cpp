@@ -108,6 +108,16 @@ namespace Horo::Physics {
             }
         }
 
+        TEST_CASE("Physics joint collision policy is explicit and rejects unknown values", "[physics][constraint]") {
+            auto descriptor = MakeConstraint();
+            descriptor.second = PhysicsBodyAnchor{{descriptor.first.body.world, {1, 1}}, {}};
+            REQUIRE(descriptor.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies);
+            descriptor.collisionPolicy = PhysicsJointCollisionPolicy::AllowBetweenBodies;
+            REQUIRE(ValidatePhysicsConstraintDescriptor(descriptor, descriptor.first.body.world).HasValue());
+            descriptor.collisionPolicy = static_cast<PhysicsJointCollisionPolicy>(255);
+            RequireConstraintError(descriptor, descriptor.first.body.world, PhysicsErrors::DescriptorInvalid);
+        }
+
         TEST_CASE("Constraint admission preserves validation precedence and explicit capability states",
                   "[physics][constraint][capability]") {
             auto descriptor = MakeConstraint();

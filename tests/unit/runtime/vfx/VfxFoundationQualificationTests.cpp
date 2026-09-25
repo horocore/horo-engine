@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Vfx {
@@ -186,6 +187,40 @@ namespace Horo::Vfx {
         REQUIRE_FALSE(missing.Value().Accepted());
         CHECK(missing.Value().diagnostics.Count(DiagnosticSeverity::Error) == 1);
         CHECK(missing.Value().diagnostics.Diagnostics().front().code.Value() == VfxErrors::ParticleMaterialMissing.code.Value());
+    }
+
+    TEST_CASE("VFX foundation preserves diagnostic path spelling without path-derived identity", "[unit][vfx][qualification][paths]") {
+        const std::array<std::string_view, 4> sourceNames{"assets/effects/火球.particle", R"(C:\Games\Horo\assets\effects\火球.particle)",
+                                                          "/opt/horo/Assets/Effects/火球.particle",
+                                                          "assets/effects/../effects/火球.particle"};
+        const auto expectedData = Tests::ValidParticleDescriptorData();
+        const auto compactProfile = GetParticleCookProfile(ParticleCookTier::Compact);
+        REQUIRE(compactProfile.HasValue());
+
+        for (const std::string_view sourceName : sourceNames) {
+            auto accepted = ValidateParticleSystemDescriptor(Tests::ValidParticleDescriptorData(), Tests::ParticleErrorRegistry(),
+                                                             std::string{sourceName});
+            REQUIRE(accepted.HasValue());
+            REQUIRE(accepted.Value().Accepted());
+            CHECK(accepted.Value().descriptor->Data() == expectedData);
+
+            auto invalidData = Tests::ValidParticleDescriptorData();
+            invalidData.maximumParticles = 0;
+            auto rejected =
+                ValidateParticleSystemDescriptor(std::move(invalidData), Tests::ParticleErrorRegistry(), std::string{sourceName});
+            REQUIRE(rejected.HasValue());
+            REQUIRE_FALSE(rejected.Value().Accepted());
+            REQUIRE(rejected.Value().diagnostics.Size() == 1);
+            CHECK(rejected.Value().diagnostics.Diagnostics().front().location.source == std::string{sourceName});
+
+            const ParticleMaterialEvidence missingMaterial{expectedData.material, ParticleMaterialAvailability::Missing};
+            const auto cook = BuildParticleSystemCookPlan(*accepted.Value().descriptor, compactProfile.Value(), missingMaterial,
+                                                          Tests::ParticleErrorRegistry(), std::string{sourceName});
+            REQUIRE(cook.HasValue());
+            REQUIRE_FALSE(cook.Value().Accepted());
+            REQUIRE(cook.Value().diagnostics.Size() == 1);
+            CHECK(cook.Value().diagnostics.Diagnostics().front().location.source == std::string{sourceName});
+        }
     }
 
     TEST_CASE("VFX foundation keeps cook tiers and quality profiles explicit across the supported matrix",

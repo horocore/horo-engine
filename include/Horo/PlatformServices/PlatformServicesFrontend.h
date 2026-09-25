@@ -66,6 +66,16 @@ namespace Horo::PlatformServices {
         /** @brief Validates and routes one leaderboard score submission. @param request Owned typed intent. @return Backend request
          * handle or pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) const;
+        /** @brief Validates and routes one finite ranked page. @param query Explicit zero-based offset and page size. @return Page request
+         * or typed failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) const;
+        /** @brief Validates and routes one bounded window around the current subject. @param query Explicit before/after limits. @return
+         * Window request or typed failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
+            LeaderboardAroundSubjectQuery query) const;
+        /** @brief Validates and routes one finite friends page. @param query Explicit zero-based offset and page size. @return Page request
+         * or typed failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) const;
         /** @brief Validates and routes one persistent-stat write. @param request Owned typed intent. @return Backend request handle or
          * pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) const;
@@ -93,6 +103,25 @@ namespace Horo::PlatformServices {
         /** @brief Routes one current-session query without requiring an already active subject. @return Backend request handle or
          * pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() const;
+
+        /**
+         * @brief Requests best-effort cancellation of one admitted typed request.
+         * @tparam T Request result type.
+         * @param request Frontend-issued request handle.
+         * @return Cancellation acknowledgement or a typed lifecycle/stale failure.
+         * @details Cancellation is intent only; the request retains its ADR-130 terminal semantics.
+         */
+        template <typename T> [[nodiscard]] Result<void> RequestCancel(const PlatformRequestHandle<T> &request) const {
+            if (!open_)
+                return Result<void>::Failure(MakeError(FrontendErrors::Unavailable));
+            if (!request.IsValid())
+                return Result<void>::Failure(MakeError(FrontendErrors::InvalidRequest));
+            try {
+                return backend_->RequestCancel(request.Id(), request.Generation());
+            } catch (...) {  // NOSONAR: backend adapters are an extension boundary and may throw non-standard exceptions.
+                return Result<void>::Failure(MakeError(BackendErrors::ServiceUnavailable));
+            }
+        }
 
         /**
          * @brief Returns public finite limits for one available policy-admitted service without exposing its private binding.

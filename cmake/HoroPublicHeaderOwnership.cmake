@@ -6,6 +6,7 @@ message(STATUS "Configuring target-specific public header boundaries")
 
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/AssetCookTargetId.h
+    Horo/Foundation/Assertions.h
     Horo/Foundation/BuildOutputStore.h
     Horo/Foundation/CancellationToken.h
     Horo/Foundation/Configuration.h
@@ -78,6 +79,9 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/AchievementDefinitionRegistry.h
     Horo/PlatformServices/PlatformCloudObjects.h
+    Horo/PlatformServices/PlatformAchievementCoordinator.h
+    Horo/PlatformServices/PlatformOfflineQueue.h
+    Horo/PlatformServices/PlatformOfflineQueueErrors.h
     Horo/PlatformServices/PlatformDefinitionRegistries.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
     Horo/PlatformServices/PlatformRequest.h
@@ -85,6 +89,7 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformServiceInterfaces.h
     Horo/PlatformServices/PlatformServicesBackend.h
     Horo/PlatformServices/PlatformServicesFrontend.h
+    Horo/PlatformServices/PlatformStatCacheCoordinator.h
     Horo/PlatformServices/PlatformStableIdRegistry.h
     Horo/PlatformServices/PlatformUserSession.h
 )
@@ -465,6 +470,7 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
     Horo/Terrain/TerrainDescriptor.h
     Horo/Terrain/TerrainErrors.h
+    Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
 )
 horo_configure_target_header_boundary(HoroNavigationNull PUBLIC_HEADERS
@@ -688,6 +694,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorThemeTokens.h
     Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/EditorSurfaceContext.h
+    Horo/Extensions/EditorCommandRegistry.h
     Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h

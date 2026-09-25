@@ -290,6 +290,15 @@ namespace Horo::PlatformServices {
             return RequestCancelErased(handle.Id(), handle.Generation(), typeid(T));
         }
 
+        /**
+         * @brief Records cooperative cancellation by untyped identity at a backend boundary.
+         * @param id Frontend-issued request identity.
+         * @param generation Request-store generation captured at admission.
+         * @return Applied/unchanged cancellation intent or a typed stale failure.
+         * @details Provider adapters use this overload when their ABI receives only the Horo request identity and generation.
+         */
+        [[nodiscard]] Result<PlatformRequestMutation> RequestCancel(PlatformRequestId id, PlatformRequestGeneration generation);
+
         /** @brief Returns the current owned snapshot or a typed stale/expired failure. */
         template <typename T> [[nodiscard]] Result<PlatformRequestSnapshot<T>> Query(const PlatformRequestHandle<T> &handle) const {
             auto queried = QueryErased(handle.Id(), handle.Generation(), typeid(T));
