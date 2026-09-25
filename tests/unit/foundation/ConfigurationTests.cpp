@@ -422,6 +422,26 @@ namespace {
         REQUIRE(service.Snapshot().Revision() == 0);
     }
 
+    TEST_CASE("Malformed Reload Document Cancels Earlier Staged Candidate", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{schema, &events};
+        ConfigurationResolutionRequest valid;
+        valid.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        REQUIRE(service.StageReload(valid).HasValue());
+
+        const auto malformed = ConfigurationResolver::ParseDocument(schema, "{", "user.json");
+        REQUIRE(malformed.HasError());
+        REQUIRE_FALSE(malformed.ErrorValue().diagnostics.empty());
+        service.CancelPendingReload();
+
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        REQUIRE(service.Snapshot().Revision() == 0);
+        REQUIRE(events.QueueStats().enqueued == 0);
+    }
+
     TEST_CASE("Reload Waits For Every Descriptor Policy And Invalidates On Direct Commit", "[unit][foundation][configuration]") {
         ConfigurationSchema schema;
         REQUIRE(schema.Register(kThemeDescriptor).HasValue());

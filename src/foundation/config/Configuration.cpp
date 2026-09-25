@@ -784,6 +784,13 @@ namespace Horo {
         return Result<void>::Success();
     }
 
+    /** @copydoc ConfigurationService::CancelPendingReload */
+    void ConfigurationService::CancelPendingReload() {
+        std::lock_guard lock(m_mutex);
+        ++m_reloadSequence;
+        m_pendingReload.reset();
+    }
+
     /** @copydoc ConfigurationService::ActivateReload */
     Result<bool> ConfigurationService::ActivateReload(const ConfigurationReloadPoint point) {
         std::optional<ConfigurationChangedEvent> event;

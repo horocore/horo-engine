@@ -281,9 +281,13 @@ the frame and job hot paths. Staging runs the canonical resolver over the whole
 input, including shadowed values. A failed parse or validation is returned with
 diagnostics and cancels the pending candidate; it cannot change the active
 revision. Repeated valid stages replace the pending candidate, so a watch storm
-before activation commits only the newest complete snapshot. Staging also
-precomputes the sorted changed-key set and next revision so activation does not
-copy the resolved map at the synchronization point.
+before activation commits only the newest complete snapshot. If host file read,
+environment capture, or document parsing fails before `StageReload`, the host
+calls `CancelPendingReload` before surfacing the original diagnostic. This also
+invalidates any resolution still in flight. The host serializes capture attempts
+in source-change order so an older failure cannot cancel a newer candidate.
+Staging also precomputes the sorted changed-key set and next revision so
+activation does not copy the resolved map at the synchronization point.
 
 The host calls `ActivateReload` at its owned synchronization point. A candidate
 waits until **all** changed descriptors permit that point; mixed-policy changes

@@ -303,6 +303,11 @@ namespace Horo {
          */
         [[nodiscard]] Result<void> StageReload(const ConfigurationResolutionRequest &request, const ConfigurationLimits &limits = {});
         /**
+         * @brief Discards a staged or in-flight reload after host source capture or parsing fails.
+         * @note The host must serialize capture attempts in source-change order before calling this or StageReload.
+         */
+        void CancelPendingReload();
+        /**
          * @brief Activates the latest staged candidate when every changed descriptor permits this synchronization point.
          * @param point Host-owned activation boundary; call only off frame/job hot paths.
          * @return True for a committed snapshot, false for no pending change or a deferred policy.
