@@ -623,6 +623,11 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] Result<std::size_t> ResolveSlot(const SequencePlayerHandle &handle) const;
         [[nodiscard]] Result<void> SynchronizeCursor(Instance &instance, SequenceCursorResetPolicy resetPolicy) const;
+        /** @brief Evaluates a validated clock interval and commits its baseline only after success. */
+        [[nodiscard]] Result<SequenceFrameEvaluationResult> EvaluateClockDelta(const SequencePlayerHandle &handle,
+                                                                               const SequenceClockSample &sample,
+                                                                               const SequenceFrameScratch &scratch,
+                                                                               const SequenceFrameHooks &hooks, Instance &instance);
         [[nodiscard]] Result<void> RebindCursorFence(Instance &instance) const;
         [[nodiscard]] Result<void> ValidateActivation(const SequencePlaybackActivation &activation) const;
         [[nodiscard]] Result<void> AdmitActivation(const SequencePlaybackActivation &activation, SequenceEvaluationUsage &additional,

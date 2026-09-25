@@ -364,6 +364,26 @@ namespace Horo::Cinematic {
         sample.position = 23;
         REQUIRE(service.EvaluateClock(handle, sample, scratch, {}).HasValue());
         CHECK(service.Snapshot(handle).Value().position == 2);
+        REQUIRE(service.Cancel(handle).HasValue());
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Clock epoch changes rebase and reject regressing positions", "[unit][cinematic][playback][coordination]") {
+        auto service = Service();
+        SequencePlaybackActivation activation{{Handle(48), 10, 0, {1, 1}}, Plan(SequenceLoopMode::Loop)};
+        activation.coordination = {SequenceClockSource::MonotonicWall, SequencePausePolicy::FollowGameplay,
+                                   SequenceDilationPolicy::ApplyGameplayScale, false, false};
+        const auto admitted = service.Activate(std::move(activation));
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        REQUIRE(service.Play(handle).HasValue());
+        const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, std::span<SequenceFrameEventOccurrence>{},
+                                           std::span<SequenceFrameCameraCutRequest>{}};
+        SequenceClockSample sample{SequenceClockSource::MonotonicWall, 0, 1, {1, 2}};
+        REQUIRE(service.EvaluateClock(handle, sample, scratch, {}).HasValue());
+        sample.position = 4;
+        REQUIRE(service.EvaluateClock(handle, sample, scratch, {}).HasValue());
+        CHECK(service.Snapshot(handle).Value().position == 2);
         sample.epoch = 2;
         sample.position = 0;
         REQUIRE(service.EvaluateClock(handle, sample, scratch, {}).HasValue());
