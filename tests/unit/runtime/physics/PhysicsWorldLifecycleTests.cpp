@@ -59,6 +59,8 @@ namespace Horo::Physics {
                               .source = PhysicsCommandSourceId::Create(1).Value(),
                               .sourceSequence = 1},
                     .bodyMutation = mutation};
+        }
+
         /** @brief Confirms joint-state reads remain bound to the world's owner thread. */
         void RequireForeignJointReadRejected(PhysicsWorld &world, const ConstraintHandle joint) {
             bool foreignRejected = false;
