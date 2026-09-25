@@ -297,9 +297,9 @@ Implementation status on 10 September 2026: PLS-001.2 provides the standalone
 `HoroEngine::PlatformServices` target and the typed `PlatformRequestStore` foundation.
 It owns bounded active/terminal records, generation-fenced move-only handles, immutable
 typed terminal snapshots, idempotent cancellation intent, and deferred at-most-once
-`OnComplete` subscriptions. Provider routing, the SDK evidence queue, timeout policy,
-provider cancellation, normalized provider errors, and host-wide frontend composition
-remain the later PLS-001.3 through PLS-001.8 slices; callers must not treat the request
+`OnComplete` subscriptions. The later PLS-001.3 through PLS-001.6 slices add routing,
+the provider evidence queue, request finalization and normalized provider errors.
+Host-wide frontend composition remains separate; callers must not treat the request
 store as a provider backend or bypass those owners.
 
 PLS-001.3 adds the generation-fenced `PlatformServicesFrontend` routing boundary.
@@ -309,6 +309,19 @@ unavailable/Null, stale-session, malformed-ID and over-bound requests before bac
 invocation. Routing and idempotent `Close` are serialized by the composition owner;
 `Close` publishes closed admission before invoking backend shutdown. The completion
 queue and provider-to-frontend request-store handoff remain PLS-001.4 scope.
+
+PLS-001.5 gives the version-2 provider lifecycle host a finite per-service request
+policy (30 seconds by default, at most 24 hours), queued owner-lane submission and
+explicit caller cancellation. Existing direct host callers must pump
+`DispatchCompletions` on the owner lane regularly to start queued work, apply ingress,
+evaluate deadlines and deliver terminal observers; without that pump neither launch
+nor timeout advances. `RequestCancel` before the first turn completes the request
+without a native call. Executing cancellation queues one native best-effort
+request for the next owner-lane turn and waits for completion or the admission deadline. The host processes copied
+completion ingress observed by the deadline before its timeout sweep. At timeout it
+publishes the immutable caller result and dispatches observers even when native cancel
+is unsupported. Native leases remain bounded and generation-fenced until a late
+completion or safe provider drain retires them; neither path rewrites the result.
 
 ```cpp
 template <typename T>
