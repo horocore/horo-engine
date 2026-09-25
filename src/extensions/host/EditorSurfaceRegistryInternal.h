@@ -2,6 +2,7 @@
 
 #include "Horo/Extensions/EditorSurfaceRegistry.h"
 
+#include <mutex>
 #include <type_traits>
 
 namespace Horo::Extensions {
@@ -30,15 +31,21 @@ namespace Horo::Extensions {
     };
 
     struct EditorSurfaceRegistryState final {
-        explicit EditorSurfaceRegistryState(EditorSurfaceRegistryLimits registryLimits);
+        explicit EditorSurfaceRegistryState(const EditorSurfaceRegistryLimits &registryLimits);
 
         EditorSurfaceRegistryLimits limits;
         bool validLimits{};
-        mutable std::mutex mutex;
         std::vector<std::shared_ptr<EditorSurfaceState>> surfaces;
         std::vector<PendingSurfaceState> pending;
         std::vector<ProviderStatusEntry> providers;
         bool shutdown{};
+
+        [[nodiscard]] std::unique_lock<std::mutex> Lock() const {
+            return std::unique_lock{mutex};
+        }
+
+    private:
+        mutable std::mutex mutex;
     };
 
     namespace EditorSurfaceRegistryInternal {

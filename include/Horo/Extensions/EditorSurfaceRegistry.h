@@ -146,7 +146,7 @@ namespace Horo::Extensions {
     public:
         static constexpr std::uint32_t WorkspaceSchemaVersion = 1;
 
-        explicit EditorSurfaceRegistry(EditorSurfaceRegistryLimits limits = {});
+        explicit EditorSurfaceRegistry(const EditorSurfaceRegistryLimits &limits = {});
         ~EditorSurfaceRegistry() noexcept;
         EditorSurfaceRegistry(const EditorSurfaceRegistry &) = delete;
         EditorSurfaceRegistry &operator=(const EditorSurfaceRegistry &) = delete;
@@ -174,7 +174,7 @@ namespace Horo::Extensions {
          * @param status New host availability state.
          * @return Success or a typed malformed/shutdown failure.
          */
-        [[nodiscard]] Result<void> SetProviderStatus(EditorSurfaceProviderKey provider, EditorSurfaceProviderStatus status) const;
+        [[nodiscard]] Result<void> SetProviderStatus(const EditorSurfaceProviderKey &provider, EditorSurfaceProviderStatus status) const;
 
         /**
          * @brief Replaces one surface's bounded opaque presentation state.

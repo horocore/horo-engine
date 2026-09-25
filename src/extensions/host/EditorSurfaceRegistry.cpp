@@ -112,10 +112,10 @@ namespace Horo::Extensions {
 
         [[nodiscard]] EditorSurfaceProviderStatus EffectiveStatus(const EditorSurfaceRegistryState &state,
                                                                   const EditorSurfaceState &surface) {
-            if (const EditorSurfaceProviderStatus configured = ConfiguredStatus(state, surface.provider);
-                configured != EditorSurfaceProviderStatus::Active)
+            using enum EditorSurfaceProviderStatus;
+            if (const EditorSurfaceProviderStatus configured = ConfiguredStatus(state, surface.provider); configured != Active)
                 return configured;
-            return surface.context.IsRegistered() ? EditorSurfaceProviderStatus::Active : EditorSurfaceProviderStatus::Missing;
+            return surface.context.IsRegistered() ? Active : Missing;
         }
 
         [[nodiscard]] std::shared_ptr<EditorSurfaceState> FindSurface(const EditorSurfaceRegistryState &state, const std::string_view id) {
@@ -169,11 +169,9 @@ namespace Horo::Extensions {
                 if (!add(bytes))
                     return false;
             }
-            for (const PendingSurfaceState &pending : state.pending) {
-                if (!add(pending.entry.opaqueState.size()))
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(state.pending, [&add](const PendingSurfaceState &pending) {
+                return add(pending.entry.opaqueState.size());
+            });
         }
 
         void SetProviderConfiguredStatus(EditorSurfaceRegistryState &state, const EditorSurfaceProviderKey &provider,
@@ -182,7 +180,7 @@ namespace Horo::Extensions {
                 return SameProvider(entry.provider, provider);
             });
             if (found == state.providers.end())
-                state.providers.push_back(ProviderStatusEntry{provider, status});
+                state.providers.emplace_back(provider, status);
             else
                 found->status = status;
         }
@@ -221,7 +219,7 @@ namespace Horo::Extensions {
         : context(std::move(registration)), descriptor(context.Context().Surface()),
           provider(EditorSurfaceRegistryInternal::ProviderKey(descriptor)) {}
 
-    EditorSurfaceRegistryState::EditorSurfaceRegistryState(const EditorSurfaceRegistryLimits registryLimits)
+    EditorSurfaceRegistryState::EditorSurfaceRegistryState(const EditorSurfaceRegistryLimits &registryLimits)
         : limits(registryLimits), validLimits(EditorSurfaceRegistryInternal::ValidLimits(registryLimits)) {
         if (validLimits)
             pending.reserve(limits.maximumWorkspaceEntries);
@@ -277,7 +275,7 @@ namespace Horo::Extensions {
         return surface_->descriptor;
     }
 
-    EditorSurfaceRegistry::EditorSurfaceRegistry(const EditorSurfaceRegistryLimits limits)
+    EditorSurfaceRegistry::EditorSurfaceRegistry(const EditorSurfaceRegistryLimits &limits)
         : state_(std::make_shared<EditorSurfaceRegistryState>(limits)) {}
 
     EditorSurfaceRegistry::~EditorSurfaceRegistry() noexcept {

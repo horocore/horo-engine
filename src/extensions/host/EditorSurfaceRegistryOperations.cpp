@@ -36,7 +36,7 @@ namespace Horo::Extensions {
 
         const std::string surfaceId = descriptor.id;
         const EditorSurfaceProviderKey provider = ProviderKey(descriptor);
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryShutdown);
         if (FindSurface(*state_, surfaceId) != nullptr)
@@ -77,7 +77,7 @@ namespace Horo::Extensions {
     Result<EditorSurfaceOperation> EditorSurfaceRegistry::Open(const std::string_view surfaceId) const {
         if (state_ == nullptr)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
         const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId);
@@ -103,7 +103,7 @@ namespace Horo::Extensions {
     Result<EditorSurfaceOperation> EditorSurfaceRegistry::Focus(const std::string_view surfaceId) const {
         if (state_ == nullptr)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
         const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId);
@@ -124,36 +124,37 @@ namespace Horo::Extensions {
 
     /** @copydoc EditorSurfaceRegistry::Close */
     Result<EditorSurfaceOperation> EditorSurfaceRegistry::Close(const std::string_view surfaceId) const {
+        using enum EditorSurfaceOperationKind;
         if (state_ == nullptr)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
         if (const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId); surface != nullptr) {
             if (!surface->desiredOpen)
-                return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::AlreadyClosed});
+                return Result<EditorSurfaceOperation>::Success({AlreadyClosed});
             surface->desiredOpen = false;
             surface->desiredFocused = false;
-            return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::Closed});
+            return Result<EditorSurfaceOperation>::Success({Closed});
         }
         if (PendingSurfaceState *pending = FindPending(*state_, surfaceId); pending != nullptr) {
             if (!pending->entry.open)
-                return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::AlreadyClosed});
+                return Result<EditorSurfaceOperation>::Success({AlreadyClosed});
             pending->entry.open = false;
             pending->entry.focused = false;
-            return Result<EditorSurfaceOperation>::Success({EditorSurfaceOperationKind::Closed});
+            return Result<EditorSurfaceOperation>::Success({Closed});
         }
         return UnknownOperation();
     }
 
     /** @copydoc EditorSurfaceRegistry::SetProviderStatus */
-    Result<void> EditorSurfaceRegistry::SetProviderStatus(EditorSurfaceProviderKey provider,
+    Result<void> EditorSurfaceRegistry::SetProviderStatus(const EditorSurfaceProviderKey &provider,
                                                           const EditorSurfaceProviderStatus status) const {
         if (!IsValidProviderKey(provider) || !IsValidStatus(status))
             return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
         if (state_ == nullptr)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
         SetProviderConfiguredStatus(*state_, provider, status);
@@ -164,7 +165,7 @@ namespace Horo::Extensions {
     Result<void> EditorSurfaceRegistry::SetOpaqueState(const std::string_view surfaceId, const std::span<const std::uint8_t> state) const {
         if (state_ == nullptr)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
         if (!state_->validLimits || state.size() > state_->limits.maximumOpaqueStateBytes ||
