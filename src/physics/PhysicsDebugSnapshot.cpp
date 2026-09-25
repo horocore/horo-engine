@@ -48,10 +48,11 @@ namespace Horo::Physics {
         }
 
         /** @brief Copies one category while charging its record and byte limits to the aggregate budget. */
-        [[nodiscard]] Result<void> CopyCategory(const PhysicsDebugSourceCategory &input, const PhysicsDebugCategoryBudget &limit,
-                                                const PhysicsDebugSource &source, const PhysicsDebugBudget &budget, const std::size_t index,
+        [[nodiscard]] Result<void> CopyCategory(const PhysicsDebugSource &source, const PhysicsDebugBudget &budget, const std::size_t index,
                                                 PhysicsDebugCategoryEvidence &evidence, std::vector<PhysicsDebugRecord> &output,
                                                 std::uint32_t &payloadBytes, std::uint32_t &totalRecords) {
+            const PhysicsDebugSourceCategory &input = source.categories[index];
+            const PhysicsDebugCategoryBudget &limit = budget.categories[index];
             if (input.availability > PhysicsDebugAvailability::Available ||
                 (input.availability == PhysicsDebugAvailability::Unavailable &&
                  (!input.records.empty() || input.truncatedBeforeCapture != 0 || input.droppedBeforeCapture != 0)))
@@ -123,9 +124,8 @@ namespace Horo::Physics {
             snapshot->publicationRevision_ = source.publicationRevision;
             std::uint32_t totalRecords{};
             for (std::size_t index = 0; index < PhysicsDebugCategoryCount; ++index) {
-                const auto copied =
-                    CopyCategory(source.categories[index], budget.categories[index], source, budget, index, snapshot->evidence_[index],
-                                 snapshot->records_[index], snapshot->payloadBytes_, totalRecords);
+                const auto copied = CopyCategory(source, budget, index, snapshot->evidence_[index], snapshot->records_[index],
+                                                 snapshot->payloadBytes_, totalRecords);
                 if (copied.HasError())
                     return SnapshotResult::Failure(copied.ErrorValue());
             }
