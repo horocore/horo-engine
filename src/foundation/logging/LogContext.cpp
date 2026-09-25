@@ -5,8 +5,9 @@
 
 #include "Horo/Foundation/Logging/LogContext.h"
 
+#include "Horo/Foundation/Assertions.h"
+
 #include <algorithm>
-#include <cassert>
 #include <vector>
 
 namespace Horo::Log {
@@ -38,8 +39,8 @@ namespace Horo::Log {
             auto &frames = MdcState().frames;
             if (index >= frames.size())
                 return;
-            assert(index == frames.size() - 1 && "Log context destroyed out of LIFO order");
-            frames.erase(frames.begin() + static_cast<std::ptrdiff_t>(index));
+            HORO_INVARIANT_MSG(index == frames.size() - 1, "Log contexts must be destroyed in last-in, first-out order.");
+            frames.pop_back();
         }
     }  // namespace
 

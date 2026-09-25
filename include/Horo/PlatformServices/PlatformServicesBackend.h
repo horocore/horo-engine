@@ -12,7 +12,7 @@
 
 namespace Horo::PlatformServices {
     inline constexpr std::uint16_t PlatformServicesBackendInterfaceMajor = 1;
-    inline constexpr std::uint16_t PlatformServicesBackendInterfaceMinor = 0;
+    inline constexpr std::uint16_t PlatformServicesBackendInterfaceMinor = 1;
 
     /** @brief Horo contract version implemented by a provider adapter. */
     struct PlatformServicesBackendInterfaceVersion final {
@@ -67,6 +67,7 @@ namespace Horo::PlatformServices {
         PlatformServiceKind service{PlatformServiceKind::Achievements};
         PlatformServiceAvailability availability{PlatformServiceAvailability::Unavailable};
         PlatformServiceLimits limits;
+        LeaderboardQueryCapabilities leaderboardQueries;
         std::optional<PlatformServiceBindingId> binding;
         std::optional<PlatformServiceUnavailableReason> unavailableReason;
     };
@@ -96,6 +97,8 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor ServiceUnavailable;
         /** @brief Canonical rejection descriptor for explicit Null provider service work. */
         extern const ErrorCodeDescriptor NullProvider;
+        /** @brief A supported service is available, but this exact leaderboard query kind is not. */
+        extern const ErrorCodeDescriptor UnsupportedOperation;
     }  // namespace BackendErrors
 
     /**
@@ -152,6 +155,13 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) override;
         /** @copydoc ILeaderboardStatService::SubmitScore */
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
+        /** @copydoc ILeaderboardStatService::QueryRankedLeaderboard */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) override;
+        /** @copydoc ILeaderboardStatService::QueryLeaderboardAroundSubject */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
+            LeaderboardAroundSubjectQuery query) override;
+        /** @copydoc ILeaderboardStatService::QueryFriendsLeaderboard */
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) override;
         /** @copydoc ILeaderboardStatService::WriteStat */
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
         /** @copydoc ICloudService::ReadCloudObject */

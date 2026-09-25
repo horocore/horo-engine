@@ -25,6 +25,9 @@ namespace Horo::PlatformServices::TestSupport {
         QueryFriends,
         QueryCurrentSession,
         RequestCancel,
+        QueryRankedLeaderboard,
+        QueryLeaderboardAroundSubject,
+        QueryFriendsLeaderboard,
         Count
     };
 
@@ -60,7 +63,9 @@ namespace Horo::PlatformServices::TestSupport {
     /** @brief Scripted result and logical timing policy for one operation. */
     struct MockPlatformServicesResponse final {
         std::optional<MockPlatformServicesFailure> failure;
-        std::variant<std::monostate, CloudReadResult, FriendsPage, PlatformSessionSnapshot> payload;
+        std::variant<std::monostate, CloudReadResult, FriendsPage, PlatformSessionSnapshot, LeaderboardEntriesPage,
+                     LeaderboardAroundSubjectResult>
+            payload;
         std::chrono::milliseconds delay{};
         std::optional<std::chrono::milliseconds> timeoutAfter;
         std::optional<std::chrono::milliseconds> duplicateDelay;
@@ -158,6 +163,10 @@ namespace Horo::PlatformServices::TestSupport {
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryRankedLeaderboard(LeaderboardRankedQuery query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> QueryLeaderboardAroundSubject(
+            LeaderboardAroundSubjectQuery query) override;
+        [[nodiscard]] Result<PlatformRequestHandle<LeaderboardEntriesPage>> QueryFriendsLeaderboard(LeaderboardFriendsQuery query) override;
         [[nodiscard]] Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest request) override;
 
     private:

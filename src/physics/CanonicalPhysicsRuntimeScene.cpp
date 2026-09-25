@@ -6,6 +6,13 @@
 
 namespace Horo::Physics::Detail {
     namespace {
+        /** @brief Stable pair key includes Jolt's native body reuse sequence. */
+        [[nodiscard]] std::uint64_t CollisionPairKey(const JPH::BodyID first, const JPH::BodyID second) noexcept {
+            const auto low = std::min(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
+            const auto high = std::max(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
+            return (static_cast<std::uint64_t>(low) << 32U) | high;
+        }
+
         [[nodiscard]] const CanonicalSceneShapeRecord *FindSceneShape(const CanonicalWorld &world, const ShapeHandle handle) {
             const auto found = std::ranges::find_if(world.scene.shapes, [handle](const auto &shape) {
                 return shape.handle == handle;
@@ -254,11 +261,52 @@ namespace Horo::Physics::Detail {
         if (nativeConstraint.HasError())
             return Result<ConstraintHandle>::Failure(nativeConstraint.ErrorValue());
 
+        const JPH::BodyID secondNativeBody = second == nullptr ? JPH::BodyID{} : second->nativeBody;
+        if (second != nullptr && descriptor.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies) {
+            const std::uint64_t key = CollisionPairKey(first->nativeBody, secondNativeBody);
+            const auto insertion = std::ranges::lower_bound(canonical.scene.disabledJointCollisionPairs, key);
+            if (insertion == canonical.scene.disabledJointCollisionPairs.end() || *insertion != key)
+                canonical.scene.disabledJointCollisionPairs.insert(insertion, key);
+        }
         canonical.native.system->AddConstraint(nativeConstraint.Value().GetPtr());
         const std::uint32_t slot = canonical.scene.nextConstraintSlot++;
         const ConstraintHandle identity{owner, {slot, 1}};
-        canonical.scene.constraints.emplace_back(
-            CanonicalSceneConstraintRecord{.handle = identity, .constraint = nativeConstraint.Value()});
+        canonical.scene.constraints.emplace_back(CanonicalSceneConstraintRecord{.handle = identity,
+                                                                                .constraint = nativeConstraint.Value(),
+                                                                                .firstBody = first->nativeBody,
+                                                                                .secondBody = secondNativeBody,
+                                                                                .collisionPolicy = descriptor.collisionPolicy});
         return Result<ConstraintHandle>::Success(identity);
+    }
+
+    /** @copydoc DestroyCanonicalSceneConstraint */
+    Result<void> DestroyCanonicalSceneConstraint(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
+        if (world.value == nullptr)
+            return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
+            return record.handle == constraint;
+        });
+        if (found == canonical.scene.constraints.end())
+            return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
+        const JPH::BodyID firstBody = found->firstBody;
+        const JPH::BodyID secondBody = found->secondBody;
+        const bool disabledCollision =
+            secondBody.IsInvalid() == false && found->collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies;
+        canonical.native.system->RemoveConstraint(found->constraint.GetPtr());
+        canonical.scene.constraints.erase(found);
+        if (disabledCollision) {
+            const bool stillDisabled = std::ranges::any_of(canonical.scene.constraints, [firstBody, secondBody](const auto &record) {
+                return !record.secondBody.IsInvalid() && record.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies &&
+                       CollisionPairKey(record.firstBody, record.secondBody) == CollisionPairKey(firstBody, secondBody);
+            });
+            if (!stillDisabled) {
+                const std::uint64_t key = CollisionPairKey(firstBody, secondBody);
+                const auto pair = std::ranges::lower_bound(canonical.scene.disabledJointCollisionPairs, key);
+                if (pair != canonical.scene.disabledJointCollisionPairs.end() && *pair == key)
+                    canonical.scene.disabledJointCollisionPairs.erase(pair);
+            }
+        }
+        return Result<void>::Success();
     }
 }  // namespace Horo::Physics::Detail

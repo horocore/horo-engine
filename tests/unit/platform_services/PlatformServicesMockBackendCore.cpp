@@ -145,6 +145,15 @@ namespace Horo::PlatformServices::TestSupport {
             }
             case MockPlatformServicesOperation::QueryCurrentSession:
                 return std::holds_alternative<PlatformSessionSnapshot>(response.payload);
+            case MockPlatformServicesOperation::QueryRankedLeaderboard:
+            case MockPlatformServicesOperation::QueryFriendsLeaderboard: {
+                const auto *payload = std::get_if<LeaderboardEntriesPage>(&response.payload);
+                return payload != nullptr && payload->entries.size() <= MockPlatformServicesBackend::MaximumPageEntries;
+            }
+            case MockPlatformServicesOperation::QueryLeaderboardAroundSubject: {
+                const auto *payload = std::get_if<LeaderboardAroundSubjectResult>(&response.payload);
+                return payload != nullptr && payload->entries.size() <= MockPlatformServicesBackend::MaximumPageEntries;
+            }
             case MockPlatformServicesOperation::RequestCancel:
             case MockPlatformServicesOperation::Count:
                 return false;

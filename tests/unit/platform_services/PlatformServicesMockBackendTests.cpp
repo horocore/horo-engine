@@ -159,6 +159,45 @@ namespace Horo::PlatformServices::TestSupport {
         VerifyRoutingBackend(backend);
     }
 
+    TEST_CASE("Deterministic mock replays typed leaderboard pages and around-subject windows", "[platform-services][mock][leaderboard]") {
+        MockPlatformServicesBackend backend({7});
+        REQUIRE(backend
+                    .ExpectSequence({MockPlatformServicesOperation::QueryRankedLeaderboard,
+                                     MockPlatformServicesOperation::QueryLeaderboardAroundSubject,
+                                     MockPlatformServicesOperation::QueryFriendsLeaderboard})
+                    .HasValue());
+        MockPlatformServicesResponse pageResponse;
+        pageResponse.payload = LeaderboardEntriesPage{.startIndex = 4, .entries = {{.rank = 5, .score = std::int64_t{10}}}};
+        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryRankedLeaderboard, pageResponse).HasValue());
+        MockPlatformServicesResponse aroundResponse;
+        aroundResponse.payload =
+            LeaderboardAroundSubjectResult{.entries = {{.rank = 5, .score = std::int64_t{10}}}, .subjectEntryIndex = 0};
+        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryLeaderboardAroundSubject, std::move(aroundResponse)).HasValue());
+        REQUIRE(backend.SetResponse(MockPlatformServicesOperation::QueryFriendsLeaderboard, std::move(pageResponse)).HasValue());
+        ActivateMock(backend);
+
+        const auto ranked = backend.QueryRankedLeaderboard({.leaderboard = {2}, .startIndex = 4, .pageSize = 1});
+        const auto around = backend.QueryLeaderboardAroundSubject({.leaderboard = {2}});
+        const auto friends = backend.QueryFriendsLeaderboard({.leaderboard = {2}, .startIndex = 4, .pageSize = 1});
+        REQUIRE(ranked.HasValue());
+        REQUIRE(around.HasValue());
+        REQUIRE(friends.HasValue());
+        CHECK(backend.DispatchDueCompletions() == 3);
+        const auto rankedResult = backend.Requests().Query(ranked.Value());
+        const auto aroundResult = backend.Requests().Query(around.Value());
+        const auto friendsResult = backend.Requests().Query(friends.Value());
+        REQUIRE(rankedResult.HasValue());
+        REQUIRE(aroundResult.HasValue());
+        REQUIRE(friendsResult.HasValue());
+        REQUIRE(rankedResult.Value().terminal.has_value());
+        REQUIRE(aroundResult.Value().terminal.has_value());
+        REQUIRE(friendsResult.Value().terminal.has_value());
+        CHECK(rankedResult.Value().terminal->Value()->startIndex == 4);
+        CHECK(aroundResult.Value().terminal->Value()->subjectEntryIndex == 0);
+        CHECK(friendsResult.Value().terminal->Value()->entries.size() == 1);
+        CHECK(backend.VerifyExpectations().HasValue());
+    }
+
     TEST_CASE("Manual clock reorders completions and resolves deadline ties before timeout",
               "[platform-services][mock][ordering][timeout]") {
         MockPlatformServicesBackend backend({7});

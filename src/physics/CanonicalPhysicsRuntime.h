@@ -109,6 +109,8 @@ namespace Horo::Physics::Detail {
     /** @brief Admits one scene constraint after both body endpoints have been staged. */
     [[nodiscard]] Result<ConstraintHandle> CreateCanonicalSceneConstraint(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                           const PhysicsConstraintDescriptor &descriptor);
+    /** @brief Removes one exact resident native joint at the owner-thread structural safe point. */
+    [[nodiscard]] Result<void> DestroyCanonicalSceneConstraint(CanonicalWorldHandle world, ConstraintHandle constraint);
     /** @brief Exercises the same bounded callback inbox from native-boundary tests. */
     void SubmitCanonicalDiagnosticForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message) noexcept;
     /** @brief Invokes the installed native callback hook under a bounded test route. */

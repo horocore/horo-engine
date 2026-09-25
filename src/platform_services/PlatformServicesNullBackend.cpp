@@ -67,6 +67,22 @@ namespace Horo::PlatformServices {
         return NullProviderFailure<PlatformRequestHandle<void>>();
     }
 
+    /** @copydoc ILeaderboardStatService::QueryRankedLeaderboard */
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> NullPlatformServicesBackend::QueryRankedLeaderboard(LeaderboardRankedQuery) {
+        return NullProviderFailure<PlatformRequestHandle<LeaderboardEntriesPage>>();
+    }
+
+    /** @copydoc ILeaderboardStatService::QueryLeaderboardAroundSubject */
+    Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> NullPlatformServicesBackend::QueryLeaderboardAroundSubject(
+        LeaderboardAroundSubjectQuery) {
+        return NullProviderFailure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>();
+    }
+
+    /** @copydoc ILeaderboardStatService::QueryFriendsLeaderboard */
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> NullPlatformServicesBackend::QueryFriendsLeaderboard(LeaderboardFriendsQuery) {
+        return NullProviderFailure<PlatformRequestHandle<LeaderboardEntriesPage>>();
+    }
+
     /** @copydoc ILeaderboardStatService::WriteStat */
     Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::WriteStat(StatWriteRequest) {  // NOSONAR
         return NullProviderFailure<PlatformRequestHandle<void>>();

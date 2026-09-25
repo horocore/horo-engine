@@ -44,7 +44,9 @@ namespace Horo::PlatformServices::TestSupport {
     struct MockPlatformServicesBackend::Impl final {
         struct ScriptedResponse final {
             std::optional<Error> error;
-            std::variant<std::monostate, CloudReadResult, FriendsPage, PlatformSessionSnapshot> payload;
+            std::variant<std::monostate, CloudReadResult, FriendsPage, PlatformSessionSnapshot, LeaderboardEntriesPage,
+                         LeaderboardAroundSubjectResult>
+                payload;
             std::uint64_t delayMilliseconds{};
             std::optional<std::uint64_t> timeoutAfterMilliseconds;
             std::optional<std::uint64_t> duplicateDelayMilliseconds;

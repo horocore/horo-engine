@@ -276,6 +276,24 @@ namespace Horo::PlatformServices::TestSupport {
         return impl_->Submit<void>(MockPlatformServicesOperation::SubmitScore);
     }
 
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> MockPlatformServicesBackend::QueryRankedLeaderboard(
+        LeaderboardRankedQuery query) {
+        const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries;
+        return impl_->Submit<LeaderboardEntriesPage>(MockPlatformServicesOperation::QueryRankedLeaderboard, validPageSize);
+    }
+
+    Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>> MockPlatformServicesBackend::QueryLeaderboardAroundSubject(
+        LeaderboardAroundSubjectQuery query) {
+        const bool validWindow = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U <= MaximumPageEntries;
+        return impl_->Submit<LeaderboardAroundSubjectResult>(MockPlatformServicesOperation::QueryLeaderboardAroundSubject, validWindow);
+    }
+
+    Result<PlatformRequestHandle<LeaderboardEntriesPage>> MockPlatformServicesBackend::QueryFriendsLeaderboard(
+        LeaderboardFriendsQuery query) {
+        const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries;
+        return impl_->Submit<LeaderboardEntriesPage>(MockPlatformServicesOperation::QueryFriendsLeaderboard, validPageSize);
+    }
+
     Result<PlatformRequestHandle<void>> MockPlatformServicesBackend::WriteStat(StatWriteRequest) {
         return impl_->Submit<void>(MockPlatformServicesOperation::WriteStat);
     }
