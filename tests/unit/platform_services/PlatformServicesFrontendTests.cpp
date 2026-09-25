@@ -19,15 +19,19 @@ namespace Horo::PlatformServices {
         REQUIRE(frontend.QueryFriendsLeaderboard({subject, {2}, 8, 3}).HasValue());
         REQUIRE(frontend.WriteStat({subject, {3}, 17}).HasValue());
         REQUIRE(frontend.ReadCloudObject({subject, {4}}).HasValue());
+        REQUIRE(frontend.ListCloudObjects({.subject = subject, .pageSize = 2}).HasValue());
+        const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{4}});
+        REQUIRE(key.HasValue());
+        REQUIRE(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 4}).HasValue());
         REQUIRE(frontend.WriteCloudObject({subject, {4}, {std::byte{1}, std::byte{2}}}).HasValue());
         REQUIRE(frontend.SetPresence({subject, {5}, "busy"}).HasValue());
         REQUIRE(frontend.ClearPresence(subject).HasValue());
         REQUIRE(frontend.QueryFriends({subject, 4}).HasValue());
         REQUIRE(frontend.QueryCurrentSession().HasValue());
 
-        CHECK(backend->TotalCalls() == 13);
+        CHECK(backend->TotalCalls() == 15);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)] == 6);
-        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 2);
+        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 4);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Presence)] == 2);
         REQUIRE(backend->lastRankedQuery);
         CHECK(backend->lastRankedQuery->startIndex == 12);
@@ -53,7 +57,12 @@ namespace Horo::PlatformServices {
         RequireError(frontend.QueryLeaderboardAroundSubject({subject, {}, 0, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriendsLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.ReadCloudObject({subject, {}}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = {}, .maximumBytes = 4}), FrontendErrors::InvalidRequest);
+        const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
+        REQUIRE(key.HasValue());
+        RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteCloudObject({subject, {1}, std::vector<std::byte>(5)}), FrontendErrors::InvalidRequest);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);

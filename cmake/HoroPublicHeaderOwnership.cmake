@@ -78,6 +78,7 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/AchievementDefinitionRegistry.h
+    Horo/PlatformServices/PlatformCloudObjects.h
     Horo/PlatformServices/PlatformAchievementCoordinator.h
     Horo/PlatformServices/PlatformOfflineQueue.h
     Horo/PlatformServices/PlatformOfflineQueueErrors.h

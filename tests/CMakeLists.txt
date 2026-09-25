@@ -1212,6 +1212,7 @@ target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
 add_executable(HoroPlatformRequestTests
         support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
+        unit/platform_services/PlatformCloudObjectsTests.cpp
         unit/platform_services/PlatformAchievementCoordinatorTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
         unit/platform_services/PlatformPresenceCoordinatorTests.cpp

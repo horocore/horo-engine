@@ -121,6 +121,7 @@ target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Sec
 
 add_library(HoroPlatformServices STATIC
         platform_services/AchievementDefinitionRegistry.cpp
+        platform_services/PlatformCloudObjects.cpp
         platform_services/PlatformAchievementCoordinator.cpp
         platform_services/PlatformOfflineQueue.cpp
         platform_services/PlatformOfflineQueueAdmission.cpp
