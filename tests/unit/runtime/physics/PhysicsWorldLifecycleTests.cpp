@@ -420,6 +420,41 @@ namespace Horo::Physics {
         REQUIRE(world->ReadSceneBodyReconciliation(body).Value().observedMotion == PhysicsMotionType::Static);
     }
 
+    TEST_CASE("Canonical body mutation clears kinematic velocity on newly locked translation and rotation axes",
+              "[physics][native][mutation]") {
+        auto fixture = CreateMutationFixture(874);
+        auto &world = fixture.world;
+        const BodyHandle body = fixture.body;
+        PhysicsStructuralCommand command = MakeMutationCommand(body, 1,
+                                                               PhysicsBodyMutation{.body = body,
+                                                                                   .motion = PhysicsMotionType::Kinematic,
+                                                                                   .linearVelocity = Math::Vec3{1.0F, 0.0F, 0.0F},
+                                                                                   .angularVelocity = Math::Vec3{0.0F, 1.0F, 0.0F}});
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto before = world->ReadSceneBodyReconciliation(body).Value();
+        REQUIRE(before.state.linearVelocity.x > 0.0F);
+        REQUIRE(before.state.angularVelocity.y > 0.0F);
+
+        command.order.simulationTick = 2;
+        PhysicsMotionSafety safety;
+        safety.lockedAxes = PhysicsAxisLock::TranslationX | PhysicsAxisLock::RotationY;
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .motionSafety = safety};
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto after = world->ReadSceneBodyReconciliation(body).Value();
+        REQUIRE(after.policy.motionSafety.lockedAxes == safety.lockedAxes);
+        REQUIRE(after.state.linearVelocity.x == 0.0F);
+        REQUIRE(after.state.angularVelocity.y == 0.0F);
+        REQUIRE(after.state.pose.translation.x == before.state.pose.translation.x);
+        REQUIRE(after.state.pose.rotation.x == before.state.pose.rotation.x);
+        REQUIRE(after.state.pose.rotation.y == before.state.pose.rotation.y);
+        REQUIRE(after.state.pose.rotation.z == before.state.pose.rotation.z);
+        REQUIRE(after.state.pose.rotation.w == before.state.pose.rotation.w);
+    }
+
     TEST_CASE("Canonical body mutation rejects unsupported policies without publication", "[physics][native][mutation][lifecycle]") {
         auto fixture = CreateMutationFixture(866);
         auto &world = fixture.world;

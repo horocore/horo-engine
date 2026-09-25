@@ -254,10 +254,10 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
-        /** @brief Preserves unspecified velocity components when applying a partial update. */
+        /** @brief Preserves unspecified velocity components while applying new native axis locks and ceilings. */
         void ApplyMutationVelocity(JPH::BodyInterface &interface, const JPH::BodyID body, const PhysicsBodyMutation &mutation,
-                                   const PhysicsMotionType motion) {
-            if (motion == PhysicsMotionType::Static || (!mutation.linearVelocity && !mutation.angularVelocity))
+                                   const PhysicsMotionType motion, const bool reconcileSafety) {
+            if (motion == PhysicsMotionType::Static || (!mutation.linearVelocity && !mutation.angularVelocity && !reconcileSafety))
                 return;
             JPH::Vec3 linear;
             JPH::Vec3 angular;
@@ -427,7 +427,7 @@ namespace Horo::Physics::Detail {
 
         if (const auto updated = ApplyMutationMotionProperties(canonical, *found, desired, preparedMass.Value()); updated.HasError())
             return updated;
-        ApplyMutationVelocity(interface, found->nativeBody, mutation, desired.motion);
+        ApplyMutationVelocity(interface, found->nativeBody, mutation, desired.motion, safetyWakes);
         if (wake && desired.motion != PhysicsMotionType::Static)
             interface.ActivateBody(found->nativeBody);
         found->policy = desired;
