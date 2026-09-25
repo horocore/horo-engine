@@ -264,8 +264,9 @@ namespace Horo::Editor {
         if (reason == ModalCloseReason::ApplicationShutdown)
             return Allow;
 
-        // Prevent close while import is in progress
-        if (m_snapshot.phase == Assets::AssetImportPhase::Preparing || m_snapshot.phase == Assets::AssetImportPhase::Committing) {
+        // Preparing also describes an idle queue after an importer failure. Only
+        // project storage commit must keep this modal alive.
+        if (m_snapshot.phase == Assets::AssetImportPhase::Committing) {
             return Deny;
         }
 

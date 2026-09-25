@@ -184,6 +184,26 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
     REQUIRE_FALSE(operations.SnapshotIfChanged(completedOperations->revision).has_value());
 }
 
+TEST_CASE("AssetImportModal closes an idle failed preparation queue", "[native][editor][asset-import]") {
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()));
+    auto *modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+
+    modalPtr->MutableSnapshot().phase = AssetImportPhase::Committing;
+    REQUIRE(modalHost.RequestClose(modalPtr->Id(), ModalCloseReason::Cancelled).HasError());
+    modalPtr->MutableSnapshot().phase = AssetImportPhase::Preparing;
+    REQUIRE(modalHost.RequestClose(modalPtr->Id(), ModalCloseReason::Cancelled).HasValue());
+    modalHost.OnUpdate(0.016F);
+    REQUIRE_FALSE(modalHost.HasOpenModal());
+}
+
 TEST_CASE("AssetImportModal restores retained import history when reopened", "[native]") {
     EditorDataBus events;
     Input::InputRouter inputRouter;
