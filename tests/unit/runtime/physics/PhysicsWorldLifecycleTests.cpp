@@ -24,6 +24,18 @@ namespace Horo::Physics {
                               .source = PhysicsCommandSourceId::Create(1).Value(),
                               .sourceSequence = 1}};
         }
+
+        /** @brief Confirms joint-state reads remain bound to the world's owner thread. */
+        void RequireForeignJointReadRejected(PhysicsWorld &world, const ConstraintHandle joint) {
+            bool foreignRejected = false;
+            std::thread foreign([&] {
+                const auto result = world.ReadSceneJointState(joint);
+                foreignRejected =
+                    result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            });
+            foreign.join();
+            REQUIRE(foreignRejected);
+        }
     }  // namespace
 
     TEST_CASE("Null Physics is explicit omitted capability and never invents simulation", "[physics][lifecycle]") {
@@ -313,13 +325,7 @@ namespace Horo::Physics {
         Test::RequireError(world->ReadSceneJointState(fixed), PhysicsErrors::OperationUnsupported);
         Test::RequireError(world->ReadSceneJointState({}), PhysicsErrors::HandleMalformed);
         Test::RequireError(world->ReadSceneJointState({PhysicsWorldId::Create(112).Value(), {0, 1}}), PhysicsErrors::HandleWorldMismatch);
-        bool foreignRejected = false;
-        std::thread foreign([&] {
-            const auto result = world->ReadSceneJointState(hinge);
-            foreignRejected = result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
-        });
-        foreign.join();
-        REQUIRE(foreignRejected);
+        RequireForeignJointReadRejected(*world, hinge);
         REQUIRE(world->DestroySceneConstraint(hinge).HasValue());
         Test::RequireError(world->ReadSceneJointState(hinge), PhysicsErrors::HandleStale);
         REQUIRE(world->DestroySceneConstraint(worldSlider).HasValue());
