@@ -358,4 +358,64 @@ namespace Horo::Extensions::Tests {
         auto descriptor = Command("editor.save", "not_allowlisted");
         RequireError(registry.Register(std::move(context), std::move(descriptor)), "editor_command_invalid");
     }
+
+    TEST_CASE("Editor command registry bounds retained diagnostics", "[Extensions][EditorCommand]") {
+        ExtensionCapabilityAdmission admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorCommandRegistryLimits limits;
+        limits.maximumDiagnostics = 1U;
+        EditorCommandRegistry registry{limits};
+
+        auto firstContext =
+            Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.first", "editor.save"));
+        auto first = registry.Register(std::move(firstContext), Command("editor.save", "save"));
+        REQUIRE(first.HasValue());
+        auto registration = std::move(first).Value();
+        for (const std::string &surface : {"com.example.menu.second", "com.example.menu.third"}) {
+            auto duplicateContext = Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, surface, "editor.save"));
+            RequireError(registry.Register(std::move(duplicateContext), Command("editor.save", "save")), "editor_command_duplicate");
+        }
+        const auto diagnostics = registry.Diagnostics();
+        REQUIRE(diagnostics.size() == 1U);
+        CHECK(diagnostics.front().kind == EditorCommandDiagnosticKind::DuplicateId);
+        CHECK(registration.IsRegistered());
+    }
+
+    TEST_CASE("Editor command registry rejects metadata beyond configured byte limits", "[Extensions][EditorCommand]") {
+        ExtensionCapabilityAdmission admission = Admission();
+        EditorSurfaceContextProvider provider;
+
+        EditorCommandRegistryLimits idLimits;
+        idLimits.maximumIdentityBytes = std::string_view{"editor.save"}.size() - 1U;
+        EditorCommandRegistry idRegistry{idLimits};
+        auto idContext = Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.id", "editor.save"));
+        RequireError(idRegistry.Register(std::move(idContext), Command("editor.save", "save")), "editor_command_invalid");
+
+        EditorCommandRegistryLimits shortcutLimits;
+        shortcutLimits.maximumShortcutBytes = 1U;
+        EditorCommandRegistry shortcutRegistry{shortcutLimits};
+        auto shortcutContext =
+            Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.shortcut", "editor.save"));
+        RequireError(shortcutRegistry.Register(std::move(shortcutContext), Command("editor.save", "save", "Ctrl+S")),
+                     "editor_command_invalid");
+
+        EditorCommandRegistryLimits localizationLimits;
+        localizationLimits.maximumLocalizationKeyBytes = std::string_view{"editor.commands.save.label"}.size() - 1U;
+        EditorCommandRegistry localizationRegistry{localizationLimits};
+        auto localizationContext =
+            Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu.label", "editor.save"));
+        RequireError(localizationRegistry.Register(std::move(localizationContext), Command("editor.save", "save")),
+                     "editor_command_invalid");
+    }
+
+    TEST_CASE("Editor command registry rejects repeated predicates", "[Extensions][EditorCommand]") {
+        ExtensionCapabilityAdmission admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorCommandRegistry registry;
+        auto context = Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu", "editor.save"));
+        auto descriptor = Command("editor.save", "save");
+        descriptor.predicates = {{EditorCommandPredicateKind::ProjectOpen, {}, true}, {EditorCommandPredicateKind::ProjectOpen, {}, true}};
+        RequireError(registry.Register(std::move(context), std::move(descriptor)), "editor_command_invalid");
+        CHECK(registry.Snapshot().empty());
+    }
 }  // namespace Horo::Extensions::Tests

@@ -22,18 +22,22 @@ namespace Horo::Extensions {
             : descriptor(std::move(command)), contextRegistration(std::move(registration)), context(contextRegistration.Context()) {}
     };
 
-    struct EditorCommandRegistryState final {
-        EditorCommandRegistryLimits limits;
-        std::vector<std::shared_ptr<EditorCommandEntry>> entries;
-        std::vector<EditorCommandDiagnostic> diagnostics;
-        bool shutdown{};
-
+    class EditorCommandRegistryMutex final {
+    public:
         [[nodiscard]] std::unique_lock<std::mutex> Lock() const {
             return std::unique_lock{mutex};
         }
 
     private:
         mutable std::mutex mutex;
+    };
+
+    struct EditorCommandRegistryState final {
+        EditorCommandRegistryLimits limits;
+        std::vector<std::shared_ptr<EditorCommandEntry>> entries;
+        std::vector<EditorCommandDiagnostic> diagnostics;
+        bool shutdown{};
+        EditorCommandRegistryMutex synchronization;
     };
 
     namespace {
@@ -259,7 +263,7 @@ namespace Horo::Extensions {
 
         [[nodiscard]] std::shared_ptr<EditorCommandEntry> FindEntry(const std::shared_ptr<EditorCommandRegistryState> &state,
                                                                     const std::string_view id) {
-            auto lock = state->Lock();
+            auto lock = state->synchronization.Lock();
             const auto found = std::ranges::find_if(state->entries, [id](const std::shared_ptr<EditorCommandEntry> &entry) {
                 return entry->descriptor.id.value == id;
             });
@@ -270,7 +274,7 @@ namespace Horo::Extensions {
                          const std::shared_ptr<EditorCommandEntry> &entry) noexcept {
             bool revokeContext = false;
             if (state != nullptr) {
-                auto lock = state->Lock();
+                auto lock = state->synchronization.Lock();
                 revokeContext = entry->registered.exchange(false, std::memory_order_acq_rel);
                 std::erase(state->entries, entry);
             } else {
@@ -425,9 +429,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorCommandRegistry::Register */
-    Result<EditorCommandRegistration> EditorCommandRegistry::Register(
-        EditorSurfaceContextRegistration context,  // NOSONAR(cpp:S5817) Registration mutates shared registry state.
-        EditorCommandDescriptor descriptor) {
+    Result<EditorCommandRegistration> EditorCommandRegistry::Register(  // NOSONAR(cpp:S5817) Registration mutates shared registry state.
+        EditorSurfaceContextRegistration context, EditorCommandDescriptor descriptor) {
         if (state_ == nullptr)
             return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
         if (Result<void> validation = ValidateDescriptor(context.Context(), descriptor, state_->limits); validation.HasError())
@@ -436,7 +439,7 @@ namespace Horo::Extensions {
         std::shared_ptr<EditorCommandEntry> displaced;
         std::shared_ptr<EditorCommandEntry> entry;
         {
-            auto lock = state_->Lock();
+            auto lock = state_->synchronization.Lock();
             if (state_->shutdown)
                 return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
 
@@ -496,7 +499,7 @@ namespace Horo::Extensions {
     std::vector<EditorCommandSnapshot> EditorCommandRegistry::Snapshot() const {
         if (state_ == nullptr)
             return {};
-        auto lock = state_->Lock();
+        auto lock = state_->synchronization.Lock();
         std::vector<EditorCommandSnapshot> snapshot;
         snapshot.reserve(state_->entries.size());
         for (const std::shared_ptr<EditorCommandEntry> &entry : state_->entries) {
@@ -522,7 +525,7 @@ namespace Horo::Extensions {
     std::vector<EditorCommandDiagnostic> EditorCommandRegistry::Diagnostics() const {
         if (state_ == nullptr)
             return {};
-        auto lock = state_->Lock();
+        auto lock = state_->synchronization.Lock();
         return state_->diagnostics;
     }
 
@@ -532,7 +535,7 @@ namespace Horo::Extensions {
             return;
         std::vector<std::shared_ptr<EditorCommandEntry>> retired;
         {
-            auto lock = state_->Lock();
+            auto lock = state_->synchronization.Lock();
             if (state_->shutdown)
                 return;
             state_->shutdown = true;
@@ -548,7 +551,7 @@ namespace Horo::Extensions {
     bool EditorCommandRegistry::IsShutdown() const noexcept {
         if (state_ == nullptr)
             return true;
-        auto lock = state_->Lock();
+        auto lock = state_->synchronization.Lock();
         return state_->shutdown;
     }
 }  // namespace Horo::Extensions
