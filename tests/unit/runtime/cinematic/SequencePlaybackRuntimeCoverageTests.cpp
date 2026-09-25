@@ -44,6 +44,14 @@ namespace Horo::Cinematic {
             float value{};
         };
 
+        struct RestorePreflightCase final {
+            SequenceRestoreTargetId second;
+            std::uint64_t revision;
+            SequenceRestoreOutcome outcome;
+            std::size_t missing;
+            std::size_t stale;
+        };
+
         bool ApplyRestore(void *context, const float value) noexcept {
             static_cast<RestoreProbe *>(context)->value = value;
             return true;
@@ -297,18 +305,10 @@ namespace Horo::Cinematic {
         const std::array entries{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(1), 4, 3.0F},
                                  SequenceRestoreEntry{TrackId{2, 1}, RestoreTarget(2), 7, 8.0F}};
 
-        struct Case final {
-            SequenceRestoreTargetId second;
-            std::uint64_t revision;
-            SequenceRestoreOutcome outcome;
-            std::size_t missing;
-            std::size_t stale;
-        };
-
-        const std::array cases{Case{{}, 0, SequenceRestoreOutcome::TargetMissing, 1, 0},
-                               Case{RestoreTarget(2, 2), 7, SequenceRestoreOutcome::StaleGeneration, 0, 1},
-                               Case{RestoreTarget(2), 8, SequenceRestoreOutcome::StaleGeneration, 0, 1},
-                               Case{RestoreTarget(2), 7, SequenceRestoreOutcome::Restored, 0, 0}};
+        const std::array cases{RestorePreflightCase{{}, 0, SequenceRestoreOutcome::TargetMissing, 1, 0},
+                               RestorePreflightCase{RestoreTarget(2, 2), 7, SequenceRestoreOutcome::StaleGeneration, 0, 1},
+                               RestorePreflightCase{RestoreTarget(2), 8, SequenceRestoreOutcome::StaleGeneration, 0, 1},
+                               RestorePreflightCase{RestoreTarget(2), 7, SequenceRestoreOutcome::Restored, 0, 0}};
         for (std::size_t index = 0; index < cases.size(); ++index) {
             auto service = Service();
             auto captured = SequenceRestoreSnapshot::Create(entries);
