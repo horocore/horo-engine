@@ -222,17 +222,28 @@ display name, traversal order, native ID or solver-owned pointer participates in
 identity. World anchors are transient runtime intent; origin rebasing must rebind
 or reject queued intent rather than treating numeric coordinates as durable identity.
 
-`PhysicsFixedConstraint` and `PhysicsDistanceConstraint` are the initial typed
-parameter vocabulary. Validation proves representation and owner consistency only;
+`PhysicsFixedConstraint`, `PhysicsDistanceConstraint`, `PhysicsHingeConstraint` and
+`PhysicsSliderConstraint` are typed runtime parameter policies. A hinge rotates
+around each anchor frame's local `+Y`, with local `+X` defining the zero-angle
+reference. A slider translates along each frame's local `+X`, with local `+Y`
+fixing orientation. Hinge limits are finite within `[-pi, 0]` and `[0, pi]`;
+slider limits are finite and bracket zero. The limits are hard; motors, springs,
+friction and break behavior are not exposed. `ReadSceneJointState` returns a
+non-owning owner-thread copy of the current signed angle in radians or displacement
+in meters. Fixed and distance joints return `OperationUnsupported` for that query.
+The serializable Scene producer still supports fixed and distance only; hinge and
+slider are runtime-only until a separate authored schema and migration are defined.
+
+Validation proves representation and owner consistency only;
 admission separately requires exact-revision `PhysicsCapability::Constraints`
 evidence before body resolution, lease retention or native creation. Unsupported,
-temporarily unavailable and stale evidence remain distinct typed failures. Hinge,
-slider, cone-twist, six-DOF, motor, break and spring behavior must gain typed policy
-and qualification rather than being approximated by fixed or distance constraints.
+temporarily unavailable and stale evidence remain distinct typed failures. Other
+joint kinds need typed policy and qualification rather than approximation.
 
 Canonical scene admission resolves both live body handles and converts each body-local
 frame through that body's staged pose. Fixed joints preserve both frame orientations;
-distance joints enforce their finite ordered minimum/maximum interval. A joint owns
+distance joints enforce their finite ordered minimum/maximum interval. Hinge and
+slider joints use both complete frames and retain the declared signed axis. A joint owns
 one native solver constraint until explicit owner-thread destruction or world reset,
 unload or shutdown. Destruction checks the exact world and handle generation, removes
 native ownership before its endpoints retire, and never revives an old handle.

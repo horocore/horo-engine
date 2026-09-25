@@ -2,6 +2,8 @@
 
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <limits>
 
 namespace Horo::Physics::Detail {
@@ -116,18 +118,57 @@ namespace Horo::Physics::Detail {
             return settings.Create(body1, body2);
         }
 
+        /** @brief Maps two explicit anchor frames to Jolt's world-space hinge axes. */
+        [[nodiscard]] JPH::Ref<JPH::Constraint> CreateNativeHingeConstraint(JPH::Body &body1, JPH::Body &body2,
+                                                                            const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
+                                                                            const PhysicsHingeConstraint &hinge) {
+            JPH::HingeConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = ToNativePoint(firstFrame.translation);
+            settings.mHingeAxis1 = ToNative(firstFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mNormalAxis1 = ToNative(firstFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mPoint2 = ToNativePoint(secondFrame.translation);
+            settings.mHingeAxis2 = ToNative(secondFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mNormalAxis2 = ToNative(secondFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mLimitsMin = hinge.minimumRadians;
+            settings.mLimitsMax = hinge.maximumRadians;
+            return settings.Create(body1, body2);
+        }
+
+        /** @brief Maps two explicit anchor frames to Jolt's world-space slider axes. */
+        [[nodiscard]] JPH::Ref<JPH::Constraint> CreateNativeSliderConstraint(JPH::Body &body1, JPH::Body &body2,
+                                                                             const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
+                                                                             const PhysicsSliderConstraint &slider) {
+            JPH::SliderConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mAutoDetectPoint = false;
+            settings.mPoint1 = ToNativePoint(firstFrame.translation);
+            settings.mSliderAxis1 = ToNative(firstFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mNormalAxis1 = ToNative(firstFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mPoint2 = ToNativePoint(secondFrame.translation);
+            settings.mSliderAxis2 = ToNative(secondFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mNormalAxis2 = ToNative(secondFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mLimitsMin = slider.minimumMeters;
+            settings.mLimitsMax = slider.maximumMeters;
+            return settings.Create(body1, body2);
+        }
+
         [[nodiscard]] Result<JPH::Ref<JPH::Constraint>> CreateNativeSceneConstraint(
             const JPH::BodyLockWrite &firstLock, const JPH::BodyLockWrite &secondLock, const CanonicalSceneBodyRecord *second,
             const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
-            const std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint> &parameters) {
+            const decltype(PhysicsConstraintDescriptor::parameters) &parameters) {
             JPH::Body &body1 = firstLock.GetBody();
             JPH::Body &body2 = second != nullptr ? secondLock.GetBody() : JPH::Body::sFixedToWorld;
             JPH::Ref<JPH::Constraint> nativeConstraint = std::visit([&]<typename Parameter>(const Parameter &value) {
                 using ParameterType = std::decay_t<Parameter>;
                 if constexpr (std::is_same_v<ParameterType, PhysicsFixedConstraint>)
                     return CreateNativeFixedConstraint(body1, body2, firstFrame, secondFrame);
-                else
+                else if constexpr (std::is_same_v<ParameterType, PhysicsDistanceConstraint>)
                     return CreateNativeDistanceConstraint(body1, body2, firstFrame, secondFrame, value);
+                else if constexpr (std::is_same_v<ParameterType, PhysicsHingeConstraint>)
+                    return CreateNativeHingeConstraint(body1, body2, firstFrame, secondFrame, value);
+                else
+                    return CreateNativeSliderConstraint(body1, body2, firstFrame, secondFrame, value);
             }, parameters);
             if (nativeConstraint == nullptr)
                 return Result<JPH::Ref<JPH::Constraint>>::Failure(
@@ -308,5 +349,30 @@ namespace Horo::Physics::Detail {
             }
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc ReadCanonicalSceneJointState */
+    Result<PhysicsJointState> ReadCanonicalSceneJointState(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
+        if (world.value == nullptr)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
+        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
+            return record.handle == constraint;
+        });
+        if (found == canonical.scene.constraints.end())
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::HandleStale));
+        switch (found->constraint->GetSubType()) {
+            case JPH::EConstraintSubType::Hinge:
+                return Result<PhysicsJointState>::Success(
+                    {PhysicsJointCoordinateKind::AngleRadians,
+                     static_cast<const JPH::HingeConstraint *>(found->constraint.GetPtr())->GetCurrentAngle()});
+            case JPH::EConstraintSubType::Slider:
+                return Result<PhysicsJointState>::Success(
+                    {PhysicsJointCoordinateKind::PositionMeters,
+                     static_cast<const JPH::SliderConstraint *>(found->constraint.GetPtr())->GetCurrentPosition()});
+            default:
+                return Result<PhysicsJointState>::Failure(
+                    MakeError(PhysicsErrors::OperationUnsupported, "Only hinge and slider joints expose a single-axis coordinate."));
+        }
     }
 }  // namespace Horo::Physics::Detail

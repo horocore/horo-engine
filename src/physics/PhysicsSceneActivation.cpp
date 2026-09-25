@@ -42,7 +42,7 @@ namespace Horo::Physics::Detail {
                 const auto &world = std::get<Runtime::PhysicsConstraintWorldEndpoint>(planned.authored.second);
                 result.second = PhysicsWorldAnchor{{world.frame.translation, world.frame.rotation}};
             }
-            using RuntimeParameters = std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint>;
+            using RuntimeParameters = decltype(result.parameters);
             result.parameters = std::visit([]<typename Parameter>(const Parameter &parameter) {
                 using ParameterType = std::decay_t<Parameter>;
                 if constexpr (std::is_same_v<ParameterType, Runtime::PhysicsFixedConstraint>)
