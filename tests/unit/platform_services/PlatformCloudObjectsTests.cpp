@@ -63,6 +63,17 @@ namespace Horo::PlatformServices {
             return id;
         }
 
+        CloudBlobWriteRequest CreateWriteRequest(const PlatformSubjectHandle &subject) {
+            const auto bytes = CloudBlobOwnedBytes::Copy(std::array{std::byte{1}});
+            REQUIRE(bytes.HasValue());
+            return {.subject = subject,
+                    .key = Key(std::byte{3}),
+                    .bytes = bytes.Value(),
+                    .expectedDigest = ComputeSha256(bytes.Value().Bytes()),
+                    .precondition = CloudCreateIfAbsent{},
+                    .mutation = Mutation()};
+        }
+
         // A deterministic provider model: the lock represents one remote atomic commit point.
         // Product adapters must qualify equivalent behavior using their native conditional primitive.
         class AtomicCloudProviderModel final {
@@ -244,7 +255,33 @@ namespace Horo::PlatformServices {
         CHECK(snapshot.Value().cancellationRequested);
     }
 
-    TEST_CASE("Cloud mutation admission requires atomic CAS dedupe and exact immutable bytes", "[platform-services][cloud][mutation]") {
+    TEST_CASE("Cloud mutation write intent equality includes key and precondition", "[platform-services][cloud][mutation]") {
+        const auto subject = Subject(4, std::byte{1});
+        const std::array bytes{std::byte{1}, std::byte{2}};
+        const auto owned = CloudBlobOwnedBytes::Copy(bytes);
+        REQUIRE(owned.HasValue());
+        CloudBlobWriteRequest write{.subject = subject,
+                                    .key = Key(std::byte{3}),
+                                    .bytes = owned.Value(),
+                                    .expectedDigest = ComputeSha256(bytes),
+                                    .precondition = CloudCreateIfAbsent{},
+                                    .mutation = Mutation()};
+        const auto capability = MutationCapability();
+        REQUIRE(ValidateCloudBlobWriteRequest(write, capability, {}).HasValue());
+        auto missingPrecondition = write;
+        missingPrecondition.precondition = {};
+        RequireError(ValidateCloudBlobWriteRequest(missingPrecondition, capability, {}), CloudObjectErrors::InvalidRequest);
+        CHECK(SameCloudWriteIntent(write, write));
+        auto changedIntent = write;
+        changedIntent.key = Key(std::byte{7});
+        CHECK_FALSE(SameCloudWriteIntent(write, changedIntent));
+        changedIntent = write;
+        changedIntent.precondition = CloudMatchProviderRevision{Revision(std::byte{4})};
+        CHECK_FALSE(SameCloudWriteIntent(write, changedIntent));
+    }
+
+    TEST_CASE("Cloud write admission requires exact digest, complete bytes, and mutation identity",
+              "[platform-services][cloud][mutation]") {
         const auto subject = Subject(4, std::byte{1});
         const std::array bytes{std::byte{1}, std::byte{2}};
         const auto owned = CloudBlobOwnedBytes::Copy(bytes);
@@ -257,18 +294,6 @@ namespace Horo::PlatformServices {
                                     .mutation = Mutation()};
         auto capability = MutationCapability();
         REQUIRE(ValidateCloudBlobWriteRequest(write, capability, {}).HasValue());
-        auto missingPrecondition = write;
-        missingPrecondition.precondition = {};
-        RequireError(ValidateCloudBlobWriteRequest(missingPrecondition, capability, {}), CloudObjectErrors::InvalidRequest);
-        CHECK(SameCloudWriteIntent(write, write));
-        auto changedIntent = write;
-        changedIntent.key = Key(std::byte{7});
-        CHECK_FALSE(SameCloudWriteIntent(write, changedIntent));
-        changedIntent = write;
-        changedIntent.precondition = CloudMatchProviderRevision{Revision(std::byte{4})};
-        CHECK_FALSE(SameCloudWriteIntent(write, changedIntent));
-        write.precondition = CloudMatchProviderRevision{Revision(std::byte{4})};
-        REQUIRE(ValidateCloudBlobWriteRequest(write, capability, {}).HasValue());
         write.expectedDigest = ComputeSha256(std::array{std::byte{7}});
         RequireError(ValidateCloudBlobWriteRequest(write, capability, {}), CloudObjectErrors::IntegrityMismatch);
         write.expectedDigest = ComputeSha256(bytes);
@@ -278,7 +303,19 @@ namespace Horo::PlatformServices {
         write.bytes = completeBytes;
         write.mutation = {};
         RequireError(ValidateCloudBlobWriteRequest(write, capability, {}), CloudObjectErrors::InvalidRequest);
-        write.mutation = Mutation();
+    }
+
+    TEST_CASE("Cloud write admission requires a supported atomic mutation capability", "[platform-services][cloud][mutation]") {
+        const auto subject = Subject(4, std::byte{1});
+        const auto owned = CloudBlobOwnedBytes::Copy(std::array{std::byte{1}, std::byte{2}});
+        REQUIRE(owned.HasValue());
+        CloudBlobWriteRequest write{.subject = subject,
+                                    .key = Key(std::byte{3}),
+                                    .bytes = owned.Value(),
+                                    .expectedDigest = ComputeSha256(owned.Value().Bytes()),
+                                    .precondition = CloudCreateIfAbsent{},
+                                    .mutation = Mutation()};
+        auto capability = MutationCapability();
         capability.atomicity = CloudMutationAtomicity::UncoordinatedBlob;
         RequireError(ValidateCloudBlobWriteRequest(write, capability, {}), CloudObjectErrors::InvalidLimits);
         capability.createIfAbsent = false;
@@ -295,7 +332,11 @@ namespace Horo::PlatformServices {
         capability = MutationCapability();
         capability.maxObjectCount = 0;
         RequireError(ValidateCloudMutationCapability(capability, {}), CloudObjectErrors::InvalidLimits);
-        capability = MutationCapability();
+    }
+
+    TEST_CASE("Cloud quota observations stay within limits and the current session", "[platform-services][cloud][quota]") {
+        const auto subject = Subject(4, std::byte{1});
+        const auto capability = MutationCapability();
         CHECK(ValidateCloudQuotaObservation({.subject = subject,
                                              .sessionGeneration = subject.SessionGeneration(),
                                              .usedBytes = 31,
@@ -353,24 +394,17 @@ namespace Horo::PlatformServices {
         RequireError(ValidateCloudBlobDeleteRequest(remove, MutationCapability(), {}), CloudObjectErrors::InvalidRequest);
     }
 
-    TEST_CASE("Atomic cloud provider contract rejects concurrent stale revisions and deduplicates exact retries",
-              "[platform-services][cloud][mutation][concurrency]") {
+    TEST_CASE("Atomic cloud provider deduplicates exact write retries and rejects changed intent", "[platform-services][cloud][mutation]") {
         AtomicCloudProviderModel provider;
         const auto subject = Subject(4, std::byte{1});
-        const auto owned = CloudBlobOwnedBytes::Copy(std::array{std::byte{1}});
-        REQUIRE(owned.HasValue());
-        CloudBlobWriteRequest create{.subject = subject,
-                                     .key = Key(std::byte{3}),
-                                     .bytes = owned.Value(),
-                                     .expectedDigest = ComputeSha256(owned.Value().Bytes()),
-                                     .precondition = CloudCreateIfAbsent{},
-                                     .mutation = Mutation()};
+        const auto create = CreateWriteRequest(subject);
         const auto created = provider.Write(create);
         REQUIRE(created.HasValue());
         REQUIRE(created.Value().committedObject.has_value());
         const auto firstRevision = created.Value().committedObject->revision;
         const auto exactReplay = provider.Write(create);
         REQUIRE(exactReplay.HasValue());
+        REQUIRE(exactReplay.Value().committedObject.has_value());
         CHECK(exactReplay.Value().committedObject->revision == firstRevision);
         CHECK(provider.Commits() == 1);
 
@@ -383,7 +417,16 @@ namespace Horo::PlatformServices {
         changed = create;
         changed.key = Key(std::byte{7});
         RequireError(provider.Write(changed), CloudObjectErrors::IdempotencyConflict);
+    }
 
+    TEST_CASE("Atomic cloud writes reject concurrent stale revisions", "[platform-services][cloud][mutation][concurrency]") {
+        AtomicCloudProviderModel provider;
+        const auto subject = Subject(4, std::byte{1});
+        const auto create = CreateWriteRequest(subject);
+        const auto created = provider.Write(create);
+        REQUIRE(created.HasValue());
+        REQUIRE(created.Value().committedObject.has_value());
+        const auto firstRevision = created.Value().committedObject->revision;
         CloudBlobWriteRequest replaceA = create;
         replaceA.precondition = CloudMatchProviderRevision{firstRevision};
         replaceA.mutation.bytes.back() = std::byte{10};
@@ -416,6 +459,22 @@ namespace Horo::PlatformServices {
         const auto winner = resultA->HasValue() ? *resultA : *resultB;
         REQUIRE(winner.Value().committedObject.has_value());
         CHECK(winner.Value().committedObject->revision != firstRevision);
+    }
+
+    TEST_CASE("Atomic cloud deletes require the current revision and replay exact outcomes", "[platform-services][cloud][mutation]") {
+        AtomicCloudProviderModel provider;
+        const auto subject = Subject(4, std::byte{1});
+        const auto create = CreateWriteRequest(subject);
+        const auto created = provider.Write(create);
+        REQUIRE(created.HasValue());
+        REQUIRE(created.Value().committedObject.has_value());
+        const auto firstRevision = created.Value().committedObject->revision;
+        auto replace = create;
+        replace.precondition = CloudMatchProviderRevision{firstRevision};
+        replace.mutation.bytes.back() = std::byte{14};
+        const auto replaced = provider.Write(replace);
+        REQUIRE(replaced.HasValue());
+        REQUIRE(replaced.Value().committedObject.has_value());
 
         CloudBlobDeleteRequest staleDelete{.subject = subject,
                                            .key = create.key,
@@ -427,7 +486,7 @@ namespace Horo::PlatformServices {
 
         CloudBlobDeleteRequest remove{.subject = subject,
                                       .key = create.key,
-                                      .expectedRevision = winner.Value().committedObject->revision,
+                                      .expectedRevision = replaced.Value().committedObject->revision,
                                       .mutation = Mutation()};
         remove.mutation.bytes.back() = std::byte{12};
         const auto deleted = provider.Delete(remove);

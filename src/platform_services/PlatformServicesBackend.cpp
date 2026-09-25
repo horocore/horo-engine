@@ -31,14 +31,13 @@ namespace Horo::PlatformServices {
             const bool available = capability.availability == PlatformServiceAvailability::Available;
             if (!ValidateLimits(capability.limits, available))
                 return false;
-            if (capability.cloudMutation) {
-                if (!available || capability.service != PlatformServiceKind::Cloud ||
-                    capability.cloudMutation->maxConcurrentMutations > capability.limits.maxConcurrentRequests ||
-                    ValidateCloudMutationCapability(*capability.cloudMutation, {.maxPageEntries = capability.limits.maxPageEntries,
-                                                                                .maxObjectBytes = capability.limits.maxPayloadBytes})
-                        .HasError())
-                    return false;
-            }
+            if (capability.cloudMutation.has_value() &&
+                (!available || capability.service != PlatformServiceKind::Cloud ||
+                 capability.cloudMutation->maxConcurrentMutations > capability.limits.maxConcurrentRequests ||
+                 ValidateCloudMutationCapability(*capability.cloudMutation, {.maxPageEntries = capability.limits.maxPageEntries,
+                                                                             .maxObjectBytes = capability.limits.maxPayloadBytes})
+                     .HasError()))
+                return false;
             if (available)
                 return capability.binding && capability.binding->IsValid() && !capability.unavailableReason;
             return !capability.binding && capability.unavailableReason && IsKnown(*capability.unavailableReason);

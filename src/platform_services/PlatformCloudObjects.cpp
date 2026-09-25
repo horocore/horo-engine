@@ -217,18 +217,16 @@ namespace Horo::PlatformServices {
 
     /** @copydoc ValidateCloudMutationCapability */
     Result<void> ValidateCloudMutationCapability(const CloudMutationCapability &capability, const CloudObjectContractLimits &limits) {
+        using enum CloudMutationAtomicity;
         if (ValidateCloudObjectContractLimits(limits).HasError() ||
-            (capability.atomicity != CloudMutationAtomicity::ConditionalAtomicObject &&
-             capability.atomicity != CloudMutationAtomicity::UncoordinatedBlob) ||
+            (capability.atomicity != ConditionalAtomicObject && capability.atomicity != UncoordinatedBlob) ||
             capability.maxNamespaceBytes == 0 || capability.maxNamespaceBytes > (1ULL << 40U) || capability.maxObjectCount == 0 ||
             capability.maxObjectCount > (1U << 20U) || capability.maxConcurrentMutations == 0 ||
             capability.maxConcurrentMutations > (1U << 20U) ||
-            (capability.atomicity == CloudMutationAtomicity::ConditionalAtomicObject &&
-             (!capability.createIfAbsent || !capability.replaceIfRevision || !capability.deleteIfRevision ||
-              !capability.durableMutationDedupe)) ||
-            (capability.atomicity == CloudMutationAtomicity::UncoordinatedBlob &&
-             (capability.createIfAbsent || capability.replaceIfRevision || capability.deleteIfRevision ||
-              capability.durableMutationDedupe)))
+            (capability.atomicity == ConditionalAtomicObject && (!capability.createIfAbsent || !capability.replaceIfRevision ||
+                                                                 !capability.deleteIfRevision || !capability.durableMutationDedupe)) ||
+            (capability.atomicity == UncoordinatedBlob && (capability.createIfAbsent || capability.replaceIfRevision ||
+                                                           capability.deleteIfRevision || capability.durableMutationDedupe)))
             return Failure(CloudObjectErrors::InvalidLimits);
         return Result<void>::Success();
     }
@@ -240,8 +238,8 @@ namespace Horo::PlatformServices {
             observation.sessionGeneration != currentSubject.SessionGeneration())
             return Failure(CloudObjectErrors::StaleSession);
         if (ValidateCloudMutationCapability(capability, {}).HasError() ||
-            (observation.usedBytes && *observation.usedBytes > capability.maxNamespaceBytes) ||
-            (observation.objectCount && *observation.objectCount > capability.maxObjectCount))
+            (observation.usedBytes.has_value() && *observation.usedBytes > capability.maxNamespaceBytes) ||
+            (observation.objectCount.has_value() && *observation.objectCount > capability.maxObjectCount))
             return Failure(CloudObjectErrors::InvalidLimits);
         return Result<void>::Success();
     }
