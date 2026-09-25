@@ -181,6 +181,23 @@ namespace Horo::Physics::Detail {
             return desired;
         }
 
+        /** @brief Calculates and validates native mass properties before any body setter runs. */
+        [[nodiscard]] Result<JPH::MassProperties> PrepareMutationMass(const CanonicalSceneBodyRecord &body,
+                                                                      const CanonicalSceneShapeRecord &shape,
+                                                                      const PhysicsBodyDescriptor &desired) {
+            if (desired.motion == PhysicsMotionType::Static)
+                return Result<JPH::MassProperties>::Success(JPH::MassProperties{});
+            JPH::BodyCreationSettings settings(shape.shape.GetPtr(), ToNativePoint(body.pose.translation), ToNative(body.pose.rotation),
+                                               ToNativeMotion(desired.motion), JPH::ObjectLayer{0});
+            if (const auto mass = ApplyCanonicalMassPolicy(settings, desired.mass); mass.HasError())
+                return Result<JPH::MassProperties>::Failure(mass.ErrorValue());
+            JPH::MassProperties prepared = settings.GetMassProperties();
+            if (!std::isfinite(prepared.mMass) || prepared.mMass <= 0.0F)
+                return Result<JPH::MassProperties>::Failure(
+                    MakeError(PhysicsErrors::DescriptorInvalid, "The replacement shape cannot produce finite body mass."));
+            return Result<JPH::MassProperties>::Success(std::move(prepared));
+        }
+
         /** @brief Checks replacement policy against resident shape and native motion capabilities. */
         [[nodiscard]] Result<void> ValidateMutationPolicy(const CanonicalWorld &canonical, const PhysicsWorldId owner,
                                                           const CanonicalSceneBodyRecord &body, const PhysicsBodyMutation &mutation,
@@ -205,29 +222,9 @@ namespace Horo::Physics::Detail {
             if (desired.motion != PhysicsMotionType::Static && desired.motionSafety.lockedAxes == PhysicsAxisLock::All)
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::DescriptorInvalid, "A moving body cannot lock all translation and rotation axes."));
-            if (desired.motion != PhysicsMotionType::Static) {
-                JPH::BodyCreationSettings settings(shape->shape.GetPtr(), ToNativePoint(body.pose.translation),
-                                                   ToNative(body.pose.rotation), ToNativeMotion(desired.motion), JPH::ObjectLayer{0});
-                if (const auto mass = ApplyCanonicalMassPolicy(settings, desired.mass); mass.HasError())
-                    return mass;
-                if (const float kilograms = settings.GetMassProperties().mMass; !std::isfinite(kilograms) || kilograms <= 0.0F)
-                    return Result<void>::Failure(
-                        MakeError(PhysicsErrors::DescriptorInvalid, "The replacement shape cannot produce finite body mass."));
-            }
+            if (const auto mass = PrepareMutationMass(body, *shape, desired); mass.HasError())
+                return Result<void>::Failure(mass.ErrorValue());
             return Result<void>::Success();
-        }
-
-        /** @brief Calculates native mass properties before any body setter runs. */
-        [[nodiscard]] Result<JPH::MassProperties> PrepareMutationMass(const CanonicalSceneBodyRecord &body,
-                                                                      const CanonicalSceneShapeRecord &shape,
-                                                                      const PhysicsBodyDescriptor &desired) {
-            if (desired.motion == PhysicsMotionType::Static)
-                return Result<JPH::MassProperties>::Success(JPH::MassProperties{});
-            JPH::BodyCreationSettings settings(shape.shape.GetPtr(), ToNativePoint(body.pose.translation), ToNative(body.pose.rotation),
-                                               ToNativeMotion(desired.motion), JPH::ObjectLayer{0});
-            if (const auto mass = ApplyCanonicalMassPolicy(settings, desired.mass); mass.HasError())
-                return Result<JPH::MassProperties>::Failure(mass.ErrorValue());
-            return Result<JPH::MassProperties>::Success(settings.GetMassProperties());
         }
 
         /** @brief Updates the resident motion properties while holding its native write lock. */
