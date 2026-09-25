@@ -111,6 +111,19 @@ namespace Horo::PlatformServices {
                    startIndex <= std::numeric_limits<std::uint32_t>::max() - pageSize && page.entries.size() <= pageSize &&
                    (!page.hasMore || !page.entries.empty()) && HasValidLeaderboardOrder(page.entries, valueKind, ordering);
         }
+
+        [[nodiscard]] bool HasValidRankedPagePositions(const LeaderboardEntriesPage &page) noexcept {
+            if (page.entries.empty())
+                return true;
+            if (page.entries.front().rank > static_cast<std::uint64_t>(page.startIndex) + 1U)
+                return false;
+            for (std::size_t index = 1; index < page.entries.size(); ++index) {
+                if (page.entries[index].rank != page.entries[index - 1].rank &&
+                    page.entries[index].rank != static_cast<std::uint64_t>(page.startIndex) + index + 1U)
+                    return false;
+            }
+            return true;
+        }
     }  // namespace
 
     namespace BackendErrors {
@@ -196,7 +209,8 @@ namespace Horo::PlatformServices {
     /** @copydoc ValidateLeaderboardEntriesPage */
     Result<void> ValidateLeaderboardEntriesPage(const LeaderboardEntriesPage &page, const LeaderboardRankedQuery &query,
                                                 const ProgressionValueKind valueKind, const LeaderboardOrdering ordering) {
-        if (!query.leaderboard.IsValid() || !HasValidLeaderboardPage(page, query.startIndex, query.pageSize, valueKind, ordering))
+        if (!query.leaderboard.IsValid() || !HasValidLeaderboardPage(page, query.startIndex, query.pageSize, valueKind, ordering) ||
+            !HasValidRankedPagePositions(page))
             return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
         return Result<void>::Success();
     }

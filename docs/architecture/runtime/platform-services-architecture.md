@@ -550,7 +550,11 @@ one-based competition rank (`1, 1, 3`); private provider tie order is stable for
 unchanged result set, while no participant or account identifier is returned. Around-
 subject results identify the center by its index in the bounded result and report
 whether earlier or later entries were omitted. Result validators reject an offset,
-count, ordering, score-type or tie-rank contradiction before publication. Offset pages remain
+count, ordering, score-type or tie-rank contradiction before publication. Ranked
+pages also require every new score group to start at the one-based position implied
+by the requested offset; a leading tie may begin before that page. Friends-page
+offsets count only friends, so their reported ranks need not match those offsets.
+Offset pages remain
 deterministic for an unchanged leaderboard snapshot; a provider without a snapshot
 revision may reflect score changes between separate page requests.
 

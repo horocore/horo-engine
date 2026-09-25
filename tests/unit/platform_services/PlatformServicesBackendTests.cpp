@@ -231,21 +231,32 @@ namespace Horo::PlatformServices {
     TEST_CASE("Leaderboard page results preserve score ordering and competition ties", "[platform-services][backend][leaderboard]") {
         const LeaderboardRankedQuery query{.leaderboard = {2}, .startIndex = 4, .pageSize = 4};
         LeaderboardEntriesPage page{.startIndex = 4,
-                                    .entries = {{.rank = 1, .score = std::int64_t{100}},
-                                                {.rank = 1, .score = std::int64_t{100}},
-                                                {.rank = 3, .score = std::int64_t{80}}},
+                                    .entries = {{.rank = 4, .score = std::int64_t{100}},
+                                                {.rank = 4, .score = std::int64_t{100}},
+                                                {.rank = 7, .score = std::int64_t{80}}},
                                     .hasMore = true};
         REQUIRE(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
                     .HasValue());
-        page.entries[1].rank = 2;
+        page.entries[1].rank = 5;
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
                   .ErrorValue()
                   .code.Value() == LeaderboardErrors::InvalidResult.code.Value());
-        page.entries = {{.rank = 1, .score = std::int64_t{80}}, {.rank = 2, .score = std::int64_t{100}}};
+        page.entries = {{.rank = 5, .score = std::int64_t{80}}, {.rank = 6, .score = std::int64_t{100}}};
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
                   .HasError());
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::LowestFirst)
                   .HasValue());
+
+        page.entries = {{.rank = 4, .score = std::int64_t{100}},
+                        {.rank = 4, .score = std::int64_t{100}},
+                        {.rank = 8, .score = std::int64_t{80}}};
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
+        page.entries.front().rank = 6;
+        page.entries[1].rank = 6;
+        page.entries[2].rank = 7;
+        CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::SignedInteger64, LeaderboardOrdering::HighestFirst)
+                  .HasError());
     }
 
     TEST_CASE("Leaderboard page validation rejects invalid offsets and bounds", "[platform-services][backend][leaderboard]") {
@@ -272,7 +283,7 @@ namespace Horo::PlatformServices {
         const LeaderboardRankedQuery query{.leaderboard = {2}, .startIndex = 4, .pageSize = 4};
         LeaderboardEntriesPage page;
         page = {.startIndex = 4,
-                .entries = {{.rank = 1, .score = std::uint64_t{100}}, {.rank = 2, .score = std::uint64_t{80}}},
+                .entries = {{.rank = 5, .score = std::uint64_t{100}}, {.rank = 6, .score = std::uint64_t{80}}},
                 .hasMore = false};
         CHECK(ValidateLeaderboardEntriesPage(page, query, ProgressionValueKind::UnsignedInteger64, LeaderboardOrdering::HighestFirst)
                   .HasValue());
