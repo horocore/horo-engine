@@ -69,6 +69,7 @@ namespace Horo::PlatformServices {
         PlatformServiceLimits limits;
         std::optional<PlatformServiceBindingId> binding;
         std::optional<PlatformServiceUnavailableReason> unavailableReason;
+        std::optional<CloudMutationCapability> cloudMutation;
     };
 
     /** @brief Exact versioned capability truth copied from one provider candidate. */

@@ -78,9 +78,14 @@ namespace Horo::PlatformServices {
         /** @brief Validates and routes one complete opaque cloud read. @param request Session-partitioned bounded read.
          * @return Backend request handle or pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest request) const;
-        /** @brief Validates and routes one bounded cloud object write. @param request Owned typed payload. @return Backend request handle
-         * or pre-admission failure. */
-        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) const;
+        /** @brief Admits one conditional atomic write. @param request Immutable bounded intent. @return Typed mutation request or failure.
+         */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest request) const;
+        /** @brief Admits one revision-matched atomic delete. @param request Exact deletion intent. @return Typed mutation request or
+         * failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest request) const;
+        /** @brief Queries advisory usage without reserving quota. @param subject Current subject. @return Admitted query or failure. */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle subject) const;
         /** @brief Validates and routes one bounded presence update. @param request Owned typed presence. @return Backend request handle
          * or pre-admission failure. */
         [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) const;

@@ -74,8 +74,16 @@ namespace Horo::PlatformServices {
                 return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest) override {
-                return Admit<void>(PlatformServiceKind::Cloud);
+            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest) override {
+                return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest) override {
+                return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle) override {
+                return Admit<CloudQuotaObservation>(PlatformServiceKind::Cloud);
             }
 
             Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest) override {
@@ -142,6 +150,33 @@ namespace Horo::PlatformServices {
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
+
+        CloudBlobWriteRequest MutationWrite(const PlatformSubjectHandle &subject) {
+            const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{4}});
+            const std::array bytes{std::byte{1}, std::byte{2}};
+            const auto owned = CloudBlobOwnedBytes::Copy(bytes);
+            REQUIRE(key.HasValue());
+            REQUIRE(owned.HasValue());
+            CloudMutationId mutation;
+            mutation.bytes.back() = std::byte{1};
+            return {.subject = subject,
+                    .key = key.Value(),
+                    .bytes = owned.Value(),
+                    .expectedDigest = ComputeSha256(bytes),
+                    .precondition = CloudCreateIfAbsent{},
+                    .mutation = mutation};
+        }
+
+        CloudMutationCapability MutationFacts() {
+            return {.atomicity = CloudMutationAtomicity::ConditionalAtomicObject,
+                    .createIfAbsent = true,
+                    .replaceIfRevision = true,
+                    .deleteIfRevision = true,
+                    .durableMutationDedupe = true,
+                    .maxNamespaceBytes = 32,
+                    .maxObjectCount = 4,
+                    .maxConcurrentMutations = 2};
+        }
     }  // namespace
 
     TEST_CASE("Platform Services frontend routes every accepted typed operation exactly once", "[platform-services][frontend]") {
@@ -158,15 +193,14 @@ namespace Horo::PlatformServices {
         const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{4}});
         REQUIRE(key.HasValue());
         REQUIRE(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 4}).HasValue());
-        REQUIRE(frontend.WriteCloudObject({subject, {4}, {std::byte{1}, std::byte{2}}}).HasValue());
         REQUIRE(frontend.SetPresence({subject, {5}, "busy"}).HasValue());
         REQUIRE(frontend.ClearPresence(subject).HasValue());
         REQUIRE(frontend.QueryFriends({subject, 4}).HasValue());
         REQUIRE(frontend.QueryCurrentSession().HasValue());
 
-        CHECK(backend->TotalCalls() == 11);
+        CHECK(backend->TotalCalls() == 10);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)] == 2);
-        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 4);
+        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Presence)] == 2);
     }
 
@@ -186,7 +220,6 @@ namespace Horo::PlatformServices {
         const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{1}});
         REQUIRE(key.HasValue());
         RequireError(frontend.ReadCloudObject({.subject = subject, .key = key.Value(), .maximumBytes = 5}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.WriteCloudObject({subject, {1}, std::vector<std::byte>(5)}), FrontendErrors::InvalidRequest);
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
@@ -299,6 +332,38 @@ namespace Horo::PlatformServices {
         REQUIRE(limits.HasValue());
         CHECK(limits.Value().maxPayloadBytes == 4);
         RequireError(frontend.ServiceLimits(static_cast<PlatformServiceKind>(255)), FrontendErrors::InvalidRequest);
+    }
+
+    TEST_CASE("Platform Services frontend admits only declared conditional cloud mutations", "[platform-services][frontend][cloud]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        const auto subject = *session.Subject();
+        auto frontend = Frontend(backend, session);
+        RequireError(frontend.WriteCloudObject(MutationWrite(subject)), CloudObjectErrors::UnsupportedCapability);
+        CHECK(backend->TotalCalls() == 0);
+
+        REQUIRE(frontend.Close().HasValue());
+        backend->snapshot = Capabilities();
+        backend->snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)].cloudMutation = MutationFacts();
+        auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
+        REQUIRE(created.HasValue());
+        auto enabled = std::move(created).Value();
+        REQUIRE(enabled.WriteCloudObject(MutationWrite(subject)).HasValue());
+        auto write = MutationWrite(subject);
+        const auto revision = ProviderObjectRevision::Copy(std::array{std::byte{5}});
+        REQUIRE(revision.HasValue());
+        CloudBlobDeleteRequest remove{.subject = subject,
+                                      .key = write.key,
+                                      .expectedRevision = revision.Value(),
+                                      .mutation = write.mutation};
+        REQUIRE(enabled.DeleteCloudObject(remove).HasValue());
+        REQUIRE(enabled.QueryCloudQuota(subject).HasValue());
+        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
+        write.mutation = {};
+        RequireError(enabled.WriteCloudObject(write), CloudObjectErrors::InvalidRequest);
+        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
+        REQUIRE(enabled.Close().HasValue());
+        RequireError(enabled.DeleteCloudObject(remove), FrontendErrors::Unavailable);
     }
 
     TEST_CASE("Platform Services frontend closes admission before one idempotent backend shutdown",

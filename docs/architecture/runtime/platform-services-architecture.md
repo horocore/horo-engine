@@ -557,6 +557,23 @@ captured-subject/session-generation fence before it can be published. The existi
 retirement; unsupported older providers return a typed capability failure rather than
 falling back to another provider or exposing a partial result.
 
+PLS-005.3 migration: the earlier `CloudWriteRequest`/`WriteCloudObject(CloudWriteRequest)`
+route has been removed because it could publish without a revision precondition. Its
+only in-tree callers were frontend/backend contract tests. New callers supply a
+`CloudBlobWriteRequest` with a complete immutable byte owner, SHA-256 digest, exact
+`CloudCreateIfAbsent` or `CloudMatchProviderRevision`, and coordinator-owned
+`CloudMutationId`; deletion supplies the exact revision and mutation ID. The selected
+provider must declare finite `CloudMutationCapability` facts including atomic
+create/replace/delete and durable deduplication as one inseparable capability, or
+frontend admission fails with `UnsupportedCapability`. Adapters own atomic commit
+ordering and durable mutation-ID lookup: the expected revision check and complete
+publication occur at one native commit point, with staging hidden at the public key.
+Frontend validation cannot emulate either with a local read or mutex. Exact
+retries must return the original semantic outcome, and a changed intent with the same
+ID is `IdempotencyConflict`. Completion validation checks subject/session, key, ID,
+size, revision and digest before success publication. Advisory quota observations do
+not reserve provider capacity; `QuotaExceeded` remains possible at commit.
+
 ```cpp
 struct CloudSaveObjectKey { BoundedOpaqueBytes value; };
 struct CloudSaveObjectPrefix { BoundedOpaqueBytes value; };

@@ -26,7 +26,8 @@ namespace Horo::PlatformServices {
 
         [[nodiscard]] bool SameCapability(const PlatformServiceCapability &left, const PlatformServiceCapability &right) noexcept {
             return left.service == right.service && left.availability == right.availability && SameLimits(left.limits, right.limits) &&
-                   left.binding == right.binding && left.unavailableReason == right.unavailableReason;
+                   left.binding == right.binding && left.unavailableReason == right.unavailableReason &&
+                   left.cloudMutation == right.cloudMutation;
         }
 
         [[nodiscard]] bool SameSnapshot(const PlatformServiceCapabilitySnapshot &left,
@@ -190,15 +191,43 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformServicesFrontend::WriteCloudObject */
-    Result<PlatformRequestHandle<void>> PlatformServicesFrontend::WriteCloudObject(CloudWriteRequest request) const {
-        if (!request.object.IsValid())
-            return Failure<PlatformRequestHandle<void>>(FrontendErrors::InvalidRequest);
+    Result<PlatformRequestHandle<CloudMutationResult>> PlatformServicesFrontend::WriteCloudObject(CloudBlobWriteRequest request) const {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
         if (valid.HasError())
-            return Result<PlatformRequestHandle<void>>::Failure(valid.ErrorValue());
-        if (std::cmp_greater(request.bytes.size(), valid.Value()->limits.maxPayloadBytes))
-            return Failure<PlatformRequestHandle<void>>(FrontendErrors::InvalidRequest);
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(valid.ErrorValue());
+        if (!valid.Value()->cloudMutation)
+            return Failure<PlatformRequestHandle<CloudMutationResult>>(CloudObjectErrors::UnsupportedCapability);
+        const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
+                                               .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
+        if (const auto requestValid = ValidateCloudBlobWriteRequest(request, *valid.Value()->cloudMutation, limits);
+            requestValid.HasError())
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(requestValid.ErrorValue());
         return ValidatedDispatch(backend_->WriteCloudObject(std::move(request)));
+    }
+
+    /** @copydoc PlatformServicesFrontend::DeleteCloudObject */
+    Result<PlatformRequestHandle<CloudMutationResult>> PlatformServicesFrontend::DeleteCloudObject(CloudBlobDeleteRequest request) const {
+        const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
+        if (valid.HasError())
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(valid.ErrorValue());
+        if (!valid.Value()->cloudMutation)
+            return Failure<PlatformRequestHandle<CloudMutationResult>>(CloudObjectErrors::UnsupportedCapability);
+        const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
+                                               .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
+        if (const auto requestValid = ValidateCloudBlobDeleteRequest(request, *valid.Value()->cloudMutation, limits);
+            requestValid.HasError())
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(requestValid.ErrorValue());
+        return ValidatedDispatch(backend_->DeleteCloudObject(std::move(request)));
+    }
+
+    /** @copydoc PlatformServicesFrontend::QueryCloudQuota */
+    Result<PlatformRequestHandle<CloudQuotaObservation>> PlatformServicesFrontend::QueryCloudQuota(PlatformSubjectHandle subject) const {
+        const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, subject);
+        if (valid.HasError())
+            return Result<PlatformRequestHandle<CloudQuotaObservation>>::Failure(valid.ErrorValue());
+        if (!valid.Value()->cloudMutation)
+            return Failure<PlatformRequestHandle<CloudQuotaObservation>>(CloudObjectErrors::UnsupportedCapability);
+        return ValidatedDispatch(backend_->QueryCloudQuota(std::move(subject)));
     }
 
     /** @copydoc PlatformServicesFrontend::SetPresence */

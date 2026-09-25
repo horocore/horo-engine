@@ -58,10 +58,6 @@ namespace Horo::PlatformServices {
                 return Unavailable<CloudReadResult>();
             }
 
-            Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest) override {
-                return Unavailable<void>();
-            }
-
             Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest) override {
                 return Unavailable<void>();
             }
@@ -133,6 +129,33 @@ namespace Horo::PlatformServices {
         REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
         friends.binding.reset();
         friends.unavailableReason.reset();
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+    }
+
+    TEST_CASE("Cloud mutation capability must be finite and belong to the cloud service", "[platform-services][backend][cloud]") {
+        PlatformServicesBackendConfig config;
+        auto snapshot = Snapshot();
+        CloudMutationCapability mutation{.atomicity = CloudMutationAtomicity::ConditionalAtomicObject,
+                                         .createIfAbsent = true,
+                                         .replaceIfRevision = true,
+                                         .deleteIfRevision = true,
+                                         .durableMutationDedupe = true,
+                                         .maxNamespaceBytes = 32,
+                                         .maxObjectCount = 4,
+                                         .maxConcurrentMutations = 2};
+        auto &cloud = snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)];
+        cloud.cloudMutation = mutation;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasValue());
+        cloud.cloudMutation->replaceIfRevision = false;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+        cloud.cloudMutation = mutation;
+        cloud.cloudMutation->durableMutationDedupe = false;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+        cloud.cloudMutation = mutation;
+        cloud.cloudMutation->maxConcurrentMutations = 0;
+        REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
+        cloud.cloudMutation.reset();
+        snapshot.services[0].cloudMutation = mutation;
         REQUIRE(ValidatePlatformServiceCapabilitySnapshot(snapshot, config).HasError());
     }
 
