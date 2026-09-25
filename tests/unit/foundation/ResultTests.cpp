@@ -1,3 +1,4 @@
+#include "AssertionFormatting.h"
 #include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/ErrorCode.h"
@@ -53,6 +54,30 @@ namespace {
         int invariantEvaluations = 0;
         HORO_INVARIANT(++invariantEvaluations == 1);
         REQUIRE((invariantEvaluations == 1));
+    }
+
+    TEST_CASE("Emergency assertion formatting preserves context and bounds every field", "[unit][foundation][assertions]") {
+        using Horo::AssertionPolicy::Detail::FormatFailure;
+        using Horo::AssertionPolicy::FailureKind;
+
+        const auto ordinary = FormatFailure(FailureKind::DebugAssertion, "value > 0", "invalid value", "src/test.cpp", 17, "Run");
+        CHECK(std::string_view{ordinary.data()} == "Assertion failed at src/test.cpp:17 in Run: value > 0: invalid value");
+
+        const std::string file(300, 'f');
+        const std::string function(300, 'u');
+        const std::string expression(300, 'e');
+        const std::string message(300, 'm');
+        const auto bounded = FormatFailure(FailureKind::Invariant, expression, message, file, 42, function);
+        const std::string_view text{bounded.data()};
+        CHECK(text.starts_with("Invariant violation at "));
+        CHECK(text.find(std::string(192, 'f')) != std::string_view::npos);
+        CHECK(text.find(std::string(193, 'f')) == std::string_view::npos);
+        CHECK(text.find(std::string(160, 'u')) != std::string_view::npos);
+        CHECK(text.find(std::string(161, 'u')) == std::string_view::npos);
+        CHECK(text.find(std::string(256, 'e')) != std::string_view::npos);
+        CHECK(text.find(std::string(257, 'e')) == std::string_view::npos);
+        CHECK(text.ends_with(std::string(256, 'm')));
+        CHECK(bounded.back() == '\0');
     }
 
     TEST_CASE("Emergency logging bypasses filters and carries no result", "[unit][foundation]") {
