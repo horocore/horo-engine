@@ -8,6 +8,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <new>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -98,6 +99,31 @@ namespace Horo::PlatformServices {
             if (found == records.end() || found->second.type != type)
                 return nullptr;
             return &found->second;
+        }
+
+        [[nodiscard]] Result<PlatformRequestId> Admit(const std::type_index type, const std::chrono::steady_clock::time_point now) {
+            std::lock_guard lock(mutex);
+            if (config.activeCapacity == 0 || config.terminalCapacity == 0 || config.observerCapacity == 0 || !config.generation.IsValid())
+                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::InvalidConfiguration));
+            if (closed)
+                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::FrontendUnavailable));
+            if (activeCount >= config.activeCapacity || nextId == 0)
+                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::CapacityExceeded));
+
+            const PlatformRequestId id{nextId};
+            Record record{.type = type,
+                          .snapshot = ErasedSnapshot{.id = id,
+                                                     .generation = config.generation,
+                                                     .state = PlatformRequestState::Queued,
+                                                     .timing = PlatformRequestTiming{.admittedAt = now}}};
+            try {
+                records.try_emplace(id.value, std::move(record));
+            } catch (const std::bad_alloc &) {
+                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::CapacityExceeded));
+            }
+            ++nextId;
+            ++activeCount;
+            return Result<PlatformRequestId>::Success(id);
         }
 
         template <typename Operation>
@@ -224,29 +250,7 @@ namespace Horo::PlatformServices {
     Result<PlatformRequestId> PlatformRequestStore::AdmitErased(const std::type_index type) {
         auto &state = MutableState();
         const auto now = std::chrono::steady_clock::now();
-        auto admitted = [&]() -> Result<PlatformRequestId> {
-            std::lock_guard lock(state.mutex);
-            if (state.config.activeCapacity == 0 || state.config.terminalCapacity == 0 || state.config.observerCapacity == 0 ||
-                !state.config.generation.IsValid())
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::InvalidConfiguration));
-            if (state.closed)
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::FrontendUnavailable));
-            if (state.activeCount >= state.config.activeCapacity)
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::CapacityExceeded));
-            if (state.nextId == 0)
-                return Result<PlatformRequestId>::Failure(
-                    MakeError(RequestErrors::CapacityExceeded, "Request identity space is exhausted."));
-
-            const PlatformRequestId id{state.nextId++};
-            State::Record record{.type = type,
-                                 .snapshot = ErasedSnapshot{.id = id,
-                                                            .generation = state.config.generation,
-                                                            .state = PlatformRequestState::Queued,
-                                                            .timing = PlatformRequestTiming{.admittedAt = now}}};
-            state.records.try_emplace(id.value, std::move(record));
-            ++state.activeCount;
-            return Result<PlatformRequestId>::Success(id);
-        }();
+        auto admitted = state.Admit(type, now);
         if (admitted.HasValue()) {
             Detail::RecordPlatformRequestQueueMetric(Detail::PlatformRequestQueueMetricOutcome::Accepted);
         } else {
@@ -299,11 +303,11 @@ namespace Horo::PlatformServices {
     Result<void> PlatformRequestStore::RecordObservationErased(const PlatformRequestId id, const PlatformRequestGeneration generation,
                                                                const std::type_index type, const Observation observation) {
         auto &state = MutableState();
-        auto validated = [&]() -> Result<void> {
+        auto validated = [&]() {
             std::lock_guard lock(state.mutex);
             if (state.closed)
                 return Result<void>::Failure(MakeError(RequestErrors::FrontendUnavailable));
-            auto *record = state.FindRecord(id, generation, type);
+            const auto *record = state.FindRecord(id, generation, type);
             if (record == nullptr)
                 return Result<void>::Failure(MakeError(RequestErrors::Stale));
             if (IsTerminal(record->snapshot.state))

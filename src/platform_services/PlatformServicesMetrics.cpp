@@ -52,7 +52,7 @@ namespace Horo::PlatformServices {
         }
 
         [[nodiscard]] std::string_view ServiceMetricName(const PlatformServiceKind service) noexcept {
-            const std::size_t index = static_cast<std::size_t>(service);
+            const auto index = static_cast<std::size_t>(service);
             return index < static_cast<std::size_t>(PlatformServiceKind::Count) ? ServiceMetricValues[index] : "unknown";
         }
 
@@ -77,8 +77,8 @@ namespace Horo::PlatformServices {
                 }
 
                 std::unique_lock lock(mutex_);
-                const std::uint32_t confirmedGeneration = Runtime::GetDiagnosticSnapshot().runtimeGeneration;
-                if (confirmedGeneration != generation_) {
+                if (const auto confirmedGeneration = Runtime::GetDiagnosticSnapshot().runtimeGeneration;
+                    confirmedGeneration != generation_) {
                     generation_ = confirmedGeneration;
                     handles_ = {};
                     if (generation_ != 0)
@@ -118,7 +118,8 @@ namespace Horo::PlatformServices {
                         CounterDescriptor("horo.platform_services.frontend.shutdown", "Platform Services frontend shutdown outcomes.",
                                           {MetricDimension("outcome", ShutdownMetricOutcomes)},
                                           static_cast<std::uint32_t>(ShutdownMetricOutcomes.size())));
-                } catch (const std::bad_alloc &) {
+                } catch (const std::bad_alloc
+                             &) {  // NOSONAR(cpp:S2486) Metrics are best effort; allocation failure must not affect service work.
                     // Telemetry registration is best-effort and must not change service admission or shutdown.
                 }
             }
@@ -140,7 +141,7 @@ namespace Horo::PlatformServices {
             const std::array selection{DimensionValue{.key = key, .value = value}};
             try {
                 root.WithDimensions(selection).Add(delta);
-            } catch (const std::bad_alloc &) {
+            } catch (const std::bad_alloc &) {  // NOSONAR(cpp:S2486) A dropped metric must not change request behavior.
                 // A metric series allocation failure must not affect the owning request.
             }
         }
@@ -151,7 +152,7 @@ namespace Horo::PlatformServices {
                                        DimensionValue{.key = secondKey, .value = secondValue}};
             try {
                 root.WithDimensions(selection).Add();
-            } catch (const std::bad_alloc &) {
+            } catch (const std::bad_alloc &) {  // NOSONAR(cpp:S2486) A dropped metric must not change request behavior.
                 // A metric series allocation failure must not affect the owning request.
             }
         }
@@ -165,7 +166,7 @@ namespace Horo::PlatformServices {
         void RecordPlatformRequestMetric(const PlatformRequestMetricOutcome outcome, const std::uint64_t delta) noexcept {
             constexpr std::array<std::string_view, 7> values{"accepted",  "rejected",  "succeeded", "failed",
                                                              "cancelled", "timed_out", "shutdown"};
-            const std::size_t index = static_cast<std::size_t>(outcome);
+            const auto index = static_cast<std::size_t>(outcome);
             if (index >= values.size() || delta == 0)
                 return;
             AddBoundMetric(PlatformMetrics().CurrentHandles().request, "outcome", values[index], delta);
@@ -173,7 +174,7 @@ namespace Horo::PlatformServices {
 
         void RecordPlatformRequestQueueMetric(const PlatformRequestQueueMetricOutcome outcome) noexcept {
             constexpr std::array<std::string_view, 4> values{"accepted", "capacity_rejected", "shutdown_rejected", "invalid_configuration"};
-            const std::size_t index = static_cast<std::size_t>(outcome);
+            const auto index = static_cast<std::size_t>(outcome);
             if (index >= values.size())
                 return;
             AddBoundMetric(PlatformMetrics().CurrentHandles().queueAdmissions, "outcome", values[index]);
@@ -190,7 +191,7 @@ namespace Horo::PlatformServices {
         void RecordPlatformCapabilityMetric(const PlatformServiceKind service, const PlatformCapabilityMetricOutcome outcome) noexcept {
             constexpr std::array<std::string_view, 6> values{"available",     "unavailable",     "null_provider",
                                                              "policy_denied", "frontend_closed", "invalid_service"};
-            const std::size_t index = static_cast<std::size_t>(outcome);
+            const auto index = static_cast<std::size_t>(outcome);
             if (index >= values.size())
                 return;
             AddBoundMetric(PlatformMetrics().CurrentHandles().capabilities, "service", ServiceMetricName(service), "outcome",
@@ -201,7 +202,7 @@ namespace Horo::PlatformServices {
             constexpr std::array<std::string_view, 9> values{"allowed",          "stale_session",      "stale_access_policy",
                                                              "consent_required", "access_denied",      "access_restricted",
                                                              "access_revoked",   "access_unavailable", "inactive"};
-            const std::size_t index = static_cast<std::size_t>(outcome);
+            const auto index = static_cast<std::size_t>(outcome);
             if (index >= values.size())
                 return;
             AddBoundMetric(PlatformMetrics().CurrentHandles().sessions, "service", ServiceMetricName(service), "outcome", values[index]);
@@ -209,7 +210,7 @@ namespace Horo::PlatformServices {
 
         void RecordPlatformShutdownMetric(const PlatformShutdownMetricOutcome outcome) noexcept {
             constexpr std::array<std::string_view, 2> values{"succeeded", "failed"};
-            const std::size_t index = static_cast<std::size_t>(outcome);
+            const auto index = static_cast<std::size_t>(outcome);
             if (index >= values.size())
                 return;
             AddBoundMetric(PlatformMetrics().CurrentHandles().shutdown, "outcome", values[index]);
