@@ -128,12 +128,17 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformOfflineQueueLifecycle.cpp
         platform_services/PlatformDefinitionErrors.cpp
         platform_services/PlatformDefinitionRegistries.cpp
+        platform_services/PlatformOfflineQueueStorageErrors.cpp
+        platform_services/PlatformOfflineQueueStorage.cpp
+        platform_services/PlatformProgressionErrors.cpp
+        platform_services/PlatformProgressionIdempotency.cpp
         platform_services/PlatformProjectConfiguration.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
         platform_services/PlatformSessionObserver.cpp
+        platform_services/PlatformServicesMetrics.cpp
         platform_services/PlatformStatCacheErrors.cpp
         platform_services/PlatformStatCacheCoordinator.cpp
         platform_services/PlatformStableIdRegistry.cpp
@@ -141,7 +146,7 @@ add_library(HoroPlatformServices STATIC
 )
 add_library(HoroEngine::PlatformServices ALIAS HoroPlatformServices)
 target_compile_features(HoroPlatformServices PUBLIC cxx_std_20)
-target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform)
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp
@@ -1615,6 +1620,10 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
+        extensions/host/EditorSurfaceRegistry.cpp
+        extensions/host/EditorSurfaceRegistryOperations.cpp
+        extensions/host/EditorSurfaceRegistryPersistence.cpp
+        extensions/host/EditorSurfaceRegistryInternal.h
         extensions/host/EditorCommandRegistry.cpp
         extensions/host/EditorThemeTokensInternal.h
         extensions/host/EditorThemeTokensValidation.cpp

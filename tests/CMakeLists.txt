@@ -688,6 +688,7 @@ target_compile_features(HoroStructuredLogStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroStructuredLogStoreTests PRIVATE HoroEngine::Foundation Threads::Threads)
 add_executable(HoroObservabilityTests
         unit/foundation/ObservabilityTests.cpp
+        unit/foundation/TelemetryContractTests.cpp
 )
 target_compile_features(HoroObservabilityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroObservabilityTests PRIVATE HoroEngine::Foundation Threads::Threads miniz)
@@ -1212,6 +1213,8 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
         unit/platform_services/PlatformAchievementCoordinatorTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
+        unit/platform_services/PlatformOfflineQueueStorageTests.cpp
+        unit/platform_services/PlatformProgressionIdempotencyTests.cpp
         unit/platform_services/PlatformOfflineQueueTests.cpp
         unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp
         unit/platform_services/PlatformProjectConfigurationTests.cpp
@@ -1219,6 +1222,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformServicesBackendTests.cpp
         unit/platform_services/PlatformServicesFrontendTests.cpp
         unit/platform_services/PlatformSessionObserverTests.cpp
+        unit/platform_services/PlatformServicesMetricsTests.cpp
         unit/platform_services/PlatformStatCacheCoordinatorTests.cpp
         unit/platform_services/PlatformStableIdRegistryTests.cpp
         unit/platform_services/PlatformUserSessionTests.cpp
@@ -1955,6 +1959,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
+        unit/extensions/EditorSurfaceRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
         unit/extensions/ExtensionManagerTests.cpp

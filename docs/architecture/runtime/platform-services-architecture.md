@@ -61,6 +61,18 @@ makes the Platform Offline Queue the single durable owner for eligible progressi
 opted-in expiring presence intent. Durable acceptance precedes provider submission,
 while cloud upload/delete remains exclusively in Save's coordinator journal.
 
+PLS-007.2 provides the `Horo::PlatformOfflineQueue::PlatformOfflineQueueStorage`
+boundary. It persists one bounded versioned document per opaque subject partition,
+encodes only provider-neutral Horo intent, verifies a SHA-256 body digest and rejects
+corrupt, truncated, oversized, duplicate or unsupported-version documents. Records
+carry the provider-neutral operation class and bounded canonical Horo payload bytes;
+semantic owners provide those bytes, and the storage adapter treats them as opaque.
+The storage contract has no cloud-archive operation. Publication uses the host
+`DurableFileSystem` lock, prepared file and same-filesystem atomic replacement; a
+failed replacement is reported as storage-unknown and never treated as an empty queue.
+The storage boundary does not admit credentials, raw provider account identifiers or
+live subject handles.
+
 ## Scope
 
 Platform services covered here:
@@ -390,6 +402,12 @@ Throttling metrics:
 platform.stats.coalesced_writes     -- stat writes merged by frontend
 platform.leaderboards.deferred_submits -- submissions delayed by debounce
 ```
+
+The request store also accepts `RecordRetryScheduled` and `RecordThrottled`
+observations for a current nonterminal request. They publish one bounded Horo
+counter after the owning policy schedules a retry or normalizes provider rate-limit
+evidence. They do not schedule work, change request state, or retain provider error
+text, retry-after values, payloads, or subject identity.
 
 ### Result And Errors
 
@@ -1339,22 +1357,26 @@ recorded outcome without duplicating cancellation or native teardown.
 
 ## Observability
 
-Platform services emit bounded metrics:
+The frontend and request store emit bounded metrics through Foundation Telemetry:
 
 ```text
-platform.request.pending_count           -- in-flight requests
-platform.request.completed_count         -- completed by service and backend
-platform.request.failed_count            -- by error category
-platform.request.latency_ms              -- end-to-end latency
-platform.offline.pending                 -- aggregate pending by service/state
-platform.offline.reconciling             -- aggregate remote-ambiguity count
-platform.offline.storage_bytes           -- bounded queue storage utilization
-platform.session.signed_in               -- 0/1 gauge
-platform.capability.available            -- gauge per service per backend
+horo.platform_services.request.lifecycle       -- accepted/rejected/terminal outcome
+horo.platform_services.request.queue_admission -- accepted/capacity/shutdown/config admission outcome
+horo.platform_services.request.retry_scheduled -- explicit Horo retry scheduling signal
+horo.platform_services.request.throttled       -- normalized throttling signal
+horo.platform_services.capability.checks       -- service and bounded capability outcome
+horo.platform_services.session.checks          -- service and bounded session outcome, including stale session
+horo.platform_services.frontend.shutdown       -- frontend shutdown success/failure
 ```
 
-No platform SDK logging or network callbacks run on the audio or render
-threads.
+Dimensions use only the finite Horo service and outcome vocabularies. Metrics never
+include request or session IDs, provider IDs/names, account identity, subject handles,
+payloads, provider error text, or retry-after values. Queue replay/storage and
+service-specific coalescing metrics remain with their respective owners; this request
+store reports only its bounded admission outcomes. Retry and throttling metrics report
+explicit observations and do not drive retry or rate policy.
+
+No platform SDK logging or network callbacks run on the audio or render threads.
 
 ## Editor And Runtime UI Surfaces
 

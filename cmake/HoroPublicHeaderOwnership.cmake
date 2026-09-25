@@ -82,6 +82,8 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformOfflineQueue.h
     Horo/PlatformServices/PlatformOfflineQueueErrors.h
     Horo/PlatformServices/PlatformDefinitionRegistries.h
+    Horo/PlatformServices/PlatformOfflineQueueStorage.h
+    Horo/PlatformServices/PlatformProgressionIdempotency.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
@@ -694,6 +696,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorThemeTokens.h
     Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/EditorSurfaceContext.h
+    Horo/Extensions/EditorSurfaceRegistry.h
     Horo/Extensions/EditorCommandRegistry.h
     Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
