@@ -254,8 +254,28 @@ typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate);
 /** @brief Destroy a fully retired candidate on its required owner thread. */
 typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);
 
+/** @brief Provider-neutral completion status; adapters translate native results before crossing the ABI. */
+enum HoroPlatformProviderResultCode {  // NOSONAR(cpp:S3642) Shared C11 ABI requires unscoped provider status constants.
+    HORO_PLATFORM_PROVIDER_SUCCESS = 0,
+    HORO_PLATFORM_PROVIDER_OFFLINE = 1,
+    HORO_PLATFORM_PROVIDER_NOT_SIGNED_IN = 2,
+    HORO_PLATFORM_PROVIDER_FORBIDDEN = 3,
+    HORO_PLATFORM_PROVIDER_RATE_LIMITED = 4,
+    HORO_PLATFORM_PROVIDER_PRECONDITION_FAILED = 5,
+    HORO_PLATFORM_PROVIDER_QUOTA_EXCEEDED = 6,
+    HORO_PLATFORM_PROVIDER_INVALID_RESPONSE = 7,
+    HORO_PLATFORM_PROVIDER_TRANSIENT_FAILURE = 8,
+    HORO_PLATFORM_PROVIDER_PERMANENT_FAILURE = 9,
+    HORO_PLATFORM_PROVIDER_UNKNOWN_FAILURE = 10,
+    HORO_PLATFORM_PROVIDER_CANCELLED = 11,
+    HORO_PLATFORM_PROVIDER_TIMED_OUT = 12,
+    HORO_PLATFORM_PROVIDER_CAPABILITY_UNAVAILABLE = 13,
+};
+
 /** @brief One bounded, host-owned completion copied before this callback returns.
- * @details A zero resultCode is success; nonzero is normalized provider failure.
+ * @details resultCode is a HoroPlatformProviderResultCode, never a native SDK code.
+ *          Failure completions have no payload. Provider logs may correlate on requestId and requestGeneration;
+ *          native text, account identifiers, credentials and response bodies never cross this boundary.
  *          The service and nonzero operation must match one admitted request exactly.
  */
 struct HoroPlatformProviderCompletion {

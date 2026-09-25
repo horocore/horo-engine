@@ -1,10 +1,14 @@
 #include "Horo/PlatformServices/PlatformProviderAdmission.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 
+#include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 extern "C" {
@@ -12,6 +16,7 @@ struct FixtureAudit;
 FixtureAudit *horo_test_provider_audit_create(void);
 void horo_test_provider_audit_free(FixtureAudit *);
 void horo_test_provider_fail_at(FixtureAudit *, unsigned);
+void horo_test_provider_submit_status(FixtureAudit *, unsigned);
 void horo_test_provider_set_busy(FixtureAudit *, unsigned);
 unsigned horo_test_provider_event_count(const FixtureAudit *);
 char horo_test_provider_event(const FixtureAudit *, unsigned);
@@ -19,6 +24,7 @@ unsigned horo_test_provider_destroyed(const FixtureAudit *);
 unsigned horo_test_provider_post_destroy_callbacks(const FixtureAudit *);
 HoroExtensionStatus horo_test_provider_session_changed(FixtureAudit *, std::uint64_t, std::uint32_t);
 HoroExtensionStatus horo_test_provider_emit(FixtureAudit *, std::uint64_t, std::uint64_t);
+HoroExtensionStatus horo_test_provider_emit_failure(FixtureAudit *, std::uint64_t, std::uint64_t, std::uint32_t);
 HoroExtensionStatus horo_test_provider_emit_held(FixtureAudit *, std::uint64_t, std::uint64_t);
 unsigned horo_test_provider_held_ready(const FixtureAudit *);
 void horo_test_provider_release_held(FixtureAudit *);
@@ -231,6 +237,103 @@ namespace Horo::PlatformServices::Tests {
         CHECK(horo_test_provider_destroyed(rig.audit.get()) == 1);
         CHECK(horo_test_provider_post_destroy_callbacks(rig.audit.get()) == 0);
         CHECK(observed == 0);
+    }
+
+    TEST_CASE("Host translates every provider result to a safe application meaning", "[platform-services][errors]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        const std::array<std::pair<std::uint32_t, PlatformProviderFailureCategory>, 10> cases{
+            std::pair{HORO_PLATFORM_PROVIDER_OFFLINE, PlatformProviderFailureCategory::Offline},
+            std::pair{HORO_PLATFORM_PROVIDER_NOT_SIGNED_IN, PlatformProviderFailureCategory::NotSignedIn},
+            std::pair{HORO_PLATFORM_PROVIDER_FORBIDDEN, PlatformProviderFailureCategory::Forbidden},
+            std::pair{HORO_PLATFORM_PROVIDER_RATE_LIMITED, PlatformProviderFailureCategory::RateLimited},
+            std::pair{HORO_PLATFORM_PROVIDER_PRECONDITION_FAILED, PlatformProviderFailureCategory::PreconditionFailed},
+            std::pair{HORO_PLATFORM_PROVIDER_QUOTA_EXCEEDED, PlatformProviderFailureCategory::QuotaExceeded},
+            std::pair{HORO_PLATFORM_PROVIDER_INVALID_RESPONSE, PlatformProviderFailureCategory::InvalidResponse},
+            std::pair{HORO_PLATFORM_PROVIDER_TRANSIENT_FAILURE, PlatformProviderFailureCategory::TransientFailure},
+            std::pair{HORO_PLATFORM_PROVIDER_PERMANENT_FAILURE, PlatformProviderFailureCategory::PermanentFailure},
+            std::pair{999U, PlatformProviderFailureCategory::Unknown},
+        };
+        for (const auto &[code, category] : cases) {
+            auto request = host->UnlockAchievement({1});
+            REQUIRE(request.HasValue());
+            REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
+                                                    code) == HORO_EXTENSION_SUCCESS);
+            REQUIRE(host->DispatchCompletions(1) == 1);
+            const auto snapshot = host->Query(request.Value());
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().state == PlatformRequestState::Failed);
+            REQUIRE(snapshot.Value().terminal);
+            REQUIRE(snapshot.Value().terminal->HasError());
+            const Error &error = *snapshot.Value().terminal->ErrorValue();
+            const auto meaning = category == PlatformProviderFailureCategory::NotSignedIn ? PlatformServiceErrorKind::AuthenticationRequired
+                                 : category == PlatformProviderFailureCategory::Forbidden ? PlatformServiceErrorKind::AccessDenied
+                                                                                          : PlatformServiceErrorKind::ProviderFailed;
+            CHECK(ClassifyPlatformServiceError(error) == meaning);
+            CHECK(PlatformProviderCategory(error) == category);
+            REQUIRE(error.cause.Get());
+            REQUIRE(error.cause.Get()->diagnostics.size() == 1);
+            const auto &message = error.cause.Get()->diagnostics.front().message;
+            CHECK(message.find(std::to_string(request.Value().Id().value)) != std::string::npos);
+            CHECK(message.find("private-account") == std::string::npos);
+            CHECK(error.message.find("private-account") == std::string::npos);
+        }
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Host preserves cancellation timeout and capability failure states", "[platform-services][errors]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        for (const auto &[code, kind, state] :
+             std::array{std::tuple{HORO_PLATFORM_PROVIDER_CANCELLED, PlatformServiceErrorKind::Cancelled, PlatformRequestState::Cancelled},
+                        std::tuple{HORO_PLATFORM_PROVIDER_TIMED_OUT, PlatformServiceErrorKind::TimedOut, PlatformRequestState::TimedOut},
+                        std::tuple{HORO_PLATFORM_PROVIDER_CAPABILITY_UNAVAILABLE, PlatformServiceErrorKind::CapabilityUnavailable,
+                                   PlatformRequestState::Failed}}) {
+            auto request = host->UnlockAchievement({1});
+            REQUIRE(request.HasValue());
+            REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
+                                                    code) == HORO_EXTENSION_SUCCESS);
+            REQUIRE(host->DispatchCompletions(1) == 1);
+            const auto snapshot = host->Query(request.Value());
+            REQUIRE(snapshot.HasValue());
+            CHECK(snapshot.Value().state == state);
+            REQUIRE(snapshot.Value().terminal);
+            REQUIRE(snapshot.Value().terminal->HasError());
+            CHECK(ClassifyPlatformServiceError(*snapshot.Value().terminal->ErrorValue()) == kind);
+        }
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Synchronous provider submission failure keeps cancellation distinct from unknown failure", "[platform-services][errors]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        for (const auto [status, expectedState, expectedMeaning] :
+             std::array{std::tuple{HORO_EXTENSION_ERROR_CANCELLED, PlatformRequestState::Cancelled, PlatformServiceErrorKind::Cancelled},
+                        std::tuple{HORO_EXTENSION_ERROR_INIT_FAILED, PlatformRequestState::Failed,
+                                   PlatformServiceErrorKind::ProviderFailed}}) {
+            horo_test_provider_submit_status(rig.audit.get(), status);
+            auto request = host->UnlockAchievement({1});
+            REQUIRE(request.HasValue());
+            const auto snapshot = host->Query(request.Value());
+            REQUIRE(snapshot.HasValue());
+            CHECK(snapshot.Value().state == expectedState);
+            REQUIRE(snapshot.Value().terminal);
+            REQUIRE(snapshot.Value().terminal->HasError());
+            const Error &error = *snapshot.Value().terminal->ErrorValue();
+            CHECK(ClassifyPlatformServiceError(error) == expectedMeaning);
+            if (expectedMeaning == PlatformServiceErrorKind::ProviderFailed)
+                CHECK(PlatformProviderCategory(error) == PlatformProviderFailureCategory::Unknown);
+        }
+        REQUIRE(host->Close().HasValue());
     }
 
     TEST_CASE("Session revision change fences an in-flight native completion", "[platform-services][lifecycle]") {

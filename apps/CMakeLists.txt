@@ -5,7 +5,7 @@ target_compile_features(HoroHostModuleComposition PUBLIC cxx_std_20)
 target_include_directories(HoroHostModuleComposition PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
