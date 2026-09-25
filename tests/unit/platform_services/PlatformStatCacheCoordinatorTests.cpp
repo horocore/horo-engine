@@ -271,4 +271,53 @@ namespace Horo::PlatformServices {
         CHECK(value.IsClosed());
         RequireError(value.ReadStat({*session.Subject(), session.AccessRevision(), fixture.snapshot, 1}), StatCoordinatorErrors::Closed);
     }
+
+    TEST_CASE("Failed and cancelled stat writes retain their mutation identity without refreshing cache",
+              "[platform-services][stat][write][lifecycle]") {
+        const StatFixture fixture;
+        const auto session = ActiveSession();
+        const auto request = SnapshotWrite(session, fixture, Mutation(11));
+        for (const auto outcome : {PlatformStatWriteOutcome::Failed, PlatformStatWriteOutcome::Cancelled}) {
+            auto coordinator = Coordinator(fixture, session);
+            REQUIRE(coordinator.SubmitWrite(request).Value() == PlatformStatWriteAdmission::Queued);
+            const auto publication = coordinator.TakeNextWrite();
+            REQUIRE(publication.HasValue());
+            REQUIRE(publication.Value().has_value());
+            REQUIRE(coordinator.CompleteWrite(*publication.Value(), outcome).HasValue());
+            CHECK_FALSE(coordinator.HasInFlight());
+            CHECK(coordinator.CacheEntryCount() == 0);
+            CHECK(coordinator.SubmitWrite(request).Value() == PlatformStatWriteAdmission::IgnoredDuplicate);
+            RequireError(coordinator.CompleteWrite(*publication.Value(), outcome), StatCoordinatorErrors::StalePublication);
+            REQUIRE(coordinator.Close().HasValue());
+            RequireError(coordinator.SubmitWrite(request), StatCoordinatorErrors::Closed);
+        }
+    }
+
+    TEST_CASE("Bounded stat cache evicts the older live entry when a new result is accepted",
+              "[platform-services][stat][cache][capacity]") {
+        const StatFixture fixture;
+        const auto session = ActiveSession();
+        auto created = PlatformStatCacheCoordinator::Create(fixture.registry, session,
+                                                            {.maximumCacheEntries = 1,
+                                                             .maximumPendingWrites = 1,
+                                                             .maximumLedgerEntries = 1,
+                                                             .freshnessWindowTicks = 5});
+        REQUIRE(created.HasValue());
+        auto coordinator = std::move(created).Value();
+        const auto first = coordinator.ReadStat({*session.Subject(), session.AccessRevision(), fixture.snapshot, 10});
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value().query.has_value());
+        REQUIRE(coordinator.PublishReadResult(*first.Value().query, Evidence(session, fixture.snapshot, PlatformStatValue::FromSigned(3)))
+                    .HasValue());
+        const auto second = coordinator.ReadStat({*session.Subject(), session.AccessRevision(), fixture.maximum, 10});
+        REQUIRE(second.HasValue());
+        REQUIRE(second.Value().query.has_value());
+        REQUIRE(coordinator.PublishReadResult(*second.Value().query, Evidence(session, fixture.maximum, PlatformStatValue::FromSigned(8)))
+                    .HasValue());
+        CHECK(coordinator.CacheEntryCount() == 1);
+        CHECK(coordinator.ReadStat({*session.Subject(), session.AccessRevision(), fixture.snapshot, 11}).Value().disposition ==
+              PlatformStatReadDisposition::ProviderQuery);
+        CHECK(coordinator.ReadStat({*session.Subject(), session.AccessRevision(), fixture.maximum, 11}).Value().disposition ==
+              PlatformStatReadDisposition::FreshCacheHit);
+    }
 }  // namespace Horo::PlatformServices
