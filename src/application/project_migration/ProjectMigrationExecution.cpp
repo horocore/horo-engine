@@ -10,6 +10,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <limits>
+#include <span>
 #include <system_error>
 #include <unordered_set>
 
@@ -290,11 +291,10 @@ namespace Horo::Application {
         [[nodiscard]] Result<void> ExecuteForEachBatch(const ProjectMigrationDefinition &definition, const ProjectMigrationNode &node,
                                                        const ProjectMigrationContext &context, JobSystem &jobs,
                                                        const CancellationToken &cancellation, const MigrationStageDescriptor &descriptor,
-                                                       const std::vector<MigrationDocumentEntry> &documents, const std::size_t begin,
-                                                       const std::size_t end) {
-            std::vector<std::optional<MigrationDocumentChange>> results(end - begin);
+                                                       std::span<const MigrationDocumentEntry> documents) {
+            std::vector<std::optional<MigrationDocumentChange>> results(documents.size());
             TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
-            for (std::size_t index = begin; index < end; ++index) {
+            for (std::size_t index = 0; index < documents.size(); ++index) {
                 const Result<ProjectDocumentView> source = context.ReadDocument(documents[index].handle);
                 if (source.HasError()) {
                     group.RequestCancel();
@@ -302,8 +302,8 @@ namespace Horo::Application {
                     return Result<void>::Failure(source.ErrorValue());
                 }
                 const ProjectDocumentView view = source.Value();
-                const auto spawned = group.Spawn({}, [index, begin, view, &node, &definition, &descriptor,
-                                                      &results](const CancellationToken &childCancellation) {
+                const auto spawned =
+                    group.Spawn({}, [index, view, &node, &definition, &descriptor, &results](const CancellationToken &childCancellation) {
                     Result<MigrationDocumentChange> changed =
                         node.documentStage->Execute(view, MigrationStageContext{.definitionId = definition.id, .stageId = descriptor.id},
                                                     childCancellation);
@@ -313,7 +313,7 @@ namespace Horo::Application {
                             return JobCancelled(std::move(error));
                         return Result<void>::Failure(std::move(error));
                     }
-                    results[index - begin] = std::move(changed).Value();
+                    results[index] = std::move(changed).Value();
                     return Result<void>::Success();
                 });
                 if (spawned.HasError()) {
@@ -338,8 +338,9 @@ namespace Horo::Application {
                     return Result<void>::Failure(
                         MigrationError(ProjectErrors::MigrationCancelled, "Migration cancellation was requested."));
                 const std::size_t end = std::min(documents.size(), begin + batchSize);
+                const std::span<const MigrationDocumentEntry> batchDocuments(documents.data() + begin, end - begin);
                 if (const Result<void> batch =
-                        ExecuteForEachBatch(definition, node, context, jobs, cancellation, descriptor, documents, begin, end);
+                        ExecuteForEachBatch(definition, node, context, jobs, cancellation, descriptor, batchDocuments);
                     batch.HasError())
                     return batch;
             }
