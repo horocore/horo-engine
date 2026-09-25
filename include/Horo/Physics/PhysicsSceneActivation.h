@@ -92,6 +92,7 @@ namespace Horo::Physics {
         struct ConstructionData final {
             std::unique_ptr<PhysicsWorld> physics;
             std::unique_ptr<Character::CharacterWorld> character;
+            const PhysicsRuntime *runtime{};
             const PhysicsSceneActivationAuthority *authority{};
             PhysicsSceneActivationEvidence evidence;
             std::vector<PhysicsSceneBodyBinding> bodyBindings;
@@ -129,11 +130,13 @@ namespace Horo::Physics {
 
     private:
         friend class PhysicsSceneActivationParticipant;
+        friend class PhysicsPlayWorldSession;
 
         [[nodiscard]] static std::unique_ptr<PhysicsSceneActivationCandidate> Create(ConstructionData data);
 
         std::unique_ptr<PhysicsWorld> physics_;
         std::unique_ptr<Character::CharacterWorld> character_;
+        const PhysicsRuntime *runtime_{};
         const PhysicsSceneActivationAuthority *authority_{};
         PhysicsSceneActivationEvidence evidence_;
         std::vector<PhysicsSceneBodyBinding> bodyBindings_;
@@ -159,5 +162,88 @@ namespace Horo::Physics {
         PhysicsRuntime *runtime_{};
         PhysicsSceneActivationAuthority *authority_{};
         PhysicsSceneActivationSettings settings_;
+    };
+
+    /**
+     * @brief Physics-owned play world detached from the authored scene and any edit-preview world.
+     *
+     * The host owns the source RuntimeScene and keeps the PhysicsRuntime alive longer than this session.
+     * Prepare copies all required Physics intent into a private candidate; it retains no authoring
+     * document or RuntimeSceneView. Publication, replacement and stop are owner-thread operations at
+     * RuntimePhase::CommitDeferredLifecycleChanges, after all fixed ticks and queries have drained.
+     * All session access, including binding queries and destruction, stays on that owner thread.
+     * Reload always creates a fresh world; solver velocity, sleep and contact state are not transferred.
+     */
+    class PhysicsPlayWorldSession final {
+    public:
+        /** @brief Binds one process runtime and immutable world policies without creating a world.
+         * @param runtime Runtime that outlives this session.
+         * @param settings Settings copied for each detached world candidate. */
+        PhysicsPlayWorldSession(PhysicsRuntime &runtime, PhysicsSceneActivationSettings settings) noexcept;
+        /** @brief Retires active and pending worlds on the owner thread after fixed work has drained. */
+        ~PhysicsPlayWorldSession();
+        PhysicsPlayWorldSession(const PhysicsPlayWorldSession &) = delete;
+        PhysicsPlayWorldSession &operator=(const PhysicsPlayWorldSession &) = delete;
+
+        /** @brief Stages a new isolated world from a matching immutable definition and resolved scene view.
+         * @param definition Authored snapshot used to instantiate scene; remains caller-owned.
+         * @param scene Exact resolved scene generation corresponding to definition.
+         * @return Success with an unpublished candidate, or a typed error preserving the active world.
+         * @pre Owner thread between fixed ticks; only one pending candidate is allowed. */
+        [[nodiscard]] Result<void> Prepare(const Runtime::RuntimeSceneDefinition &definition, Runtime::RuntimeSceneView scene);
+        /** @brief Publishes the pending world and retires the old one at the host lifecycle safe point.
+         * @param phase Current host phase; only CommitDeferredLifecycleChanges is admitted.
+         * @param source Original scene view supplied to Prepare; its owner must remain alive until this call.
+         * @return Success or a typed error; failed revalidation leaves the old world active. */
+        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase, Runtime::RuntimeSceneView source);
+        /** @brief Closes play admission and retires both worlds at the host lifecycle safe point.
+         * @param phase Current host phase; only CommitDeferredLifecycleChanges is admitted.
+         * @return Success, including repeated stop, or a typed phase/affinity error. */
+        [[nodiscard]] Result<void> Stop(Runtime::RuntimePhase phase);
+        /** @brief Advances only the active Physics world for one exact host fixed tick.
+         * @param input Tick and scene generation supplied by the host.
+         * @return Solver result or a typed lifecycle/generation error; this does not write scene transforms. */
+        [[nodiscard]] Result<void> AdvanceFixedTick(const PhysicsFixedTickInput &input);
+        /** @brief Reads the active world's last complete Physics tick without exposing solver ownership.
+         * @return Publication marker or a typed owner-thread/inactive error. */
+        [[nodiscard]] Result<PhysicsPublishedTick> PublishedTick() const;
+        /** @brief Resolves a stable authored body against the active play world.
+         * @param object Stable authored object identity.
+         * @param body Stable authored body slot.
+         * @return Current handle or a typed inactive/missing-binding error. */
+        [[nodiscard]] Result<BodyHandle> ResolveBody(Runtime::SceneObjectId object, Runtime::PhysicsBodySlotId body) const;
+        /** @brief Rejects retained handles from another or retired play-world generation.
+         * @param handle Non-owning body handle to validate.
+         * @return Success only for an active bound body, or a typed stale/world/state error. */
+        [[nodiscard]] Result<void> ValidateBody(const BodyHandle &handle) const;
+        /** @brief Returns the active world generation, or invalid when stopped/unpublished. */
+        [[nodiscard]] PhysicsWorldId WorldIdentity() const noexcept;
+        /** @brief Reports whether a complete play world has been published. */
+        [[nodiscard]] bool IsActive() const noexcept;
+        /** @brief Reports whether a start or reload candidate awaits the host safe point. */
+        [[nodiscard]] bool HasPendingCandidate() const noexcept;
+
+    private:
+        /** @brief Rejects mutation or binding access outside the session owner thread. */
+        [[nodiscard]] Result<void> CheckOwner() const;
+        /** @brief Requires the exact host lifecycle publication phase on the owner thread. */
+        [[nodiscard]] Result<void> CheckSafePoint(Runtime::RuntimePhase phase) const;
+        /** @brief Shuts down and releases one detached or published aggregate. */
+        void Retire(std::unique_ptr<Runtime::SceneActivationCandidate> &candidate) const noexcept;
+        /** @brief Casts the known Physics participant's published candidate to its concrete type. */
+        [[nodiscard]] const PhysicsSceneActivationCandidate *ActivePhysics() const noexcept;
+        /** @copydoc ActivePhysics */
+        [[nodiscard]] PhysicsSceneActivationCandidate *ActivePhysics() noexcept;
+
+        std::thread::id ownerThread_;
+        PhysicsSceneActivationAuthority authority_;
+        PhysicsSceneActivationParticipant participant_;
+        std::unique_ptr<Runtime::SceneActivationCandidate> pending_;
+        std::unique_ptr<Runtime::SceneActivationCandidate> active_;
+        Runtime::SceneRuntimeId pendingScene_;
+        Runtime::SceneDefinitionId pendingDefinition_;
+        Runtime::SceneDefinitionRevision pendingRevision_;
+        Assets::AssetRegistryRevision pendingAssets_;
+        Runtime::SceneRuntimeId activeScene_;
     };
 }  // namespace Horo::Physics
