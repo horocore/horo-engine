@@ -178,8 +178,8 @@ namespace Horo::PlatformServices {
             return Result<PlatformRequestHandle<LeaderboardAroundSubjectResult>>::Failure(valid.ErrorValue());
         if (!valid.Value()->leaderboardQueries.Supports(LeaderboardQueryKind::AroundSubject))
             return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(BackendErrors::UnsupportedOperation);
-        const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
-        if (entryLimit > valid.Value()->limits.maxPageEntries)
+        if (const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
+            entryLimit > valid.Value()->limits.maxPageEntries)
             return Failure<PlatformRequestHandle<LeaderboardAroundSubjectResult>>(FrontendErrors::InvalidRequest);
         return ValidatedDispatch(backend_->QueryLeaderboardAroundSubject(std::move(query)));
     }

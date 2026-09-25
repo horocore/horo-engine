@@ -35,8 +35,8 @@ namespace Horo::PlatformServices {
             const bool available = capability.availability == PlatformServiceAvailability::Available;
             if (!ValidateLimits(capability.limits, available))
                 return false;
-            const bool leaderboardService = capability.service == PlatformServiceKind::LeaderboardsAndStats;
-            if ((!leaderboardService || !available) && capability.leaderboardQueries.HasAny())
+            if (const bool leaderboardService = capability.service == PlatformServiceKind::LeaderboardsAndStats;
+                (!leaderboardService || !available) && capability.leaderboardQueries.HasAny())
                 return false;
             if (capability.leaderboardQueries.HasAny() && capability.limits.maxPageEntries == 0)
                 return false;
@@ -65,6 +65,26 @@ namespace Horo::PlatformServices {
             return false;
         }
 
+        [[nodiscard]] bool HasValidLeaderboardPair(const LeaderboardEntry &entry, const LeaderboardEntry &previous,
+                                                   const LeaderboardOrdering ordering) noexcept {
+            if (entry.score.index() != previous.score.index())
+                return false;
+            const bool equalScores = std::visit([]<typename Left, typename Right>(const Left left, const Right right) {
+                if constexpr (std::is_same_v<Left, Right>)
+                    return left == right;
+                return false;
+            }, entry.score, previous.score);
+            if (const bool scoreOrdered = std::visit(
+                    [ordering]<typename Current, typename Prior>(const Current current, const Prior prior) {
+                if constexpr (std::is_same_v<Current, Prior>)
+                    return ordering == LeaderboardOrdering::HighestFirst ? current <= prior : current >= prior;
+                return false;
+            }, entry.score, previous.score);
+                !scoreOrdered)
+                return false;
+            return equalScores ? entry.rank == previous.rank : entry.rank > previous.rank;
+        }
+
         [[nodiscard]] bool HasValidLeaderboardOrder(const std::span<const LeaderboardEntry> entries, const ProgressionValueKind valueKind,
                                                     const LeaderboardOrdering ordering) noexcept {
             if (!IsKnown(valueKind) || !IsKnown(ordering))
@@ -73,33 +93,8 @@ namespace Horo::PlatformServices {
                 const auto &entry = entries[index];
                 if (entry.rank == 0 || !HasExpectedScoreKind(entry.score, valueKind))
                     return false;
-                if (index == 0)
-                    continue;
-                const auto &previous = entries[index - 1];
-                if (entry.score.index() != previous.score.index())
+                if (index != 0 && !HasValidLeaderboardPair(entry, entries[index - 1], ordering))
                     return false;
-                const bool equalScores = std::visit([](const auto left, const auto right) {
-                    using Left = decltype(left);
-                    using Right = decltype(right);
-                    if constexpr (std::is_same_v<Left, Right>)
-                        return left == right;
-                    return false;
-                }, entry.score, previous.score);
-                const bool scoreOrdered = std::visit([ordering](const auto current, const auto prior) {
-                    using Current = decltype(current);
-                    using Prior = decltype(prior);
-                    if constexpr (std::is_same_v<Current, Prior>)
-                        return ordering == LeaderboardOrdering::HighestFirst ? current <= prior : current >= prior;
-                    return false;
-                }, entry.score, previous.score);
-                if (!scoreOrdered)
-                    return false;
-                if (equalScores) {
-                    if (entry.rank != previous.rank)
-                        return false;
-                } else if (entry.rank <= previous.rank) {
-                    return false;
-                }
             }
             return true;
         }
@@ -227,17 +222,17 @@ namespace Horo::PlatformServices {
     Result<void> ValidateLeaderboardAroundSubjectResult(const LeaderboardAroundSubjectResult &result,
                                                         const LeaderboardAroundSubjectQuery &query, const ProgressionValueKind valueKind,
                                                         const LeaderboardOrdering ordering) {
-        const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
-        if (!query.leaderboard.IsValid() || entryLimit > MaxPageEntries || result.entries.size() > entryLimit ||
+        if (const auto entryLimit = static_cast<std::uint64_t>(query.entriesBefore) + query.entriesAfter + 1U;
+            !query.leaderboard.IsValid() || entryLimit > MaxPageEntries || result.entries.size() > entryLimit ||
             !HasValidLeaderboardOrder(result.entries, valueKind, ordering))
             return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
-        if (!result.subjectEntryIndex) {
+        if (!result.subjectEntryIndex.has_value()) {
             if (!result.entries.empty() || result.hasEarlier || result.hasLater)
                 return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
             return Result<void>::Success();
         }
-        const auto subjectIndex = static_cast<std::size_t>(*result.subjectEntryIndex);
-        if (subjectIndex >= result.entries.size() || subjectIndex > query.entriesBefore ||
+        if (const auto subjectIndex = static_cast<std::size_t>(*result.subjectEntryIndex);
+            subjectIndex >= result.entries.size() || subjectIndex > query.entriesBefore ||
             result.entries.size() - subjectIndex - 1U > query.entriesAfter || (result.hasEarlier && subjectIndex < query.entriesBefore) ||
             (result.hasLater && result.entries.size() - subjectIndex - 1U < query.entriesAfter))
             return Result<void>::Failure(MakeError(LeaderboardErrors::InvalidResult));
