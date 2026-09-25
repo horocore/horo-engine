@@ -72,6 +72,34 @@ namespace Horo::Extensions::Tests {
             });
             return found == snapshots.end() ? nullptr : &*found;
         }
+
+        struct PersistenceSurfaces final {
+            EditorSurfaceRegistration workspace;
+            EditorSurfaceRegistration session;
+            EditorSurfaceRegistration project;
+        };
+
+        [[nodiscard]] PersistenceSurfaces RegisterPersistenceSurfaces(EditorSurfaceRegistry &registry,
+                                                                      EditorSurfaceContextProvider &provider,
+                                                                      ExtensionCapabilityAdmission &admission) {
+            return {
+                .workspace = RegisterSurface(registry, provider, admission,
+                                             ContextDescriptor("com.example.tools.workspace", EditorSurfaceKind::Tab,
+                                                               EditorSurfacePersistence::Workspace)),
+                .session = RegisterSurface(registry, provider, admission,
+                                           ContextDescriptor("com.example.tools.session", EditorSurfaceKind::Tab,
+                                                             EditorSurfacePersistence::Session)),
+                .project = RegisterSurface(registry, provider, admission,
+                                           ContextDescriptor("com.example.tools.project", EditorSurfaceKind::Tab,
+                                                             EditorSurfacePersistence::Project)),
+            };
+        }
+
+        void OpenWithOpaqueState(EditorSurfaceRegistry &registry, const std::string_view id, const std::uint8_t value) {
+            REQUIRE(registry.Open(id).HasValue());
+            const std::array<std::uint8_t, 1> state{value};
+            REQUIRE(registry.SetOpaqueState(id, state).HasValue());
+        }
     }  // namespace
 
     TEST_CASE("External editor surfaces open focus close and restore deterministically", "[Extensions][EditorSurface][Registry]") {
@@ -204,41 +232,27 @@ namespace Horo::Extensions::Tests {
         CHECK(registry.Snapshot().front().open);
     }
 
-    TEST_CASE("External editor surface workspace persistence isolates session and project state", "[Extensions][EditorSurface][Registry]") {
+    TEST_CASE("Workspace persistence saves and restores only workspace surface state", "[Extensions][EditorSurface][Registry]") {
         auto admission = Admission();
         EditorSurfaceContextProvider provider;
         EditorSurfaceRegistry registry;
-        auto workspace =
-            RegisterSurface(registry, provider, admission,
-                            ContextDescriptor("com.example.tools.workspace", EditorSurfaceKind::Tab, EditorSurfacePersistence::Workspace));
-        auto session =
-            RegisterSurface(registry, provider, admission,
-                            ContextDescriptor("com.example.tools.session", EditorSurfaceKind::Tab, EditorSurfacePersistence::Session));
-        auto project =
-            RegisterSurface(registry, provider, admission,
-                            ContextDescriptor("com.example.tools.project", EditorSurfaceKind::Tab, EditorSurfacePersistence::Project));
-        REQUIRE(registry.Open(workspace.Id()).HasValue());
-        REQUIRE(registry.Open(session.Id()).HasValue());
-        REQUIRE(registry.Open(project.Id()).HasValue());
-        const std::array<std::uint8_t, 1> workspaceBytes{1};
-        const std::array<std::uint8_t, 1> sessionBytes{2};
-        const std::array<std::uint8_t, 1> projectBytes{3};
-        REQUIRE(registry.SetOpaqueState(workspace.Id(), workspaceBytes).HasValue());
-        REQUIRE(registry.SetOpaqueState(session.Id(), sessionBytes).HasValue());
-        REQUIRE(registry.SetOpaqueState(project.Id(), projectBytes).HasValue());
+        const PersistenceSurfaces surfaces = RegisterPersistenceSurfaces(registry, provider, admission);
+        OpenWithOpaqueState(registry, surfaces.workspace.Id(), 1);
+        OpenWithOpaqueState(registry, surfaces.session.Id(), 2);
+        OpenWithOpaqueState(registry, surfaces.project.Id(), 3);
 
         EditorSurfaceWorkspaceState saved = registry.Save();
         REQUIRE(saved.surfaces.size() == 1);
-        CHECK(saved.surfaces.front().surfaceId == std::string{workspace.Id()});
+        CHECK(saved.surfaces.front().surfaceId == std::string{surfaces.workspace.Id()});
 
         saved.surfaces.front().open = false;
         saved.surfaces.front().focused = false;
         saved.surfaces.front().opaqueState = {9};
         REQUIRE(registry.Restore(saved).HasValue());
         const std::vector<EditorSurfaceSnapshot> snapshots = registry.Snapshot();
-        const EditorSurfaceSnapshot *workspaceSnapshot = FindSnapshot(snapshots, workspace.Id());
-        const EditorSurfaceSnapshot *sessionSnapshot = FindSnapshot(snapshots, session.Id());
-        const EditorSurfaceSnapshot *projectSnapshot = FindSnapshot(snapshots, project.Id());
+        const EditorSurfaceSnapshot *workspaceSnapshot = FindSnapshot(snapshots, surfaces.workspace.Id());
+        const EditorSurfaceSnapshot *sessionSnapshot = FindSnapshot(snapshots, surfaces.session.Id());
+        const EditorSurfaceSnapshot *projectSnapshot = FindSnapshot(snapshots, surfaces.project.Id());
         REQUIRE(workspaceSnapshot != nullptr);
         REQUIRE(sessionSnapshot != nullptr);
         REQUIRE(projectSnapshot != nullptr);
@@ -248,14 +262,24 @@ namespace Horo::Extensions::Tests {
         CHECK(sessionSnapshot->opaqueState == std::vector<std::uint8_t>{2});
         CHECK(projectSnapshot->open);
         CHECK(projectSnapshot->opaqueState == std::vector<std::uint8_t>{3});
+    }
 
-        const std::string sessionId{session.Id()};
-        const std::string projectId{project.Id()};
-        session.Reset();
-        project.Reset();
+    TEST_CASE("Session and project surface state survives provider unload and reattach", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        const PersistenceSurfaces surfaces = RegisterPersistenceSurfaces(registry, provider, admission);
+        OpenWithOpaqueState(registry, surfaces.workspace.Id(), 1);
+        OpenWithOpaqueState(registry, surfaces.session.Id(), 2);
+        OpenWithOpaqueState(registry, surfaces.project.Id(), 3);
+
+        const std::string sessionId{surfaces.session.Id()};
+        const std::string projectId{surfaces.project.Id()};
+        surfaces.session.Reset();
+        surfaces.project.Reset();
         const EditorSurfaceWorkspaceState afterUnload = registry.Save();
         REQUIRE(afterUnload.surfaces.size() == 1);
-        CHECK(afterUnload.surfaces.front().surfaceId == std::string{workspace.Id()});
+        CHECK(afterUnload.surfaces.front().surfaceId == std::string{surfaces.workspace.Id()});
         auto sessionReplacement = RegisterSurface(registry, provider, admission,
                                                   ContextDescriptor(sessionId, EditorSurfaceKind::Tab, EditorSurfacePersistence::Session));
         auto projectReplacement = RegisterSurface(registry, provider, admission,
@@ -263,15 +287,23 @@ namespace Horo::Extensions::Tests {
         CHECK(sessionReplacement.IsRegistered());
         CHECK(projectReplacement.IsRegistered());
         const std::vector<EditorSurfaceSnapshot> reattachedSnapshots = registry.Snapshot();
-        sessionSnapshot = FindSnapshot(reattachedSnapshots, sessionId);
-        projectSnapshot = FindSnapshot(reattachedSnapshots, projectId);
+        const EditorSurfaceSnapshot *sessionSnapshot = FindSnapshot(reattachedSnapshots, sessionId);
+        const EditorSurfaceSnapshot *projectSnapshot = FindSnapshot(reattachedSnapshots, projectId);
         REQUIRE(sessionSnapshot != nullptr);
         REQUIRE(projectSnapshot != nullptr);
         CHECK(sessionSnapshot->open);
         CHECK(sessionSnapshot->opaqueState == std::vector<std::uint8_t>{2});
         CHECK(projectSnapshot->open);
         CHECK(projectSnapshot->opaqueState == std::vector<std::uint8_t>{3});
+    }
 
+    TEST_CASE("Workspace restore rejects session and project surfaces", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        const PersistenceSurfaces surfaces = RegisterPersistenceSurfaces(registry, provider, admission);
+        const std::string sessionId{surfaces.session.Id()};
+        const std::string projectId{surfaces.project.Id()};
         for (const std::string &id : {sessionId, projectId}) {
             EditorSurfaceWorkspaceState wrongScope{
                 .schemaVersion = EditorSurfaceRegistry::WorkspaceSchemaVersion,
