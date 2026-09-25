@@ -11,10 +11,6 @@ namespace Horo::PlatformServices {
     namespace {
         const ErrorDomainId Domain{"horo.platform.session_observer"};
 
-        [[nodiscard]] Result<void> Failure(const ErrorCodeDescriptor &descriptor) {
-            return Result<void>::Failure(MakeError(descriptor));
-        }
-
         [[nodiscard]] bool IsKnown(const PlatformSessionPhase phase) noexcept {
             return phase <= PlatformSessionPhase::Failed;
         }
@@ -99,14 +95,21 @@ namespace Horo::PlatformServices {
             std::uint64_t id{};
             PlatformSessionObserver::Callback callback;
             std::atomic<bool> active{true};
+            // The engine thread holds this through callback invocation. Reset/Close may take it from any thread,
+            // making their return a fence against new callbacks. Recursive locking permits callback self-revocation;
+            // Close releases the state mutex before taking it to avoid a lock-order cycle.
+            std::recursive_mutex invocationMutex;
         };
 
-        struct State final {
-            explicit State(const PlatformSessionObserverConfig value) : config(value), ownerThread(std::this_thread::get_id()) {}
+        class State final {
+        public:
+            explicit State(const PlatformSessionObserverConfig value) : config(value) {}
 
+        private:
+            friend class Horo::PlatformServices::PlatformSessionObserver;
+            friend class Horo::PlatformServices::PlatformSessionObserverSubscription;
             PlatformSessionObserverConfig config;
-            std::thread::id ownerThread;
-            mutable std::mutex mutex;
+            std::thread::id ownerThread{std::this_thread::get_id()};
             std::map<std::uint64_t, PlatformSessionNotification> pending;
             std::vector<std::shared_ptr<Slot>> slots;
             std::uint64_t nextSlotId{1};
@@ -115,6 +118,8 @@ namespace Horo::PlatformServices {
             std::uint64_t callbackFailures{};
             bool closed{};
             bool dispatching{};
+
+            mutable std::mutex mutex;
         };
     }  // namespace SessionObserverDetail
 
@@ -140,8 +145,10 @@ namespace Horo::PlatformServices {
     }
 
     void PlatformSessionObserverSubscription::Reset() noexcept {
-        if (slot_ != nullptr)
+        if (slot_ != nullptr) {
+            std::lock_guard lock(slot_->invocationMutex);
             slot_->active.store(false);
+        }
         if (const auto state = state_.lock()) {
             std::lock_guard lock(state->mutex);
             std::erase_if(state->slots, [](const std::shared_ptr<SessionObserverDetail::Slot> &slot) {
@@ -182,7 +189,9 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformSessionObserver::Subscribe */
-    Result<PlatformSessionObserverSubscription> PlatformSessionObserver::Subscribe(Callback callback) {
+    Result<PlatformSessionObserverSubscription> PlatformSessionObserver::Subscribe(  // NOSONAR(cpp:S5817) The owner facade mutates shared
+                                                                                     // state.
+        Callback callback) {
         if (!callback)
             return Result<PlatformSessionObserverSubscription>::Failure(MakeError(SessionObserverErrors::InvalidNotification));
         std::lock_guard lock(state_->mutex);
@@ -201,7 +210,9 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformSessionObserver::Enqueue */
-    Result<PlatformSessionNotificationAdmission> PlatformSessionObserver::Enqueue(PlatformSessionNotification notification) {
+    Result<PlatformSessionNotificationAdmission> PlatformSessionObserver::Enqueue(  // NOSONAR(cpp:S5817) The owner facade mutates shared
+                                                                                    // state.
+        PlatformSessionNotification notification) {
         if (!IsValidNotification(notification))
             return Result<PlatformSessionNotificationAdmission>::Failure(MakeError(SessionObserverErrors::InvalidNotification));
 
@@ -221,29 +232,30 @@ namespace Horo::PlatformServices {
         }
         if (state_->pending.size() >= state_->config.maxPendingNotifications)
             return Result<PlatformSessionNotificationAdmission>::Failure(MakeError(SessionObserverErrors::CapacityExceeded));
-        state_->pending.emplace(notification.revision, std::move(notification));
+        state_->pending.try_emplace(notification.revision, std::move(notification));
         return Result<PlatformSessionNotificationAdmission>::Success(PlatformSessionNotificationAdmission::Queued);
     }
 
     /** @copydoc PlatformSessionObserver::Dispatch */
-    Result<std::size_t> PlatformSessionObserver::Dispatch() {
+    Result<std::size_t> PlatformSessionObserver::Dispatch() {  // NOSONAR(cpp:S5817) The owner facade mutates shared state.
         if (std::this_thread::get_id() != state_->ownerThread)
             return Result<std::size_t>::Failure(MakeError(SessionObserverErrors::WrongThread));
 
         std::map<std::uint64_t, PlatformSessionNotification> pending;
+        std::vector<std::shared_ptr<SessionObserverDetail::Slot>> slots;
         {
             std::lock_guard lock(state_->mutex);
             if (state_->closed)
                 return Result<std::size_t>::Failure(MakeError(SessionObserverErrors::Closed));
             if (state_->dispatching)
                 return Result<std::size_t>::Failure(MakeError(SessionObserverErrors::ReentrantDispatch));
+            slots = state_->slots;
             state_->dispatching = true;
             pending.swap(state_->pending);
         }
 
         std::size_t published{};
-        for (auto &[revision, notification] : pending) {
-            std::vector<std::shared_ptr<SessionObserverDetail::Slot>> slots;
+        for (const auto &[revision, notification] : pending) {
             {
                 std::lock_guard lock(state_->mutex);
                 if (state_->closed)
@@ -251,10 +263,10 @@ namespace Horo::PlatformServices {
                 if (revision <= state_->lastPublishedRevision || notification.snapshot.Generation().value < state_->latestSessionGeneration)
                     continue;
                 state_->lastPublishedRevision = revision;
-                slots = state_->slots;
             }
             ++published;
             for (const auto &slot : slots) {
+                std::lock_guard invocationLock(slot->invocationMutex);
                 if (!slot->active.load())
                     continue;
                 try {
@@ -273,17 +285,22 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformSessionObserver::Close */
-    Result<void> PlatformSessionObserver::Close() noexcept {
+    Result<void> PlatformSessionObserver::Close() noexcept {  // NOSONAR(cpp:S5817) The owner facade mutates shared state.
         if (!state_)
             return Result<void>::Success();
-        std::lock_guard lock(state_->mutex);
-        if (state_->closed)
-            return Result<void>::Success();
-        state_->closed = true;
-        state_->pending.clear();
-        for (const auto &slot : state_->slots)
+        std::vector<std::shared_ptr<SessionObserverDetail::Slot>> slots;
+        {
+            std::lock_guard lock(state_->mutex);
+            if (state_->closed)
+                return Result<void>::Success();
+            state_->closed = true;
+            state_->pending.clear();
+            slots.swap(state_->slots);
+        }
+        for (const auto &slot : slots) {
+            std::lock_guard invocationLock(slot->invocationMutex);
             slot->active.store(false);
-        state_->slots.clear();
+        }
         return Result<void>::Success();
     }
 

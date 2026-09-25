@@ -74,7 +74,7 @@ namespace Horo::PlatformServices {
         PlatformSessionObserverSubscription(PlatformSessionObserverSubscription &&other) noexcept;
         PlatformSessionObserverSubscription &operator=(PlatformSessionObserverSubscription &&other) noexcept;
 
-        /** @brief Deactivates the callback; a callback already executing may finish. */
+        /** @brief Deactivates the callback before return; waits for an in-flight callback unless called from that callback. */
         void Reset() noexcept;
         /** @brief Reports whether this token still owns an active registration. @return True while subscribed. */
         [[nodiscard]] bool IsActive() const noexcept;
@@ -127,6 +127,8 @@ namespace Horo::PlatformServices {
 
         /**
          * @brief Publishes all notifications present at entry on the composed engine thread.
+         * @details Captures the subscriber set before taking pending notifications. Subscriptions added by a callback
+         *          begin receiving notifications on the next Dispatch.
          * @return Number of snapshots published, or WrongThread/ReentrantDispatch/Closed.
          * @post Provider threads and callbacks are never invoked by this method's admission counterpart.
          */
@@ -134,7 +136,7 @@ namespace Horo::PlatformServices {
 
         /**
          * @brief Closes admission, revokes observers, and discards pending notifications idempotently.
-         * @return Success; no callback is invoked by Close.
+         * @return Success after active callbacks on other threads finish; no callback is invoked by Close.
          */
         [[nodiscard]] Result<void> Close() noexcept;
 

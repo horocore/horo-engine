@@ -138,6 +138,69 @@ namespace Horo::PlatformServices {
         CHECK(observer.LastPublishedRevision() == 4);
     }
 
+    TEST_CASE("A callback may revoke itself without blocking dispatch", "[platform-services][session][observer][lifecycle]") {
+        auto observer = PlatformSessionObserver::Create().Value();
+        std::optional<PlatformSessionObserverSubscription> subscription;
+        std::size_t callbackCount{};
+        auto subscribed = observer.Subscribe([&](const PlatformSessionNotification &) {
+            ++callbackCount;
+            subscription->Reset();
+        });
+        REQUIRE(subscribed.HasValue());
+        subscription.emplace(std::move(subscribed).Value());
+
+        REQUIRE(observer.Enqueue(Notification(1, 1)).HasValue());
+        REQUIRE(observer.Enqueue(Notification(2, 1)).HasValue());
+        REQUIRE(observer.Dispatch().Value() == 2);
+        CHECK(callbackCount == 1);
+        CHECK_FALSE(subscription->IsActive());
+    }
+
+    TEST_CASE("Subscriptions added during dispatch begin with the next batch", "[platform-services][session][observer][ordering]") {
+        auto observer = PlatformSessionObserver::Create().Value();
+        std::optional<PlatformSessionObserverSubscription> lateSubscription;
+        std::vector<std::uint64_t> lateRevisions;
+        auto first = observer.Subscribe([&](const PlatformSessionNotification &notification) {
+            if (notification.revision != 1)
+                return;
+            auto added = observer.Subscribe([&](const PlatformSessionNotification &later) {
+                lateRevisions.push_back(later.revision);
+            });
+            if (added.HasValue())
+                lateSubscription.emplace(std::move(added).Value());
+        });
+        REQUIRE(first.HasValue());
+
+        REQUIRE(observer.Enqueue(Notification(1, 1)).HasValue());
+        REQUIRE(observer.Enqueue(Notification(2, 1)).HasValue());
+        REQUIRE(observer.Dispatch().Value() == 2);
+        REQUIRE(lateSubscription.has_value());
+        CHECK(lateRevisions.empty());
+
+        REQUIRE(observer.Enqueue(Notification(3, 1)).HasValue());
+        REQUIRE(observer.Dispatch().Value() == 1);
+        REQUIRE(lateRevisions == std::vector<std::uint64_t>{3});
+    }
+
+    TEST_CASE("A callback may close its dispatcher without invoking remaining observers",
+              "[platform-services][session][observer][lifecycle]") {
+        auto observer = PlatformSessionObserver::Create().Value();
+        std::size_t remainingCalls{};
+        auto closing = observer.Subscribe([&](const PlatformSessionNotification &) {
+            REQUIRE(observer.Close().HasValue());
+        });
+        auto remaining = observer.Subscribe([&](const PlatformSessionNotification &) {
+            ++remainingCalls;
+        });
+        REQUIRE(closing.HasValue());
+        REQUIRE(remaining.HasValue());
+
+        REQUIRE(observer.Enqueue(Notification(1, 1)).HasValue());
+        REQUIRE(observer.Dispatch().Value() == 1);
+        CHECK(observer.IsClosed());
+        CHECK(remainingCalls == 0);
+    }
+
     TEST_CASE("Wrong-thread dispatch and shutdown fail closed without invoking callbacks",
               "[platform-services][session][observer][lifecycle]") {
         auto created = PlatformSessionObserver::Create({.maxObservers = 2, .maxPendingNotifications = 2});
