@@ -370,13 +370,31 @@ namespace {
         REQUIRE(deliveryThreads.front() == std::this_thread::get_id());
         REQUIRE(std::get<std::string>(service.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
         REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+    }
+
+    TEST_CASE("Reload Of Unchanged Values Does Not Notify", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Register(kAutosaveDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema), &events};
+        int notifications = 0;
+        const Subscription subscription = events.Subscribe<ConfigurationChangedEvent>([&](const auto &) {
+            ++notifications;
+        });
         ConfigurationResolutionRequest unchanged;
         unchanged.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
         unchanged.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
         REQUIRE(service.StageReload(unchanged).HasValue());
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        events.DispatchQueued();
+        REQUIRE(notifications == 1);
+        REQUIRE(service.StageReload(unchanged).HasValue());
         REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
         events.DispatchQueued();
-        REQUIRE(observed.size() == 1);
+        REQUIRE(notifications == 1);
+        REQUIRE(service.Snapshot().Revision() == 1);
     }
 
     TEST_CASE("Reload Rejects Whole Invalid Candidate And Cancels Pending Input", "[unit][foundation][configuration]") {

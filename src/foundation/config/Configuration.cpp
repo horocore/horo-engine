@@ -786,33 +786,35 @@ namespace Horo {
 
     /** @copydoc ConfigurationService::ActivateReload */
     Result<bool> ConfigurationService::ActivateReload(const ConfigurationReloadPoint point) {
-        std::unique_lock lock(m_mutex);
-        if (!m_pendingReload.has_value())
-            return Result<bool>::Success(false);
-        if (m_pendingReload->baseRevision != m_active->revision) {
-            m_pendingReload.reset();
-            return Result<bool>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
-        }
-
-        for (const SettingKey &key : m_pendingReload->changedKeys) {
-            const SettingDescriptor *descriptor = m_schema.FindDescriptor(key);
-            HORO_INVARIANT_MSG(descriptor != nullptr, "Resolved reload candidates contain only registered settings.");
-            if (!PermitsReload(descriptor->reloadPolicy, point))
+        std::optional<ConfigurationChangedEvent> event;
+        {
+            std::lock_guard lock(m_mutex);
+            if (!m_pendingReload.has_value())
                 return Result<bool>::Success(false);
-        }
-        PendingReload pending = std::move(*m_pendingReload);
-        m_pendingReload.reset();
-        if (pending.changedKeys.empty())
-            return Result<bool>::Success(false);
+            if (m_pendingReload->baseRevision != m_active->revision) {
+                m_pendingReload.reset();
+                return Result<bool>::Failure(ConfigurationSchema::ErrorFor(ConfigurationErrors::DraftStale));
+            }
 
-        m_active = std::move(pending.snapshot);
-        if (m_events != nullptr) {
-            ConfigurationChangedEvent event{.revision = m_active->revision,
-                                            .domain = ConfigurationDomain::All,
-                                            .changedKeys = std::move(pending.changedKeys)};
-            lock.unlock();
-            m_events->PublishAsync(std::move(event));
+            for (const SettingKey &key : m_pendingReload->changedKeys) {
+                const SettingDescriptor *descriptor = m_schema.FindDescriptor(key);
+                HORO_INVARIANT_MSG(descriptor != nullptr, "Resolved reload candidates contain only registered settings.");
+                if (!PermitsReload(descriptor->reloadPolicy, point))
+                    return Result<bool>::Success(false);
+            }
+            PendingReload pending = std::move(*m_pendingReload);
+            m_pendingReload.reset();
+            if (pending.changedKeys.empty())
+                return Result<bool>::Success(false);
+
+            m_active = std::move(pending.snapshot);
+            if (m_events != nullptr)
+                event = ConfigurationChangedEvent{.revision = m_active->revision,
+                                                  .domain = ConfigurationDomain::All,
+                                                  .changedKeys = std::move(pending.changedKeys)};
         }
+        if (event.has_value())
+            m_events->PublishAsync(std::move(*event));
         return Result<bool>::Success(true);
     }
 
