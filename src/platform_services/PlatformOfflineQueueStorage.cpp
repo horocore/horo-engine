@@ -6,9 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <cstring>
 #include <fstream>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -143,7 +143,7 @@ namespace Horo::PlatformOfflineQueue {
                     return Result<std::vector<std::byte>>::Failure(PathError(PlatformOfflineQueueErrors::CapacityExceeded, path));
                 const auto oldSize = document.size();
                 document.resize(oldSize + byteCount);
-                std::memcpy(document.data() + oldSize, buffer.data(), byteCount);
+                std::ranges::copy(std::as_bytes(std::span{buffer}.first(byteCount)), document.begin() + oldSize);
             }
             if (input.bad())
                 return Result<std::vector<std::byte>>::Failure(PathError(PlatformOfflineQueueErrors::DurableUnavailable, path));

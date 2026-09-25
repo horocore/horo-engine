@@ -5,7 +5,6 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <latch>
@@ -58,8 +57,7 @@ namespace {
 
     [[nodiscard]] std::vector<std::byte> Bytes(const std::string_view text) {
         std::vector<std::byte> bytes(text.size());
-        if (!text.empty())
-            std::memcpy(bytes.data(), text.data(), text.size());
+        std::ranges::copy(std::as_bytes(std::span{text.data(), text.size()}), bytes.begin());
         return bytes;
     }
 
