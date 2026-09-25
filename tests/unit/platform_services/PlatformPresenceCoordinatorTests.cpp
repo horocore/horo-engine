@@ -145,6 +145,43 @@ namespace Horo::PlatformServices {
                      PresenceCoordinatorErrors::DetailForbidden);
     }
 
+    TEST_CASE("Ignored presence duplicates do not consume publication sequences", "[platform-services][presence][coalescing]") {
+        const PresenceFixture fixture;
+        const auto session = ActiveSession();
+        const auto subject = *session.Subject();
+        auto coordinator = Coordinator(fixture, session);
+        const auto now = std::chrono::steady_clock::time_point{};
+
+        CHECK(coordinator.LastSequence() == 0);
+        REQUIRE(coordinator.SubmitSet({subject, session.AccessRevision(), fixture.status, "playing"}).Value() ==
+                PlatformPresenceAdmission::Queued);
+        CHECK(coordinator.LastSequence() == 1);
+        CHECK(coordinator.SubmitSet({subject, session.AccessRevision(), fixture.status, "playing"}).Value() ==
+              PlatformPresenceAdmission::IgnoredDuplicate);
+        CHECK(coordinator.LastSequence() == 1);
+
+        const auto first = coordinator.TakeReady(now);
+        REQUIRE(first.HasValue());
+        REQUIRE(first.Value().has_value());
+        CHECK(first.Value()->intent.sequence == 1);
+        CHECK(coordinator.SubmitSet({subject, session.AccessRevision(), fixture.status, "playing"}).Value() ==
+              PlatformPresenceAdmission::IgnoredDuplicate);
+        CHECK(coordinator.LastSequence() == 1);
+
+        REQUIRE(coordinator.SubmitClear({subject, session.AccessRevision()}).Value() == PlatformPresenceAdmission::Queued);
+        CHECK(coordinator.LastSequence() == 2);
+        CHECK(coordinator.SubmitClear({subject, session.AccessRevision()}).Value() == PlatformPresenceAdmission::IgnoredDuplicate);
+        CHECK(coordinator.LastSequence() == 2);
+        REQUIRE(coordinator.Complete(*first.Value(), PlatformPresencePublicationOutcome::Succeeded, now).HasValue());
+
+        const auto clear = coordinator.TakeReady(now);
+        REQUIRE(clear.HasValue());
+        REQUIRE(clear.Value().has_value());
+        CHECK(clear.Value()->intent.sequence == 2);
+        CHECK(coordinator.SubmitClear({subject, session.AccessRevision()}).Value() == PlatformPresenceAdmission::IgnoredDuplicate);
+        CHECK(coordinator.LastSequence() == 2);
+    }
+
     TEST_CASE("Presence publication coalesces while in flight and respects the minimum interval",
               "[platform-services][presence][coalescing]") {
         const PresenceFixture fixture;

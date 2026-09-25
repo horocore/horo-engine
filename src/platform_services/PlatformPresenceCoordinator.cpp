@@ -152,7 +152,7 @@ namespace Horo::PlatformServices {
                 .accessRevision = request.accessRevision,
                 .status = request.status,
                 .detail = std::move(request.detail),
-                .sequence = nextSequence_++};
+                .sequence = nextSequence_};
     }
 
     PlatformPresenceIntent PlatformPresenceCoordinator::MakeClearIntent(PlatformPresenceClearRequest request) {
@@ -162,7 +162,7 @@ namespace Horo::PlatformServices {
                 .accessRevision = request.accessRevision,
                 .status = std::nullopt,
                 .detail = {},
-                .sequence = nextSequence_++};
+                .sequence = nextSequence_};
     }
 
     bool PlatformPresenceCoordinator::SameIntent(const PlatformPresenceIntent &left, const PlatformPresenceIntent &right) noexcept {
@@ -184,6 +184,7 @@ namespace Horo::PlatformServices {
             return Result<PlatformPresenceAdmission>::Success(PlatformPresenceAdmission::IgnoredDuplicate);
         const auto admission = pending_ ? PlatformPresenceAdmission::Coalesced : PlatformPresenceAdmission::Queued;
         pending_ = std::move(intent);
+        ++nextSequence_;
         return Result<PlatformPresenceAdmission>::Success(admission);
     }
 
@@ -201,6 +202,7 @@ namespace Horo::PlatformServices {
             return Result<PlatformPresenceAdmission>::Success(PlatformPresenceAdmission::IgnoredDuplicate);
         const auto admission = pending_ ? PlatformPresenceAdmission::Coalesced : PlatformPresenceAdmission::Queued;
         pending_ = std::move(intent);
+        ++nextSequence_;
         return Result<PlatformPresenceAdmission>::Success(admission);
     }
 
