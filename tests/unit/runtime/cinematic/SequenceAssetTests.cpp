@@ -141,6 +141,41 @@ namespace Horo::Cinematic {
         RequireError(ParseSequenceAsset(invalidTrack), CinematicErrors::SequenceSchemaMalformed);
     }
 
+    TEST_CASE("Sequence source rejects path-shaped dependencies and hostile numeric encodings",
+              "[unit][cinematic][sequence-parser][qualification]") {
+        const std::array invalidAssets{"../Audio/intro.wav", R"(C:\\Cinematics\\intro.wav)", "/assets/cinematics/intro.wav",
+                                       "assets/\xc3\xbc"
+                                       "ber/intro.wav",
+                                       "00000000-0000-0000-0000-00000000000A"};
+        for (const std::string &candidate : invalidAssets) {
+            std::string source = ValidJson();
+            ReplaceFirst(source, "00000000-0000-0000-0000-000000000002", candidate);
+            RequireError(ParseSequenceAsset(source), CinematicErrors::SequenceSchemaMalformed);
+        }
+
+        const std::array invalidNumbers{std::pair{R"("durationFrames":240)", R"("durationFrames":-1)"},
+                                        std::pair{R"("durationFrames":240)", R"("durationFrames":1.5)"},
+                                        std::pair{R"("durationFrames":240)", R"("durationFrames":18446744073709551616)"},
+                                        std::pair{R"("numerator":24)", R"("numerator":4294967296)"},
+                                        std::pair{R"("keyframeCount":2)", R"("keyframeCount":65537)"}};
+        for (const auto &[from, to] : invalidNumbers) {
+            std::string source = ValidJson();
+            ReplaceFirst(source, from, to);
+            const auto parsed = ParseSequenceAsset(source);
+            REQUIRE(parsed.HasError());
+            CHECK((parsed.ErrorValue().code.Value() == CinematicErrors::SequenceSchemaMalformed.code.Value() ||
+                   parsed.ErrorValue().code.Value() == CinematicErrors::SequenceSchemaLimitExceeded.code.Value()));
+        }
+
+        std::string embeddedNull = ValidJson();
+        ReplaceFirst(embeddedNull, R"("name":"Intro")", R"("name":"Intro\u0000Extra")");
+        RequireError(ParseSequenceAsset(embeddedNull), CinematicErrors::SequenceSchemaMalformed);
+
+        std::string invalidUtf8 = ValidJson();
+        ReplaceFirst(invalidUtf8, "Intro", std::string{"\xff"});
+        RequireError(ParseSequenceAsset(invalidUtf8), CinematicErrors::SequenceSchemaMalformed);
+    }
+
     TEST_CASE("Sequence parser rejects oversized and deeply nested hostile input", "[unit][cinematic][sequence-parser]") {
         SequenceSchemaLimits limits;
         limits.maximumSourceBytes = ValidJson().size();
