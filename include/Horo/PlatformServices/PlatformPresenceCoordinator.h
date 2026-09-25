@@ -191,7 +191,7 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<void> ValidateSet(const PlatformPresenceSetRequest &request) const;
         [[nodiscard]] Result<void> ValidateClear(const PlatformPresenceClearRequest &request) const;
         [[nodiscard]] PlatformPresenceIntent MakeSetIntent(PlatformPresenceSetRequest request);
-        [[nodiscard]] PlatformPresenceIntent MakeClearIntent(PlatformPresenceClearRequest request);
+        [[nodiscard]] PlatformPresenceIntent MakeClearIntent(const PlatformPresenceClearRequest &request);
         [[nodiscard]] static bool SameIntent(const PlatformPresenceIntent &left, const PlatformPresenceIntent &right) noexcept;
 
         std::shared_ptr<const PresenceDefinitionRegistry> registry_;

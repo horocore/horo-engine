@@ -132,8 +132,8 @@ namespace Horo::PlatformServices {
         const auto &presence = *definition.Value();
         if (presence.detailPolicy == PresenceDetailPolicy::Forbidden && !request.detail.empty())
             return Failure(PresenceCoordinatorErrors::DetailForbidden);
-        const auto maximumDetailBytes = std::min<std::size_t>(config_.maximumDetailBytes, presence.maximumDetailUtf8Bytes);
-        if (request.detail.size() > maximumDetailBytes)
+        if (const auto maximumDetailBytes = std::min<std::size_t>(config_.maximumDetailBytes, presence.maximumDetailUtf8Bytes);
+            request.detail.size() > maximumDetailBytes)
             return Failure(PresenceCoordinatorErrors::DetailTooLarge);
         if (!IsValidUtf8ScalarSequence(request.detail))
             return Failure(PresenceCoordinatorErrors::DetailInvalidUtf8);
@@ -155,7 +155,7 @@ namespace Horo::PlatformServices {
                 .sequence = nextSequence_};
     }
 
-    PlatformPresenceIntent PlatformPresenceCoordinator::MakeClearIntent(PlatformPresenceClearRequest request) {
+    PlatformPresenceIntent PlatformPresenceCoordinator::MakeClearIntent(const PlatformPresenceClearRequest &request) {
         return {.operation = PlatformPresenceOperation::Clear,
                 .subject = request.subject,
                 .sessionGeneration = session_.Generation(),
@@ -172,6 +172,7 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformPresenceCoordinator::SubmitSet */
     Result<PlatformPresenceAdmission> PlatformPresenceCoordinator::SubmitSet(PlatformPresenceSetRequest request) {
+        using enum PlatformPresenceAdmission;
         if (closed_)
             return Result<PlatformPresenceAdmission>::Failure(MakeError(PresenceCoordinatorErrors::Closed));
         if (const auto valid = ValidateSet(request); valid.HasError())
@@ -179,10 +180,10 @@ namespace Horo::PlatformServices {
 
         auto intent = MakeSetIntent(std::move(request));
         if (pending_ && SameIntent(*pending_, intent))
-            return Result<PlatformPresenceAdmission>::Success(PlatformPresenceAdmission::IgnoredDuplicate);
+            return Result<PlatformPresenceAdmission>::Success(IgnoredDuplicate);
         if (!pending_ && inFlight_ && SameIntent(inFlight_->intent, intent))
-            return Result<PlatformPresenceAdmission>::Success(PlatformPresenceAdmission::IgnoredDuplicate);
-        const auto admission = pending_ ? PlatformPresenceAdmission::Coalesced : PlatformPresenceAdmission::Queued;
+            return Result<PlatformPresenceAdmission>::Success(IgnoredDuplicate);
+        const auto admission = pending_ ? Coalesced : Queued;
         pending_ = std::move(intent);
         ++nextSequence_;
         return Result<PlatformPresenceAdmission>::Success(admission);
@@ -190,6 +191,7 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformPresenceCoordinator::SubmitClear */
     Result<PlatformPresenceAdmission> PlatformPresenceCoordinator::SubmitClear(PlatformPresenceClearRequest request) {
+        using enum PlatformPresenceAdmission;
         if (closed_)
             return Result<PlatformPresenceAdmission>::Failure(MakeError(PresenceCoordinatorErrors::Closed));
         if (const auto valid = ValidateClear(request); valid.HasError())
@@ -197,10 +199,10 @@ namespace Horo::PlatformServices {
 
         auto intent = MakeClearIntent(std::move(request));
         if (pending_ && SameIntent(*pending_, intent))
-            return Result<PlatformPresenceAdmission>::Success(PlatformPresenceAdmission::IgnoredDuplicate);
+            return Result<PlatformPresenceAdmission>::Success(IgnoredDuplicate);
         if (!pending_ && inFlight_ && SameIntent(inFlight_->intent, intent))
-            return Result<PlatformPresenceAdmission>::Success(PlatformPresenceAdmission::IgnoredDuplicate);
-        const auto admission = pending_ ? PlatformPresenceAdmission::Coalesced : PlatformPresenceAdmission::Queued;
+            return Result<PlatformPresenceAdmission>::Success(IgnoredDuplicate);
+        const auto admission = pending_ ? Coalesced : Queued;
         pending_ = std::move(intent);
         ++nextSequence_;
         return Result<PlatformPresenceAdmission>::Success(admission);
@@ -237,13 +239,14 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformPresenceCoordinator::UpdateSession */
     Result<PlatformPresenceSessionUpdate> PlatformPresenceCoordinator::UpdateSession(PlatformSessionSnapshot session) {
+        using enum PlatformPresenceSessionUpdate;
         if (closed_)
             return Result<PlatformPresenceSessionUpdate>::Failure(MakeError(PresenceCoordinatorErrors::Closed));
         if (session.Generation() < session_.Generation() || session.AccessRevision() < session_.AccessRevision() ||
             (session.Generation() == session_.Generation() && session.ProviderGeneration() != session_.ProviderGeneration()))
             return Result<PlatformPresenceSessionUpdate>::Failure(MakeError(PlatformSessionErrors::StaleSession));
         if (SameSessionAuthority(session_, session))
-            return Result<PlatformPresenceSessionUpdate>::Success(PlatformPresenceSessionUpdate::Unchanged);
+            return Result<PlatformPresenceSessionUpdate>::Success(Unchanged);
 
         session_ = std::move(session);
         pending_.reset();
@@ -251,8 +254,7 @@ namespace Horo::PlatformServices {
         lastCompletedAt_.reset();
         const bool usable = session_.Phase() == PlatformSessionPhase::Active && session_.Subject() &&
                             session_.Capabilities().Access(PlatformServiceKind::Presence) == PlatformSessionAccessState::Granted;
-        return Result<PlatformPresenceSessionUpdate>::Success(usable ? PlatformPresenceSessionUpdate::Replaced
-                                                                     : PlatformPresenceSessionUpdate::Invalidated);
+        return Result<PlatformPresenceSessionUpdate>::Success(usable ? Replaced : Invalidated);
     }
 
     /** @copydoc PlatformPresenceCoordinator::Close */
