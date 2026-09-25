@@ -6,6 +6,8 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Runtime/Input.h"
+#include "editor/ui_preview/AssetImportPreviewModal.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 #include "editor/ui_preview/EditorUiPreviewGallery.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
@@ -225,13 +227,13 @@ TEST_CASE("Asset import preview fixtures render populated and empty workflow sta
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
 
-    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+    auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
     auto *const modalPtr = modal.get();
-    modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Populated);
+    modalPtr->SetScenario(AssetImportPreviewScenario::Populated);
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);
 
-    REQUIRE(modalPtr->IsUiPreview());
+    REQUIRE(modalPtr->IsReadOnlyPresentation());
     REQUIRE(modalPtr->Snapshot().items.size() == 4);
     REQUIRE(modalPtr->SourceFileSize(0).value() == 12'400'000);
     ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -259,14 +261,14 @@ TEST_CASE("Asset import preview fixture renders an empty queue", "[unit][editor]
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
 
-    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+    auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
     auto *const modalPtr = modal.get();
-    modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Empty);
+    modalPtr->SetScenario(AssetImportPreviewScenario::Empty);
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);
     DrawFrame(imgui, *modalPtr);
 
-    REQUIRE(modalPtr->IsUiPreview());
+    REQUIRE(modalPtr->IsReadOnlyPresentation());
     REQUIRE(modalPtr->Snapshot().items.empty());
 }
 
@@ -282,8 +284,13 @@ TEST_CASE("Editor UI preview gallery renders both interaction states", "[unit][e
     imgui.EndFrame();
     REQUIRE_FALSE(initialSelection.has_value());
 
+    const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
+    REQUIRE(gallery != nullptr);
+    const float firstButtonTop = EditorUiPreviewHeaderHeight + 54.0F;
+    const float buttonHeight = 38.0F;
+    const float secondButtonCenter = firstButtonTop + buttonHeight + ImGui::GetStyle().ItemSpacing.y + buttonHeight * 0.5F;
     ImGuiIO &io = ImGui::GetIO();
-    io.AddMousePosEvent(120.0F, 137.0F);
+    io.AddMousePosEvent(gallery->Pos.x + EditorUiPreviewSidebarWidth * 0.5F, gallery->Pos.y + secondButtonCenter);
     imgui.BeginFrame();
     const auto hoveredSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
     imgui.EndFrame();
@@ -312,13 +319,13 @@ TEST_CASE("Asset import preview fixtures expose deterministic populated and empt
         EditorDataBus events;
         Input::InputRouter inputRouter;
         EditorModalHost modalHost{events, inputRouter};
-        auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+        auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
         auto *const modalPtr = modal.get();
-        modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Populated);
+        modalPtr->SetScenario(AssetImportPreviewScenario::Populated);
         REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
         modalHost.OnUpdate(0.016F);
 
-        REQUIRE(modalPtr->IsUiPreview());
+        REQUIRE(modalPtr->IsReadOnlyPresentation());
         REQUIRE(modalPtr->Snapshot().items.size() == 4);
         REQUIRE(modalPtr->Snapshot().items.front().displayName == "hero");
         REQUIRE(modalPtr->Snapshot().items.back().diagnostics.size() == 1);
@@ -330,13 +337,13 @@ TEST_CASE("Asset import preview fixtures expose deterministic populated and empt
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
-    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
+    auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
     auto *const modalPtr = modal.get();
-    modalPtr->RequestUiPreviewFixture(AssetImportModal::UiPreviewFixture::Empty);
+    modalPtr->SetScenario(AssetImportPreviewScenario::Empty);
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);
 
-    REQUIRE(modalPtr->IsUiPreview());
+    REQUIRE(modalPtr->IsReadOnlyPresentation());
     REQUIRE(modalPtr->Snapshot().items.empty());
     DrawFrame(imgui, *modalPtr);
 }

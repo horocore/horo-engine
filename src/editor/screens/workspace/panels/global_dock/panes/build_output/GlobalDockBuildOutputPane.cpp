@@ -449,7 +449,6 @@ namespace Horo::Editor {
         }
     }
 
-
     bool GlobalDockBuildOutputPane::RefreshSnapshot() {
         if (m_buildOutputQuery == nullptr)
             return false;

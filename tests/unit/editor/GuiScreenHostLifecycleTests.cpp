@@ -11,9 +11,8 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
-#include "editor/modals/build/BuildWorkflowPreviewModal.h"
-#include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/project_model/RendererAvailability.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <imgui_internal.h>
@@ -31,7 +30,6 @@ namespace {
         int enters = 0;
         int leaves = 0;
         int destructions = 0;
-        int menuInvocations = 0;
     };
 
     class RecordingScreen final : public GuiScreen {
@@ -55,11 +53,6 @@ namespace {
 
         void Draw(const GuiContentRegion &) override {}
 
-        bool HandleMenuInvocation(const EditorMenuInvocation &) override {
-            ++stats_.menuInvocations;
-            return true;
-        }
-
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
             return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
         }
@@ -75,21 +68,6 @@ namespace {
     private:
         ScreenStats &stats_;
     };
-
-    void VerifyMenuInputBarrier(GuiScreenHost &host, Input::InputRouter &input, const ScreenStats &stats) {
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        auto modalContext = input.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        modalContext.Reset();
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        const Input::RawInputSnapshot nextFrame;
-        input.BeginFrame(nextFrame);
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 2);
-    }
 
     void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
         host.Shutdown();
@@ -134,18 +112,6 @@ namespace {
         REQUIRE(modals.RequestClose(*previewModalId, ModalCloseReason::Cancelled).HasValue());
         modals.OnUpdate(0.016F);
         REQUIRE_FALSE(modals.HasOpenModal());
-
-        for (const char *scenario : {"build", "run-tests", "prepare-release", "publish-candidate"}) {
-            REQUIRE(host.OpenUiPreview(scenario));
-            imgui.BeginFrame();
-            host.Draw();
-            imgui.EndFrame();
-            const auto workflowModalId = modals.TopModalId();
-            REQUIRE(workflowModalId.has_value());
-            REQUIRE(modals.RequestClose(*workflowModalId, ModalCloseReason::Cancelled).HasValue());
-            modals.OnUpdate(0.016F);
-            REQUIRE_FALSE(modals.HasOpenModal());
-        }
 
         const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
         REQUIRE(gallery != nullptr);
@@ -202,7 +168,6 @@ namespace {
         REQUIRE((host.Start(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasValue()));
         REQUIRE((stats.enters == 1));
         REQUIRE((!host.Services().Empty()));
-        VerifyMenuInputBarrier(host, input, stats);
 
         const Result<void> invalidRoute = host.Navigate(GuiRoute{GuiRouteKind::Welcome, ProjectCreationRouteParameters{}});
         REQUIRE((invalidRoute.HasError()));
@@ -241,25 +206,6 @@ namespace {
                            ScreenRegistry{},
                            WorkspacePanelRegistry{}};
         ExerciseUiPreviewScenarios(host, modals, imgui);
-
-        const auto galleryModalId = modals.TopModalId();
-        REQUIRE(galleryModalId.has_value());
-        REQUIRE(modals.RequestClose(*galleryModalId, ModalCloseReason::Cancelled).HasValue());
-        modals.OnUpdate(0.016F);
-        BuildWorkflowPreviewState activity;
-        REQUIRE(activity.Start(BuildPreviewRequest{.kind = BuildPreviewKind::Build,
-                                                   .target = "Game Runtime · Linux · x86_64 · Development",
-                                                   .output = "builds/local"}));
-        REQUIRE(modals.OpenRoot(std::make_unique<BuildWorkflowPreviewModal>(gui, activity, BuildPreviewKind::Build)).HasValue());
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-        for (int stage = 0; stage < 4; ++stage)
-            activity.Update(1.8F);
-        REQUIRE(activity.Job()->status == BuildPreviewStatus::Completed);
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
 
         host.Shutdown();
         CHECK(host.IsShutdown());

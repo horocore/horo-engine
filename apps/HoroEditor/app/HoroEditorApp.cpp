@@ -84,6 +84,7 @@
 #include <imgui_impl_sdl3.h>
 #include <memory>
 #include <optional>
+#include <portable-file-dialogs.h>
 #include <span>
 #include <string>
 #include <string_view>
@@ -104,6 +105,32 @@
 namespace Horo::Editor {
     namespace {
         using Theme::Fonts;
+
+        /** @brief Desktop picker adapter composed only by the graphical editor host. */
+        class PfdNativeDialogs final : public NativeDialogs {
+        public:
+            std::vector<std::filesystem::path> ChooseOpenFiles(const std::string_view title) override {
+                std::vector<std::filesystem::path> selected;
+                for (const std::string &utf8Path :
+                     pfd::open_file(std::string{title}, "", {"All Files", "*"}, pfd::opt::multiselect).result())
+                    selected.push_back(FromUtf8(utf8Path));
+                return selected;
+            }
+
+            std::optional<std::filesystem::path> ChooseFolder(const std::string_view title) override {
+                const std::string utf8Path = pfd::select_folder(std::string{title}).result();
+                if (utf8Path.empty())
+                    return std::nullopt;
+                return FromUtf8(utf8Path);
+            }
+
+        private:
+            /** @brief Converts the UTF-8 path returned by the picker to the native path representation. */
+            [[nodiscard]] static std::filesystem::path FromUtf8(const std::string &utf8Path) {
+                const auto *bytes = reinterpret_cast<const char8_t *>(utf8Path.data());
+                return std::filesystem::path{std::u8string{bytes, utf8Path.size()}};
+            }
+        };
 
         class PreparedAssetRegistryState final : public IPreparedProjectOpenDerivedState {
         public:
@@ -934,8 +961,7 @@ namespace Horo::Editor {
                     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0F, 0.0F, 0.0F, 1.0F});
                     ImGui::Begin("##ModalWorkspaceBackdrop", nullptr,
                                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
-                                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+                                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus);
                     ImGui::End();
                     ImGui::PopStyleColor();
                     ImGui::PopStyleVar();
@@ -1131,6 +1157,7 @@ namespace Horo::Editor {
             }
             Extensions::ExtensionMarketplaceService extensionMarketplace{p.jobSystem, extensionInventory,
                                                                          Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
+            PfdNativeDialogs nativeDialogs;
             GuiScreenHost screenHost{guiContext,
                                      p.modalHost,
                                      p.settings,
@@ -1144,7 +1171,8 @@ namespace Horo::Editor {
                                      std::move(workspacePanelRegistry),
                                      (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
                                      extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                     extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr};
+                                     extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                     &nativeDialogs};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);

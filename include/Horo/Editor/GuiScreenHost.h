@@ -12,7 +12,6 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Result.h"
 
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -44,7 +43,6 @@ namespace Horo::Editor {
     class ProjectCreationService;
     class RendererAvailabilitySnapshot;
     class EditorStatusBar;
-    class BuildWorkflowPreviewState;
 
     /**
      * @file GuiScreenHost.h
@@ -162,11 +160,8 @@ namespace Horo::Editor {
         /** @brief Updates the active screen and checks pending leave dialogs. */
         void OnUpdate(float dt);
 
-        /** @brief Offers the committed routed snapshot to the active screen before fixed simulation. */
-        void OnInputSnapshot();
-
         /** @brief Routes one host fixed tick to the active screen. */
-        void OnFixedUpdate(std::uint64_t simulationTick, double fixedDeltaSeconds);
+        void OnFixedUpdate(double fixedDeltaSeconds);
 
         /** @brief Renders the active screen and any active leave-resolution modals. */
         void Draw();
@@ -213,7 +208,6 @@ namespace Horo::Editor {
 
         const EditorGuiContext *context_;
         EditorModalHost *modalHost_;
-        Input::InputRouter *inputRouter_;
         EditorSettingsService *settingsService_;
         LocalizationService *localization_;
         EngineDataBus *engineEvents_;
@@ -221,13 +215,13 @@ namespace Horo::Editor {
         Extensions::ExtensionInventory *extensionInventory_{};
         Extensions::ExtensionMarketplaceService *extensionMarketplace_{};
         NativeDialogs *nativeDialogs_{};
+        Input::InputRouter *inputRouter_{};
 
         EditorServiceRegistry services_;
         ScreenRegistry screenRegistry_;
         WorkspacePanelRegistry workspacePanelRegistry_;
         EditorStatusItemRegistry statusItemRegistry_;
         std::unique_ptr<EditorStatusBar> statusBar_;
-        std::unique_ptr<BuildWorkflowPreviewState> buildPreviewState_;
         std::vector<std::string_view> activeStatusPanelIds_;
 
         JobSystem m_importJobs{JobSystemConfig{.workerCount = 1}};
