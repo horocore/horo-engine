@@ -53,6 +53,36 @@ namespace Horo::Runtime {
             SaveParticipantRegistrySnapshot participants_;
         };
 
+        struct DetachedCompletion final {
+            bool bytesStayedImmutable{};
+            std::optional<Result<void>> publication;
+        };
+
+        /** @brief Observes detached bytes and publishes the worker completion after scene replacement. */
+        DetachedCompletion CompleteDetachedCapture(SaveSafePointCoordinator &coordinator, const RuntimeSaveSnapshot &snapshot,
+                                                   const SaveRuntimeGeneration generation) {
+            DetachedCompletion result;
+            std::thread worker([&] {
+                result.bytesStayedImmutable = snapshot.Records().front().Segment(0)[0] == std::byte{0x31};
+                result.publication = coordinator.PublishWorkerCompletion(
+                    {.operation = 31, .generation = generation, .outcome = SaveWorkerCompletionOutcome::Succeeded});
+            });
+            worker.join();
+            return result;
+        }
+
+        /** @brief Reports measured safe-point handoff latency after the sample has been sorted. */
+        void PrintCaptureHandoffEvidence(const std::vector<std::chrono::nanoseconds> &durations) {
+            const auto micros = [](const std::chrono::nanoseconds value) {
+                return std::chrono::duration_cast<std::chrono::microseconds>(value).count();
+            };
+            std::cout << "save capture handoff: 2048 scene entities x 32B, 2048 physics states x 64B, "
+                         "256 inventory entries x 32B; 200 measured iterations; 200KiB total; "
+                         "p50="
+                      << micros(durations[99]) << "us p95=" << micros(durations[189]) << "us max=" << micros(durations.back())
+                      << "us; budget p95<=2000us\n";
+        }
+
         TEST_CASE("Headless safe-point capture survives scene replacement without a borrowed payload or stale callback",
                   "[unit][save][qualification]") {
             auto destructionCount = std::make_shared<int>(0);
@@ -87,17 +117,10 @@ namespace Horo::Runtime {
             executor.ReleaseRegistry();
             participants = {};
 
-            std::optional<Result<void>> completion;
-            bool observedDetachedBytes{};
-            std::thread worker([&] {
-                observedDetachedBytes = executor.snapshot->Records().front().Segment(0)[0] == std::byte{0x31};
-                completion = coordinator->PublishWorkerCompletion(
-                    {.operation = 31, .generation = generation, .outcome = SaveWorkerCompletionOutcome::Succeeded});
-            });
-            worker.join();
-            REQUIRE(completion.has_value());
-            REQUIRE(completion->HasValue());
-            CHECK(observedDetachedBytes);
+            const DetachedCompletion completion = CompleteDetachedCapture(*coordinator, *executor.snapshot, generation);
+            REQUIRE(completion.publication.has_value());
+            REQUIRE(completion.publication->HasValue());
+            CHECK(completion.bytesStayedImmutable);
             CHECK(coordinator->Snapshot(31).Value().state == SaveSafePointOperationState::Completed);
             RequireError(coordinator->PublishWorkerCompletion(
                              {.operation = 31, .generation = generation, .outcome = SaveWorkerCompletionOutcome::Succeeded}),
@@ -156,14 +179,7 @@ namespace Horo::Runtime {
                     durations.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed));
             }
             std::ranges::sort(durations);
-            const auto micros = [](const std::chrono::nanoseconds value) {
-                return std::chrono::duration_cast<std::chrono::microseconds>(value).count();
-            };
-            std::cout << "save capture handoff: 2048 scene entities x 32B, 2048 physics states x 64B, "
-                         "256 inventory entries x 32B; 200 measured iterations; 200KiB total; "
-                         "p50="
-                      << micros(durations[99]) << "us p95=" << micros(durations[189]) << "us max=" << micros(durations.back())
-                      << "us; budget p95<=2000us\n";
+            PrintCaptureHandoffEvidence(durations);
         }
     }  // namespace
 }  // namespace Horo::Runtime
