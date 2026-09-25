@@ -1207,6 +1207,14 @@ session generation increases on bind, sign-out, account switch/invalidation and
 provider replacement. Subject-preserving access changes increment the access revision;
 identity uncertainty closes/rebinds a new generation.
 
+Implementation status for PLS-006.3: `PlatformSessionObserver` binds dispatch to the
+engine thread that composes it. Provider callbacks only enqueue copied revisioned
+snapshots into a finite ordered queue; they never run observer code. Dispatch sorts
+out-of-order revisions, evicts pending snapshots from older session generations when
+a replacement arrives, rejects late stale evidence, and invokes callbacks outside the
+state lock. Move-only subscriptions revoke safely during or between dispatch turns;
+recursive dispatch, queue pressure, wrong-thread calls and shutdown are typed outcomes.
+
 The private identity/profile service maps a provider stable authenticated subject to a
 pseudonymous product/provider-scoped binding, ADR-113 `LocalUserStorageId` and explicit
 `GameProfileId`. Raw account ID, gamertag, email, native handle or credentials do not
