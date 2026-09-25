@@ -7,9 +7,11 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Time.h"
+#include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsDeterminismPolicy.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace Horo::Physics {
     /** @brief Hard admission bound for optional solver-neutral child work in one fixed tick. */
@@ -50,6 +52,31 @@ namespace Horo::Physics {
         PostStep
     };
 
+    /** @brief Explicit activation policy after a body change; shape or mode changes always wake moving bodies. */
+    enum class PhysicsBodyWakePolicy : std::uint8_t {
+        Preserve,
+        Wake
+    };
+
+    /**
+     * @brief Owned partial replacement of one resident scene body at the pre-step safe point.
+     *
+     * Absent fields retain their current policy and velocity. Shape and mode changes rebuild the
+     * broadphase/contact representation in place and wake moving bodies. No pose or native ID is
+     * accepted; the body retains its current solver pose and Horo handle. A constrained body cannot
+     * be changed until a qualified constraint-reconciliation path exists.
+     */
+    struct PhysicsBodyMutation final {
+        BodyHandle body;
+        std::optional<ShapeHandle> shape;
+        std::optional<PhysicsMotionType> motion;
+        std::optional<PhysicsMassPolicy> mass;
+        std::optional<PhysicsMotionSafety> motionSafety;
+        std::optional<Math::Vec3> linearVelocity;
+        std::optional<Math::Vec3> angularVelocity;
+        PhysicsBodyWakePolicy wake{PhysicsBodyWakePolicy::Preserve}; /**< Explicit override for otherwise non-waking damping edits. */
+    };
+
     /**
      * @brief Bounded structural-command envelope retained by value until one fixed-tick safe point.
      *
@@ -60,6 +87,7 @@ namespace Horo::Physics {
      */
     struct PhysicsStructuralCommand final {
         PhysicsCommandOrderKey order; /**< Complete tick/world/scene/target/source canonical key. */
+        std::optional<PhysicsBodyMutation> bodyMutation; /**< Only Change/Body commands may carry a native mutation. */
     };
 
     /** @brief Non-throwing command admission result; rejected work remains owned by the caller. */

@@ -205,7 +205,7 @@ namespace Horo::Physics::Detail {
             return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (impl.state == PhysicsWorldState::ActiveNull)
             return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
-        if (impl.state != PhysicsWorldState::ActiveSolver || impl.stepping)
+        if (impl.state != PhysicsWorldState::ActiveSolver || impl.runtime->state != PhysicsRuntimeState::Ready || impl.stepping)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         return Result<void>::Success();
     }

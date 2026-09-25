@@ -131,7 +131,7 @@ namespace Horo::Physics {
         const auto canonicalWorld =
             static_cast<std::uint8_t>(impl_->mode == PhysicsRuntimeMode::Canonical) *
             static_cast<std::uint8_t>(capability == WorldCreation || capability == RigidBodies || capability == ImmutableShapes ||
-                                      capability == Constraints || capability == ImmediateQueries);
+                                      capability == Constraints || capability == ImmediateQueries || capability == BodyMutation);
         const auto ready = static_cast<std::uint8_t>(impl_->state == PhysicsRuntimeState::Ready);
         return static_cast<PhysicsCapabilitySupport>(static_cast<std::uint8_t>(PhysicsCapabilitySupport::Unsupported) +
                                                      canonicalWorld * (1U + ready));
@@ -232,10 +232,30 @@ namespace Horo::Physics {
             return Result<PhysicsCommandAdmission>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (impl_->state == PhysicsWorldState::ActiveNull)
             return Result<PhysicsCommandAdmission>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
-        if (impl_->state != PhysicsWorldState::ActiveSolver)
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready)
             return Result<PhysicsCommandAdmission>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (const Result<void> valid = ValidatePhysicsCommandOrderKey(command.order); valid.HasError())
             return Result<PhysicsCommandAdmission>::Failure(valid.ErrorValue());
+        if (command.bodyMutation) {
+            if (impl_->stepping)
+                return Result<PhysicsCommandAdmission>::Failure(
+                    MakeError(PhysicsErrors::InvalidState, "Body mutations must be admitted between fixed ticks."));
+            if (command.order.commandKind != PhysicsStructuralCommandKind::Change ||
+                command.order.targetKind != PhysicsCommandTargetKind::Body ||
+                command.order.targetIdentity != static_cast<std::uint64_t>(command.bodyMutation->body.slot.index) + 1U)
+                return Result<PhysicsCommandAdmission>::Failure(
+                    MakeError(PhysicsErrors::CommandOrderInvalid, "Body mutation order key must name its exact body slot."));
+            if (const auto resolved = Detail::ResolveCanonicalBodyMutation(impl_->native, impl_->identity, *command.bodyMutation);
+                resolved.HasError())
+                return Result<PhysicsCommandAdmission>::Failure(resolved.ErrorValue());
+            for (std::uint32_t index = 0; index < impl_->commandCount; ++index) {
+                const auto &existing = impl_->CommandAt(index);
+                if (existing.bodyMutation && existing.order.simulationTick == command.order.simulationTick &&
+                    existing.bodyMutation->body == command.bodyMutation->body)
+                    return Result<PhysicsCommandAdmission>::Failure(
+                        MakeError(PhysicsErrors::CommandOrderInvalid, "A body already has a mutation for this tick."));
+            }
+        }
         if (const std::uint64_t completedOrActiveTick = impl_->stepping ? impl_->activeTick : impl_->published.completedTick;
             command.order.simulationTick <= completedOrActiveTick || command.order.worldGeneration != impl_->identity.Value())
             return Result<PhysicsCommandAdmission>::Failure(
@@ -257,6 +277,28 @@ namespace Horo::Physics {
         impl_->statistics.pendingCommands = impl_->commandCount;
         impl_->statistics.maximumCommandDepth = std::max(impl_->statistics.maximumCommandDepth, impl_->commandCount);
         return Result<PhysicsCommandAdmission>::Success({PhysicsCommandAdmissionStatus::Deferred, impl_->commandCount});
+    }
+
+    /** @copydoc PhysicsWorld::ReadSceneBodyPolicy */
+    Result<PhysicsBodyDescriptor> PhysicsWorld::ReadSceneBodyPolicy(const BodyHandle body) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready || impl_->stepping)
+            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::InvalidState));
+        return Detail::ReadCanonicalSceneBodyPolicy(impl_->native, impl_->identity, body);
+    }
+
+    /** @copydoc PhysicsWorld::ReadSceneBodyReconciliation */
+    Result<PhysicsBodyReconciliation> PhysicsWorld::ReadSceneBodyReconciliation(const BodyHandle body) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready || impl_->stepping)
+            return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::InvalidState));
+        return Detail::ReadCanonicalSceneBodyReconciliation(impl_->native, impl_->identity, body);
     }
 
     /** @copydoc PhysicsWorld::CreateQueryFixture */
@@ -322,8 +364,26 @@ namespace Horo::Physics {
         if (frame.HasError())
             return Result<void>::Failure(frame.ErrorValue());
         const std::uint32_t eligible = frame.Value();
+        for (std::uint32_t index = 0; index < eligible; ++index) {
+            const auto &command = impl_->CommandAt(index);
+            if (!command.bodyMutation)
+                continue;
+            if (const auto resolved = Detail::ResolveCanonicalBodyMutation(impl_->native, impl_->identity, *command.bodyMutation);
+                resolved.HasError())
+                return Result<void>::Failure(resolved.ErrorValue());
+        }
         std::uint32_t applied{};
         Detail::ObservePhase(input, ApplyDeferredPreStep);
+        for (std::uint32_t index = 0; index < eligible; ++index) {
+            const auto &command = impl_->CommandAt(index);
+            if (!command.bodyMutation)
+                continue;
+            if (const auto changed = Detail::ApplyCanonicalBodyMutation(impl_->native, impl_->identity, *command.bodyMutation);
+                changed.HasError()) {
+                impl_->Fail(changed.ErrorValue(), input.sceneGeneration, input.simulationTick);
+                return changed;
+            }
+        }
         Detail::ObserveCommands(*impl_, input, eligible, PhysicsStructuralCommandKind::Create, PhysicsCommandSafePoint::PreStep, applied);
         Detail::ObservePhase(input, CopyKinematicTargets);
         Detail::ObservePhase(input, ApplyDynamicInputs);

@@ -40,6 +40,28 @@ namespace Horo::Physics::Detail {
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
 
+    /** @copydoc ResolveCanonicalBodyMutation */
+    Result<PhysicsBodyDescriptor> ResolveCanonicalBodyMutation(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                               const PhysicsBodyMutation &) {
+        return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ApplyCanonicalBodyMutation */
+    Result<void> ApplyCanonicalBodyMutation(const CanonicalWorldHandle, const PhysicsWorldId, const PhysicsBodyMutation &) {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ReadCanonicalSceneBodyPolicy */
+    Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(const CanonicalWorldHandle, const PhysicsWorldId, const BodyHandle) {
+        return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ReadCanonicalSceneBodyReconciliation */
+    Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                                           const BodyHandle) {
+        return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
     /** @copydoc CreateCanonicalSceneConstraint */
     Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsConstraintDescriptor &) {
