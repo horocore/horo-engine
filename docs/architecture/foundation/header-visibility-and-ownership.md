@@ -198,6 +198,17 @@ finding through a module-owned descriptor, then return
 `Result<ValidationResult>`. Existing non-validation `Result<T>` APIs and
 `Error::diagnostics` callers do not change.
 
+## ERR-001.6 Migration Notes
+
+`HoroEngine::Foundation` owns the new
+`Horo/Foundation/Assertions.h` contract. Foundation runtime assertions migrate
+to `HORO_ASSERT` for debug-only programmer preconditions and `HORO_INVARIANT`
+for checks required in every build. Existing valid `Result` callers keep their
+source unchanged; invalid `Value()` or `ErrorValue()` access now fails through
+the always-on invariant boundary in every configuration. Boundary input remains
+typed `Result`/diagnostic validation. The generated Foundation public-header
+consumer compiles the new header through its sole owning target.
+
 ## GAM-001.5 Migration Notes
 
 `HoroEngine::Foundation` owns the canonical

@@ -234,6 +234,10 @@ Rules:
   code when one exists.
 - `Critical` records severity but does not itself call `abort()`. The owning
   lifecycle code decides whether to terminate after logging and flushing.
+- `Logger::WriteEmergency` bypasses severity filters and queued sinks, writes
+  and flushes a bounded emergency record to standard error, and has no result
+  value. The assertion boundary uses it before terminating; ordinary logging
+  calls never determine operation control flow.
 - The same condition is logged once by the layer that owns the failure. Higher
   layers add context only when they convert, recover, retry, or present it.
 
