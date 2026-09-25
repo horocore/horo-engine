@@ -38,6 +38,17 @@ namespace {
         return parsed.Value();
     }
 
+    AssetRecord TestMeshRecord() {
+        const auto sourcePath = ProjectPath::Parse("assets/test_mesh.fbx");
+        const auto metadataPath = ProjectPath::Parse("assets/test_mesh.fbx.horo");
+        REQUIRE(sourcePath.HasValue());
+        REQUIRE(metadataPath.HasValue());
+        return AssetRecord{.id = Id("00000000-0000-0000-0000-0000000000a1"),
+                           .type = Type("core.mesh"),
+                           .sourcePath = sourcePath.Value(),
+                           .metadataPath = metadataPath.Value()};
+    }
+
     struct TempDir {
         std::filesystem::path path;
 
@@ -210,16 +221,7 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
         CancellationSource source;
 
         AssetRegistry registry;
-        const auto sourcePath = ProjectPath::Parse("assets/test_mesh.fbx");
-        const auto metadataPath = ProjectPath::Parse("assets/test_mesh.fbx.horo");
-        REQUIRE(sourcePath.HasValue());
-        REQUIRE(metadataPath.HasValue());
-        REQUIRE(registry
-                    .Publish({AssetRecord{.id = Id("00000000-0000-0000-0000-0000000000a1"),
-                                          .type = Type("core.mesh"),
-                                          .sourcePath = sourcePath.Value(),
-                                          .metadataPath = metadataPath.Value()}})
-                    .status == AssetRegistryBuildStatus::Complete);
+        REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
 
         CookerCatalog catalog;
         REQUIRE(catalog
