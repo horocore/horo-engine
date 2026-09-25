@@ -128,6 +128,8 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformOfflineQueueLifecycle.cpp
         platform_services/PlatformDefinitionErrors.cpp
         platform_services/PlatformDefinitionRegistries.cpp
+        platform_services/PlatformOfflineQueueStorageErrors.cpp
+        platform_services/PlatformOfflineQueueStorage.cpp
         platform_services/PlatformProgressionErrors.cpp
         platform_services/PlatformProgressionIdempotency.cpp
         platform_services/PlatformProjectConfiguration.cpp
@@ -142,7 +144,7 @@ add_library(HoroPlatformServices STATIC
 )
 add_library(HoroEngine::PlatformServices ALIAS HoroPlatformServices)
 target_compile_features(HoroPlatformServices PUBLIC cxx_std_20)
-target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroPlatformServices PUBLIC HoroEngine::Foundation HoroEngine::Platform)
 
 add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp

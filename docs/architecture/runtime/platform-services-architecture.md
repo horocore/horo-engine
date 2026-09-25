@@ -61,6 +61,18 @@ makes the Platform Offline Queue the single durable owner for eligible progressi
 opted-in expiring presence intent. Durable acceptance precedes provider submission,
 while cloud upload/delete remains exclusively in Save's coordinator journal.
 
+PLS-007.2 provides the `Horo::PlatformOfflineQueue::PlatformOfflineQueueStorage`
+boundary. It persists one bounded versioned document per opaque subject partition,
+encodes only provider-neutral Horo intent, verifies a SHA-256 body digest and rejects
+corrupt, truncated, oversized, duplicate or unsupported-version documents. Records
+carry the provider-neutral operation class and bounded canonical Horo payload bytes;
+semantic owners provide those bytes, and the storage adapter treats them as opaque.
+The storage contract has no cloud-archive operation. Publication uses the host
+`DurableFileSystem` lock, prepared file and same-filesystem atomic replacement; a
+failed replacement is reported as storage-unknown and never treated as an empty queue.
+The storage boundary does not admit credentials, raw provider account identifiers or
+live subject handles.
+
 ## Scope
 
 Platform services covered here:
