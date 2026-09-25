@@ -15,13 +15,14 @@
 namespace Horo::Telemetry {
     namespace {
         [[nodiscard]] std::string_view MetricUnitSymbol(const MetricUnit unit) noexcept {
+            using enum MetricUnit;
             switch (unit) {
-                case MetricUnit::Count:
-                case MetricUnit::Ratio:
+                case Count:
+                case Ratio:
                     return "1";
-                case MetricUnit::Bytes:
+                case Bytes:
                     return "By";
-                case MetricUnit::Seconds:
+                case Seconds:
                     return "s";
             }
             return {};
