@@ -250,6 +250,8 @@ namespace Horo::Editor {
                           error.code.Value().c_str());
                 std::lock_guard lock(completion->mutex);
                 completion->error = error;
+                if (ErrorChainContains(error, ProjectOpenErrors::Cancelled.domain, ProjectOpenErrors::Cancelled.code))
+                    return JobCancelled(std::move(error));
                 return Result<void>::Failure(std::move(error));
             };
 
