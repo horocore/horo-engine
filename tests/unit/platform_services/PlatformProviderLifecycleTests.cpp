@@ -281,6 +281,15 @@ namespace Horo::PlatformServices::Tests {
             CHECK(message.find("private-account") == std::string::npos);
             CHECK(error.message.find("private-account") == std::string::npos);
         }
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Host preserves cancellation timeout and capability failure states", "[platform-services][errors]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
         for (const auto &[code, kind, state] :
              std::array{std::tuple{HORO_PLATFORM_PROVIDER_CANCELLED, PlatformServiceErrorKind::Cancelled, PlatformRequestState::Cancelled},
                         std::tuple{HORO_PLATFORM_PROVIDER_TIMED_OUT, PlatformServiceErrorKind::TimedOut, PlatformRequestState::TimedOut},
