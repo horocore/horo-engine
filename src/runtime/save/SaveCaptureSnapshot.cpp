@@ -447,7 +447,9 @@ namespace Horo::Runtime {
         const Result<CanonicalCaptureDisposition> captured = binding.Adapter()->Capture(MakeContext(binding), sink);
         if (captured.HasError())
             return Result<void>::Failure(captured.ErrorValue());
-        if (sink.RejectedWrite() || (captured.Value() == CanonicalCaptureDisposition::Omitted && usage->recordCount != 0))
+        if (sink.RejectedWrite() ||
+            (captured.Value() != CanonicalCaptureDisposition::Captured && captured.Value() != CanonicalCaptureDisposition::Omitted) ||
+            (captured.Value() == CanonicalCaptureDisposition::Omitted && usage->recordCount != 0))
             return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
         usage->resolved = true;
         usage->disposition = captured.Value();
