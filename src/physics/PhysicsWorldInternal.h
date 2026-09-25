@@ -19,6 +19,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <ranges>
@@ -34,6 +35,50 @@ namespace Horo::Physics {
         std::thread::id ownerThread;
         bool revoked{};
         bool stale{};
+    };
+
+    /** @brief Bounded request ownership and mutex-protected terminal publication; only Physics owner reads commands. */
+    struct PhysicsQueryBatchState final {
+        std::vector<PhysicsQueryCommand> commands;
+        std::shared_ptr<PhysicsQueryEventCapabilityState> access;
+        mutable std::mutex terminalMutex;
+        bool terminal{};
+        const ErrorCodeDescriptor *failureCode{};
+        std::optional<Error> failure;
+        std::shared_ptr<const PhysicsQueryBatchCompletion> completion;
+
+        [[nodiscard]] bool Fail(Error error) {
+            std::lock_guard lock(terminalMutex);
+            if (terminal)
+                return false;
+            failure = std::move(error);
+            terminal = true;
+            return true;
+        }
+
+        [[nodiscard]] bool FailCode(const ErrorCodeDescriptor &code) noexcept {
+            std::lock_guard lock(terminalMutex);
+            if (terminal)
+                return false;
+            failureCode = &code;
+            terminal = true;
+            return true;
+        }
+
+        [[nodiscard]] bool Complete(std::shared_ptr<const PhysicsQueryBatchCompletion> value) noexcept {
+            std::lock_guard lock(terminalMutex);
+            if (terminal)
+                return false;
+            // This lock is the publication point: a prior Cancel wins and discards all prepared hits.
+            completion = std::move(value);
+            terminal = true;
+            return true;
+        }
+
+        [[nodiscard]] bool IsTerminal() const noexcept {
+            std::lock_guard lock(terminalMutex);
+            return terminal;
+        }
     };
 
     namespace Detail {
@@ -144,6 +189,8 @@ namespace Horo::Physics {
             commandCount = 0;
             activeTick = 0;
             querySceneGeneration = 0;
+            queryBatchTick = 0;
+            queryBatchAdmissions = 0;
             commandOrderDirty = false;
             stepping = false;
             events.Reset();
@@ -158,6 +205,10 @@ namespace Horo::Physics {
         }
 
         void InvalidateQueryEventCapabilities() noexcept {
+            if (pendingQueryBatch) {
+                (void)pendingQueryBatch->FailCode(PhysicsErrors::CapabilityStale);
+                pendingQueryBatch.reset();
+            }
             for (const auto &weak : queryEventCapabilities) {
                 if (const auto access = weak.lock()) {
                     access->stale = true;
@@ -237,11 +288,14 @@ namespace Horo::Physics {
         std::vector<std::uint32_t> sourceOrder;
         Detail::PhysicsEventProjection events;
         std::vector<std::weak_ptr<PhysicsQueryEventCapabilityState>> queryEventCapabilities;
+        std::shared_ptr<PhysicsQueryBatchState> pendingQueryBatch;
         std::uint64_t nextQueryEventCapabilityGeneration{1};
         std::uint32_t commandHead{};
         std::uint32_t commandCount{};
         std::uint64_t activeTick{};
         std::uint64_t querySceneGeneration{};
+        std::uint64_t queryBatchTick{};
+        std::uint32_t queryBatchAdmissions{};
         bool commandOrderDirty{};
         bool stepping{};
         // The owner thread alone writes publication state; any live-world thread may take a coherent snapshot.
