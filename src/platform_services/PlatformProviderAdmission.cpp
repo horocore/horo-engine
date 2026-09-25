@@ -70,7 +70,7 @@ namespace Horo::PlatformServices {
             for (std::size_t index = 0; index < descriptor.services.size(); ++index)
                 descriptor.services[index] = (candidate.serviceMask & (1U << index)) != 0;
             for (const auto &permission : candidate.permissions)
-                descriptor.permissions.push_back({permission});
+                descriptor.permissions.emplace_back(permission);
             descriptor.interfaceVersion = {static_cast<std::uint16_t>(candidate.interfaceMajor),
                                            static_cast<std::uint16_t>(candidate.interfaceMinor)};
             descriptor.contractVersion = {static_cast<std::uint16_t>(candidate.contractMajor),
@@ -174,7 +174,7 @@ namespace Horo::PlatformServices {
             {
                 std::scoped_lock lock{retirement->mutex};
                 count = retirement->candidates.size();
-                std::copy(retirement->candidates.begin(), retirement->candidates.end(), snapshot.begin());
+                std::ranges::copy(retirement->candidates, snapshot.begin());
             }
             bool busy = false;
             for (std::size_t index = 0; index < count; ++index)
@@ -300,7 +300,8 @@ namespace Horo::PlatformServices {
             HoroExtensionStatus status = HORO_EXTENSION_ERROR_INIT_FAILED;
             try {
                 status = candidate_.createCandidate(candidate_.factoryContext, &nativeCandidate);
-            } catch (...) {
+            } catch (...) {  // NOSONAR(cpp:S2738,cpp:S2486) C ABI callbacks may throw any type; failure status is already set.
+                // The initialized failure status keeps the candidate out of the active backend set.
             }
             state->candidate = nativeCandidate;
             if (nativeCandidate != nullptr) {
@@ -317,7 +318,7 @@ namespace Horo::PlatformServices {
             return Result<PlatformProviderCandidateLease>::Success(PlatformProviderCandidateLease{std::move(state)});
         }
 
-        void Shutdown() noexcept {
+        void Shutdown() const noexcept {
             retirement_->closed.store(true, std::memory_order_release);
         }
 
@@ -356,8 +357,7 @@ namespace Horo::PlatformServices {
                     state->backendActive = false;
                 }
             }
-            const auto disposition = factory_.Reset();
-            if (disposition == Extensions::BackendServiceRetirementDisposition::RestartRequired)
+            if (const auto disposition = factory_.Reset(); disposition == Extensions::BackendServiceRetirementDisposition::RestartRequired)
                 retirement_->restartRequired.store(true, std::memory_order_release);
             static_cast<void>(FinalizeCandidates(retirement_));
         }
@@ -411,7 +411,7 @@ namespace Horo::PlatformServices {
         Extensions::ExtensionCapabilityRequest permissionRequest;
         permissionRequest.capability.value = CapabilityId;
         for (const auto &permission : candidate.permissions)
-            permissionRequest.requiredPermissions.push_back({permission});
+            permissionRequest.requiredPermissions.emplace_back(permission);
         request.capabilities.push_back(std::move(permissionRequest));
         auto admission = Extensions::ExtensionCapabilityAdmission::Evaluate(request, policy_);
         if (admission.HasError())

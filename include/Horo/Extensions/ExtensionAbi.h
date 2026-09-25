@@ -231,14 +231,14 @@ typedef HoroExtensionStatus (*HoroRegisterAssetImporterFunc)(  // NOSONAR(cpp:S5
     void *hostContext, const HoroAssetImporterDescriptor *descriptor);
 
 /** @brief Exact OS bits in a platform-services provider claim. */
-enum HoroPlatformProviderPlatformBits {
+enum HoroPlatformProviderPlatformBits {  // NOSONAR(cpp:S3642) Shared C11 ABI requires an unscoped enum.
     HORO_PLATFORM_PROVIDER_WINDOWS = 1U << 0U,
     HORO_PLATFORM_PROVIDER_MACOS = 1U << 1U,
     HORO_PLATFORM_PROVIDER_LINUX = 1U << 2U,
 };
 
 /** @brief Exact product profile bits in a platform-services provider claim. */
-enum HoroPlatformProviderProfileBits {
+enum HoroPlatformProviderProfileBits {  // NOSONAR(cpp:S3642) Shared C11 ABI requires an unscoped enum.
     HORO_PLATFORM_PROVIDER_INTERACTIVE = 1U << 0U,
     HORO_PLATFORM_PROVIDER_HEADLESS = 1U << 1U,
     HORO_PLATFORM_PROVIDER_COOK = 1U << 2U,
@@ -246,11 +246,12 @@ enum HoroPlatformProviderProfileBits {
 };
 
 /** @brief Create one opaque provider candidate; output ownership remains with this module. */
-typedef HoroExtensionStatus (*HoroPlatformProviderCreateFunc)(void *factoryContext, void **outCandidate);
+typedef HoroExtensionStatus (*HoroPlatformProviderCreateFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    void *factoryContext, void **outCandidate);
 /** @brief Close candidate admission, cancel work and report success only after callbacks have drained. */
-typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate);
+typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 /** @brief Destroy a fully retired candidate on its required owner thread. */
-typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);
+typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
 /**
  * @brief Borrowed provider contribution copied during module load; version 1 is a factory/lifetime profile.
@@ -278,11 +279,12 @@ struct HoroPlatformServicesProviderDescriptor {
     HoroPlatformProviderRetireFunc retireCandidate;
     HoroPlatformProviderDestroyFunc destroyCandidate;
 };
-typedef struct HoroPlatformServicesProviderDescriptor HoroPlatformServicesProviderDescriptor;
+typedef struct HoroPlatformServicesProviderDescriptor  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    HoroPlatformServicesProviderDescriptor;
 
 /** @brief Stages one provider claim during the module load transaction. */
-typedef HoroExtensionStatus (*HoroRegisterPlatformServicesProviderFunc)(void *hostContext,
-                                                                        const HoroPlatformServicesProviderDescriptor *descriptor);
+typedef HoroExtensionStatus (*HoroRegisterPlatformServicesProviderFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor);
 
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */

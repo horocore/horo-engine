@@ -68,26 +68,27 @@ namespace Horo::Extensions {
         }
 
         /** @brief Copies a provider claim while all ABI input borrows are live. */
-        HoroExtensionStatus RegisterPlatformProvider(void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor) noexcept {
+        HoroExtensionStatus RegisterPlatformProvider(  // NOSONAR(cpp:S5008) C11 callback ABI requires an opaque host context.
+            void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor) noexcept {
             auto *session = static_cast<AssetImporterRegistrationSession *>(hostContext);
             if (session == nullptr || session->failed)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            constexpr std::size_t MaximumPermissions = 32;
-            if (descriptor == nullptr || descriptor->structSize != sizeof(HoroPlatformServicesProviderDescriptor) ||
+            if (constexpr std::size_t MaximumPermissions = 32;
+                descriptor == nullptr || descriptor->structSize != sizeof(HoroPlatformServicesProviderDescriptor) ||
                 descriptor->abiVersion != HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION || !IsValidBoundedText(descriptor->providerKey) ||
                 descriptor->providerKey.length == 0 || descriptor->permissionCount > MaximumPermissions ||
                 (descriptor->permissionCount != 0 && descriptor->permissions == nullptr) || descriptor->createCandidate == nullptr ||
-                descriptor->retireCandidate == nullptr || descriptor->destroyCandidate == nullptr ||
-                session->platformProviders.size() != 0) {
+                descriptor->retireCandidate == nullptr || descriptor->destroyCandidate == nullptr || !session->platformProviders.empty()) {
                 session->failed = true;
                 session->error = MakeError(ExtensionErrors::ContributionRejected, "Platform provider ABI descriptor is invalid.");
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             }
-            const auto declared = std::ranges::find_if(session->manifest->contributions, [&](const auto &contribution) {
+            if (const auto declared = std::ranges::find_if(session->manifest->contributions,
+                                                           [&](const auto &contribution) {
                 return contribution.type == "platform.services.provider" && contribution.owningModule == session->extensionModule->id &&
                        contribution.id == View(descriptor->providerKey);
             });
-            if (declared == session->manifest->contributions.end()) {
+                declared == session->manifest->contributions.end()) {
                 session->failed = true;
                 session->error = MakeError(ExtensionErrors::ContributionRejected, "Platform provider is absent from its owning manifest.");
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
@@ -316,7 +317,7 @@ namespace Horo::Extensions {
                 .hostContext = &registration,
                 .registerAssetImporter = RegisterExternalAssetImporter,
                 .abiMinorVersion = HORO_EXTENSION_ABI_MINOR_VERSION,
-                .registerPlatformServicesProvider = allowPlatformProvider ? RegisterPlatformProvider : nullptr,
+                .registerPlatformServicesProvider = allowPlatformProvider ? &RegisterPlatformProvider : nullptr,
             };
             if (const auto query =
                     reinterpret_cast<HoroExtensionQueryFunc>(library->GetSymbol("horo_extension_query"));  // NOSONAR(cpp:S3630)
@@ -410,6 +411,44 @@ namespace Horo::Extensions {
             return extensionId;
         }
 
+        /** @brief Validates the atomic provider-only ABI profile before any native module is loaded. */
+        [[nodiscard]] Result<std::size_t> ValidateProviderPackage(const ExtensionManifest &manifest,
+                                                                  const ExtensionPlatformProviderCommit &providerCommit,
+                                                                  const std::vector<std::string> &hostCapabilities) {
+            const auto declarations = std::ranges::count_if(manifest.contributions, [](const auto &contribution) {
+                return contribution.type == "platform.services.provider";
+            });
+            if (declarations > 1 || (declarations != 0 && manifest.contributions.size() != 1))
+                return Result<std::size_t>::Failure(
+                    MakeError(ExtensionErrors::ContributionRejected,
+                              "Platform provider packages must publish exactly one provider-only contribution."));
+            if (declarations == 0)
+                return Result<std::size_t>::Success(0);
+            if (providerCommit == nullptr || !std::ranges::binary_search(hostCapabilities, std::string{"platform.services.provider"}))
+                return Result<std::size_t>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable,
+                                                              "Host composition has not admitted platform provider contributions."));
+            const auto &claim = manifest.contributions.front();
+            const auto owningModule = std::ranges::find(manifest.modules, claim.owningModule, &ExtensionModuleManifest::id);
+            if (owningModule == manifest.modules.end() || !owningModule->imports.empty() ||
+                std::ranges::find(owningModule->requiredCapabilities, "platform.services.provider") ==
+                    owningModule->requiredCapabilities.end())
+                return Result<std::size_t>::Failure(
+                    MakeError(ExtensionErrors::ContributionRejected,
+                              "Provider module must require its host capability and cannot import services in ABI profile 1."));
+            return Result<std::size_t>::Success(static_cast<std::size_t>(declarations));
+        }
+
+        /** @brief Keeps arbitrary host-composition callback failures inside the manager's result contract. */
+        [[nodiscard]] Result<ExtensionPlatformProviderPublication> CommitPlatformProvider(ExtensionPlatformProviderCandidate candidate,
+                                                                                          const ExtensionPlatformProviderCommit &commit) {
+            try {
+                return commit(std::move(candidate));
+            } catch (...) {  // NOSONAR(cpp:S2738) Host-composition callback may throw any exception type.
+                return Result<ExtensionPlatformProviderPublication>::Failure(
+                    MakeError(ExtensionErrors::ContributionRejected, "Platform provider host commit threw an exception."));
+            }
+        }
+
     }  // namespace
 
     /** @copydoc ExtensionManager::ExtensionManager */
@@ -451,26 +490,10 @@ namespace Horo::Extensions {
             return Result<std::string>::Failure(planResult.ErrorValue());
         ExtensionModulePlan plan = std::move(planResult).Value();
 
-        const auto platformDeclarations = std::ranges::count_if(manifest.contributions, [](const auto &contribution) {
-            return contribution.type == "platform.services.provider";
-        });
-        if (platformDeclarations > 1 || (platformDeclarations != 0 && manifest.contributions.size() != 1))
-            return Result<std::string>::Failure(
-                MakeError(ExtensionErrors::ContributionRejected,
-                          "Platform provider packages must publish exactly one provider-only contribution."));
-        if (platformDeclarations != 0 && (m_platformProviderCommit == nullptr ||
-                                          !std::ranges::binary_search(m_hostCapabilities, std::string{"platform.services.provider"})))
-            return Result<std::string>::Failure(
-                MakeError(ExtensionErrors::CapabilityUnavailable, "Host composition has not admitted platform provider contributions."));
-        if (platformDeclarations != 0) {
-            const auto &claim = manifest.contributions.front();
-            const auto module = std::ranges::find(manifest.modules, claim.owningModule, &ExtensionModuleManifest::id);
-            if (module == manifest.modules.end() || !module->imports.empty() ||
-                std::ranges::find(module->requiredCapabilities, "platform.services.provider") == module->requiredCapabilities.end())
-                return Result<std::string>::Failure(
-                    MakeError(ExtensionErrors::ContributionRejected,
-                              "Provider module must require its host capability and cannot import services in ABI profile 1."));
-        }
+        auto declarationsResult = ValidateProviderPackage(manifest, m_platformProviderCommit, m_hostCapabilities);
+        if (declarationsResult.HasError())
+            return Result<std::string>::Failure(declarationsResult.ErrorValue());
+        const auto platformDeclarations = std::move(declarationsResult).Value();
 
         ExtensionActivationTransaction transaction;
         std::vector<ExtensionPlatformProviderCandidate> platformCandidates;
@@ -505,15 +528,7 @@ namespace Horo::Extensions {
                 MakeError(ExtensionErrors::ContributionRejected, "Provider module did not register its exact declared contribution.")));
         ExtensionPlatformProviderPublication platformPublication;
         if (!platformCandidates.empty()) {
-            auto commitProvider = [&]() -> Result<ExtensionPlatformProviderPublication> {
-                try {
-                    return m_platformProviderCommit(std::move(platformCandidates.front()));
-                } catch (...) {  // Keep host-composition callback failure inside the manager's result contract.
-                    return Result<ExtensionPlatformProviderPublication>::Failure(
-                        MakeError(ExtensionErrors::ContributionRejected, "Platform provider host commit threw an exception."));
-                }
-            };
-            auto committed = commitProvider();
+            auto committed = CommitPlatformProvider(std::move(platformCandidates.front()), m_platformProviderCommit);
             if (committed.HasError())
                 return Result<std::string>::Failure(transaction.Rollback(committed.ErrorValue()));
             platformPublication = std::move(committed).Value();
@@ -524,7 +539,7 @@ namespace Horo::Extensions {
         if (auto committed = CommitContributions(transaction.Contributions(), m_importerCatalog); committed.HasError())
             return Result<std::string>::Failure(transaction.Rollback(committed.ErrorValue()));
 
-        const std::string extensionId =
+        std::string extensionId =
             CommitLoadedExtension(std::move(manifest), std::move(plan), transaction, std::move(platformPublication), m_loadedExtensions);
         LOG_INFO("extensions", "Successfully loaded extension: %s", extensionId.c_str());
         return Result<std::string>::Success(std::move(extensionId));
