@@ -23,11 +23,17 @@ namespace Horo::Extensions {
     };
 
     struct EditorCommandRegistryState final {
-        mutable std::mutex mutex;
         EditorCommandRegistryLimits limits;
         std::vector<std::shared_ptr<EditorCommandEntry>> entries;
         std::vector<EditorCommandDiagnostic> diagnostics;
         bool shutdown{};
+
+        [[nodiscard]] std::unique_lock<std::mutex> Lock() const {
+            return std::unique_lock{mutex};
+        }
+
+    private:
+        mutable std::mutex mutex;
     };
 
     namespace {
@@ -63,7 +69,8 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] bool IsSupportedSurface(const EditorSurfaceKind kind) noexcept {
-            return kind == EditorSurfaceKind::MenuItem || kind == EditorSurfaceKind::ToolbarAction || kind == EditorSurfaceKind::StatusItem;
+            using enum EditorSurfaceKind;
+            return kind == MenuItem || kind == ToolbarAction || kind == StatusItem;
         }
 
         [[nodiscard]] bool EqualsAsciiCaseInsensitive(const std::string_view left, const std::string_view right) noexcept {
@@ -88,16 +95,17 @@ namespace Horo::Extensions {
         };
 
         [[nodiscard]] ShortcutModifier ParseShortcutModifier(const std::string_view token) noexcept {
+            using enum ShortcutModifier;
             if (EqualsAsciiCaseInsensitive(token, "ctrl") || EqualsAsciiCaseInsensitive(token, "control"))
-                return ShortcutModifier::Control;
+                return Control;
             if (EqualsAsciiCaseInsensitive(token, "shift"))
-                return ShortcutModifier::Shift;
+                return Shift;
             if (EqualsAsciiCaseInsensitive(token, "alt"))
-                return ShortcutModifier::Alt;
+                return Alt;
             if (EqualsAsciiCaseInsensitive(token, "meta") || EqualsAsciiCaseInsensitive(token, "cmd") ||
                 EqualsAsciiCaseInsensitive(token, "command"))
-                return ShortcutModifier::Meta;
-            return ShortcutModifier::None;
+                return Meta;
+            return None;
         }
 
         [[nodiscard]] std::string FormatShortcut(const std::array<bool, 4> &modifiers, const std::string_view key) {
@@ -139,8 +147,7 @@ namespace Horo::Extensions {
                 if (token.empty())
                     return std::nullopt;
 
-                const ShortcutModifier modifier = ParseShortcutModifier(token);
-                if (modifier == ShortcutModifier::None) {
+                if (const ShortcutModifier modifier = ParseShortcutModifier(token); modifier == ShortcutModifier::None) {
                     if (!key.empty())
                         return std::nullopt;
                     key = token;
@@ -252,7 +259,7 @@ namespace Horo::Extensions {
 
         [[nodiscard]] std::shared_ptr<EditorCommandEntry> FindEntry(const std::shared_ptr<EditorCommandRegistryState> &state,
                                                                     const std::string_view id) {
-            std::scoped_lock lock{state->mutex};
+            auto lock = state->Lock();
             const auto found = std::ranges::find_if(state->entries, [id](const std::shared_ptr<EditorCommandEntry> &entry) {
                 return entry->descriptor.id.value == id;
             });
@@ -263,7 +270,7 @@ namespace Horo::Extensions {
                          const std::shared_ptr<EditorCommandEntry> &entry) noexcept {
             bool revokeContext = false;
             if (state != nullptr) {
-                std::scoped_lock lock{state->mutex};
+                auto lock = state->Lock();
                 revokeContext = entry->registered.exchange(false, std::memory_order_acq_rel);
                 std::erase(state->entries, entry);
             } else {
@@ -280,10 +287,11 @@ namespace Horo::Extensions {
 
         [[nodiscard]] Result<void> CheckCommandAdmissionLocked(EditorCommandRegistryState &state, const EditorCommandDescriptor &descriptor,
                                                                std::shared_ptr<EditorCommandEntry> &displaced) {
-            const auto duplicate = std::ranges::find_if(state.entries, [&descriptor](const std::shared_ptr<EditorCommandEntry> &entry) {
+            if (const auto duplicate = std::ranges::find_if(state.entries,
+                                                            [&descriptor](const std::shared_ptr<EditorCommandEntry> &entry) {
                 return entry->descriptor.id.value == descriptor.id.value;
             });
-            if (duplicate != state.entries.end()) {
+                duplicate != state.entries.end()) {
                 AppendDiagnostic(state, EditorCommandDiagnostic{.kind = EditorCommandDiagnosticKind::DuplicateId,
                                                                 .commandId = descriptor.id.value,
                                                                 .conflictingCommandId = (*duplicate)->descriptor.id.value,
@@ -331,18 +339,19 @@ namespace Horo::Extensions {
 
         [[nodiscard]] bool PredicateMatches(const EditorCommandPredicate &predicate,
                                             const EditorCommandEvaluationContext &evaluation) noexcept {
+            using enum EditorCommandPredicateKind;
             bool value = false;
             switch (predicate.kind) {
-                case EditorCommandPredicateKind::ProjectOpen:
+                case ProjectOpen:
                     value = evaluation.projectOpen;
                     break;
-                case EditorCommandPredicateKind::SelectionPresent:
+                case SelectionPresent:
                     value = evaluation.selectionPresent;
                     break;
-                case EditorCommandPredicateKind::SurfaceOpen:
+                case SurfaceOpen:
                     value = ContainsSurface(evaluation.openSurfaceIds, predicate.operand);
                     break;
-                case EditorCommandPredicateKind::CapabilityAvailable:
+                case CapabilityAvailable:
                     value = ContainsCapability(evaluation.availableCapabilities, predicate.operand);
                     break;
             }
@@ -416,23 +425,22 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorCommandRegistry::Register */
-    Result<EditorCommandRegistration> EditorCommandRegistry::Register(EditorSurfaceContextRegistration context,
-                                                                      EditorCommandDescriptor descriptor) {
+    Result<EditorCommandRegistration> EditorCommandRegistry::Register(
+        EditorSurfaceContextRegistration context,  // NOSONAR(cpp:S5817) Registration mutates shared registry state.
+        EditorCommandDescriptor descriptor) {
         if (state_ == nullptr)
             return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
-        Result<void> validation = ValidateDescriptor(context.Context(), descriptor, state_->limits);
-        if (validation.HasError())
+        if (Result<void> validation = ValidateDescriptor(context.Context(), descriptor, state_->limits); validation.HasError())
             return Result<EditorCommandRegistration>::Failure(std::move(validation).ErrorValue());
 
         std::shared_ptr<EditorCommandEntry> displaced;
         std::shared_ptr<EditorCommandEntry> entry;
         {
-            std::scoped_lock lock{state_->mutex};
+            auto lock = state_->Lock();
             if (state_->shutdown)
                 return Result<EditorCommandRegistration>::Failure(MakeError(ExtensionErrors::EditorCommandShutdown));
 
-            Result<void> admission = CheckCommandAdmissionLocked(*state_, descriptor, displaced);
-            if (admission.HasError())
+            if (Result<void> admission = CheckCommandAdmissionLocked(*state_, descriptor, displaced); admission.HasError())
                 return Result<EditorCommandRegistration>::Failure(std::move(admission).ErrorValue());
 
             entry = std::make_shared<EditorCommandEntry>(std::move(descriptor), std::move(context));
@@ -488,7 +496,7 @@ namespace Horo::Extensions {
     std::vector<EditorCommandSnapshot> EditorCommandRegistry::Snapshot() const {
         if (state_ == nullptr)
             return {};
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         std::vector<EditorCommandSnapshot> snapshot;
         snapshot.reserve(state_->entries.size());
         for (const std::shared_ptr<EditorCommandEntry> &entry : state_->entries) {
@@ -514,15 +522,15 @@ namespace Horo::Extensions {
     std::vector<EditorCommandDiagnostic> EditorCommandRegistry::Diagnostics() const {
         if (state_ == nullptr)
             return {};
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         return state_->diagnostics;
     }
 
     /** @copydoc EditorCommandRegistry::BeginShutdown */
-    void EditorCommandRegistry::BeginShutdown() noexcept {
+    void EditorCommandRegistry::BeginShutdown() noexcept {  // NOSONAR(cpp:S5817) Shutdown mutates shared registry state.
         if (state_ == nullptr)
             return;
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         if (state_->shutdown)
             return;
         state_->shutdown = true;
@@ -537,7 +545,7 @@ namespace Horo::Extensions {
     bool EditorCommandRegistry::IsShutdown() const noexcept {
         if (state_ == nullptr)
             return true;
-        std::scoped_lock lock{state_->mutex};
+        auto lock = state_->Lock();
         return state_->shutdown;
     }
 }  // namespace Horo::Extensions
