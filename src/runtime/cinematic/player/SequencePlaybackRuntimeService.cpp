@@ -19,6 +19,23 @@ namespace Horo::Cinematic {
         [[nodiscard]] bool IsTerminal(const SequencePlaybackState state) noexcept {
             return state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed;
         }
+
+        /** @brief Requires complete restore evidence for the bounded one-shot blend profile. */
+        [[nodiscard]] Result<void> ValidateBlendRestore(const SequencePlaybackActivation &activation) {
+            if (activation.blend.restorePolicy == SequenceRestorePolicy::RestorePrePlayback && !activation.restore.has_value())
+                return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+            if (activation.blend.blendIn.mode != SequenceBlendMode::Blend && activation.blend.blendOut.mode != SequenceBlendMode::Blend)
+                return Result<void>::Success();
+            if (activation.plan.LoopMode() != SequenceLoopMode::Once || !activation.restore.has_value())
+                return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+            for (const SequenceFrameTrackDescriptor &track : activation.plan.Tracks()) {
+                if (std::ranges::count_if(activation.restore->Entries(), [&](const SequenceRestoreEntry &entry) {
+                    return entry.track == track.track;
+                }) != 1)
+                    return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     CinematicRuntimeService::Instance::Instance(SequencePlayer playerValue, const SequenceFrameCursor &cursorValue,
@@ -321,18 +338,8 @@ namespace Horo::Cinematic {
         if ((activation.coordination.pauseGameplay || activation.coordination.hideHud) &&
             (activation.coordinationHooks.acquire == nullptr || activation.coordinationHooks.release == nullptr))
             return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
-        if (activation.blend.restorePolicy == SequenceRestorePolicy::RestorePrePlayback && !activation.restore.has_value())
-            return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
-        if (activation.blend.blendIn.mode == SequenceBlendMode::Blend || activation.blend.blendOut.mode == SequenceBlendMode::Blend) {
-            if (activation.plan.LoopMode() != SequenceLoopMode::Once || !activation.restore.has_value())
-                return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
-            for (const SequenceFrameTrackDescriptor &track : activation.plan.Tracks()) {
-                if (std::ranges::count_if(activation.restore->Entries(), [&](const SequenceRestoreEntry &entry) {
-                    return entry.track == track.track;
-                }) != 1)
-                    return Failed<void>(SequencePlaybackRuntimeErrors::RestoreInvalid);
-            }
-        }
+        if (auto restore = ValidateBlendRestore(activation); restore.HasError())
+            return restore;
         if (activation.plan.Duration() != activation.player.duration)
             return Failed<void>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         if (activation.plan.TrackCount() > budget_.maximumTracksPerPlayer || activation.plan.TrackCount() > MaximumFrameEvaluationTracks ||
