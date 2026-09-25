@@ -7,12 +7,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cstring>
 #include <exception>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -649,7 +649,7 @@ namespace Horo::PlatformServices {
             slot.resultCode = completion->resultCode;
             slot.size = completion->payloadSize;
             if (slot.size != 0)
-                std::memcpy(slot.payload.data(), completion->payload, slot.size);
+                std::ranges::copy(std::as_bytes(std::span{completion->payload, static_cast<std::size_t>(slot.size)}), slot.payload.begin());
             ++state.completionCount;
             return HORO_EXTENSION_SUCCESS;
         }
@@ -687,6 +687,57 @@ namespace Horo::PlatformServices {
                 if (descriptor.services[index])
                     mask |= 1U << index;
             return mask;
+        }
+
+        /** @brief Opens the selected provider in services, session, then ingress order. */
+        [[nodiscard]] bool StartNativeLifecycle(PlatformProviderLifecycleState &state,
+                                                const PlatformProviderContributionDescriptor &descriptor,
+                                                const PlatformProjectConfiguration &configuration,
+                                                const std::uint32_t requiredMask) noexcept {
+            state.servicesAttempted = true;
+            std::uint32_t availableMask{};
+            if (InvokeProvider(state.operations.initializeServices, state.candidate, requiredMask, &availableMask) !=
+                    HORO_EXTENSION_SUCCESS ||
+                (availableMask & ~ClaimedMask(descriptor)) != 0 || (requiredMask & ~availableMask) != 0)
+                return false;
+            state.availableServices = availableMask & EnabledMask(configuration);
+            state.sessionAttempted = true;
+            if (InvokeProvider(state.operations.beginSession, state.candidate, &state.sink) != HORO_EXTENSION_SUCCESS)
+                return false;
+            state.ingressAttempted = true;
+            return InvokeProvider(state.operations.openIngress, state.candidate, &state.sink) == HORO_EXTENSION_SUCCESS;
+        }
+
+        /** @brief Closes admission once and retains failed native teardown for an owner-thread retry. */
+        [[nodiscard]] Result<void> CloseNativeAdmission(const std::shared_ptr<PlatformProviderLifecycleState> &state) {
+            if (state->admissionClosed)
+                return Result<void>::Success();
+            if (state->servicesAttempted && InvokeProvider(state->operations.closeAdmission, state->candidate) != HORO_EXTENSION_SUCCESS) {
+                state->quarantine = state;
+                return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
+            }
+            state->admissionClosed = true;
+            return Result<void>::Success();
+        }
+
+        /** @brief Sends cancellation to every admitted in-flight request before provider drain. */
+        void CancelNativeInflight(PlatformProviderLifecycleState &state) {
+            for (const auto &request : state.inFlight) {
+                static_cast<void>(state.requests.RequestCancel(request.id, request.generation));
+                static_cast<void>(InvokeProvider(state.operations.cancel, state.candidate, request.id.value, request.generation.value));
+            }
+        }
+
+        /** @brief Stops a begun provider session exactly once after requests have drained. */
+        [[nodiscard]] Result<void> StopNativeSession(const std::shared_ptr<PlatformProviderLifecycleState> &state) {
+            if (state->sessionStopped || !state->sessionAttempted)
+                return Result<void>::Success();
+            if (InvokeProvider(state->operations.stopSession, state->candidate) != HORO_EXTENSION_SUCCESS) {
+                state->quarantine = state;
+                return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
+            }
+            state->sessionStopped = true;
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -734,22 +785,7 @@ namespace Horo::PlatformServices {
                        .sessionChanged = ObserveSession,
                        .complete = ReceiveCompletion};
         auto host = std::unique_ptr<PlatformProviderLifecycleHost>(new PlatformProviderLifecycleHost(state));
-        state->servicesAttempted = true;
-        std::uint32_t availableMask{};
-        if (InvokeProvider(state->operations.initializeServices, state->candidate, requiredMask, &availableMask) !=
-                HORO_EXTENSION_SUCCESS ||
-            (availableMask & ~ClaimedMask(descriptor)) != 0 || (requiredMask & ~availableMask) != 0) {
-            static_cast<void>(host->Close());
-            return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InitializationFailed));
-        }
-        state->availableServices = availableMask & EnabledMask(configuration);
-        state->sessionAttempted = true;
-        if (InvokeProvider(state->operations.beginSession, state->candidate, &state->sink) != HORO_EXTENSION_SUCCESS) {
-            static_cast<void>(host->Close());
-            return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InitializationFailed));
-        }
-        state->ingressAttempted = true;
-        if (InvokeProvider(state->operations.openIngress, state->candidate, &state->sink) != HORO_EXTENSION_SUCCESS) {
+        if (!StartNativeLifecycle(*state, descriptor, configuration, requiredMask)) {
             static_cast<void>(host->Close());
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InitializationFailed));
         }
@@ -873,13 +909,8 @@ namespace Horo::PlatformServices {
         if (state.closed)
             return Result<void>::Success();
         state.closing = true;
-        if (!state.admissionClosed) {
-            if (state.servicesAttempted && InvokeProvider(state.operations.closeAdmission, state.candidate) != HORO_EXTENSION_SUCCESS) {
-                state.quarantine = state_;
-                return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
-            }
-            state.admissionClosed = true;
-        }
+        if (auto closed = CloseNativeAdmission(state_); closed.HasError())
+            return closed;
         if (!state.ingressClosed) {
             {
                 std::scoped_lock lock{state.mutex};
@@ -892,10 +923,7 @@ namespace Horo::PlatformServices {
             }
             state.ingressClosed = true;
         }
-        for (const auto &request : state.inFlight) {
-            static_cast<void>(state.requests.RequestCancel(request.id, request.generation));
-            static_cast<void>(InvokeProvider(state.operations.cancel, state.candidate, request.id.value, request.generation.value));
-        }
+        CancelNativeInflight(state);
         if (!state.drained && (state.sessionAttempted || state.ingressAttempted)) {
             const auto status = InvokeProvider(state.operations.drain, state.candidate);
             if (status != HORO_EXTENSION_SUCCESS) {
@@ -908,13 +936,8 @@ namespace Horo::PlatformServices {
         }
         state.inFlight.clear();
         state.requests.Shutdown();
-        if (!state.sessionStopped && state.sessionAttempted) {
-            if (InvokeProvider(state.operations.stopSession, state.candidate) != HORO_EXTENSION_SUCCESS) {
-                state.quarantine = state_;
-                return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
-            }
-            state.sessionStopped = true;
-        }
+        if (auto stopped = StopNativeSession(state_); stopped.HasError())
+            return stopped;
         if (!state.servicesStopped && state.servicesAttempted) {
             if (InvokeProvider(state.operations.shutdownServices, state.candidate) != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
