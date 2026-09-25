@@ -627,7 +627,7 @@ namespace Horo::Cinematic {
         [[nodiscard]] Result<SequenceFrameEvaluationResult> EvaluateClockDelta(const SequencePlayerHandle &handle,
                                                                                const SequenceClockSample &sample,
                                                                                const SequenceFrameScratch &scratch,
-                                                                               const SequenceFrameHooks &hooks, Instance &instance);
+                                                                               const SequenceFrameHooks &hooks, const Instance &instance);
         [[nodiscard]] Result<void> RebindCursorFence(Instance &instance) const;
         [[nodiscard]] Result<void> ValidateActivation(const SequencePlaybackActivation &activation) const;
         [[nodiscard]] Result<void> AdmitActivation(const SequencePlaybackActivation &activation, SequenceEvaluationUsage &additional,

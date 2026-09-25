@@ -542,7 +542,8 @@ namespace Horo::Cinematic {
     Result<SequenceFrameEvaluationResult> CinematicRuntimeService::EvaluateClockDelta(const SequencePlayerHandle &handle,
                                                                                       const SequenceClockSample &sample,
                                                                                       const SequenceFrameScratch &scratch,
-                                                                                      const SequenceFrameHooks &hooks, Instance &instance) {
+                                                                                      const SequenceFrameHooks &hooks,
+                                                                                      const Instance &instance) {
         const SequenceTime rawDelta = sample.position - instance.clockPosition;
         SequenceTime sourceDelta = rawDelta;
         std::uint64_t nextRemainder = instance.scaleRemainder;
