@@ -1,7 +1,8 @@
 #include "Horo/Foundation/Telemetry/Operation.h"
 
+#include "Horo/Foundation/Assertions.h"
+
 #include <atomic>
-#include <cassert>
 #include <ranges>
 #include <string>
 #include <utility>
@@ -30,9 +31,8 @@ namespace Horo::Telemetry {
 
         void PopOperation() {
             auto &operations = ActiveOperations();
-            assert(!operations.empty() && "operation context stack underflow");
-            if (!operations.empty())
-                operations.pop_back();
+            HORO_INVARIANT_MSG(!operations.empty(), "Operation context stack underflow.");
+            operations.pop_back();
         }
 
         [[nodiscard]] bool IsTerminalStatus(const SpanStatus status) noexcept {

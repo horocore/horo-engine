@@ -82,6 +82,11 @@ namespace Horo::Vfx {
         const CpuParticleSoAView left = first.View().Value();
         const CpuParticleSoAView right = second.View().Value();
         for (std::size_t index = 0; index < left.positionX.size(); ++index) {
+            const auto leftHandle = first.HandleAtDenseIndex(static_cast<std::uint32_t>(index));
+            const auto rightHandle = second.HandleAtDenseIndex(static_cast<std::uint32_t>(index));
+            REQUIRE(leftHandle.HasValue());
+            REQUIRE(rightHandle.HasValue());
+            CHECK(leftHandle.Value().particle == rightHandle.Value().particle);
             CHECK(left.positionX[index] == right.positionX[index]);
             CHECK(left.positionY[index] == right.positionY[index]);
             CHECK(left.positionZ[index] == right.positionZ[index]);

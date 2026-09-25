@@ -1,4 +1,5 @@
 add_library(HoroFoundation STATIC
+        foundation/assertions/Assertions.cpp
         foundation/AssetCookTargetId.cpp
         foundation/FoundationErrors.cpp
         foundation/modules/ModuleActivationContext.cpp
@@ -120,15 +121,22 @@ target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Sec
 
 add_library(HoroPlatformServices STATIC
         platform_services/AchievementDefinitionRegistry.cpp
+        platform_services/PlatformAchievementCoordinator.cpp
+        platform_services/PlatformOfflineQueue.cpp
+        platform_services/PlatformOfflineQueueAdmission.cpp
+        platform_services/PlatformOfflineQueueErrors.cpp
+        platform_services/PlatformOfflineQueueLifecycle.cpp
         platform_services/PlatformDefinitionErrors.cpp
         platform_services/PlatformDefinitionRegistries.cpp
-        platform_services/PlatformOfflineQueueErrors.cpp
+        platform_services/PlatformOfflineQueueStorageErrors.cpp
         platform_services/PlatformOfflineQueueStorage.cpp
         platform_services/PlatformProjectConfiguration.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
+        platform_services/PlatformStatCacheErrors.cpp
+        platform_services/PlatformStatCacheCoordinator.cpp
         platform_services/PlatformStableIdRegistry.cpp
         platform_services/PlatformUserSession.cpp
 )
@@ -879,6 +887,7 @@ add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp
         runtime/terrain/api/TerrainDescriptor.cpp
         runtime/terrain/api/TerrainErrors.cpp
+        runtime/terrain/api/TerrainFoliageRegistry.cpp
         runtime/terrain/api/TerrainIdentity.cpp
 )
 add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
@@ -1607,6 +1616,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
+        extensions/host/EditorCommandRegistry.cpp
         extensions/host/EditorThemeTokensInternal.h
         extensions/host/EditorThemeTokensValidation.cpp
         extensions/host/EditorThemeTokensColor.cpp
@@ -1646,6 +1656,7 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptInvocation.cpp
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/EditorSurfaceContextErrors.cpp
+        extensions/registry/EditorCommandErrors.cpp
         extensions/registry/ExtensionErrors.cpp
         extensions/registry/ScriptExportDescriptorErrors.cpp
         extensions/registry/ScriptInvocationErrors.cpp

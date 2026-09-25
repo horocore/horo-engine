@@ -51,18 +51,19 @@ namespace Horo::Vfx {
         CHECK(AdvanceVfxIdentityGeneration(exhausted).ErrorValue().code.Value() == VfxErrors::GenerationExhausted.code.Value());
     }
 
-    TEST_CASE("VFX identities retain exact canonical bytes through editor runtime and cook boundaries", "[unit][vfx][identity]") {
+    TEST_CASE("VFX identity decoding follows the canonical network byte order", "[unit][vfx][identity][qualification]") {
         const auto original =
             MakeVfxIdentity<ParticleBufferIdentityTag>(VfxIdentityScope::Create(0x0102030405060708ULL).Value(), 0x11121314U, 0x21222324U)
                 .Value();
+        constexpr SerializedVfxIdentity canonicalBytes{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                                       0x11, 0x12, 0x13, 0x14, 0x21, 0x22, 0x23, 0x24};
         const SerializedVfxIdentity editorBytes = SerializeVfxIdentity(original);
-        const auto runtimeIdentity = DeserializeVfxIdentity<ParticleBufferIdentityTag>(editorBytes).Value();
+        const auto runtimeIdentity = DeserializeVfxIdentity<ParticleBufferIdentityTag>(canonicalBytes).Value();
         const SerializedVfxIdentity cookBytes = SerializeVfxIdentity(runtimeIdentity);
 
         CHECK(runtimeIdentity == original);
-        CHECK(cookBytes == editorBytes);
-        CHECK(editorBytes ==
-              SerializedVfxIdentity{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x11, 0x12, 0x13, 0x14, 0x21, 0x22, 0x23, 0x24});
+        CHECK(editorBytes == canonicalBytes);
+        CHECK(cookBytes == canonicalBytes);
     }
 
     TEST_CASE("VFX identity decoder rejects every reserved canonical representation", "[unit][vfx][identity]") {
