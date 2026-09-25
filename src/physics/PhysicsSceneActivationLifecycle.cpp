@@ -14,24 +14,21 @@ namespace Horo::Physics {
         : physics_(std::move(data.physics)), character_(std::move(data.character)), authority_(data.authority), evidence_(data.evidence),
           bodyBindings_(std::move(data.bodyBindings)), shapeBindings_(std::move(data.shapeBindings)),
           constraintBindings_(std::move(data.constraintBindings)) {
-        physics_->SetQuarantineSink(
-            this,
-            [](void *context, const BodyHandle body) noexcept {
-                auto &candidate = *static_cast<PhysicsSceneActivationCandidate *>(context);
-                const auto found = std::ranges::find_if(candidate.bodyBindings_, [body](const auto &binding) {
-                    return binding.handle == body;
-                });
-                if (found == candidate.bodyBindings_.end())
-                    return;
-                candidate.bodyBindings_.erase(found);
-                std::erase_if(candidate.shapeBindings_, [body](const auto &binding) { return binding.body == body; });
-            },
-            [](void *context, const ConstraintHandle constraint) noexcept {
-                auto &candidate = *static_cast<PhysicsSceneActivationCandidate *>(context);
-                std::erase_if(candidate.constraintBindings_, [constraint](const auto &binding) {
-                    return binding.handle == constraint;
-                });
+        physics_->SetQuarantineSink([this](const BodyHandle body) noexcept {
+            const auto found = std::ranges::find_if(bodyBindings_, [body](const auto &binding) {
+                return binding.handle == body;
             });
+            if (found == bodyBindings_.end())
+                return;
+            bodyBindings_.erase(found);
+            std::erase_if(shapeBindings_, [body](const auto &binding) {
+                return binding.body == body;
+            });
+        }, [this](const ConstraintHandle constraint) noexcept {
+            std::erase_if(constraintBindings_, [constraint](const auto &binding) {
+                return binding.handle == constraint;
+            });
+        });
     }
 
     std::unique_ptr<PhysicsSceneActivationCandidate> PhysicsSceneActivationCandidate::Create(ConstructionData data) {

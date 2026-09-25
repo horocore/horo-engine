@@ -180,10 +180,16 @@ namespace Horo::Physics::Detail {
                 observations_[kept++] = observations_[index];
         }
         callbackWrite_.store(kept, std::memory_order::seq_cst);
-        std::erase_if(previousPairs_, [&](const PairState &pair) { return touches(pair.pair); });
-        std::erase_if(currentPairs_, [&](const PairState &pair) { return touches(pair.pair); });
+        std::erase_if(previousPairs_, [touches](const PairState &pair) {
+            return touches(pair.pair);
+        });
+        std::erase_if(currentPairs_, [touches](const PairState &pair) {
+            return touches(pair.pair);
+        });
         for (auto &buffer : eventBuffers_)
-            std::erase_if(buffer, [&](const PhysicsEventRecord &event) { return touches(event.pair); });
+            std::erase_if(buffer, [touches](const PhysicsEventRecord &event) {
+                return touches(event.pair);
+            });
     }
 
     /** @copydoc PhysicsEventProjection::Reset */

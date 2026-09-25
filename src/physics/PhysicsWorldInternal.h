@@ -131,17 +131,19 @@ namespace Horo::Physics {
             lastFailure = std::move(error);
         }
 
-        void RecordNonFiniteDiagnostic(const Error &error, const Detail::CanonicalNonFiniteBody &body,
-                                       const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
+        void RecordNonFiniteDiagnostic(const Error &error, const Detail::CanonicalNonFiniteBody &body, const std::uint64_t sceneGeneration,
+                                       const std::uint64_t simulationTick) {
             using enum PhysicsDiagnosticContextKey;
-            std::array<PhysicsDiagnosticContextEntry, 5> context{
-                PhysicsDiagnosticContextEntry{.key = World, .value = identity},
-                PhysicsDiagnosticContextEntry{.key = Body, .value = body.body},
-                PhysicsDiagnosticContextEntry{.key = SceneGeneration, .value = sceneGeneration},
-                PhysicsDiagnosticContextEntry{.key = SimulationTick, .value = simulationTick},
-                PhysicsDiagnosticContextEntry{.key = SceneEntity, .value = body.sceneEntity}};
-            const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error,
-                                                            {context.data(), body.sceneEntity == 0 ? 4U : 5U});
+            std::array<PhysicsDiagnosticContextEntry, 5> context{PhysicsDiagnosticContextEntry{.key = World, .value = identity},
+                                                                 PhysicsDiagnosticContextEntry{.key = Body, .value = body.body},
+                                                                 PhysicsDiagnosticContextEntry{.key = SceneGeneration,
+                                                                                               .value = sceneGeneration},
+                                                                 PhysicsDiagnosticContextEntry{.key = SimulationTick,
+                                                                                               .value = simulationTick},
+                                                                 PhysicsDiagnosticContextEntry{.key = SceneEntity,
+                                                                                               .value = body.sceneEntity}};
+            const auto record =
+                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error, {context.data(), body.sceneEntity == 0 ? 4U : 5U});
             if (record.HasValue())
                 lastDiagnostic = record.Value();
         }
@@ -238,8 +240,7 @@ namespace Horo::Physics {
     /** @brief Private deterministic corruption seam used only by containment tests. */
     struct PhysicsWorldContainmentTestAccess final {
         [[nodiscard]] static bool Inject(PhysicsWorld &world, const BodyHandle body, const float value) noexcept {
-            return world.impl_->state == PhysicsWorldState::ActiveSolver &&
-                   Detail::InjectCanonicalNonFiniteBodyForTesting(world.impl_->native, body, value);
+            return world.InjectNonFiniteBodyForTesting(body, value);
         }
     };
 }  // namespace Horo::Physics

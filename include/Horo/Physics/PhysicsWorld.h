@@ -16,6 +16,7 @@
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -295,8 +296,9 @@ namespace Horo::Physics {
         friend class PhysicsRuntime;
         struct Impl;
         /** @brief Binds aggregate scene tables to native quarantine retirement on the owner thread. */
-        void SetQuarantineSink(void *context, void (*body)(void *, BodyHandle) noexcept,
-                               void (*constraint)(void *, ConstraintHandle) noexcept) noexcept;
+        void SetQuarantineSink(std::function<void(BodyHandle)> body, std::function<void(ConstraintHandle)> constraint) noexcept;
+        /** @brief Injects deterministic corruption through the private native test seam. */
+        [[nodiscard]] bool InjectNonFiniteBodyForTesting(BodyHandle body, float value) noexcept;
         /** @brief Takes one prepared world's ownership. @param impl Owned isolated world state. */
         explicit PhysicsWorld(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;

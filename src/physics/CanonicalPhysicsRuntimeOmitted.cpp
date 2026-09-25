@@ -73,7 +73,7 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc QuarantineCanonicalSceneBody */
-    void QuarantineCanonicalSceneBody(const CanonicalWorldHandle, const BodyHandle, const CanonicalRetirementSink) noexcept {}
+    void QuarantineCanonicalSceneBody(const CanonicalWorldHandle, const BodyHandle, const CanonicalRetirementSink &) noexcept {}
 
     /** @copydoc InjectCanonicalNonFiniteBodyForTesting */
     bool InjectCanonicalNonFiniteBodyForTesting(const CanonicalWorldHandle, const BodyHandle, const float) noexcept {
