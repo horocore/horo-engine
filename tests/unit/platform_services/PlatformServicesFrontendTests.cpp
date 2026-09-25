@@ -219,6 +219,19 @@ namespace Horo::PlatformServices {
             }
         };
 
+        [[nodiscard]] bool HoldWriterAtFirstExport(MetricCaptureSink &sink) {
+            sink.HoldNextExport();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            bool markerAccepted{};
+            do {
+                markerAccepted = Telemetry::Runtime::EmitRecord(
+                    {.subsystem = "platform_services", .payload = Telemetry::LogRecord{.message = "test export gate"}});
+                if (!markerAccepted)
+                    std::this_thread::yield();
+            } while (!markerAccepted && std::chrono::steady_clock::now() < deadline);
+            return markerAccepted && sink.WaitForHeldExport(std::chrono::seconds{2});
+        }
+
         struct TelemetryShutdown final {
             ~TelemetryShutdown() {
                 static_cast<void>(Telemetry::Runtime::Shutdown());
@@ -463,13 +476,8 @@ namespace Horo::PlatformServices {
         const auto sink = std::make_shared<MetricCaptureSink>();
         REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 256, .enabled = true}, sink));
         [[maybe_unused]] const TelemetryShutdown telemetryShutdown;
-        sink->HoldNextExport();
         [[maybe_unused]] const MetricExportRelease exportRelease{*sink};
-        const auto marker =
-            Telemetry::Runtime::RegisterCounter({.name = "horo.platform_services.test_export_gate", .subsystem = "platform_services"});
-        REQUIRE(static_cast<bool>(marker));
-        marker.Add();
-        REQUIRE(sink->WaitForHeldExport(std::chrono::seconds{2}));
+        REQUIRE(HoldWriterAtFirstExport(*sink));
 
         auto backend = std::make_shared<RoutingBackend>(1);
         const auto session = Session();
