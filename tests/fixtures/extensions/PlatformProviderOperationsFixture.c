@@ -8,6 +8,7 @@ typedef struct FixtureAudit {
     unsigned eventCount;
     unsigned failStage;
     unsigned submitStatus;
+    unsigned cancelStatus;
     unsigned busy;
     unsigned destroyed;
     unsigned postDestroyCallbacks;
@@ -40,6 +41,10 @@ void horo_test_provider_fail_at(FixtureAudit *audit, unsigned stage) {
 
 void horo_test_provider_submit_status(FixtureAudit *audit, unsigned status) {
     audit->submitStatus = status;
+}
+
+void horo_test_provider_cancel_status(FixtureAudit *audit, unsigned status) {
+    audit->cancelStatus = status;
 }
 
 void horo_test_provider_set_busy(FixtureAudit *audit, unsigned busy) {
@@ -185,8 +190,9 @@ static HoroExtensionStatus Submit(void *candidate, const HoroPlatformProviderOpe
 static HoroExtensionStatus Cancel(void *candidate, uint64_t requestId, uint64_t generation) {
     (void)requestId;
     (void)generation;
-    Record((FixtureAudit *)candidate, 'X');
-    return HORO_EXTENSION_SUCCESS;
+    FixtureAudit *audit = (FixtureAudit *)candidate;
+    Record(audit, 'X');
+    return audit->cancelStatus;
 }
 
 static HoroExtensionStatus CloseAdmission(void *candidate) {

@@ -417,6 +417,7 @@ namespace Horo::PlatformServices::Tests {
         auto host = std::move(started).Value();
         auto request = host->UnlockAchievement({1});
         REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
         CHECK(host->DispatchCompletions(1) == 1);
         CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Succeeded);
         REQUIRE(host->Close().HasValue());

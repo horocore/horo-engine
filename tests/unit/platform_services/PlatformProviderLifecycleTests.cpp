@@ -1,6 +1,8 @@
 #include "Horo/PlatformServices/PlatformProviderAdmission.h"
+#include "Horo/PlatformServices/PlatformRequestErrors.h"
 #include "Horo/PlatformServices/PlatformServiceErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -17,6 +19,7 @@ FixtureAudit *horo_test_provider_audit_create(void);
 void horo_test_provider_audit_free(FixtureAudit *);
 void horo_test_provider_fail_at(FixtureAudit *, unsigned);
 void horo_test_provider_submit_status(FixtureAudit *, unsigned);
+void horo_test_provider_cancel_status(FixtureAudit *, unsigned);
 void horo_test_provider_set_busy(FixtureAudit *, unsigned);
 unsigned horo_test_provider_event_count(const FixtureAudit *);
 char horo_test_provider_event(const FixtureAudit *, unsigned);
@@ -121,12 +124,12 @@ namespace Horo::PlatformServices::Tests {
                 publication = std::move(result).Value();
             }
 
-            [[nodiscard]] Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start() {
+            [[nodiscard]] Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start(PlatformProviderRequestPolicy requestPolicy = {}) {
                 auto authority = consumer.Grant({"platform.services.provider"});
                 REQUIRE(authority.HasValue());
                 const Extensions::ApplicationCapabilityVersionRange version{{1, 0, 0}, {1, 0, 0}};
                 return PlatformProviderLifecycleHost::Start(Configuration(), admission, identity, authority.Value(), version,
-                                                            "example.consumer", "consumer.module", 1);
+                                                            "example.consumer", "consumer.module", 1, std::move(requestPolicy));
             }
         };
     }  // namespace
@@ -182,6 +185,7 @@ namespace Horo::PlatformServices::Tests {
         CHECK(host->Session().revision == 1);
         auto request = host->UnlockAchievement({1});
         REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
         unsigned observed{};
         auto subscription = host->OnComplete(request.Value(), [&](const auto &) {
             ++observed;
@@ -212,6 +216,7 @@ namespace Horo::PlatformServices::Tests {
         auto host = std::move(started).Value();
         auto request = host->UnlockAchievement({1});
         REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
         unsigned observed{};
         auto subscription = host->OnComplete(request.Value(), [&](const auto &) {
             ++observed;
@@ -260,6 +265,7 @@ namespace Horo::PlatformServices::Tests {
         for (const auto &[code, category] : cases) {
             auto request = host->UnlockAchievement({1});
             REQUIRE(request.HasValue());
+            CHECK(host->DispatchCompletions(0) == 0);
             REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
                                                     code) == HORO_EXTENSION_SUCCESS);
             REQUIRE(host->DispatchCompletions(1) == 1);
@@ -297,6 +303,7 @@ namespace Horo::PlatformServices::Tests {
                                    PlatformRequestState::Failed}}) {
             auto request = host->UnlockAchievement({1});
             REQUIRE(request.HasValue());
+            CHECK(host->DispatchCompletions(0) == 0);
             REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
                                                     code) == HORO_EXTENSION_SUCCESS);
             REQUIRE(host->DispatchCompletions(1) == 1);
@@ -323,6 +330,7 @@ namespace Horo::PlatformServices::Tests {
             horo_test_provider_submit_status(rig.audit.get(), status);
             auto request = host->UnlockAchievement({1});
             REQUIRE(request.HasValue());
+            CHECK(host->DispatchCompletions(0) == 0);
             const auto snapshot = host->Query(request.Value());
             REQUIRE(snapshot.HasValue());
             CHECK(snapshot.Value().state == expectedState);
@@ -344,6 +352,7 @@ namespace Horo::PlatformServices::Tests {
         auto host = std::move(started).Value();
         auto request = host->UnlockAchievement({1});
         REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
         REQUIRE(horo_test_provider_session_changed(rig.audit.get(), 2, 2) == HORO_EXTENSION_SUCCESS);
         REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value) ==
                 HORO_EXTENSION_SUCCESS);
@@ -355,6 +364,254 @@ namespace Horo::PlatformServices::Tests {
         REQUIRE(result.Value().terminal->HasError());
         CHECK(result.Value().terminal->ErrorValue()->code.Value() == PlatformSessionErrors::StaleSession.code.Value());
         REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Queued caller cancellation is terminal once without native submission or callback reentry",
+              "[platform-services][lifecycle][cancellation]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Queued);
+        unsigned observed{};
+        auto subscription = host->OnComplete(request.Value(), [&](const auto &snapshot) {
+            CHECK(snapshot.state == PlatformRequestState::Cancelled);
+            ++observed;
+        });
+        REQUIRE(subscription.HasValue());
+        REQUIRE(host->RequestCancel(request.Value()).HasValue());
+        REQUIRE(host->RequestCancel(request.Value()).HasValue());
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Cancelled);
+        CHECK(observed == 0);
+        CHECK(host->DispatchCompletions(64) == 0);
+        CHECK(observed == 1);
+        CHECK(std::ranges::count(Events(*rig.audit), 'O') == 0);
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 0);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Queued work from an old session revision never reaches the provider", "[platform-services][lifecycle]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        REQUIRE(horo_test_provider_session_changed(rig.audit.get(), 2, 2) == HORO_EXTENSION_SUCCESS);
+        CHECK(host->DispatchCompletions(64) == 0);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Failed);
+        CHECK(std::ranges::count(Events(*rig.audit), 'O') == 0);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Executing cancellation is sent once and completion wins or acknowledges deterministically",
+              "[platform-services][lifecycle][cancellation]") {
+        Rig rig;
+        rig.Publish();
+        auto started = rig.Start();
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        for (const auto result : {HORO_PLATFORM_PROVIDER_SUCCESS, HORO_PLATFORM_PROVIDER_CANCELLED}) {
+            auto request = host->UnlockAchievement({1});
+            REQUIRE(request.HasValue());
+            CHECK(host->DispatchCompletions(0) == 0);
+            REQUIRE(host->RequestCancel(request.Value()).HasValue());
+            REQUIRE(host->RequestCancel(request.Value()).HasValue());
+            CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Cancelling);
+            CHECK(host->DispatchCompletions(0) == 0);
+            REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
+                                                    result) == HORO_EXTENSION_SUCCESS);
+            CHECK(host->DispatchCompletions(64) == 1);
+            CHECK(host->Query(request.Value()).Value().state ==
+                  (result == HORO_PLATFORM_PROVIDER_SUCCESS ? PlatformRequestState::Succeeded : PlatformRequestState::Cancelled));
+            REQUIRE(host->RequestCancel(request.Value()).HasValue());
+        }
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 2);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Timeout releases caller and observer despite unsupported native cancellation; late evidence only retires lease",
+              "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        horo_test_provider_cancel_status(rig.audit.get(), HORO_EXTENSION_ERROR_INVALID_ARGS);
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
+        unsigned observed{};
+        auto callbackOwner = std::make_shared<int>(1);
+        std::weak_ptr<int> callbackLifetime = callbackOwner;
+        auto subscription = host->OnComplete(request.Value(), [&, callbackOwner](const auto &snapshot) {
+            CHECK(*callbackOwner == 1);
+            CHECK(snapshot.state == PlatformRequestState::TimedOut);
+            ++observed;
+        });
+        REQUIRE(subscription.HasValue());
+        callbackOwner.reset();
+        CHECK(!callbackLifetime.expired());
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        CHECK(host->DispatchCompletions(64, deadline + std::chrono::milliseconds{1}) == 0);
+        CHECK(observed == 1);
+        CHECK(callbackLifetime.expired());
+        auto timedOut = host->Query(request.Value());
+        REQUIRE(timedOut.HasValue());
+        REQUIRE(timedOut.Value().terminal);
+        CHECK(timedOut.Value().terminal->ErrorValue()->code.Value() == RequestErrors::TimedOut.code.Value());
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
+        REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value + 1) ==
+                HORO_EXTENSION_SUCCESS);
+        CHECK(host->DispatchCompletions(64) == 1);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value) ==
+                HORO_EXTENSION_SUCCESS);
+        CHECK(host->DispatchCompletions(64) == 1);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        CHECK(observed == 1);
+        REQUIRE(host->Close().HasValue());
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
+    }
+
+    TEST_CASE("Ingress timestamp wins deadline sweep and wrong generation cannot finalize a request",
+              "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value + 1) ==
+                HORO_EXTENSION_SUCCESS);
+        REQUIRE(horo_test_provider_emit(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value) ==
+                HORO_EXTENSION_SUCCESS);
+        CHECK(host->DispatchCompletions(0, deadline + std::chrono::milliseconds{1}) == 0);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Running);
+        CHECK(host->DispatchCompletions(64, deadline + std::chrono::milliseconds{1}) == 2);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Succeeded);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Cancellation and timeout race publishes timeout once when acknowledgement arrives afterward",
+              "[platform-services][lifecycle][cancellation][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        horo_test_provider_cancel_status(rig.audit.get(), HORO_EXTENSION_ERROR_INVALID_ARGS);
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
+        REQUIRE(host->RequestCancel(request.Value()).HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        CHECK(host->DispatchCompletions(64, deadline + std::chrono::milliseconds{1}) == 0);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
+                                                HORO_PLATFORM_PROVIDER_CANCELLED) == HORO_EXTENSION_SUCCESS);
+        CHECK(host->DispatchCompletions(64) == 1);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 1);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Provider failure observed before the deadline remains failure when dispatch runs late",
+              "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(0) == 0);
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        REQUIRE(horo_test_provider_emit_failure(rig.audit.get(), request.Value().Id().value, request.Value().Generation().value,
+                                                HORO_PLATFORM_PROVIDER_RATE_LIMITED) == HORO_EXTENSION_SUCCESS);
+        CHECK(host->DispatchCompletions(64, deadline + std::chrono::milliseconds{1}) == 1);
+        const auto snapshot = host->Query(request.Value());
+        REQUIRE(snapshot.HasValue());
+        CHECK(snapshot.Value().state == PlatformRequestState::Failed);
+        REQUIRE(snapshot.Value().terminal);
+        CHECK(PlatformProviderCategory(*snapshot.Value().terminal->ErrorValue()) == PlatformProviderFailureCategory::RateLimited);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Queued deadline takes precedence over a late caller cancellation", "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        REQUIRE(host->RequestCancel(request.Value(), deadline).HasValue());
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        CHECK(host->DispatchCompletions(64) == 0);
+        CHECK(std::ranges::count(Events(*rig.audit), 'O') == 0);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Queued work expires without native submission or cancellation", "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{5};
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        unsigned observed{};
+        auto subscription = host->OnComplete(request.Value(), [&](const auto &snapshot) {
+            CHECK(snapshot.state == PlatformRequestState::TimedOut);
+            ++observed;
+        });
+        REQUIRE(subscription.HasValue());
+        const auto deadline = host->Query(request.Value()).Value().timing.admittedAt + std::chrono::seconds{5};
+        CHECK(host->DispatchCompletions(64, deadline) == 0);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::TimedOut);
+        CHECK(observed == 1);
+        CHECK(std::ranges::count(Events(*rig.audit), 'O') == 0);
+        CHECK(std::ranges::count(Events(*rig.audit), 'X') == 0);
+        REQUIRE(host->Close().HasValue());
+    }
+
+    TEST_CASE("Invalid per-service deadline policy fails before native provider creation", "[platform-services][lifecycle][timeout]") {
+        Rig rig;
+        rig.Publish();
+        PlatformProviderRequestPolicy policy;
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::milliseconds::zero();
+        auto started = rig.Start(policy);
+        REQUIRE(started.HasError());
+        CHECK(started.ErrorValue().code.Value() == RequestErrors::InvalidConfiguration.code.Value());
+        CHECK(Events(*rig.audit).empty());
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = std::chrono::seconds{30};
+        policy.timeouts[static_cast<std::size_t>(PlatformServiceKind::Friends)] = std::chrono::hours{25};
+        const auto tooLong = rig.Start(policy);
+        REQUIRE(tooLong.HasError());
+        CHECK(Events(*rig.audit).empty());
     }
 
     TEST_CASE("Repeated start and stop releases every native and module lease", "[platform-services][lifecycle]") {
