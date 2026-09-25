@@ -208,6 +208,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor QueryCancelled{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.query.cancelled"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The queued physics query batch was cancelled.",
+        .remediationHint = "Submit a new batch against the current world publication if results are still needed.",
+        .retryable = true,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor InitializationFailed{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.initialization.failed"},
@@ -306,6 +315,7 @@ namespace Horo::Physics::PhysicsErrors {
             &CapabilityStale,
             &CapabilityRevoked,
             &QuerySnapshotStale,
+            &QueryCancelled,
             &InitializationFailed,
             &ShapeCookSourceInvalid,
             &ShapeCookLimitExceeded,

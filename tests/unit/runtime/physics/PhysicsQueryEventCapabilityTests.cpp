@@ -209,8 +209,161 @@ namespace Horo::Physics {
         Test::RequireError(capability.ReadEvents(EventsAt(capability, removed), events), PhysicsErrors::CapabilityStale);
         Test::RequireError(capability.Submit(RayAt(capability, removed), hits), PhysicsErrors::CapabilityStale);
     }
+
+    TEST_CASE("Queued Physics queries publish ordered owned hits only after owner processing", "[physics][query-batch]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(56).Value()).HasValue());
+        const auto layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+        const auto profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value();
+        const auto channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+        const auto first = world
+                               ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                                     .pose = {.translation = {0, 0, -5}, .rotation = Math::Quaternion::Identity()},
+                                                     .layer = layer,
+                                                     .profile = profile,
+                                                     .channel = channel})
+                               .Value();
+        const auto second = world
+                                ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                                      .pose = {.translation = {0, 0, -8}, .rotation = Math::Quaternion::Identity()},
+                                                      .layer = layer,
+                                                      .profile = profile,
+                                                      .channel = channel})
+                                .Value();
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        const auto publication = world->PublishedTick();
+        std::array commands{RayAt(capability, publication), RayAt(capability, publication)};
+        std::get<PhysicsRayQuery>(commands[0].descriptor.geometry).maximumDistanceMeters = 6;
+        std::get<PhysicsRayQuery>(commands[1].descriptor.geometry).origin = {0, 0, -6};
+        std::get<PhysicsRayQuery>(commands[1].descriptor.geometry).maximumDistanceMeters = 4;
+        auto batch = capability.SubmitBatch(commands).Value();
+        REQUIRE(batch.Poll().HasValue());
+        REQUIRE_FALSE(batch.Poll().Value());
+        Test::RequireError(capability.SubmitBatch(commands), PhysicsErrors::CapacityExceeded);
+        bool foreignPumpRejected{};
+        std::thread worker([&] {
+            const auto result = world->ProcessQueryBatch();
+            foreignPumpRejected =
+                result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+        });
+        worker.join();
+        REQUIRE(foreignPumpRejected);
+        bool foreignSubmitRejected{};
+        std::thread foreignSubmit([&] {
+            const auto result = capability.SubmitBatch(commands);
+            foreignSubmitRejected =
+                result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+        });
+        foreignSubmit.join();
+        REQUIRE(foreignSubmitRejected);
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+        const auto result = batch.Poll();
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value());
+        REQUIRE(result.Value()->entries.size() == 2);
+        REQUIRE(result.Value()->entries[0].hits.size() == 1);
+        REQUIRE(result.Value()->entries[1].hits.size() == 1);
+        REQUIRE(result.Value()->entries[0].hits[0].body == first.body);
+        REQUIRE(result.Value()->entries[1].hits[0].body == second.body);
+        REQUIRE(result.Value()->entries[0].completion.publicationRevision == publication.publicationRevision);
+        REQUIRE_FALSE(batch.Cancel());
+        REQUIRE(batch.Poll().Value()->entries.size() == 2);
+        REQUIRE(world->UnloadScene().HasValue());
+        world.reset();
+        REQUIRE(batch.Poll().Value()->entries[0].hits[0].body == first.body);
+    }
+
+    TEST_CASE("Queued Physics queries cancel, stale and bound all requested results", "[physics][query-batch]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(57).Value()).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        const auto publication = world->PublishedTick();
+        std::array commands{RayAt(capability, publication), RayAt(capability, publication)};
+        auto cancelled = capability.SubmitBatch(commands).Value();
+        bool workerCancelled{};
+        std::thread worker([&] {
+            workerCancelled = cancelled.Cancel();
+        });
+        worker.join();
+        REQUIRE(workerCancelled);
+        Test::RequireError(cancelled.Poll(), PhysicsErrors::QueryCancelled);
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+        REQUIRE_FALSE(cancelled.Cancel());
+
+        auto stale = capability.SubmitBatch(commands).Value();
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+        Test::RequireError(stale.Poll(), PhysicsErrors::QuerySnapshotStale);
+        Test::RequireError(capability.SubmitBatch(commands), PhysicsErrors::QuerySnapshotStale);
+
+        auto structurallyStale = capability.SubmitBatch(std::array{RayAt(capability, world->PublishedTick())}).Value();
+        REQUIRE(world
+                    ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                          .pose = {.translation = {0, 0, -5}, .rotation = Math::Quaternion::Identity()},
+                                          .layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
+                                          .profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value(),
+                                          .channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value()})
+                    .HasValue());
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+        Test::RequireError(structurallyStale.Poll(), PhysicsErrors::QuerySnapshotStale);
+
+        const auto current = world->PublishedTick();
+        commands = {RayAt(capability, current), RayAt(capability, current)};
+        auto multiHit = RayAt(capability, current);
+        multiHit.descriptor.collection = PhysicsQueryCollection::All;
+        multiHit.descriptor.maximumHitCount = MaximumPhysicsQueryHits;
+        std::array acceptedHits{multiHit, multiHit, multiHit, multiHit};
+        REQUIRE(acceptedHits.size() * MaximumPhysicsQueryHits == MaximumPhysicsQueryBatchHits);
+        auto accepted = capability.SubmitBatch(acceptedHits).Value();
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+        REQUIRE(accepted.Poll().HasValue());
+        REQUIRE(accepted.Poll().Value()->entries.size() == acceptedHits.size());
+        std::array tooManyHits{multiHit, multiHit, multiHit, multiHit, multiHit};
+        Test::RequireError(capability.SubmitBatch(tooManyHits), PhysicsErrors::CapacityExceeded);
+        const std::vector<PhysicsQueryCommand> tooManyQueries(world->Settings().Values().budgets.maximumQueriesPerTick + 1,
+                                                              RayAt(capability, current));
+        Test::RequireError(capability.SubmitBatch(tooManyQueries), PhysicsErrors::CapacityExceeded);
+        std::array<PhysicsQueryCommand, 0> empty{};
+        Test::RequireError(capability.SubmitBatch(empty), PhysicsErrors::CapacityExceeded);
+
+        auto retired = capability.SubmitBatch(commands).Value();
+        REQUIRE(world->Reset().HasValue());
+        Test::RequireError(retired.Poll(), PhysicsErrors::CapabilityStale);
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+    }
+
+    TEST_CASE("Revocation and shutdown terminate queued Physics batches without native retention", "[physics][query-batch]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(58).Value()).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        auto command = RayAt(capability, world->PublishedTick());
+        auto revoked = capability.SubmitBatch(std::span{&command, 1}).Value();
+        REQUIRE(world->RevokeQueryEventCapability(capability).HasValue());
+        Test::RequireError(revoked.Poll(), PhysicsErrors::CapabilityRevoked);
+        REQUIRE(world->ProcessQueryBatch().HasValue());
+
+        capability = world->IssueQueryEventCapability().Value();
+        command = RayAt(capability, world->PublishedTick());
+        auto stopped = capability.SubmitBatch(std::span{&command, 1}).Value();
+        world->Shutdown();
+        world.reset();
+        runtime.reset();
+        Test::RequireError(stopped.Poll(), PhysicsErrors::CapabilityStale);
+        REQUIRE_FALSE(stopped.Cancel());
+    }
 #endif
 
     static_assert(std::is_copy_constructible_v<PhysicsQueryEventCapability>);
+    static_assert(std::is_same_v<decltype(PhysicsQueryBatchEntry::hits)::value_type, PhysicsQueryHit>);
     static_assert(std::is_trivially_copyable_v<PhysicsEventRecord>);
 }  // namespace Horo::Physics

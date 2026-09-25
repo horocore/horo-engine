@@ -148,8 +148,25 @@ both graphical and headless hosts that require simulation; `Null` explicitly
 reports omitted Physics and unsupported features. It is never an automatic fallback.
 The initial lifecycle implementation advertises canonical world creation, analytic
 scene-shape admission, rigid-body and fixed/distance-constraint staging, and the
-owner-thread immediate-query capability. Snapshot-query and origin-rebasing behavior
-remain unsupported. Simulation filters remain closed until the validated collision-
+owner-thread immediate-query capability. Immutable solver snapshot queries and origin-
+rebasing behavior remain unsupported. A bounded queued batch accepts copied query
+commands on the owner thread and runs them only when the owner calls
+`ProcessQueryBatch` outside a fixed step. This lets a frame submit without waiting
+for query execution; a worker may poll or cancel its result handle, but may not
+submit or execute native queries. At most one batch is pending per world. Each
+batch's request count fits the world's query budget. Its total requested hit
+capacity has an independent hard cap of `MaximumPhysicsQueryBatchHits` (4096),
+regardless of the world's query-count setting. Admitted
+requests also consume the per-tick query count, including batches later cancelled;
+saturation rejects admission. The result is published all-or-nothing in request order, with
+owned Horo hit values that remain readable after world retirement. Cancellation,
+capability revocation, world retirement and publication changes terminate pending
+batches with distinct typed errors. Cancellation that arrives after publication
+leaves the completed result intact. Cancellation and completion race at one terminal
+mutex: cancellation before publication discards every prepared hit, while completed
+publication makes later cancellation ineffective. Hosts must pump the explicit owner-thread safe
+point; a batch does not schedule itself or require a worker/job service.
+Simulation filters remain closed until the validated collision-
 profile table is installed; scene activation still validates authored profiles and
 materials and publishes complete body/shape/constraint bindings, but does not claim
 contact filtering support from the closed native filter. Immediate-query fixtures
@@ -604,9 +621,14 @@ When the 64-bit publication revision is exhausted, the next structural edit or
 fixed tick fails with `physics.generation.exhausted` before mutating the world or
 publishing another snapshot. Revision zero is never reused for an active world.
 
-Immediate queries execute on the physics owner thread outside a step. Parallel
-or asynchronous queries use a read-only broadphase snapshot with documented
-staleness.
+Immediate and queued batch queries execute on the physics owner thread outside a
+step. The current native solver path does not publish an immutable broadphase or
+shape lease set, so parallel solver reads and off-thread query execution remain
+unsupported. Existing immediate callers do not need migration. Consumers needing
+non-blocking completion may submit the batch through their existing world-bound
+capability, arrange one owner-thread `ProcessQueryBatch` safe point, and poll the
+returned handle from any thread. Result handles own copied hits and never keep the
+world or native solver alive.
 
 CanonicalV1 currently admits bounded analytic query fixtures (box, sphere, capsule
 and static plane) through the active world solely to exercise this query contract

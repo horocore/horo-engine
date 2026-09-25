@@ -53,6 +53,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor CapabilityRevoked;
     /** @brief A query targets a retired scene or filter/broadphase snapshot generation. */
     extern const ErrorCodeDescriptor QuerySnapshotStale;
+    /** @brief A queued query batch was cancelled before its result was published. */
+    extern const ErrorCodeDescriptor QueryCancelled;
     /** @brief Candidate or process initialization failed after releasing acquired resources. */
     extern const ErrorCodeDescriptor InitializationFailed;
     /** @brief Convex or mesh source geometry is malformed before solver cooking. */
