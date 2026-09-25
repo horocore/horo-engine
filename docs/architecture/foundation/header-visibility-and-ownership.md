@@ -20,6 +20,19 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PLS-002.3 Migration Notes
+
+`HoroEngine::Extensions` owns the additive `ExtensionPlatformProvider.h` candidate
+handoff and the 1.2 tail of `ExtensionAbi.h`; existing 1.1 modules negotiate their
+original host-table prefix without source changes. A provider module that opts in
+requires the new callback and version-1 factory descriptor. The new
+`HoroEngine::PlatformServicesExtension` composition target owns
+`Horo/PlatformServices/PlatformProviderAdmission.h` and publicly links only
+Platform Services and Extensions. Hosts adopting provider packages construct
+that bridge beside their two existing registries and call owner-thread retirement
+finalization before releasing the bridge. Importer-only callers do not migrate.
+The generated public-header consumers cover both newly owned headers.
+
 ## EXT-002.11 Migration Notes
 
 `HoroEngine::Extensions` owns the new

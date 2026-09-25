@@ -123,6 +123,56 @@ credentials, error translation and certification policy and exposes only the Hor
 
 ## Provider Package And Composition Boundary
 
+### PLS-002.3 provider contribution admission
+
+The additive extension ABI 1.2 host-table tail adds
+`registerPlatformServicesProvider`. A module may require that function during
+inert ABI negotiation; 1.0/1.1 modules keep their earlier table prefix and
+remain loadable. The version-1 provider profile copies a bounded descriptor
+with stable provider key/ID, exact OS and product-profile masks, service bits in
+`PlatformServiceKind` order, approved permission IDs, backend interface version,
+and semantic factory contract version. The profile supplies opaque candidate
+create/retire/destroy callbacks. It deliberately exposes no native service
+operations or C++ backend object across the ABI; a later operation profile must
+version those calls separately.
+
+`HoroPlatformServicesExtension` is the host composition bridge and depends on
+both the generic Extensions registry and Platform Services contracts. Neither
+lower target gains a reverse dependency or a second provider registry.
+`BackendServiceRegistry` stages the one-shot candidate factory under an exact
+generation. `ApplicationCapabilityRegistry` publishes the matching capability
+last. A factory resolve requires that exact capability lease, so no reader can
+call the staged factory. All fallible allocation of the publication owner happens
+before capability publication. Failure revokes the staged service without
+exposing a partial generation. After publication, the manager's RAII owner
+revokes it even if manager storage allocation or insertion fails.
+
+For this first profile a package declares exactly one provider-only contribution.
+Mixing importers or other contribution points in the same package is rejected
+before native load: their independent registries do not yet offer an atomic
+cross-catalog commit. Existing importer-only packages follow the unchanged path.
+Provider modules receive the provider registration callback only when the host
+explicitly exposes `platform.services.provider`; the provider's requested
+permissions must pass the host's sealed admission policy before publication.
+This profile supplies no service-import call table, so provider modules requiring
+service imports are not admitted until a versioned import ABI exists.
+
+On unload, the publication closes capability resolution first, then retires the
+factory. Each provider generation has its own retirement state. Backend and
+request leases retain the module code; the host admission owns pending retirement
+after the manager releases its publication. The recorded owner thread retries
+deferred factory shutdown in `BackendServiceRegistry`, then `retireCandidate`
+through `FinalizeOnOwnerThread` after leases drain. `BUSY`
+never invokes `destroyCandidate` or releases native code. A non-BUSY failure
+requires restart; if composition itself ends with a pending candidate, a bounded
+process-lifetime quarantine self-retains that generation and its code rather
+than force-unloading it; owner-thread retirement breaks the quarantine when it
+eventually completes. A foreign-thread final release does not run native
+retirement, so composition must keep admission alive to perform the owner-thread
+pass. The quarantine is a last-resort safety path, not a substitute for drain.
+The next provider generation can be admitted independently after a completed
+retirement.
+
 Provider discovery reads only verified `.horopkg` install records and inert manifests;
 it never probes PATH or loads candidates to discover capabilities. Package/Trust
 services resolve integrity, signature, permissions, license and enablement. ExtensionHost

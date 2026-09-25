@@ -93,6 +93,10 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformUserSession.h
 )
 
+horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADERS
+    Horo/PlatformServices/PlatformProviderAdmission.h
+)
+
 horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/HostObservability.h
     Horo/Application/ProjectCompatibility.h
@@ -699,6 +703,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionManager.h
     Horo/Extensions/ExtensionManifest.h
     Horo/Extensions/ExtensionModuleResolution.h
+    Horo/Extensions/ExtensionPlatformProvider.h
     Horo/Extensions/ExtensionMarketplace.h
     Horo/Extensions/HeadlessExtensionHost.h
     Horo/Extensions/PipelineStepRegistry.h
