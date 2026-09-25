@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#include <new>
 #include <ranges>
 #include <utility>
 #include <vector>
@@ -249,7 +250,11 @@ namespace Horo::PlatformServices {
                 return Result<std::size_t>::Failure(MakeError(SessionObserverErrors::Closed));
             if (state_->dispatching)
                 return Result<std::size_t>::Failure(MakeError(SessionObserverErrors::ReentrantDispatch));
-            slots = state_->slots;
+            try {
+                slots = state_->slots;
+            } catch (const std::bad_alloc &) {
+                return Result<std::size_t>::Failure(MakeError(SessionObserverErrors::CapacityExceeded));
+            }
             state_->dispatching = true;
             pending.swap(state_->pending);
         }
