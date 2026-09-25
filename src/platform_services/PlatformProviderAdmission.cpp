@@ -665,27 +665,28 @@ namespace Horo::PlatformServices {
         }
 
         [[nodiscard]] PlatformProviderFailureCategory ProviderCategory(const std::uint32_t code) noexcept {
-            switch (code) {  // NOSONAR(cpp:S6177) C11 ABI enumerators are unscoped; using enum adds no scope here.
+            using enum PlatformProviderFailureCategory;
+            switch (code) {
                 case HORO_PLATFORM_PROVIDER_OFFLINE:
-                    return PlatformProviderFailureCategory::Offline;
+                    return Offline;
                 case HORO_PLATFORM_PROVIDER_NOT_SIGNED_IN:
-                    return PlatformProviderFailureCategory::NotSignedIn;
+                    return NotSignedIn;
                 case HORO_PLATFORM_PROVIDER_FORBIDDEN:
-                    return PlatformProviderFailureCategory::Forbidden;
+                    return Forbidden;
                 case HORO_PLATFORM_PROVIDER_RATE_LIMITED:
-                    return PlatformProviderFailureCategory::RateLimited;
+                    return RateLimited;
                 case HORO_PLATFORM_PROVIDER_PRECONDITION_FAILED:
-                    return PlatformProviderFailureCategory::PreconditionFailed;
+                    return PreconditionFailed;
                 case HORO_PLATFORM_PROVIDER_QUOTA_EXCEEDED:
-                    return PlatformProviderFailureCategory::QuotaExceeded;
+                    return QuotaExceeded;
                 case HORO_PLATFORM_PROVIDER_INVALID_RESPONSE:
-                    return PlatformProviderFailureCategory::InvalidResponse;
+                    return InvalidResponse;
                 case HORO_PLATFORM_PROVIDER_TRANSIENT_FAILURE:
-                    return PlatformProviderFailureCategory::TransientFailure;
+                    return TransientFailure;
                 case HORO_PLATFORM_PROVIDER_PERMANENT_FAILURE:
-                    return PlatformProviderFailureCategory::PermanentFailure;
+                    return PermanentFailure;
                 default:
-                    return PlatformProviderFailureCategory::Unknown;
+                    return Unknown;
             }
         }
 
@@ -830,8 +831,8 @@ namespace Horo::PlatformServices {
                                                   .operation = operation,
                                                   .payload = reinterpret_cast<const std::uint8_t *>(payload.data()),
                                                   .payloadSize = static_cast<std::uint32_t>(payload.size())};
-        const HoroExtensionStatus submission = InvokeProvider(state.operations.submit, state.candidate, &input);
-        if (submission != HORO_EXTENSION_SUCCESS) {
+        if (const HoroExtensionStatus submission = InvokeProvider(state.operations.submit, state.candidate, &input);
+            submission != HORO_EXTENSION_SUCCESS) {
             if (submission == HORO_EXTENSION_ERROR_CANCELLED) {
                 static_cast<void>(state.requests.RequestCancel(handle));
                 static_cast<void>(state.requests.CompleteCancelled(handle, MakeError(RequestErrors::Cancelled)));
@@ -865,10 +866,11 @@ namespace Horo::PlatformServices {
             });
             if (found != state.inFlight.end()) {
                 RequestHandle handle{found->id, found->generation};
-                const auto currentSessionRevision = [&state] {
+                std::uint64_t currentSessionRevision{};
+                {
                     std::scoped_lock lock{state.mutex};
-                    return state.session.revision;
-                }();
+                    currentSessionRevision = state.session.revision;
+                }
                 if (completion.sessionRevision != found->sessionRevision || currentSessionRevision != found->sessionRevision)
                     static_cast<void>(state.requests.CompleteFailure(handle, MakeError(PlatformSessionErrors::StaleSession)));
                 else if (completion.resultCode == HORO_PLATFORM_PROVIDER_SUCCESS)
