@@ -551,6 +551,11 @@ bounded typed mutation identity, and conflicting reuse is rejected. Successful
 provider evidence refreshes the cache only after the current session and stat schema
 are revalidated. Protected storage may restore detached cache records atomically,
 but this coordinator never serializes raw account identifiers or calls a provider.
+Coordinator admission and completion APIs now borrow large request, configuration,
+and optional state values during the call, then copy only accepted values into owned
+tokens. Existing source call sites keep their call form; consumers holding exact
+member-function pointers must update their signatures. No caller-owned reference is
+retained after the call.
 
 ### Cloud Save
 

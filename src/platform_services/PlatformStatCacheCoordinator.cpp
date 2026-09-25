@@ -11,10 +11,6 @@ namespace Horo::PlatformServices {
             return Result<void>::Failure(MakeError(descriptor));
         }
 
-        [[nodiscard]] bool IsKnown(const ProgressionValueKind value) noexcept {
-            return value == ProgressionValueKind::SignedInteger64 || value == ProgressionValueKind::UnsignedInteger64;
-        }
-
         [[nodiscard]] bool IsKnown(const ProgressionAuthorityMode value) noexcept {
             return value == ProgressionAuthorityMode::LocalProduct || value == ProgressionAuthorityMode::AuthorityServer;
         }
@@ -59,11 +55,9 @@ namespace Horo::PlatformServices {
     };
 
     bool PlatformStatMutationId::IsValid() const noexcept {
-        for (const std::byte byte : bytes) {
-            if (byte != std::byte{})
-                return true;
-        }
-        return false;
+        return std::ranges::any_of(bytes, [](const std::byte byte) {
+            return byte != std::byte{};
+        });
     }
 
     PlatformStatValue PlatformStatValue::FromSigned(const std::int64_t value) noexcept {
@@ -85,7 +79,7 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformStatCacheCoordinator::Create */
     Result<PlatformStatCacheCoordinator> PlatformStatCacheCoordinator::Create(std::shared_ptr<const StatDefinitionRegistry> registry,
                                                                               PlatformSessionSnapshot session,
-                                                                              const PlatformStatCacheCoordinatorConfig config) {
+                                                                              const PlatformStatCacheCoordinatorConfig &config) {
         if (!registry || config.maximumCacheEntries == 0 || config.maximumCacheEntries > MaximumPlatformStatCacheEntries ||
             config.maximumPendingWrites == 0 || config.maximumPendingWrites > MaximumPlatformStatPendingWrites ||
             config.maximumLedgerEntries == 0 || config.maximumLedgerEntries > MaximumPlatformStatMutationLedger ||
@@ -101,7 +95,7 @@ namespace Horo::PlatformServices {
 
     PlatformStatCacheCoordinator::PlatformStatCacheCoordinator(std::shared_ptr<const StatDefinitionRegistry> registry,
                                                                PlatformSessionSnapshot session,
-                                                               const PlatformStatCacheCoordinatorConfig config)
+                                                               const PlatformStatCacheCoordinatorConfig &config)
         : registry_(std::move(registry)), session_(std::move(session)), config_(config) {
         cache_.reserve(config_.maximumCacheEntries);
         ledger_.reserve(config_.maximumLedgerEntries);
@@ -149,8 +143,7 @@ namespace Horo::PlatformServices {
                 ValidatePlatformSessionAccess(session_, request.subject, request.accessRevision, PlatformServiceKind::LeaderboardsAndStats);
             access.HasError())
             return access;
-        const auto definition = FindDefinition(request.stat);
-        if (definition.HasError())
+        if (const auto definition = FindDefinition(request.stat); definition.HasError())
             return Result<void>::Failure(definition.ErrorValue());
         return Result<void>::Success();
     }
@@ -174,9 +167,9 @@ namespace Horo::PlatformServices {
         if (!IsKnown(expected.mutation))
             return Failure(StatCoordinatorErrors::InvalidRequest);
         if (expected.mutation == StatMutationPolicy::SnapshotAtRevision) {
-            if (!request.expectedProviderRevision || *request.expectedProviderRevision == 0)
+            if (!request.expectedProviderRevision.has_value() || *request.expectedProviderRevision == 0)
                 return Failure(StatCoordinatorErrors::RevisionRequired);
-        } else if (request.expectedProviderRevision)
+        } else if (request.expectedProviderRevision.has_value())
             return Failure(StatCoordinatorErrors::InvalidRequest);
         return Result<void>::Success();
     }
@@ -197,9 +190,10 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformStatCacheCoordinator::ValidateStateForQuery */
     Result<void> PlatformStatCacheCoordinator::ValidateStateForQuery(const PlatformStatQueryIntent &query,
                                                                      const PlatformStatStateEvidence &state) const {
-        const auto currentSubject = session_.Subject();
-        if (query.providerGeneration != session_.ProviderGeneration() || query.sessionGeneration != session_.Generation() ||
-            query.request.accessRevision != session_.AccessRevision() || !currentSubject || query.request.subject != *currentSubject)
+        if (const auto currentSubject = session_.Subject(); query.providerGeneration != session_.ProviderGeneration() ||
+                                                            query.sessionGeneration != session_.Generation() ||
+                                                            query.request.accessRevision != session_.AccessRevision() ||
+                                                            !currentSubject.has_value() || query.request.subject != *currentSubject)
             return Failure(StatCoordinatorErrors::StaleState);
         if (const auto access = ValidatePlatformSessionAccess(session_, query.request.subject, query.request.accessRevision,
                                                               PlatformServiceKind::LeaderboardsAndStats);
@@ -213,9 +207,9 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformStatCacheCoordinator::ValidateCacheRecord */
     Result<void> PlatformStatCacheCoordinator::ValidateCacheRecord(const PlatformStatCacheRecord &record) const {
-        const auto currentSubject = session_.Subject();
-        if (!currentSubject || !record.subject.IsValid() || record.subject != *currentSubject || IsZero(record.definitionFingerprint) ||
-            record.definitionFingerprint != registry_->Fingerprint() || record.expiresAtTick == 0)
+        if (const auto currentSubject = session_.Subject();
+            !currentSubject.has_value() || !record.subject.IsValid() || record.subject != *currentSubject ||
+            IsZero(record.definitionFingerprint) || record.definitionFingerprint != registry_->Fingerprint() || record.expiresAtTick == 0)
             return Failure(StatCoordinatorErrors::CacheCorrupt);
         if (const auto state = ValidateState(record.state, record.state.stat); state.HasError())
             return Failure(StatCoordinatorErrors::CacheCorrupt);
@@ -243,16 +237,16 @@ namespace Horo::PlatformServices {
                left.Capabilities().services == right.Capabilities().services;
     }
 
-    PlatformStatCacheRecord *PlatformStatCacheCoordinator::FindCache(const PlatformSubjectHandle subject, const StatId stat) noexcept {
-        const auto found = std::ranges::find_if(cache_, [subject, stat](const PlatformStatCacheRecord &record) {
+    PlatformStatCacheRecord *PlatformStatCacheCoordinator::FindCache(const PlatformSubjectHandle &subject, const StatId stat) noexcept {
+        const auto found = std::ranges::find_if(cache_, [&subject, stat](const PlatformStatCacheRecord &record) {
             return record.subject == subject && record.state.stat == stat;
         });
         return found == cache_.end() ? nullptr : std::to_address(found);
     }
 
-    const PlatformStatCacheRecord *PlatformStatCacheCoordinator::FindCache(const PlatformSubjectHandle subject,
+    const PlatformStatCacheRecord *PlatformStatCacheCoordinator::FindCache(const PlatformSubjectHandle &subject,
                                                                            const StatId stat) const noexcept {
-        const auto found = std::ranges::find_if(cache_, [subject, stat](const PlatformStatCacheRecord &record) {
+        const auto found = std::ranges::find_if(cache_, [&subject, stat](const PlatformStatCacheRecord &record) {
             return record.subject == subject && record.state.stat == stat;
         });
         return found == cache_.end() ? nullptr : std::to_address(found);
@@ -290,7 +284,8 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformStatCacheCoordinator::ReadStat */
-    Result<PlatformStatReadDecision> PlatformStatCacheCoordinator::ReadStat(PlatformStatReadRequest request) {
+    Result<PlatformStatReadDecision> PlatformStatCacheCoordinator::ReadStat(const PlatformStatReadRequest &request) {
+        using enum PlatformStatReadDisposition;
         if (closed_)
             return Result<PlatformStatReadDecision>::Failure(MakeError(StatCoordinatorErrors::Closed));
         if (const auto valid = ValidateRead(request); valid.HasError())
@@ -303,20 +298,18 @@ namespace Horo::PlatformServices {
                                             .sessionGeneration = session_.Generation(),
                                             .definitionFingerprint = registry_->Fingerprint(),
                                             .sequence = nextQuerySequence_++};
-        const auto *cached = FindCache(request.subject, request.stat);
-        if (cached != nullptr) {
+        if (const auto *cached = FindCache(request.subject, request.stat); cached != nullptr) {
             if (const auto valid = ValidateCacheRecord(*cached); valid.HasError()) {
                 cache_.erase(cache_.begin() + (cached - cache_.data()));
-                return Result<PlatformStatReadDecision>::Success(
-                    {.disposition = PlatformStatReadDisposition::CorruptCacheQuery, .query = query});
+                return Result<PlatformStatReadDecision>::Success({.disposition = CorruptCacheQuery, .query = query});
             }
             if (cached->expiresAtTick > request.observedTick)
                 return Result<PlatformStatReadDecision>::Success(
-                    {.disposition = PlatformStatReadDisposition::FreshCacheHit,
+                    {.disposition = FreshCacheHit,
                      .cached = PlatformStatCachedState{.state = cached->state, .expiresAtTick = cached->expiresAtTick}});
-            return Result<PlatformStatReadDecision>::Success({.disposition = PlatformStatReadDisposition::StaleCacheQuery, .query = query});
+            return Result<PlatformStatReadDecision>::Success({.disposition = StaleCacheQuery, .query = query});
         }
-        return Result<PlatformStatReadDecision>::Success({.disposition = PlatformStatReadDisposition::ProviderQuery, .query = query});
+        return Result<PlatformStatReadDecision>::Success({.disposition = ProviderQuery, .query = query});
     }
 
     /** @copydoc PlatformStatCacheCoordinator::PublishReadResult */
@@ -356,7 +349,7 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformStatCacheCoordinator::SubmitWrite */
-    Result<PlatformStatWriteAdmission> PlatformStatCacheCoordinator::SubmitWrite(PlatformStatWriteRequest request) {
+    Result<PlatformStatWriteAdmission> PlatformStatCacheCoordinator::SubmitWrite(const PlatformStatWriteRequest &request) {
         if (closed_)
             return Result<PlatformStatWriteAdmission>::Failure(MakeError(StatCoordinatorErrors::Closed));
         if (const auto valid = ValidateWrite(request); valid.HasError())
@@ -433,7 +426,7 @@ namespace Horo::PlatformServices {
     /** @copydoc PlatformStatCacheCoordinator::CompleteWrite */
     Result<void> PlatformStatCacheCoordinator::CompleteWrite(const PlatformStatWritePublication &publication,
                                                              const PlatformStatWriteOutcome outcome,
-                                                             std::optional<PlatformStatStateEvidence> state) {
+                                                             const std::optional<PlatformStatStateEvidence> &state) {
         if (closed_)
             return Failure(StatCoordinatorErrors::Closed);
         if (!inFlight_ || inFlight_->sequence != publication.sequence || !SameWrite(inFlight_->request, publication.request))

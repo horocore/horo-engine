@@ -194,7 +194,7 @@ namespace Horo::PlatformServices {
          */
         [[nodiscard]] static Result<PlatformStatCacheCoordinator> Create(std::shared_ptr<const StatDefinitionRegistry> registry,
                                                                          PlatformSessionSnapshot session,
-                                                                         PlatformStatCacheCoordinatorConfig config = {});
+                                                                         const PlatformStatCacheCoordinatorConfig &config = {});
 
         PlatformStatCacheCoordinator() = delete;
         ~PlatformStatCacheCoordinator();
@@ -208,7 +208,7 @@ namespace Horo::PlatformServices {
          * @param request Current subject, access revision, stat identity, and logical observation tick.
          * @return Fresh cache state or an explicit provider query disposition/token.
          */
-        [[nodiscard]] Result<PlatformStatReadDecision> ReadStat(PlatformStatReadRequest request);
+        [[nodiscard]] Result<PlatformStatReadDecision> ReadStat(const PlatformStatReadRequest &request);
 
         /**
          * @brief Validates and publishes one provider read result into the bounded cache.
@@ -230,7 +230,7 @@ namespace Horo::PlatformServices {
          * @param request Typed value, authority, revision precondition, and logical mutation identity.
          * @return Queued, IgnoredDuplicate, or a typed validation/conflict/capacity failure.
          */
-        [[nodiscard]] Result<PlatformStatWriteAdmission> SubmitWrite(PlatformStatWriteRequest request);
+        [[nodiscard]] Result<PlatformStatWriteAdmission> SubmitWrite(const PlatformStatWriteRequest &request);
 
         /**
          * @brief Takes the next write for provider publication.
@@ -246,7 +246,7 @@ namespace Horo::PlatformServices {
          * @return Success or stale/invalid-state/closed failure.
          */
         [[nodiscard]] Result<void> CompleteWrite(const PlatformStatWritePublication &publication, PlatformStatWriteOutcome outcome,
-                                                 std::optional<PlatformStatStateEvidence> state = std::nullopt);
+                                                 const std::optional<PlatformStatStateEvidence> &state = std::nullopt);
 
         /**
          * @brief Replaces session/access authority and discards old cache, writes, and tokens.
@@ -270,7 +270,7 @@ namespace Horo::PlatformServices {
         struct LedgerEntry;
 
         PlatformStatCacheCoordinator(std::shared_ptr<const StatDefinitionRegistry> registry, PlatformSessionSnapshot session,
-                                     PlatformStatCacheCoordinatorConfig config);
+                                     const PlatformStatCacheCoordinatorConfig &config);
 
         [[nodiscard]] Result<const StatDefinition *> FindDefinition(StatId id) const;
         [[nodiscard]] Result<void> ValidateRead(const PlatformStatReadRequest &request) const;
@@ -281,8 +281,8 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<void> ValidateCacheRecord(const PlatformStatCacheRecord &record) const;
         [[nodiscard]] static bool SameWrite(const PlatformStatWriteRequest &left, const PlatformStatWriteRequest &right) noexcept;
         [[nodiscard]] static bool SameSessionAuthority(const PlatformSessionSnapshot &left, const PlatformSessionSnapshot &right) noexcept;
-        [[nodiscard]] PlatformStatCacheRecord *FindCache(PlatformSubjectHandle subject, StatId stat) noexcept;
-        [[nodiscard]] const PlatformStatCacheRecord *FindCache(PlatformSubjectHandle subject, StatId stat) const noexcept;
+        [[nodiscard]] PlatformStatCacheRecord *FindCache(const PlatformSubjectHandle &subject, StatId stat) noexcept;
+        [[nodiscard]] const PlatformStatCacheRecord *FindCache(const PlatformSubjectHandle &subject, StatId stat) const noexcept;
         [[nodiscard]] LedgerEntry *FindLedger(PlatformStatMutationId id) noexcept;
         void PruneExpired(std::uint64_t observedTick) noexcept;
         [[nodiscard]] Result<void> UpsertCache(PlatformStatCacheRecord record);
