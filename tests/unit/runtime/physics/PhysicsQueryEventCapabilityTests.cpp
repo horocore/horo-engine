@@ -54,7 +54,7 @@ namespace Horo::Physics {
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
-    TEST_CASE("Query/event capability validates identity, completion, bounds and revocation", "[physics][query-event-capability]") {
+    TEST_CASE("Query/event capability validates move, completion and revocation", "[physics][query-event-capability]") {
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
         REQUIRE(world->Activate(PhysicsWorldId::Create(51).Value()).HasValue());
@@ -95,6 +95,19 @@ namespace Horo::Physics {
         REQUIRE(query.HasValue());
         REQUIRE(query.Value().completedTick == 1);
         REQUIRE(query.Value().publicationRevision == published.publicationRevision);
+    }
+
+    TEST_CASE("Query/event capability rejects foreign identity, stale snapshots and revocation", "[physics][query-event-capability]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(51).Value()).HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        auto copy = capability;
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
+        const auto tick = Duration::FromNanoseconds(16'666'667);
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = tick}).HasValue());
+        const auto published = world->PublishedTick();
 
         auto foreign = EventsAt(capability, published);
         foreign.identity.world = PhysicsWorldId::Create(52).Value();
@@ -150,7 +163,7 @@ namespace Horo::Physics {
         Test::RequireError(replacement.Value().ReadEvents(EventsAt(replacement.Value(), {}), events), PhysicsErrors::CapabilityStale);
     }
 
-    TEST_CASE("Query/event access rejects structural edits, unloaded fixtures and foreign threads", "[physics][query-event-capability]") {
+    TEST_CASE("Query/event access rejects foreign threads", "[physics][query-event-capability]") {
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
         REQUIRE(world->Activate(PhysicsWorldId::Create(55).Value()).HasValue());
@@ -168,6 +181,18 @@ namespace Horo::Physics {
         });
         reader.join();
         REQUIRE(rejectedThread);
+    }
+
+    TEST_CASE("Query/event access invalidates structural edits and unloaded fixtures", "[physics][query-event-capability]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(56).Value()).HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto before = world->PublishedTick();
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
 
         const auto fixture =
             world
