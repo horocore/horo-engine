@@ -266,6 +266,23 @@ temporarily unavailable and stale evidence remain distinct typed failures. Hinge
 slider, cone-twist, six-DOF, motor, break and spring behavior must gain typed policy
 and qualification rather than being approximated by fixed or distance constraints.
 
+Canonical scene admission resolves both live body handles and converts each body-local
+frame through that body's staged pose. Fixed joints preserve both frame orientations;
+distance joints enforce their finite ordered minimum/maximum interval. A joint owns
+one native solver constraint until explicit owner-thread destruction or world reset,
+unload or shutdown. Destruction checks the exact world and handle generation, removes
+native ownership before its endpoints retire, and never revives an old handle.
+Multiple joints on one body pair retain collision suppression until the last
+suppressed joint is removed. The collision-pair lookup is immutable during a joined
+solver tick; structural changes occur only outside that tick.
+
+`PhysicsJointCollisionPolicy` defaults to disabling contacts between two connected
+bodies. CanonicalV1's current scene object-layer filters are closed, so a request
+to allow contacts between two body endpoints fails with `OperationUnsupported`;
+it cannot silently claim to enable contacts. World-anchor joints have no second
+body to filter. When scene collision profiles are enabled, their implementation
+must qualify persistent-contact invalidation before enabling the allow policy.
+
 Constraint solving inherits the immutable world's `PhysicsStepPolicy`. CanonicalV1
 uses the qualified 10 velocity and 2 position iterations for the complete world;
 individual constraints cannot override iteration counts. This keeps work budgets,

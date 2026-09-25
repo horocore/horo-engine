@@ -7,6 +7,13 @@
 
 namespace Horo::Physics::Detail {
     namespace {
+        /** @brief Orders native body identities without dropping their reuse sequence. */
+        [[nodiscard]] std::uint64_t CollisionPairKey(const JPH::BodyID first, const JPH::BodyID second) noexcept {
+            const auto low = std::min(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
+            const auto high = std::max(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
+            return (static_cast<std::uint64_t>(low) << 32U) | high;
+        }
+
         [[nodiscard]] const CanonicalQueryFixtureRecord *FindFixture(const CanonicalWorld &world, const BodyHandle body) {
             const auto found = std::ranges::find_if(world.query.fixtures, [body](const auto &fixture) {
                 return fixture.fixture.body == body;
@@ -62,6 +69,15 @@ namespace Horo::Physics::Detail {
             return selected;
         }
     }  // namespace
+
+    /** @copydoc CanonicalContactListener::OnContactValidate */
+    JPH::ValidateResult CanonicalContactListener::OnContactValidate(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg,
+                                                                    const JPH::CollideShapeResult &) {
+        const std::uint64_t key = CollisionPairKey(body1.GetID(), body2.GetID());
+        return std::ranges::binary_search(world_.scene.disabledJointCollisionPairs, key)
+                   ? JPH::ValidateResult::RejectAllContactsForThisBodyPair
+                   : JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
+    }
 
     /** @copydoc CanonicalContactListener::OnContactAdded */
     void CanonicalContactListener::OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,

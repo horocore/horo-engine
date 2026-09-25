@@ -69,6 +69,12 @@ namespace Horo::Physics::Detail {
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
 
+    /** @copydoc DestroyCanonicalSceneConstraint */
+    Result<void> DestroyCanonicalSceneConstraint(const CanonicalWorldHandle, const ConstraintHandle) {
+        return Result<void>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
     /** @copydoc CreateCanonicalQueryFixture */
     Result<PhysicsQueryFixture> CreateCanonicalQueryFixture(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsQueryFixtureDescriptor &) {
