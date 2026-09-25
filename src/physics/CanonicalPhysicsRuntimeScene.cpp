@@ -235,7 +235,7 @@ namespace Horo::Physics::Detail {
         }
 
         /** @brief Updates the resident motion properties while holding its native write lock. */
-        [[nodiscard]] Result<void> ApplyMutationMotionProperties(CanonicalWorld &canonical, const CanonicalSceneBodyRecord &body,
+        [[nodiscard]] Result<void> ApplyMutationMotionProperties(const CanonicalWorld &canonical, const CanonicalSceneBodyRecord &body,
                                                                  const PhysicsBodyDescriptor &desired,
                                                                  const JPH::MassProperties &preparedMass) {
             if (desired.motion == PhysicsMotionType::Static)
@@ -376,7 +376,7 @@ namespace Horo::Physics::Detail {
                                                                const PhysicsBodyMutation &mutation) {
         if (world.value == nullptr || !owner.IsValid())
             return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        const auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         const auto target = ValidateMutationTarget(canonical, owner, mutation);
         if (target.HasError())
             return Result<PhysicsBodyDescriptor>::Failure(target.ErrorValue());

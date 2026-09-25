@@ -56,6 +56,7 @@ namespace Horo::Physics {
         /** @brief Revalidates the complete frame before applying ordered pre-step mutations. */
         [[nodiscard]] Result<void> RunCanonicalPreStep(auto &impl, const PhysicsFixedTickInput &input, const std::uint32_t eligible,
                                                        std::uint32_t &applied) {
+            using enum PhysicsTickPhase;
             for (std::uint32_t index = 0; index < eligible; ++index) {
                 const auto &command = impl.CommandAt(index);
                 if (!command.bodyMutation)
@@ -64,7 +65,7 @@ namespace Horo::Physics {
                     resolved.HasError())
                     return Result<void>::Failure(resolved.ErrorValue());
             }
-            Detail::ObservePhase(input, PhysicsTickPhase::ApplyDeferredPreStep);
+            Detail::ObservePhase(input, ApplyDeferredPreStep);
             for (std::uint32_t index = 0; index < eligible; ++index) {
                 const auto &command = impl.CommandAt(index);
                 if (!command.bodyMutation)
@@ -76,33 +77,34 @@ namespace Horo::Physics {
                 }
             }
             Detail::ObserveCommands(impl, input, eligible, PhysicsStructuralCommandKind::Create, PhysicsCommandSafePoint::PreStep, applied);
-            Detail::ObservePhase(input, PhysicsTickPhase::CopyKinematicTargets);
-            Detail::ObservePhase(input, PhysicsTickPhase::ApplyDynamicInputs);
-            Detail::ObservePhase(input, PhysicsTickPhase::BroadPhase);
-            Detail::ObservePhase(input, PhysicsTickPhase::ContactGeneration);
-            Detail::ObservePhase(input, PhysicsTickPhase::ConstraintSolve);
+            Detail::ObservePhase(input, CopyKinematicTargets);
+            Detail::ObservePhase(input, ApplyDynamicInputs);
+            Detail::ObservePhase(input, BroadPhase);
+            Detail::ObservePhase(input, ContactGeneration);
+            Detail::ObservePhase(input, ConstraintSolve);
             return Result<void>::Success();
         }
 
         /** @brief Finishes event projection and publishes only a completed tick. */
         [[nodiscard]] Result<void> RunCanonicalPostStep(auto &impl, const PhysicsFixedTickInput &input, const std::uint32_t eligible,
                                                         std::uint32_t &applied) {
-            Detail::ObservePhase(input, PhysicsTickPhase::IntegrateBodies);
-            Detail::ObservePhase(input, PhysicsTickPhase::WriteRuntimeTransforms);
+            using enum PhysicsTickPhase;
+            Detail::ObservePhase(input, IntegrateBodies);
+            Detail::ObservePhase(input, WriteRuntimeTransforms);
             const Result<Detail::PhysicsEventProjectionResult> eventResult = Detail::CompleteEventProjection(impl, input);
             if (eventResult.HasError()) {
                 impl.Fail(eventResult.ErrorValue(), input.sceneGeneration, input.simulationTick);
                 return Result<void>::Failure(eventResult.ErrorValue());
             }
-            Detail::ObservePhase(input, PhysicsTickPhase::ProduceEvents);
-            Detail::ObservePhase(input, PhysicsTickPhase::ApplyDeferredPostStep);
+            Detail::ObservePhase(input, ProduceEvents);
+            Detail::ObservePhase(input, ApplyDeferredPostStep);
             Detail::ObserveCommands(impl, input, eligible, PhysicsStructuralCommandKind::Destroy, PhysicsCommandSafePoint::PostStep,
                                     applied);
             impl.DiscardCommands(eligible);
             impl.querySceneGeneration = input.sceneGeneration;
             Detail::CommitPublishedTick(impl, input.simulationTick, applied, eventResult.Value());
             impl.statistics.completedTicks = input.simulationTick;
-            Detail::ObservePhase(input, PhysicsTickPhase::PublishCompletedTick);
+            Detail::ObservePhase(input, PublishCompletedTick);
             return Result<void>::Success();
         }
     }  // namespace
