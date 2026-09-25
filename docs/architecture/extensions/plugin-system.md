@@ -302,6 +302,13 @@ Initial editor and tool extension points:
 | `project.browser_action` | Add project-browser actions. | Host owns selected project context and confirmation UI. |
 | `mcp.tool` | Add MCP tools subject to permission policy. | MCP host owns transport, schema, and authorization. |
 
+The host-owned `EditorSurfaceRegistry` now borrows registry limits and provider
+status keys during construction and status updates, then copies the values it
+retains. Existing source callers use the same call form; consumers holding exact
+constructor or member-function signatures must update those signatures. No
+caller-owned reference survives either call. This narrows copies without changing
+the registry's provider or workspace ownership.
+
 `AssetCookerRegistry` is the synchronous typed host boundary for `asset.cooker`.
 Each publication declares one stable contribution identity, an exact provider
 generation, one imported asset type, sorted target identities, and the cooker
@@ -388,6 +395,16 @@ runtime lifecycle contracts:
 | `asset.runtime_loader` | Load game-owned asset types at runtime. | [Gameplay Runtime Integration](./gameplay-runtime-integration.md) |
 | `network.transport` | Provide approved network transport implementations. | [Runtime Lifecycle](../runtime/runtime-lifecycle.md) |
 | `platform.services.provider` | Provide a trusted private adapter for closed platform-service SDKs through the versioned Horo C ABI. Discovery/trust/load remain package/ExtensionHost concerns; application composition selects one provider generation. | [Platform Services Architecture](../runtime/platform-services-architecture.md) |
+
+The initial provider contribution ABI is an additive 1.2 host-table tail. It
+stages exactly one provider-only package contribution, then the Platform Services
+composition bridge publishes its existing backend-service factory before the
+matching application capability. The capability is the final visibility edge.
+Manager release auto-revokes that publication; pending candidate/request leases
+and `BUSY` native retirement retain module code until owner-thread drain or
+restart quarantine. Importer-only package behavior is unchanged. Mixed provider
+and importer packages require a future cross-catalog atomic commit and are
+rejected before module load.
 
 The catalog is intentionally typed. A package cannot draw arbitrary UI, mutate
 scene state, or open sockets merely because it is installed. It must contribute

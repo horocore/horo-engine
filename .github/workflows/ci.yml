@@ -66,7 +66,7 @@ jobs:
             build_dir: build/ci
           - name: macOS / Clang
             runner: macos-latest
-            timeout_minutes: 35
+            timeout_minutes: 45
             cc: clang
             cxx: clang++
             build_dir: build/ci

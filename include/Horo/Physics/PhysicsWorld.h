@@ -231,13 +231,29 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<BodyHandle> CreateSceneBody(const PhysicsSceneBodyDescriptor &descriptor) const;
         /**
-         * @brief Stages one fixed or distance constraint after its body endpoints are resident.
+         * @brief Stages one fixed, distance, hinge or slider constraint after its body endpoints are resident.
          * @param descriptor World-scoped body anchors and typed constraint policy.
          * @return World-scoped constraint identity or a typed validation/capacity/native error.
          * @pre Active canonical world, owner-thread scene preparation, and every body endpoint is resident.
          * @post Constraint ownership remains private to this world until aggregate publication.
          */
         [[nodiscard]] Result<ConstraintHandle> CreateSceneConstraint(const PhysicsConstraintDescriptor &descriptor) const;
+        /**
+         * @brief Removes one exact resident joint before retiring either endpoint body.
+         * @param constraint Generation-scoped identity returned by CreateSceneConstraint.
+         * @return Success or typed affinity, lifecycle, foreign-world or stale-handle error.
+         * @pre Active canonical world on its owner thread, outside a fixed tick.
+         * @post Native solver ownership and collision policy are removed; repeated destruction is stale.
+         */
+        [[nodiscard]] Result<void> DestroySceneConstraint(ConstraintHandle constraint) const;
+        /**
+         * @brief Reads the current signed coordinate of one resident hinge or slider joint.
+         * @param constraint Exact generation-scoped joint identity.
+         * @return Angle in radians or displacement in meters; typed lifecycle, affinity, stale-handle or
+         * OperationUnsupported error for a fixed/distance joint.
+         * @pre Active canonical world on its owner thread, outside a fixed tick. This copy retains no joint lease.
+         */
+        [[nodiscard]] Result<PhysicsJointState> ReadSceneJointState(ConstraintHandle constraint) const;
         /**
          * @brief Executes one immediate query against the current owner-thread broadphase.
          * @param descriptor Exact world/scene query request.
