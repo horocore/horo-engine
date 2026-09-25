@@ -188,9 +188,9 @@ namespace Horo::Navigation {
         };
 
         /** @brief Executes one bake item and translates its typed cancellation into a job acknowledgement. */
-        template <typename Work>
+        template <typename Work>  // NOSONAR(cpp:S5213,cpp:S995) Work is already a const-reference template parameter.
         [[nodiscard]] Result<void> ExecuteBakeWork(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state, const Work &work,
-                                                   const CancellationToken &cancellation) {
+                                                   const CancellationToken &cancellation) {  // NOSONAR(cpp:S995) Work is already const-ref.
             TerminalCounter terminal{state};
             if (cancellation.IsCancellationRequested())
                 return JobCancelled(MakeError(NavigationErrors::BakeInputCancelled));
