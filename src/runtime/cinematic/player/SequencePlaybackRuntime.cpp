@@ -45,6 +45,33 @@ namespace Horo::Cinematic {
             return nullptr;
         }
 
+        /** @brief Classifies every captured target before any owner write is allowed. */
+        [[nodiscard]] SequenceRestoreResult PreflightRestoreTargets(const std::span<const SequenceRestoreEntry> entries,
+                                                                    const std::span<const SequenceRestoreTargetSnapshot> targets,
+                                                                    const std::span<SequenceRestoreDiagnostic> diagnostics) noexcept {
+            SequenceRestoreResult result{};
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                const SequenceRestoreEntry &entry = entries[index];
+                SequenceRestoreDiagnostic &diagnostic = diagnostics[index];
+                diagnostic = {entry.track, entry.target, SequenceRestoreOutcome::TargetMissing};
+                const SequenceRestoreTargetSnapshot *target = FindRestoreTarget(targets, entry.target);
+                if (target == nullptr || !target->target.IsValid() || target->context == nullptr || target->apply == nullptr) {
+                    ++result.missing;
+                    continue;
+                }
+                if (target->target.generation != entry.target.generation || target->targetRevision != entry.targetRevision ||
+                    std::ranges::count_if(targets, [&](const SequenceRestoreTargetSnapshot &candidate) {
+                    return SameStableTarget(candidate.target, entry.target);
+                }) != 1) {
+                    diagnostic.outcome = SequenceRestoreOutcome::StaleGeneration;
+                    ++result.stale;
+                    continue;
+                }
+                diagnostic.outcome = SequenceRestoreOutcome::Restored;
+            }
+            return result;
+        }
+
         [[nodiscard]] bool AuthorityClaimLess(const SequenceAuthorityClaim &left, const SequenceAuthorityClaim &right) noexcept {
             if (left.target.stableValue != right.target.stableValue)
                 return left.target.stableValue < right.target.stableValue;
@@ -77,6 +104,14 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] bool IsTerminal(const SequencePlaybackState state) noexcept {
             return state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed;
+        }
+
+        /** @brief Binds activation-owned baselines and edge durations to one evaluation call. */
+        void ConfigureBlendScratch(SequenceFrameScratch &scratch, const SequencePlaybackBlendSettings &settings,
+                                   const std::span<const float> baselines) noexcept {
+            scratch.blendBaselines = baselines;
+            scratch.blendInDuration = settings.blendIn.mode == SequenceBlendMode::Blend ? settings.blendIn.duration : 0;
+            scratch.blendOutDuration = settings.blendOut.mode == SequenceBlendMode::Blend ? settings.blendOut.duration : 0;
         }
 
         [[nodiscard]] std::uint32_t SaturatingAdd(const std::uint32_t left, const std::uint32_t right) noexcept {
@@ -269,22 +304,23 @@ namespace Horo::Cinematic {
         if (diagnostics.size() < snapshot.Size())
             return Failed<SequenceRestoreResult>(SequencePlaybackRuntimeErrors::RestoreInvalid);
         using enum SequenceRestoreOutcome;
-        SequenceRestoreResult result{};
         const auto entries = snapshot.Entries();
+        // Resolve every generation before invoking any owner write; a destroyed target
+        // selects keep-final for the entire activation rather than a partial restore.
+        SequenceRestoreResult result = PreflightRestoreTargets(entries, targets, diagnostics);
+        if (result.missing != 0 || result.stale != 0) {
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                if (diagnostics[index].outcome == Restored) {
+                    diagnostics[index].outcome = KeptFinalDueToMissingTarget;
+                    ++result.keptFinal;
+                }
+            }
+            return Result<SequenceRestoreResult>::Success(result);
+        }
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const SequenceRestoreEntry &entry = entries[index];
             SequenceRestoreDiagnostic &diagnostic = diagnostics[index];
-            diagnostic = {entry.track, entry.target, TargetMissing};
             const SequenceRestoreTargetSnapshot *target = FindRestoreTarget(targets, entry.target);
-            if (target == nullptr || !target->target.IsValid() || target->context == nullptr || target->apply == nullptr) {
-                ++result.missing;
-                continue;
-            }
-            if (target->target.generation != entry.target.generation || target->targetRevision != entry.targetRevision) {
-                diagnostic.outcome = StaleGeneration;
-                ++result.stale;
-                continue;
-            }
             if (!target->apply(target->context, entry.value)) {
                 diagnostic.outcome = WriteRejected;
                 ++result.rejected;
@@ -392,6 +428,7 @@ namespace Horo::Cinematic {
                 {snapshot.position, snapshot.position, instance.cursor.traversal, instance.cursor.evaluationRevision, 0, 0, 0, false});
         }
         SequenceFrameScratch boundedScratch = scratch;
+        ConfigureBlendScratch(boundedScratch, instance.blend, instance.blendBaselines);
         if (boundedScratch.maximumBoundaryOccurrences == 0 ||
             boundedScratch.maximumBoundaryOccurrences > budget_.maximumBoundaryOccurrences)
             boundedScratch.maximumBoundaryOccurrences = budget_.maximumBoundaryOccurrences;
@@ -408,6 +445,8 @@ namespace Horo::Cinematic {
             if (auto stopped = instance.player.FinishStop(handle); stopped.HasError())
                 return Result<SequenceFrameEvaluationResult>::Failure(stopped.ErrorValue());
             ReleaseCoordination(instance);
+            if (hooks.finishedHook != nullptr)
+                hooks.finishedHook(hooks.finishedContext, handle);
         }
         return Result<SequenceFrameEvaluationResult>::Success(result);
     }

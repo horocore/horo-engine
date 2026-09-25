@@ -357,6 +357,17 @@ Constructing or validating policy performs no discovery, registration, lifecycle
 SDK initialization or ambient-state mutation. Existing callers require no signature
 migration because this is the first published project configuration contract.
 
+## PLS-003.6 Migration Notes
+
+`HoroEngine::PlatformServices` additionally owns
+`Horo/PlatformServices/PlatformProviderManifestCook.h`. Cook composition passes
+validated immutable ledger, definition and policy snapshots with one exact mapping
+revision. The synchronous cook owns both output buffers; no borrowed snapshot or
+adapter value survives in them. Hosts recheck the captured source revisions and
+atomically publish the two outputs together. Existing callers have no signature
+migration. Provider adapters retain native values and produce their private manifests
+from the canonical mapping handoff; SDK loading is outside this cook boundary.
+
 ## PLS-004.3 Migration Notes
 
 The leaderboard/stat service contract adds typed ranked-page, around-subject and

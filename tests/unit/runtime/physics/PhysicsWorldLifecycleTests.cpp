@@ -24,6 +24,18 @@ namespace Horo::Physics {
                               .source = PhysicsCommandSourceId::Create(1).Value(),
                               .sourceSequence = 1}};
         }
+
+        /** @brief Confirms joint-state reads remain bound to the world's owner thread. */
+        void RequireForeignJointReadRejected(PhysicsWorld &world, const ConstraintHandle joint) {
+            bool foreignRejected = false;
+            std::thread foreign([&] {
+                const auto result = world.ReadSceneJointState(joint);
+                foreignRejected =
+                    result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            });
+            foreign.join();
+            REQUIRE(foreignRejected);
+        }
     }  // namespace
 
     TEST_CASE("Null Physics is explicit omitted capability and never invents simulation", "[physics][lifecycle]") {
@@ -88,6 +100,8 @@ namespace Horo::Physics {
                 PhysicsErrors::CapabilityUnavailable.code.Value());
         REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
         REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->DestroySceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->ReadSceneJointState({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
     }
 
     TEST_CASE("Physics rejects unknown compositions and closes unactivated candidates on runtime shutdown", "[physics][lifecycle]") {
@@ -191,6 +205,7 @@ namespace Horo::Physics {
         REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
         REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
         REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
+        REQUIRE(world->DestroySceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
 
         const auto identity = PhysicsWorldId::Create(107).Value();
         REQUIRE(world->Activate(identity).HasValue());
@@ -222,6 +237,103 @@ namespace Horo::Physics {
         REQUIRE(world->CreateSceneConstraint(constraint).HasValue());
     }
 
+    TEST_CASE("Canonical fixed and distance joints retire exact handles without leaking solver ownership",
+              "[physics][native][scene][constraint]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const auto identity = PhysicsWorldId::Create(109).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+        const auto shape = world->CreateSceneShape(PhysicsBoxShape{}).Value();
+        PhysicsBodyDescriptor body;
+        body.shape = shape;
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const BodyHandle first = world->CreateSceneBody({body, false}).Value();
+        body.pose.translation = {2.0F, 0.0F, 0.0F};
+        body.motion = PhysicsMotionType::Dynamic;
+        body.mass = PhysicsMass{1.0F};
+        const BodyHandle second = world->CreateSceneBody({body, false}).Value();
+
+        PhysicsConstraintDescriptor descriptor;
+        descriptor.first = {first, {}};
+        descriptor.second = PhysicsBodyAnchor{second, {}};
+        descriptor.parameters = PhysicsDistanceConstraint{1.0F, 3.0F};
+        const auto distance = world->CreateSceneConstraint(descriptor);
+        REQUIRE(distance.HasValue());
+        descriptor.parameters = PhysicsFixedConstraint{};
+        const auto fixed = world->CreateSceneConstraint(descriptor);
+        REQUIRE(fixed.HasValue());
+        REQUIRE(fixed.Value() != distance.Value());
+
+        REQUIRE(world->DestroySceneConstraint(distance.Value()).HasValue());
+        Test::RequireError(world->DestroySceneConstraint(distance.Value()), PhysicsErrors::HandleStale);
+        Test::RequireError(world->DestroySceneConstraint({}), PhysicsErrors::HandleMalformed);
+        Test::RequireError(world->DestroySceneConstraint({PhysicsWorldId::Create(110).Value(), {0, 1}}),
+                           PhysicsErrors::HandleWorldMismatch);
+        REQUIRE(world->DestroySceneConstraint(fixed.Value()).HasValue());
+
+        descriptor.collisionPolicy = PhysicsJointCollisionPolicy::AllowBetweenBodies;
+        Test::RequireError(world->CreateSceneConstraint(descriptor), PhysicsErrors::OperationUnsupported);
+        descriptor.collisionPolicy = PhysicsJointCollisionPolicy::DisableBetweenBodies;
+        const auto replacement = world->CreateSceneConstraint(descriptor);
+        REQUIRE(replacement.HasValue());
+        REQUIRE(replacement.Value() != fixed.Value());
+        REQUIRE(world->DestroySceneConstraint(replacement.Value()).HasValue());
+        REQUIRE(world->Reset().HasValue());
+        Test::RequireError(world->DestroySceneConstraint(replacement.Value()), PhysicsErrors::InvalidState);
+    }
+
+    TEST_CASE("Canonical hinge and slider joints expose signed axis state and retire safely", "[physics][native][scene][constraint]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const auto identity = PhysicsWorldId::Create(111).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+        const auto shape = world->CreateSceneShape(PhysicsBoxShape{}).Value();
+        PhysicsBodyDescriptor body;
+        body.shape = shape;
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const BodyHandle first = world->CreateSceneBody({body, false}).Value();
+        body.pose.translation = {2.0F, 0.0F, 0.0F};
+        body.motion = PhysicsMotionType::Dynamic;
+        body.mass = PhysicsMass{1.0F};
+        const BodyHandle second = world->CreateSceneBody({body, false}).Value();
+
+        PhysicsConstraintDescriptor descriptor;
+        descriptor.first = {first, {}};
+        descriptor.second = PhysicsBodyAnchor{second, {}};
+        descriptor.parameters = PhysicsHingeConstraint{};
+        const ConstraintHandle hinge = world->CreateSceneConstraint(descriptor).Value();
+        const auto angle = world->ReadSceneJointState(hinge);
+        REQUIRE(angle.HasValue());
+        REQUIRE(angle.Value().kind == PhysicsJointCoordinateKind::AngleRadians);
+        REQUIRE(angle.Value().coordinate == 0.0F);
+
+        descriptor.parameters = PhysicsSliderConstraint{-3.0F, 3.0F};
+        const ConstraintHandle slider = world->CreateSceneConstraint(descriptor).Value();
+        const auto position = world->ReadSceneJointState(slider);
+        REQUIRE(position.HasValue());
+        REQUIRE(position.Value().kind == PhysicsJointCoordinateKind::PositionMeters);
+        REQUIRE(position.Value().coordinate == 2.0F);
+        descriptor.first = {second, {}};
+        descriptor.second = PhysicsWorldAnchor{{{2.0F, 0.0F, 0.0F}, {}}};
+        descriptor.parameters = PhysicsSliderConstraint{-3.0F, 3.0F};
+        const ConstraintHandle worldSlider = world->CreateSceneConstraint(descriptor).Value();
+        REQUIRE(world->ReadSceneJointState(worldSlider).Value().coordinate == 0.0F);
+        descriptor.parameters = PhysicsFixedConstraint{};
+        const ConstraintHandle fixed = world->CreateSceneConstraint(descriptor).Value();
+        Test::RequireError(world->ReadSceneJointState(fixed), PhysicsErrors::OperationUnsupported);
+        Test::RequireError(world->ReadSceneJointState({}), PhysicsErrors::HandleMalformed);
+        Test::RequireError(world->ReadSceneJointState({PhysicsWorldId::Create(112).Value(), {0, 1}}), PhysicsErrors::HandleWorldMismatch);
+        RequireForeignJointReadRejected(*world, hinge);
+        REQUIRE(world->DestroySceneConstraint(hinge).HasValue());
+        Test::RequireError(world->ReadSceneJointState(hinge), PhysicsErrors::HandleStale);
+        REQUIRE(world->DestroySceneConstraint(worldSlider).HasValue());
+        REQUIRE(world->DestroySceneConstraint(fixed).HasValue());
+        REQUIRE(world->Reset().HasValue());
+        Test::RequireError(world->ReadSceneJointState(slider), PhysicsErrors::InvalidState);
+    }
+
     TEST_CASE("Canonical scene admission enforces owner-thread boundaries", "[physics][native][scene][thread]") {
         auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
         auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
@@ -232,6 +344,7 @@ namespace Horo::Physics {
         bool compoundRejected = false;
         bool bodyRejected = false;
         bool constraintRejected = false;
+        bool constraintDestroyRejected = false;
         std::thread foreignThread([&] {
             shapeRejected =
                 world->CreateSceneShape(sceneShape).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
@@ -240,12 +353,15 @@ namespace Horo::Physics {
             bodyRejected = world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
             constraintRejected =
                 world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            constraintDestroyRejected =
+                world->DestroySceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
         });
         foreignThread.join();
         REQUIRE(shapeRejected);
         REQUIRE(compoundRejected);
         REQUIRE(bodyRejected);
         REQUIRE(constraintRejected);
+        REQUIRE(constraintDestroyRejected);
     }
 #endif
 }  // namespace Horo::Physics

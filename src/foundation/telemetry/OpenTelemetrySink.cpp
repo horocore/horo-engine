@@ -14,6 +14,20 @@
 
 namespace Horo::Telemetry {
     namespace {
+        [[nodiscard]] std::string_view MetricUnitSymbol(const MetricUnit unit) noexcept {
+            using enum MetricUnit;
+            switch (unit) {
+                case Count:
+                case Ratio:
+                    return "1";
+                case Bytes:
+                    return "By";
+                case Seconds:
+                    return "s";
+            }
+            return {};
+        }
+
         using Json = nlohmann::json;
 
         template <typename... Visitors> struct Overloaded : Visitors... {
@@ -402,7 +416,7 @@ namespace Horo::Telemetry {
                     break;
             }
             data["name"] = descriptor.name;
-            data["unit"] = descriptor.unit;
+            data["unit"] = MetricUnitSymbol(descriptor.unit);
             return data;
         }
 

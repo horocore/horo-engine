@@ -1,5 +1,7 @@
+#include "Horo/Cinematic/SequenceEvaluationErrors.h"
 #include "Horo/Cinematic/SequencePlaybackRuntime.h"
 #include "Horo/Cinematic/SequencePlaybackRuntimeErrors.h"
+#include "support/AllocationProbe.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -50,6 +52,21 @@ namespace Horo::Cinematic {
             return false;
         }
 
+        struct ValueProbe final {
+            float value{4.0F};
+            std::size_t writes{};
+        };
+
+        Result<float> SampleValue(const void *, const SequenceTime time) {
+            return Result<float>::Success(10.0F + static_cast<float>(time));
+        }
+
+        void ApplyValue(void *context, const float value) noexcept {
+            auto &probe = *static_cast<ValueProbe *>(context);
+            probe.value = value;
+            ++probe.writes;
+        }
+
         struct CoordinationProbe final {
             std::uint64_t nextRevision{1};
             std::size_t acquired{};
@@ -66,6 +83,48 @@ namespace Horo::Cinematic {
         void ReleaseCoordination(void *context, const SequenceCoordinationLease &) noexcept {
             ++static_cast<CoordinationProbe *>(context)->released;
         }
+
+        struct PlaybackProbe final {
+            CinematicRuntimeService *service{};
+            std::array<SequenceFrameEventOccurrence, 16> events{};
+            std::size_t eventCount{};
+            std::size_t finishedCount{};
+            SequencePlaybackState stateAtFinish{SequencePlaybackState::Ready};
+        };
+
+        void OnPlaybackEvent(void *context, const SequenceFrameEventOccurrence &event) noexcept {
+            auto &probe = *static_cast<PlaybackProbe *>(context);
+            probe.events[probe.eventCount++] = event;
+        }
+
+        void OnPlaybackFinished(void *context, const SequencePlayerHandle &handle) noexcept {
+            auto &probe = *static_cast<PlaybackProbe *>(context);
+            ++probe.finishedCount;
+            const auto snapshot = probe.service->Snapshot(handle);
+            if (snapshot.HasValue())
+                probe.stateAtFinish = snapshot.Value().state;
+        }
+
+        [[nodiscard]] SequenceFrameHooks PlaybackHooks(PlaybackProbe &probe) {
+            return {&probe, OnPlaybackEvent, nullptr, nullptr, &probe, OnPlaybackFinished};
+        }
+
+        [[nodiscard]] SequenceFrameEvaluationPlan EventPlan(const SequenceLoopMode mode) {
+            const std::array events{SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{1, 1}, 0, true},
+                                    SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{2, 1}, 5, true},
+                                    SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{3, 1}, 10, true}};
+            auto plan = SequenceFrameEvaluationPlan::Create(10, mode, 4, {}, events, {});
+            REQUIRE(plan.HasValue());
+            return std::move(plan).Value();
+        }
+
+        struct EventScratch final {
+            std::array<SequenceFrameEventOccurrence, 16> events{};
+
+            [[nodiscard]] SequenceFrameScratch View() {
+                return {{}, events, {}};
+            }
+        };
 
         template <typename T> void RequireError(const Result<T> &result, const ErrorCodeDescriptor &expected) {
             REQUIRE(result.HasError());
@@ -218,9 +277,11 @@ namespace Horo::Cinematic {
         std::array<SequenceRestoreDiagnostic, 2> diagnostics{};
         auto result = ApplySequenceRestoreSnapshot(snapshot.Value(), current, diagnostics);
         REQUIRE(result.HasValue());
-        CHECK(result.Value().restored == 1);
+        CHECK(result.Value().restored == 0);
         CHECK(result.Value().missing == 1);
-        CHECK(restored.value == 3.0F);
+        CHECK(result.Value().keptFinal == 1);
+        CHECK(restored.value == 0.0F);
+        CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::KeptFinalDueToMissingTarget);
         CHECK(diagnostics[1].outcome == SequenceRestoreOutcome::TargetMissing);
 
         const std::array reordered{SequenceRestoreTargetSnapshot{RestoreTarget(200), 7, &restored, ApplyRestore},
@@ -235,6 +296,7 @@ namespace Horo::Cinematic {
         result = ApplySequenceRestoreSnapshot(snapshot.Value(), stale, diagnostics);
         REQUIRE(result.HasValue());
         CHECK(result.Value().stale == 1);
+        CHECK(result.Value().keptFinal == 1);
         CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::StaleGeneration);
 
         const std::array rejected{SequenceRestoreTargetSnapshot{RestoreTarget(100), 4, &restored, RejectRestore},
@@ -246,6 +308,86 @@ namespace Horo::Cinematic {
 
         const std::array duplicate{entries[0], SequenceRestoreEntry{TrackId{3, 1}, RestoreTarget(100), 4, 9.0F}};
         RequireError(SequenceRestoreSnapshot::Create(duplicate), SequencePlaybackRuntimeErrors::RestoreInvalid);
+    }
+
+    TEST_CASE("Playback blends both edges from the captured owner value and restores exactly",
+              "[unit][cinematic][playback][blend][restore]") {
+        ValueProbe probe{};
+        const std::array tracks{SequenceFrameTrackDescriptor{TrackId{1, 1}, SequenceApplyStage::Property, &probe, SampleValue, ApplyValue}};
+        auto plan = SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::Once, 4, tracks, {}, {});
+        REQUIRE(plan.HasValue());
+        const std::array captured{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(900), 2, probe.value}};
+        auto restore = SequenceRestoreSnapshot::Create(captured);
+        REQUIRE(restore.HasValue());
+        SequencePlaybackActivation activation{{Handle(90), 10, 0, {1, 1}}, std::move(plan).Value()};
+        activation.blend = {{SequenceBlendMode::Blend, 4}, {SequenceBlendMode::Blend, 4}, SequenceRestorePolicy::RestorePrePlayback};
+        activation.restore = std::move(restore).Value();
+        auto service = Service();
+        const auto admitted = service.Activate(std::move(activation));
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        std::array<SequenceSampledValue, 1> values{};
+        const SequenceFrameScratch scratch{values, {}, {}};
+        REQUIRE(service.Play(handle).HasValue());
+        const std::size_t allocationsBefore = Horo::Tests::AllocationProbe::Count();
+        auto first = service.Evaluate(handle, 2, scratch, {});
+        const std::size_t allocationsAfter = Horo::Tests::AllocationProbe::Count();
+        REQUIRE(first.HasValue());
+        CHECK(allocationsAfter == allocationsBefore);
+        CHECK(probe.value == 8.0F);
+        REQUIRE(service.Evaluate(handle, 3, scratch, {}).HasValue());
+        CHECK(probe.value == 15.0F);
+        REQUIRE(service.Evaluate(handle, 3, scratch, {}).HasValue());
+        CHECK(probe.value == 11.0F);
+        REQUIRE(service.Evaluate(handle, 2, scratch, {}).HasValue());
+        CHECK(probe.value == 4.0F);
+        RequireError(service.Release(handle), SequencePlaybackRuntimeErrors::RestoreRequired);
+        probe.value = 99.0F;
+        const std::array targets{SequenceRestoreTargetSnapshot{RestoreTarget(900), 2, &probe, [](void *context, float value) noexcept {
+            ApplyValue(context, value);
+            return true;
+        }}};
+        std::array<SequenceRestoreDiagnostic, 1> diagnostics{};
+        auto result = service.Restore(handle, targets, diagnostics);
+        REQUIRE(result.HasValue());
+        CHECK(result.Value().restored == 1);
+        CHECK(probe.value == 4.0F);
+        CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::Restored);
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Destroyed restore target keeps every final value and emits typed diagnostics", "[unit][cinematic][playback][restore]") {
+        const std::array entries{SequenceRestoreEntry{TrackId{1, 1}, RestoreTarget(1), 2, 1.0F},
+                                 SequenceRestoreEntry{TrackId{2, 1}, RestoreTarget(2), 3, 2.0F}};
+        auto snapshot = SequenceRestoreSnapshot::Create(entries);
+        REQUIRE(snapshot.HasValue());
+        RestoreProbe surviving{10.0F};
+        const std::array targets{SequenceRestoreTargetSnapshot{RestoreTarget(1), 2, &surviving, ApplyRestore}};
+        std::array<SequenceRestoreDiagnostic, 2> diagnostics{};
+        auto outcome = ApplySequenceRestoreSnapshot(snapshot.Value(), targets, diagnostics);
+        REQUIRE(outcome.HasValue());
+        CHECK(outcome.Value().restored == 0);
+        CHECK(outcome.Value().missing == 1);
+        CHECK(outcome.Value().keptFinal == 1);
+        CHECK(surviving.value == 10.0F);
+        CHECK(diagnostics[0].outcome == SequenceRestoreOutcome::KeptFinalDueToMissingTarget);
+        CHECK(diagnostics[1].outcome == SequenceRestoreOutcome::TargetMissing);
+
+        SequencePlaybackActivation activation{{Handle(91), 10, 0, {1, 1}}, Plan()};
+        activation.blend.restorePolicy = SequenceRestorePolicy::RestorePrePlayback;
+        activation.restore = std::move(snapshot).Value();
+        auto service = Service();
+        auto admitted = service.Activate(std::move(activation));
+        REQUIRE(admitted.HasValue());
+        const auto handle = admitted.Value();
+        REQUIRE(service.Stop(handle).HasValue());
+        REQUIRE(service.FinishStop(handle).HasValue());
+        RequireError(service.Release(handle), SequencePlaybackRuntimeErrors::RestoreRequired);
+        auto terminal = service.Restore(handle, targets, diagnostics);
+        REQUIRE(terminal.HasValue());
+        CHECK(terminal.Value().keptFinal == 1);
+        CHECK(surviving.value == 10.0F);
+        REQUIRE(service.Release(handle).HasValue());
     }
 
     TEST_CASE("Authority plans return typed gameplay conflict outcomes", "[unit][cinematic][playback][authority]") {
@@ -343,6 +485,199 @@ namespace Horo::Cinematic {
         CHECK(service.Snapshot(handle).Value().position == 10);
         REQUIRE(service.Release(handle).HasValue());
         CHECK(service.ActivePlayerCount() == 0);
+    }
+
+    TEST_CASE("Stop end mode dispatches each crossed event and finishes once after terminal publication",
+              "[unit][cinematic][playback][end]") {
+        auto service = Service();
+        const auto handleResult = service.Activate({{Handle(60), 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::Once)});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        PlaybackProbe probe{&service};
+        EventScratch scratch;
+        REQUIRE(service.Play(handle).HasValue());
+
+        auto first = service.Evaluate(handle, 5, scratch.View(), PlaybackHooks(probe));
+        REQUIRE(first.HasValue());
+        CHECK(first.Value().firedEvents == 2);
+        CHECK(probe.eventCount == 2);
+        CHECK(probe.finishedCount == 0);
+
+        auto last = service.Evaluate(handle, 5, scratch.View(), PlaybackHooks(probe));
+        REQUIRE(last.HasValue());
+        CHECK(last.Value().firedEvents == 1);
+        CHECK(last.Value().reachedEnd);
+        CHECK(probe.eventCount == 3);
+        CHECK(probe.finishedCount == 1);
+        CHECK(probe.stateAtFinish == SequencePlaybackState::Stopped);
+        CHECK(probe.events[0].key == KeyframeId{1, 1});
+        CHECK(probe.events[1].key == KeyframeId{2, 1});
+        CHECK(probe.events[2].key == KeyframeId{3, 1});
+        RequireError(service.Evaluate(handle, 1, scratch.View(), PlaybackHooks(probe)), SequenceEvaluationErrors::Stale);
+        CHECK(probe.finishedCount == 1);
+        REQUIRE(service.Cancel(handle).HasValue());
+        CHECK(probe.finishedCount == 1);
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Loop end mode retriggers start and interior events on each traversal without finishing",
+              "[unit][cinematic][playback][end]") {
+        auto service = Service();
+        const auto handleResult = service.Activate({{Handle(61), 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::Loop)});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        PlaybackProbe probe{&service};
+        EventScratch scratch;
+        REQUIRE(service.Play(handle).HasValue());
+        RequireError(service.Evaluate(handle, 60, scratch.View(), PlaybackHooks(probe)), SequenceEvaluationErrors::CapacityExceeded);
+        CHECK(service.Snapshot(handle).Value().position == 0);
+        CHECK(probe.eventCount == 0);
+        CHECK(probe.finishedCount == 0);
+        auto crossed = service.Evaluate(handle, 25, scratch.View(), PlaybackHooks(probe));
+        REQUIRE(crossed.HasValue());
+        CHECK(crossed.Value().position == 5);
+        CHECK(crossed.Value().firedEvents == 8);
+        CHECK_FALSE(crossed.Value().reachedEnd);
+        CHECK(probe.eventCount == 8);
+        CHECK(probe.events[0].traversal == 1);
+        CHECK(probe.events[3].traversal == 2);
+        CHECK(probe.events[6].traversal == 3);
+        CHECK(probe.events[3].key == KeyframeId{1, 1});
+        CHECK(probe.events[6].key == KeyframeId{1, 1});
+        CHECK(probe.finishedCount == 0);
+        REQUIRE(service.Cancel(handle).HasValue());
+        CHECK(probe.finishedCount == 0);
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Reverse stop completes once at zero after reverse-eligible events", "[unit][cinematic][playback][end]") {
+        auto service = Service();
+        const auto handleResult = service.Activate({{Handle(66), 10, 10, {-1, 1}}, EventPlan(SequenceLoopMode::Once)});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        PlaybackProbe probe{&service};
+        EventScratch scratch;
+        REQUIRE(service.Play(handle).HasValue());
+        auto completed = service.Evaluate(handle, 10, scratch.View(), PlaybackHooks(probe));
+        REQUIRE(completed.HasValue());
+        CHECK(completed.Value().position == 0);
+        CHECK(completed.Value().firedEvents == 3);
+        CHECK(completed.Value().reachedEnd);
+        CHECK(probe.events[0].key == KeyframeId{3, 1});
+        CHECK(probe.events[1].key == KeyframeId{2, 1});
+        CHECK(probe.events[2].key == KeyframeId{1, 1});
+        CHECK(probe.events[2].direction == SequenceTraversalDirection::Reverse);
+        CHECK(probe.finishedCount == 1);
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Ping-pong end mode reverses events without duplicating turn keys or finishing", "[unit][cinematic][playback][end]") {
+        auto service = Service();
+        const auto handleResult = service.Activate({{Handle(62), 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::PingPong)});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        PlaybackProbe probe{&service};
+        EventScratch scratch;
+        REQUIRE(service.Play(handle).HasValue());
+        auto crossed = service.Evaluate(handle, 25, scratch.View(), PlaybackHooks(probe));
+        REQUIRE(crossed.HasValue());
+        CHECK(crossed.Value().position == 5);
+        CHECK(crossed.Value().firedEvents == 6);
+        CHECK_FALSE(crossed.Value().reachedEnd);
+        CHECK(probe.eventCount == 6);
+        CHECK(probe.events[0].key == KeyframeId{1, 1});
+        CHECK(probe.events[2].key == KeyframeId{3, 1});
+        CHECK(probe.events[3].direction == SequenceTraversalDirection::Reverse);
+        CHECK(probe.events[4].key == KeyframeId{1, 1});
+        CHECK(probe.events[5].direction == SequenceTraversalDirection::Forward);
+        CHECK(probe.events[2].traversal == 1);
+        CHECK(probe.events[3].traversal == 2);
+        CHECK(probe.events[5].traversal == 3);
+        CHECK(probe.finishedCount == 0);
+        REQUIRE(service.BeginShutdown().HasValue());
+        CHECK(service.Snapshot(handle).Value().state == SequencePlaybackState::Stopped);
+        CHECK(probe.finishedCount == 0);
+        REQUIRE(service.Release(handle).HasValue());
+    }
+
+    TEST_CASE("Ping-pong skips reverse-disabled keys and retriggers them on the next forward pass", "[unit][cinematic][playback][end]") {
+        const std::array events{SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{4, 1}, 5, false}};
+        auto plan = SequenceFrameEvaluationPlan::Create(10, SequenceLoopMode::PingPong, 4, {}, events, {});
+        REQUIRE(plan.HasValue());
+        auto service = Service();
+        const auto handleResult = service.Activate({{Handle(67), 10, 0, {1, 1}}, std::move(plan).Value()});
+        REQUIRE(handleResult.HasValue());
+        const auto handle = handleResult.Value();
+        PlaybackProbe probe{&service};
+        EventScratch scratch;
+        REQUIRE(service.Play(handle).HasValue());
+        auto crossed = service.Evaluate(handle, 25, scratch.View(), PlaybackHooks(probe));
+        REQUIRE(crossed.HasValue());
+        CHECK(crossed.Value().firedEvents == 2);
+        CHECK(probe.eventCount == 2);
+        CHECK(probe.events[0].traversal == 1);
+        CHECK(probe.events[1].traversal == 3);
+        CHECK(probe.events[1].direction == SequenceTraversalDirection::Forward);
+        CHECK(probe.finishedCount == 0);
+    }
+
+    TEST_CASE("Explicit stop and owner destruction bound infinite playback without a finished notification",
+              "[unit][cinematic][playback][end][lifetime]") {
+        PlaybackProbe probe;
+        CoordinationProbe leases;
+        {
+            auto service = Service();
+            probe.service = &service;
+            SequencePlaybackActivation activation{{Handle(63), 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::Loop)};
+            activation.coordination.hideHud = true;
+            activation.coordinationHooks = {&leases, AcquireCoordination, ReleaseCoordination};
+            const auto handleResult = service.Activate(std::move(activation));
+            REQUIRE(handleResult.HasValue());
+            const auto handle = handleResult.Value();
+            EventScratch scratch;
+            REQUIRE(service.Play(handle).HasValue());
+            REQUIRE(service.Evaluate(handle, 12, scratch.View(), PlaybackHooks(probe)).HasValue());
+            REQUIRE(service.Stop(handle).HasValue());
+            REQUIRE(service.FinishStop(handle).HasValue());
+            CHECK(probe.finishedCount == 0);
+            CHECK(leases.released == 1);
+            REQUIRE(service.Release(handle).HasValue());
+
+            SequencePlaybackActivation liveActivation{{Handle(64), 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::PingPong)};
+            liveActivation.coordination.hideHud = true;
+            liveActivation.coordinationHooks = {&leases, AcquireCoordination, ReleaseCoordination};
+            const auto live = service.Activate(std::move(liveActivation));
+            REQUIRE(live.HasValue());
+            REQUIRE(service.Play(live.Value()).HasValue());
+            REQUIRE(service.Evaluate(live.Value(), 21, scratch.View(), PlaybackHooks(probe)).HasValue());
+            CHECK(service.ActivePlayerCount() == 1);
+        }
+        CHECK(probe.finishedCount == 0);
+        CHECK(leases.released == 2);
+    }
+
+    TEST_CASE("Scene replacement closes infinite players and rejects old session handles", "[unit][cinematic][playback][end][lifetime]") {
+        auto oldService = Service();
+        const auto oldHandle = oldService.Activate({{Handle(65), 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::Loop)});
+        REQUIRE(oldHandle.HasValue());
+        PlaybackProbe probe{&oldService};
+        EventScratch scratch;
+        REQUIRE(oldService.Play(oldHandle.Value()).HasValue());
+        REQUIRE(oldService.Evaluate(oldHandle.Value(), 15, scratch.View(), PlaybackHooks(probe)).HasValue());
+        REQUIRE(oldService.BeginShutdown().HasValue());
+        CHECK(oldService.Snapshot(oldHandle.Value()).Value().state == SequencePlaybackState::Stopped);
+        CHECK(probe.finishedCount == 0);
+        REQUIRE(oldService.Release(oldHandle.Value()).HasValue());
+        CHECK(oldService.ActivePlayerCount() == 0);
+
+        const CinematicRuntimeSessionId replacementSession{41, 4};
+        auto replacement = CinematicRuntimeService::Create({replacementSession, SequenceCookTier::Standard});
+        REQUIRE(replacement.HasValue());
+        auto replacementService = std::move(replacement).Value();
+        const SequencePlayerHandle replacementHandle{replacementSession, oldHandle.Value().player};
+        RequireError(replacementService.Snapshot(oldHandle.Value()), SequencePlaybackRuntimeErrors::HandleStale);
+        REQUIRE(replacementService.Activate({{replacementHandle, 10, 0, {1, 1}}, EventPlan(SequenceLoopMode::Once)}).HasValue());
+        CHECK(probe.finishedCount == 0);
     }
 
     TEST_CASE("Runtime service keeps loop players alive and qualifies repeated cancel release generations",
