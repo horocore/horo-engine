@@ -189,8 +189,7 @@ namespace Horo::PlatformServices {
             writer.AddU64(candidate.definition.value);
             writer.AddByte(static_cast<std::byte>(candidate.kind));
             writer.AddByte(static_cast<std::byte>(candidate.value.index()));
-            std::visit([&writer](const auto &value) {
-                using Value = std::decay_t<decltype(value)>;
+            std::visit([&writer]<typename Value>(const Value &value) {
                 if constexpr (std::is_same_v<Value, std::int64_t>)
                     writer.AddU64(static_cast<std::uint64_t>(value));
                 else if constexpr (std::is_same_v<Value, std::uint64_t>)
