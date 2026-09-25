@@ -45,6 +45,7 @@ namespace Horo::Terrain {
         VertexWind,
         Count,
     };
+    static_assert(static_cast<std::uint8_t>(TerrainFoliageCapability::Count) <= 32);
 
     /** @brief Compact capability set with a closed vocabulary and no implicit fallback. */
     class TerrainFoliageCapabilitySet final {
@@ -87,7 +88,10 @@ namespace Horo::Terrain {
         /** @brief Rejects unknown bits. @return True for a closed-vocabulary representation. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             constexpr auto count = static_cast<std::uint8_t>(TerrainFoliageCapability::Count);
-            return (bits_ & ~(static_cast<std::uint32_t>(std::uint32_t{1} << count) - 1U)) == 0;
+            if constexpr (count == 32)
+                return true;
+            else
+                return (bits_ & ~((std::uint32_t{1} << count) - 1U)) == 0;
         }
 
         [[nodiscard]] constexpr auto operator<=>(const TerrainFoliageCapabilitySet &) const noexcept = default;

@@ -365,13 +365,14 @@ namespace Horo::Terrain {
             return mutation;
         if (const auto valid = ValidateDatasetRegistration(registration, capabilities_, limits_); valid.HasError())
             return Result<TerrainFoliageRegistryRevision>::Failure(valid.ErrorValue());
-        auto datasets = state_->datasets;
-        const auto found = LowerBoundDataset(datasets, registration.descriptor.Data().dataset);
-        if (found == datasets.end() || found->descriptor.Data().dataset != registration.descriptor.Data().dataset)
+        const auto found = LowerBoundDataset(state_->datasets, registration.descriptor.Data().dataset);
+        if (found == state_->datasets.end() || found->descriptor.Data().dataset != registration.descriptor.Data().dataset)
             return Result<TerrainFoliageRegistryRevision>::Failure(MakeError(TerrainErrors::IdentityUnknown));
         if (const auto revisions = ValidateDatasetReplacementRevisions(registration.descriptor, found->descriptor); revisions.HasError())
             return Result<TerrainFoliageRegistryRevision>::Failure(revisions.ErrorValue());
-        *found = std::move(registration);
+        const auto index = std::distance(state_->datasets.begin(), found);
+        auto datasets = state_->datasets;
+        datasets[index] = std::move(registration);
         return Publish(std::move(datasets), state_->foliageTypes);
     }
 
@@ -381,11 +382,12 @@ namespace Horo::Terrain {
             return Result<bool>::Failure(MakeError(TerrainErrors::RegistryClosed));
         if (!dataset.IsValid())
             return Result<bool>::Failure(MakeError(TerrainErrors::IdentityInvalid));
-        auto datasets = state_->datasets;
-        const auto found = LowerBoundDataset(datasets, dataset);
-        if (found == datasets.end() || found->descriptor.Data().dataset != dataset)
+        const auto found = LowerBoundDataset(state_->datasets, dataset);
+        if (found == state_->datasets.end() || found->descriptor.Data().dataset != dataset)
             return Result<bool>::Success(false);
-        datasets.erase(found);
+        const auto index = std::distance(state_->datasets.begin(), found);
+        auto datasets = state_->datasets;
+        datasets.erase(datasets.begin() + index);
         const auto published = Publish(std::move(datasets), state_->foliageTypes);
         return published.HasError() ? Result<bool>::Failure(published.ErrorValue()) : Result<bool>::Success(true);
     }
@@ -412,14 +414,15 @@ namespace Horo::Terrain {
             return mutation;
         if (const auto valid = ValidateFoliageRegistration(registration, capabilities_, limits_); valid.HasError())
             return Result<TerrainFoliageRegistryRevision>::Failure(valid.ErrorValue());
-        auto foliageTypes = state_->foliageTypes;
-        const auto found = LowerBoundFoliageType(foliageTypes, registration.definition.Data().type);
-        if (found == foliageTypes.end() || found->definition.Data().type != registration.definition.Data().type)
+        const auto found = LowerBoundFoliageType(state_->foliageTypes, registration.definition.Data().type);
+        if (found == state_->foliageTypes.end() || found->definition.Data().type != registration.definition.Data().type)
             return Result<TerrainFoliageRegistryRevision>::Failure(MakeError(TerrainErrors::IdentityUnknown));
         if (const auto revision = RequireNextRevision(registration.definition.Data().revision, found->definition.Data().revision);
             revision.HasError())
             return Result<TerrainFoliageRegistryRevision>::Failure(revision.ErrorValue());
-        *found = std::move(registration);
+        const auto index = std::distance(state_->foliageTypes.begin(), found);
+        auto foliageTypes = state_->foliageTypes;
+        foliageTypes[index] = std::move(registration);
         return Publish(state_->datasets, std::move(foliageTypes));
     }
 
@@ -429,11 +432,12 @@ namespace Horo::Terrain {
             return Result<bool>::Failure(MakeError(TerrainErrors::RegistryClosed));
         if (!type.IsValid())
             return Result<bool>::Failure(MakeError(TerrainErrors::IdentityInvalid));
-        auto foliageTypes = state_->foliageTypes;
-        const auto found = LowerBoundFoliageType(foliageTypes, type);
-        if (found == foliageTypes.end() || found->definition.Data().type != type)
+        const auto found = LowerBoundFoliageType(state_->foliageTypes, type);
+        if (found == state_->foliageTypes.end() || found->definition.Data().type != type)
             return Result<bool>::Success(false);
-        foliageTypes.erase(found);
+        const auto index = std::distance(state_->foliageTypes.begin(), found);
+        auto foliageTypes = state_->foliageTypes;
+        foliageTypes.erase(foliageTypes.begin() + index);
         const auto published = Publish(state_->datasets, std::move(foliageTypes));
         return published.HasError() ? Result<bool>::Failure(published.ErrorValue()) : Result<bool>::Success(true);
     }
