@@ -86,7 +86,7 @@ namespace Horo::Physics {
      * but before publication.
      */
     struct PhysicsStructuralCommand final {
-        PhysicsCommandOrderKey order; /**< Complete tick/world/scene/target/source canonical key. */
+        PhysicsCommandOrderKey order;                    /**< Complete tick/world/scene/target/source canonical key. */
         std::optional<PhysicsBodyMutation> bodyMutation; /**< Only Change/Body commands may carry a native mutation. */
     };
 
