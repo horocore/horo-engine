@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -136,6 +137,38 @@ namespace Horo::PlatformServices {
         REQUIRE(stale.HasValue());
         CHECK(stale.Value() == PlatformSessionNotificationAdmission::IgnoredStale);
         CHECK(observer.LastPublishedRevision() == 4);
+    }
+
+    TEST_CASE("Malformed notifications are rejected before entering the pending batch",
+              "[platform-services][session][observer][validation]") {
+        auto observer = PlatformSessionObserver::Create().Value();
+        auto malformed = Notification(1, 1);
+        malformed.revision = 0;
+        RequireError(observer.Enqueue(std::move(malformed)), SessionObserverErrors::InvalidNotification);
+        CHECK(observer.PendingCount() == 0);
+        REQUIRE(observer.Enqueue(Notification(1, 1)).HasValue());
+        CHECK(observer.PendingCount() == 1);
+    }
+
+    TEST_CASE("Observer callback exceptions are counted without interrupting later callbacks",
+              "[platform-services][session][observer][validation]") {
+        auto observer = PlatformSessionObserver::Create().Value();
+        auto throwing = observer.Subscribe([](const PlatformSessionNotification &) {
+            throw std::runtime_error{"observer failure"};
+        });
+        REQUIRE(throwing.HasValue());
+        std::vector<std::uint64_t> delivered;
+        auto healthy = observer.Subscribe([&](const PlatformSessionNotification &notification) {
+            delivered.push_back(notification.revision);
+        });
+        REQUIRE(healthy.HasValue());
+
+        REQUIRE(observer.Enqueue(Notification(1, 1)).HasValue());
+        REQUIRE(observer.Enqueue(Notification(2, 1)).HasValue());
+        REQUIRE(observer.Dispatch().Value() == 2);
+        CHECK(observer.CallbackFailureCount() == 2);
+        CHECK(delivered == std::vector<std::uint64_t>{1, 2});
+        CHECK(observer.LastPublishedRevision() == 2);
     }
 
     TEST_CASE("A callback may revoke itself without blocking dispatch", "[platform-services][session][observer][lifecycle]") {
