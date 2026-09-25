@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace Horo::Physics::Detail {
     class PhysicsEventProjection;
@@ -75,6 +76,19 @@ namespace Horo::Physics::Detail {
     struct CanonicalStepOutcome final {
         std::optional<Error> diagnostic;
     };
+
+    /** @brief Bounded Horo-only values projected from resident scene and query-fixture registries. */
+    struct CanonicalDebugProjection final {
+        std::vector<PhysicsDebugRecord> bodies;
+        std::vector<PhysicsDebugRecord> shapes;
+        std::vector<PhysicsDebugRecord> constraints;
+        std::uint64_t truncatedBodies{};
+        std::uint64_t truncatedShapes{};
+        std::uint64_t truncatedConstraints{};
+    };
+
+    /** @brief Copies stable Horo identities from the current owner-thread canonical world after one completed tick. */
+    [[nodiscard]] CanonicalDebugProjection ProjectCanonicalDebug(CanonicalWorldHandle world, const PhysicsDebugBudget &budget);
 
     /** @brief Starts private Jolt process registration or reports omitted/incompatible composition. */
     [[nodiscard]] Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(CanonicalFailurePoint failurePoint = CanonicalFailurePoint::None);

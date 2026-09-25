@@ -720,6 +720,28 @@ Physics exposes:
 Debug draw data is extracted into a bounded render snapshot. The renderer does
 not access live physics storage.
 
+`PhysicsDebugSnapshot` is the backend-neutral diagnostic value boundary for one
+successfully published tick. The owner thread calls
+`PhysicsWorld::CaptureDebugSnapshot` after `AdvanceFixedTick` returns and before
+the next tick or world mutation. The call is opt-in and bounded by both record
+and retained-record-storage byte limits; normal fixed ticks do no debug capture
+work. The current canonical producer copies body, shape and constraint identities
+from its private Horo handle registries, contact records from the published event
+buffer, and applied-command/event counts from the completed-tick marker. It does
+not report body pose or sleep state: the current scene registry retains admission
+pose, which is not a reliable post-step value. Per-category availability
+distinguishes an absent producer from an available empty category. Captured,
+budget-truncated and producer-dropped counts remain separate. Consumers compare
+world identity, tick and publication revision with the current marker; retaining
+the snapshot never retains a world, solver object or native pointer.
+
+There are no per-pair broadphase records or query history (immediate query hits
+live in caller-owned buffers), so those categories remain explicitly unavailable.
+The pipeline record contains actual publication counts, not stage timings; the
+existing observer reports phase names only. An unavailable category cannot be
+represented as an available empty result. This model does not add editor UI or
+expose native solver containers.
+
 ## Error Handling
 
 ### Initial world resource profile

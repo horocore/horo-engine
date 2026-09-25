@@ -362,6 +362,59 @@ namespace Horo::Physics {
         return impl_->published;
     }
 
+    /** @copydoc PhysicsWorld::CaptureDebugSnapshot */
+    Result<std::shared_ptr<const PhysicsDebugSnapshot>> PhysicsWorld::CaptureDebugSnapshot(const PhysicsDebugBudget &budget) const {
+        using SnapshotResult = Result<std::shared_ptr<const PhysicsDebugSnapshot>>;
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping || impl_->runtime->state != PhysicsRuntimeState::Ready)
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (impl_->published.completedTick == 0)
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+        try {
+            const Detail::CanonicalDebugProjection projected = Detail::ProjectCanonicalDebug(impl_->native, budget);
+            const auto events = impl_->events.PublishedEvents();
+            const auto &contactLimit = budget.categories[static_cast<std::size_t>(PhysicsDebugCategory::Contact)];
+            const std::size_t contactCapacity = std::min<std::size_t>(
+                {events.size(), contactLimit.maximumRecords, contactLimit.maximumPayloadBytes / sizeof(PhysicsDebugRecord),
+                 budget.maximumPayloadBytes / sizeof(PhysicsDebugRecord), MaximumPhysicsDebugRecords});
+            std::vector<PhysicsDebugRecord> contacts;
+            contacts.reserve(contactCapacity);
+            for (std::size_t index = 0; index < contactCapacity; ++index)
+                contacts.emplace_back(PhysicsDebugContact{events[index]});
+            const std::array<PhysicsDebugRecord, 1> pipeline{
+                PhysicsDebugPipeline{impl_->published.appliedCommands, impl_->published.eventCount, impl_->published.droppedEventCount}};
+            PhysicsDebugSource source{.world = impl_->identity,
+                                      .simulationTick = impl_->published.completedTick,
+                                      .publicationRevision = impl_->published.publicationRevision};
+            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Body)] = {.availability = PhysicsDebugAvailability::Available,
+                                                                                       .records = projected.bodies,
+                                                                                       .truncatedBeforeCapture = projected.truncatedBodies};
+            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Shape)] = {.availability = PhysicsDebugAvailability::Available,
+                                                                                        .records = projected.shapes,
+                                                                                        .truncatedBeforeCapture =
+                                                                                            projected.truncatedShapes};
+            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Contact)] = {.availability =
+                                                                                              PhysicsDebugAvailability::Available,
+                                                                                          .records = contacts,
+                                                                                          .truncatedBeforeCapture =
+                                                                                              events.size() - contacts.size(),
+                                                                                          .droppedBeforeCapture =
+                                                                                              impl_->published.droppedEventCount};
+            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Constraint)] = {.availability =
+                                                                                                 PhysicsDebugAvailability::Available,
+                                                                                             .records = projected.constraints,
+                                                                                             .truncatedBeforeCapture =
+                                                                                                 projected.truncatedConstraints};
+            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Pipeline)] = {.availability =
+                                                                                               PhysicsDebugAvailability::Available,
+                                                                                           .records = pipeline};
+            return CapturePhysicsDebugSnapshot(source, impl_->published, budget);
+        } catch (const std::bad_alloc &) {
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::CapacityExceeded, "Unable to project bounded Physics debug evidence."));
+        }
+    }
+
     /** @copydoc PhysicsWorld::TickStatistics */
     PhysicsTickStatistics PhysicsWorld::TickStatistics() const noexcept {
         return impl_->statistics;

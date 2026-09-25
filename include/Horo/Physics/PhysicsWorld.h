@@ -8,6 +8,7 @@
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
+#include "Horo/Physics/PhysicsDebugSnapshot.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsQuery.h"
@@ -259,6 +260,15 @@ namespace Horo::Physics {
          * @pre The caller keeps this PhysicsWorld alive for the complete call; the snapshot lock does not extend object lifetime.
          */
         [[nodiscard]] PhysicsPublishedTick PublishedTick() const noexcept;
+        /**
+         * @brief Copies optional backend-neutral debug evidence for the current completed tick.
+         * @param budget Explicit bounded category filters and payload limits.
+         * @return Independent immutable snapshot or a typed affinity, lifecycle, stale, or malformed error.
+         * @pre Active canonical world, owner thread, after successful AdvanceFixedTick and before the
+         * next tick or mutation. Physics projects only currently observable categories.
+         * @post No world or native storage is retained by the returned snapshot.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsDebugSnapshot>> CaptureDebugSnapshot(const PhysicsDebugBudget &budget) const;
         /** @brief Reads allocation-free cumulative pipeline metrics. @return Owner-thread value snapshot. */
         [[nodiscard]] PhysicsTickStatistics TickStatistics() const noexcept;
 
