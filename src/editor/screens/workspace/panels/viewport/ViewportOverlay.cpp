@@ -236,11 +236,15 @@ namespace Horo::Editor {
         (void)Ui::ComboControl("##Shading", &shading, &shaded, 1, fonts, {.height = ControlHeight});
         ImGui::PopItemWidth();
 
+        const float gridX = controlPosition.x + 140.0F + ControlGap + 116.0F + ControlGap;
+        if (DrawOverlayButton("##Grid", {gridX, controlPosition.y}, OverlayGlyph::Grid, state.gridVisible, true,
+                              localization.Get("editor", "workspace.viewport.grid").c_str(), fonts))
+            action.toggleGrid = true;
+
         const float groupWidth = ButtonWidth * 5.0F + ToolGap * 4.0F;
-        const float rightControlStart = origin.x + size.x - SideInset - 148.0F;
-        float toolX = origin.x + (size.x - groupWidth) * 0.5F;
+        float toolX = gridX + ButtonWidth + ToolGap;
         float toolY = origin.y + TopInset;
-        if (toolX < controlPosition.x + 140.0F + ControlGap + 116.0F + 12.0F || toolX + groupWidth > rightControlStart - 12.0F) {
+        if (toolX + groupWidth > origin.x + size.x - SideInset) {
             toolX = controlPosition.x;
             toolY += ControlHeight + 8.0F;
         }
@@ -261,11 +265,6 @@ namespace Horo::Editor {
                               localization.Get("editor", "workspace.viewport.focus").c_str(), fonts))
             action.focusSelection = true;
 
-        if (size.x >= 580.0F) {
-            if (DrawOverlayButton("##Grid", {rightControlStart, controlPosition.y}, OverlayGlyph::Grid, state.gridVisible, true,
-                                  localization.Get("editor", "workspace.viewport.grid").c_str(), fonts))
-                action.toggleGrid = true;
-        }
         if (size.x >= 740.0F)
             action.axisView = DrawCompass(*ImGui::GetWindowDrawList(), {origin.x + size.x - 48.0F, origin.y + 64.0F}, state.camera);
         DrawStats(origin, size, state, localization);

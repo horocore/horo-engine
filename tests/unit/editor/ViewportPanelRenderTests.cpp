@@ -457,3 +457,37 @@ TEST_CASE("Viewport compass selects both signed ends of each axis", "[unit][edit
     }
     ImGui::DestroyContext();
 }
+
+TEST_CASE("Viewport grid control follows shading control", "[unit][editor][viewport]") {
+    using namespace Horo::Editor;
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = {900.0F, 600.0F};
+    io.DeltaTime = 1.0F / 60.0F;
+    io.Fonts->AddFontDefault();
+    static_cast<void>(io.Fonts->Build());
+    ImFont *font = io.Fonts->Fonts.front();
+    const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font};
+    TestLocalization localization;
+    ViewportOverlayState state;
+    const auto draw = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.0F, 0.0F});
+        ImGui::SetNextWindowSize({900.0F, 600.0F});
+        ImGui::Begin("GridTest", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+        const ViewportOverlayAction action = DrawViewportOverlay({0.0F, 0.0F}, {800.0F, 500.0F}, state, fonts, localization);
+        ImGui::End();
+        ImGui::Render();
+        return action;
+    };
+
+    io.AddMousePosEvent(299.0F, 34.0F);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    static_cast<void>(draw());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    static_cast<void>(draw());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    REQUIRE(draw().toggleGrid);
+    ImGui::DestroyContext();
+}
