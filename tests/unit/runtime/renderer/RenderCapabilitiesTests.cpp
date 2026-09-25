@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 namespace {
     using namespace Horo::Render;
@@ -103,4 +104,50 @@ TEST_CASE("Null backend publishes a synthetic bounded capability snapshot", "[un
 
     const RenderBufferDescriptor oversized{.byteSize = 256U * 1024U * 1024U + 1U, .usage = RenderBufferUsage::Vertex};
     CHECK(backend.Value()->QueryBufferMemoryCost(oversized).ErrorValue().code.Value() == "render.null.unsupported_resource_operation");
+}
+
+TEST_CASE("Render resource admission diagnostics cover typed usage and limit failures", "[unit][runtime][renderer][capabilities]") {
+    const RenderCapabilitySnapshot snapshot = MakeSnapshot();
+    const RenderBufferDescriptor buffer{.byteSize = 65,
+                                        .usage = RenderBufferUsage::Vertex | RenderBufferUsage::Index | RenderBufferUsage::CopySource |
+                                                 RenderBufferUsage::CopyDestination | RenderBufferUsage::Uniform |
+                                                 RenderBufferUsage::Storage | RenderBufferUsage::Indirect,
+                                        .access = RenderBufferAccess::HostVisible};
+    CHECK(DescribeRenderBufferRequest(buffer) == "buffer bytes=65 usage=vertex|index|copy-source|copy-destination|uniform|storage|indirect "
+                                                 "access=host-visible");
+    CHECK(DescribeRenderBufferAdmissionFailure(buffer, snapshot).find("size exceeds max 64 bytes") != std::string::npos);
+
+    const RenderTextureDescriptor texture{.dimension = RenderTextureDimension::TwoD,
+                                          .extent = {64, 32},
+                                          .format = RenderTextureFormat::Rgba8Unorm,
+                                          .mipCount = 1,
+                                          .layerCount = 1,
+                                          .sampleCount = 4,
+                                          .usage = RenderTextureUsage::Sampled | RenderTextureUsage::RenderAttachment |
+                                                   RenderTextureUsage::CopySource | RenderTextureUsage::CopyDestination |
+                                                   RenderTextureUsage::Storage,
+                                          .depth = 1};
+    CHECK(DescribeRenderTextureRequest(texture).find("usage=sampled|attachment|copy-source|copy-destination|storage") != std::string::npos);
+    const std::string textureFailure = DescribeRenderTextureAdmissionFailure(texture, snapshot);
+    CHECK(textureFailure.find("usage unavailable for rgba8-unorm") != std::string::npos);
+    CHECK(textureFailure.find("sample count 4 unavailable (supported: 1|2)") != std::string::npos);
+
+    const RenderTextureDescriptor noUsage{.extent = {16, 16},
+                                          .format = RenderTextureFormat::Depth24Stencil8,
+                                          .usage = RenderTextureUsage::Sampled};
+    CHECK(DescribeRenderTextureAdmissionFailure(noUsage, snapshot).find("depth24-stencil8 has no admitted usages") != std::string::npos);
+
+    const RenderTextureDescriptor unknownFormat{.extent = {16, 16},
+                                                .format = static_cast<RenderTextureFormat>(255),
+                                                .usage = RenderTextureUsage::Sampled};
+    CHECK(DescribeRenderTextureAdmissionFailure(unknownFormat, snapshot).find("format is unknown") != std::string::npos);
+
+    const RenderBufferDescriptor emptyBuffer{};
+    RenderCapabilitySnapshot unavailable = snapshot;
+    unavailable.features = {};
+    unavailable.limits.maxBufferBytes = 0;
+    const std::string emptyBufferFailure = DescribeRenderBufferAdmissionFailure(emptyBuffer, unavailable);
+    CHECK(emptyBufferFailure.find("descriptor is structurally invalid") != std::string::npos);
+    CHECK(emptyBufferFailure.find("buffer resources are unavailable") != std::string::npos);
+    CHECK(emptyBufferFailure.find("no buffer bytes are admitted") != std::string::npos);
 }

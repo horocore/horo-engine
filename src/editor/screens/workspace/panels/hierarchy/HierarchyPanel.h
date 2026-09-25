@@ -17,7 +17,7 @@ namespace Horo::Editor {
         }
 
         [[nodiscard]] std::string GetDisplayName() const override {
-            return "horo.panel.hierarchy.title";
+            return "workspace.panel.hierarchy";
         }
 
         [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override {
@@ -42,13 +42,25 @@ namespace Horo::Editor {
         struct RowControls;
         struct RowActionIcon;
 
+        struct RowDrawLayout {
+            float listWidth{0.0F};
+            float outerPadding{0.0F};
+            float uiScale{1.0F};
+        };
+
         void BeginRename(HierarchyNodeId id);
         [[nodiscard]] PanelInteractionState DrawSearch(float panelWidth, float uiScale, const EditorGuiContext &context);
         void UpdateFocusedInputContext(bool searchActive);
         void HandleRenameShortcut(const PanelInteractionState &interaction);
-        [[nodiscard]] bool DrawRows(const std::vector<HierarchyVisibleRow> &rows, float listWidth, float outerPadding, float uiScale,
+        [[nodiscard]] bool AcceptRowAssetDrop(HierarchyNodeId nodeId, float normalizedRowY, const ImVec2 &rowMin, const ImVec2 &rowMax,
+                                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                              ImDrawList &drawList) const;
+        [[nodiscard]] bool DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
                                     const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                     const EditorGuiContext &context);
+        [[nodiscard]] RowFrame BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &layout,
+                                             const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                             ImDrawList &drawList, const EditorGuiContext &context) const;
         void DrawRowContextMenu(const RowFrame &frame, bool workspaceEligible, bool &pendingDelete, EditorWorkspaceViewCommandData &command,
                                 const EditorGuiContext &context);
         [[nodiscard]] RowControls DrawRowControls(const RowFrame &frame, bool workspaceEligible, const EditorGuiContext &context);

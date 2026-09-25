@@ -4,6 +4,7 @@
 #include "ObjMeshImporter.h"
 
 #include <algorithm>
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <memory>
@@ -52,6 +53,32 @@ namespace {
     std::uint32_t ReadLE32(std::span<const std::uint8_t> bytes, std::size_t offset) {
         return static_cast<std::uint32_t>(bytes[offset]) | (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
                (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) | (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
+    }
+
+    void AppendLE32(std::vector<std::uint8_t> &bytes, const std::uint32_t value) {
+        for (unsigned shift = 0; shift < 32; shift += 8)
+            bytes.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffU));
+    }
+
+    void WriteLE32(std::vector<std::uint8_t> &bytes, const std::size_t offset, const std::uint32_t value) {
+        REQUIRE(offset + sizeof(std::uint32_t) <= bytes.size());
+        for (unsigned shift = 0; shift < 32; shift += 8)
+            bytes[offset + shift / 8U] = static_cast<std::uint8_t>((value >> shift) & 0xffU);
+    }
+
+    void AppendFloat(std::vector<std::uint8_t> &bytes, const float value) {
+        AppendLE32(bytes, std::bit_cast<std::uint32_t>(value));
+    }
+
+    std::shared_ptr<const IAssetPreviewProvider> MakeObjPreviewProvider() {
+        AssetImporterCatalog catalog;
+        REQUIRE((RegisterObjMeshImporter(catalog).HasValue()));
+        const auto snapshot = catalog.Publish();
+        REQUIRE(snapshot.HasValue());
+        const AssetImporterContribution *contribution = snapshot.Value()->FindPreviewContribution(Type("core.mesh"));
+        REQUIRE(contribution != nullptr);
+        REQUIRE(contribution->previewProvider != nullptr);
+        return contribution->previewProvider;
     }
 
 }  // namespace
@@ -161,6 +188,104 @@ f 1 2 3
     REQUIRE((std::ranges::any_of(preview.Value().pixels, [](const std::uint8_t value) {
         return value != 0;
     })));
+}
+
+TEST_CASE("OBJ preview provider renders topology-free legacy payloads", "[native]") {
+    std::vector<std::uint8_t> payload;
+    AppendLE32(payload, MeshEditorPayloadSchemaVersion);
+    AppendLE32(payload, 2);
+    AppendLE32(payload, 1);
+    for (const float bound : {-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F})
+        AppendFloat(payload, bound);
+    AppendLE32(payload, 24);
+    AppendLE32(payload, 0);
+    AppendLE32(payload, 0);
+    for (const float component : {-1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F})
+        AppendFloat(payload, component);
+
+    AssetImporterCatalog catalog;
+    REQUIRE((RegisterObjMeshImporter(catalog).HasValue()));
+    const auto snapshot = catalog.Publish();
+    REQUIRE(snapshot.HasValue());
+    const AssetImporterContribution *contribution = snapshot.Value()->FindPreviewContribution(Type("core.mesh"));
+    REQUIRE(contribution != nullptr);
+    REQUIRE(contribution->previewProvider != nullptr);
+
+    const auto preview = contribution->previewProvider->GeneratePreview(
+        AssetPreviewInput{
+            .editorPayload = payload,
+            .absoluteAssetPath = "/tmp/legacy.horoasset",
+            .assetType = Type("core.mesh"),
+            .width = 64,
+            .height = 64,
+        },
+        CancellationToken{});
+    REQUIRE(preview.HasValue());
+    CHECK((std::ranges::any_of(preview.Value().pixels, [](const std::uint8_t value) {
+        return value != 0;
+    })));
+}
+
+TEST_CASE("OBJ preview provider rejects malformed payloads and topology indices", "[native]") {
+    const char *obj = R"(
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+)";
+    auto imported = ImportString(obj);
+    REQUIRE(imported.HasValue());
+    const auto provider = MakeObjPreviewProvider();
+
+    auto truncated = imported.Value();
+    truncated.resize(20);
+    const auto truncatedPreview = provider->GeneratePreview(
+        AssetPreviewInput{
+            .editorPayload = truncated,
+            .absoluteAssetPath = "/tmp/truncated.horoasset",
+            .assetType = Type("core.mesh"),
+            .width = 64,
+            .height = 64,
+        },
+        CancellationToken{});
+    REQUIRE(truncatedPreview.HasError());
+
+    auto invalidIndices = imported.Value();
+    WriteLE32(invalidIndices, 88, 99);
+    const auto invalidIndexPreview = provider->GeneratePreview(
+        AssetPreviewInput{
+            .editorPayload = invalidIndices,
+            .absoluteAssetPath = "/tmp/invalid-indices.horoasset",
+            .assetType = Type("core.mesh"),
+            .width = 64,
+            .height = 64,
+        },
+        CancellationToken{});
+    REQUIRE(invalidIndexPreview.HasError());
+}
+
+TEST_CASE("OBJ preview provider honors cancellation before rendering", "[native]") {
+    const char *obj = R"(
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+)";
+    auto imported = ImportString(obj);
+    REQUIRE(imported.HasValue());
+
+    CancellationSource cancellation;
+    cancellation.RequestCancellation();
+    const auto preview = MakeObjPreviewProvider()->GeneratePreview(
+        AssetPreviewInput{
+            .editorPayload = imported.Value(),
+            .absoluteAssetPath = "/tmp/cancelled.horoasset",
+            .assetType = Type("core.mesh"),
+            .width = 64,
+            .height = 64,
+        },
+        cancellation.Token());
+    REQUIRE(preview.HasError());
 }
 
 TEST_CASE("OBJ importer produces deterministic output", "[native]") {

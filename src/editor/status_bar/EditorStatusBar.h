@@ -12,7 +12,7 @@ namespace Horo::Editor {
     /** @brief Host-owned ImGui renderer for bounded editor status contributions. */
     class EditorStatusBar {
     public:
-        static constexpr float Height = 30.0F;
+        static constexpr float Height = 38.0F;
 
         EditorStatusBar(const EditorGuiContext &context, EditorStatusItemRegistry &registry);
 

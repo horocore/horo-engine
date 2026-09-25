@@ -60,24 +60,31 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::PollContentBrowserPreviews() {
         std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
-            if (!pending.handle.has_value()) {
-                auto submitted = m_assetPreviews->Submit(pending.request);
-                if (submitted.HasError())
-                    return submitted.ErrorValue().code.Value() != "asset.preview.queue_full";
-                pending.handle = std::move(submitted).Value();
-            }
-            if (const Assets::AssetPreviewState state = pending.handle->State();
-                state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
-                return false;
-            if (auto completed = pending.handle->TakeResult(); completed.HasValue()) {
-                const auto entry =
-                    std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
-                if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&
-                    entry->activeImporterVersion == pending.providerVersion)
-                    entry->previewImage = std::move(completed).Value().image;
-            }
-            return true;
+            return PollContentBrowserPreview(pending);
         });
+    }
+
+    bool EditorWorkspaceController::PollContentBrowserPreview(PendingContentBrowserPreview &pending) {
+        if (!pending.handle.has_value()) {
+            auto submitted = m_assetPreviews->Submit(pending.request);
+            if (submitted.HasError())
+                return submitted.ErrorValue().code.Value() != "asset.preview.queue_full";
+            pending.handle = std::move(submitted).Value();
+        }
+        if (const Assets::AssetPreviewState state = pending.handle->State();
+            state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
+            return false;
+        if (auto completed = pending.handle->TakeResult(); completed.HasValue()) {
+            const auto entry =
+                std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
+            if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&
+                entry->activeImporterVersion == pending.providerVersion)
+                entry->previewImage = std::move(completed).Value().image;
+        } else {
+            LOG_WARN("editor.asset_preview", "Preview generation failed for '%s': %s", pending.absolutePath.c_str(),
+                     completed.ErrorValue().code.Value().c_str());
+        }
+        return true;
     }
 
     void EditorWorkspaceController::RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry) {

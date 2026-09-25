@@ -412,7 +412,7 @@ different shape.
 
 ## Related Documents
 
-- [Scene Primitives UI Reference](./primitives-panel.html): primitive placement, snap settings, collider generation, and default materials panel.
+- [Scene Primitives UI Reference](../../../mock-studio/designs.md#architecture-runtime-primitives-panel): primitive placement, snap settings, collider generation, and default materials panel.
 
 - [Asset Pipeline](./asset-pipeline.md): imported asset flow, `AssetId`, and
   cook pipeline.

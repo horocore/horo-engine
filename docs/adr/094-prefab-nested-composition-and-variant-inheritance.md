@@ -7,7 +7,7 @@
 - **Issue**: [PFB-005.1](https://github.com/HoroCore/horo-engine/issues/1046)
 - **Jira**: [HORO-1046](https://horo-engine.atlassian.net/browse/HORO-1046)
 - **Related**: [ADR-017](017-prefab-role-ownership-and-capability-tiers.md), [ADR-093](093-prefab-override-property-identity-and-delta-operations.md)
-- **Normative documents**: [Prefab Architecture](../architecture/runtime/prefab-architecture.md), [Editor Document Model](../architecture/editor/editor-document-model.md), [Prefab Editor Reference](../architecture/runtime/prefab-editor.html), [Project Versioning and Migration](../architecture/foundation/project-versioning-and-migration.md)
+- **Normative documents**: [Prefab Architecture](../architecture/runtime/prefab-architecture.md), [Editor Document Model](../architecture/editor/editor-document-model.md), [Prefab Editor Reference](../../mock-studio/designs.md#architecture-runtime-prefab-editor), [Project Versioning and Migration](../architecture/foundation/project-versioning-and-migration.md)
 
 ## Context
 

@@ -7,25 +7,16 @@
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.h"
 
 #include <imgui.h>
+#include <optional>
 
 namespace Horo::Editor {
     class ViewportPanel final : public IWorkspacePanel {
     public:
-        [[nodiscard]] std::string GetId() const override {
-            return "horo.viewport";
-        }
+        [[nodiscard]] std::string GetId() const override;
 
-        [[nodiscard]] std::string GetDisplayName() const override {
-            return "horo.panel.viewport.title";
-        }
-
-        [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override {
-            return WorkspaceDockArea::Document;
-        }
-
-        [[nodiscard]] std::vector<std::string> GetObservedEventTypes() const override {
-            return {"SceneDocumentChangedEvent", "SelectionChangedEvent"};
-        }
+        [[nodiscard]] std::string GetDisplayName() const override;
+        [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override;
+        [[nodiscard]] std::vector<std::string> GetObservedEventTypes() const override;
 
         void OnAttach(PanelContext &ctx) override;
         void OnDetach() override;
@@ -50,19 +41,25 @@ namespace Horo::Editor {
         void DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
                                      EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
                                      Math::ClipDepthRange depthRange);
-        static bool AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
-                                            const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                                            Math::ClipDepthRange depthRange);
+        bool AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
+                                     EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                                     Math::ClipDepthRange depthRange);
+        bool HandleAcceptedAssetDrop(const ImGuiPayload *accepted, ImDrawList &drawList, const ViewportSurfaceLayout &layout,
+                                     const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                     const EditorGuiContext &context, Math::ClipDepthRange depthRange);
+        void CancelAssetPlacementPreview(EditorWorkspaceViewCommandData &command);
+        static void DrawAssetPlacementHint(ImDrawList &drawList, const ViewportSurfaceLayout &layout, ImVec2 pointer,
+                                           const EditorGuiContext &context);
         static void DrawViewportSurface(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                         const EditorViewportTextureView &textureView, bool hasRenderedViewport);
 
-        static void DrawProjectionControl(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
-        static void DrawObjectCount(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context);
         static void DrawMissingRendererMessage(float centerX, float originY, float height, const EditorGuiContext &context);
 
         IEditorViewportRenderer *viewportRenderer_{nullptr};
         ViewportInteractionController interaction_;
         bool lightMarkerFailureReported_{false};
+        bool assetPlacementPreviewActive_{false};
+        bool assetPlacementCancelled_{false};
+        std::optional<bool> gridOverride_;
     };
 }  // namespace Horo::Editor

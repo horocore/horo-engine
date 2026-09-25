@@ -145,25 +145,25 @@ namespace Horo::Editor {
             } else if (draft_.templateId == "3d-starter" || draft_.templateId == "custom") {
                 draft_.includeStarterContent = true;
                 if (draft_.defaultScene.empty()) {
-                    draft_.defaultScene = "assets/scenes/main.horo";
+                    draft_.defaultScene = "Assets/Scenes/main.horo";
                 }
             } else if (draft_.templateId == "first-person") {
                 draft_.includeStarterContent = true;
                 draft_.physicsEnabled = true;
                 if (draft_.defaultScene.empty()) {
-                    draft_.defaultScene = "assets/scenes/first_person.horo";
+                    draft_.defaultScene = "Assets/Scenes/first_person.horo";
                 }
             } else if (draft_.templateId == "tech-demo") {
                 draft_.includeStarterContent = true;
                 draft_.targetFrameRate = 120;
                 if (draft_.defaultScene.empty()) {
-                    draft_.defaultScene = "assets/scenes/benchmark.horo";
+                    draft_.defaultScene = "Assets/Scenes/benchmark.horo";
                 }
             } else if (draft_.templateId == "package-based") {
                 draft_.includeStarterContent = true;
                 draft_.restorePackages = true;
                 if (draft_.defaultScene.empty()) {
-                    draft_.defaultScene = "assets/scenes/main.horo";
+                    draft_.defaultScene = "Assets/Scenes/main.horo";
                 }
             }
         }
@@ -245,7 +245,7 @@ namespace Horo::Editor {
         if (!includeStarterContent) {
             draft_.defaultScene.clear();
         } else if (draft_.defaultScene.empty()) {
-            draft_.defaultScene = "assets/scenes/main.horo";
+            draft_.defaultScene = "Assets/Scenes/main.horo";
         }
     }
 

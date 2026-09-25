@@ -1,3 +1,4 @@
+#include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -11,8 +12,10 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "editor/project_model/RendererAvailability.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <imgui_internal.h>
 #include <memory>
 
 namespace Horo::Editor::Theme {
@@ -66,7 +69,72 @@ namespace {
         ScreenStats &stats_;
     };
 
-    TEST_CASE("Shutdown Leaves Once Destroys Screen And Revokes Services", "[unit][editor]") {
+    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
+        host.Shutdown();
+        REQUIRE((host.IsShutdown()));
+        REQUIRE((stats.leaves == 1));
+        REQUIRE((stats.destructions == 1));
+        REQUIRE((host.Services().Empty()));
+
+        host.Shutdown();
+        REQUIRE((stats.leaves == 1));
+        REQUIRE((stats.destructions == 1));
+        const Result<void> navigation = host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}});
+        REQUIRE((navigation.HasError()));
+        REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
+        REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
+        jobs.Shutdown(ShutdownPolicy::Cancel);
+    }
+
+    void ExerciseUiPreviewScenarios(GuiScreenHost &host, EditorModalHost &modals, Horo::Editor::Tests::HeadlessEditorGuiFixture &imgui) {
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::ImportAssets});
+        REQUIRE(modals.HasOpenModal());
+        REQUIRE(host.StartUiPreview("asset-import-empty").HasError());
+        const auto menuModalId = modals.TopModalId();
+        REQUIRE(menuModalId.has_value());
+        REQUIRE(modals.RequestClose(*menuModalId, ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.016F);
+        REQUIRE_FALSE(modals.HasOpenModal());
+
+        const auto invalid = host.StartUiPreview("not-a-preview");
+        REQUIRE(invalid.HasError());
+        REQUIRE(host.StartUiPreview("asset-import-empty").HasValue());
+        const auto duplicate = host.StartUiPreview("asset-import-empty");
+        REQUIRE(duplicate.HasError());
+        CHECK(duplicate.ErrorValue().code.Value() == "navigation.host_already_started");
+
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+
+        const auto previewModalId = modals.TopModalId();
+        REQUIRE(previewModalId.has_value());
+        REQUIRE(modals.RequestClose(*previewModalId, ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.016F);
+        REQUIRE_FALSE(modals.HasOpenModal());
+
+        const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
+        REQUIRE(gallery != nullptr);
+        const float firstButtonTop = EditorUiPreviewHeaderHeight + 54.0F;
+        const float buttonHeight = 38.0F;
+        const float secondButtonCenter = firstButtonTop + buttonHeight + ImGui::GetStyle().ItemSpacing.y + buttonHeight * 0.5F;
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddMousePosEvent(gallery->Pos.x + EditorUiPreviewSidebarWidth * 0.5F, gallery->Pos.y + secondButtonCenter);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        REQUIRE(modals.HasOpenModal());
+    }
+
+    TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
         Input::InputRouter input;
@@ -91,6 +159,8 @@ namespace {
 
         GuiScreenHost host{gui,  modals, settings,  localization,       engineEvents,     creation,
                            jobs, input,  renderers, std::move(screens), std::move(panels)};
+        REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
+        REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
         REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
         REQUIRE((stats.enters == 0));
         REQUIRE((host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasError()));
@@ -104,19 +174,41 @@ namespace {
         REQUIRE((invalidRoute.ErrorValue().domain.Value() == "horo.editor.screens"));
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
 
-        host.Shutdown();
-        REQUIRE((host.IsShutdown()));
-        REQUIRE((stats.leaves == 1));
-        REQUIRE((stats.destructions == 1));
-        REQUIRE((host.Services().Empty()));
+        ShutdownAndCheckGuiScreenHost(host, stats, jobs);
+    }
+
+    TEST_CASE("Gui Screen Host admits only known isolated UI preview scenarios", "[unit][editor][gui]") {
+        ::Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+        EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        Input::InputRouter input;
+        ::Horo::Editor::Tests::ScopedJobSystem jobs;
+        ProjectCreationService creation{jobs.Get(), engineEvents};
+        LocalizationService localization{LocaleTag{"en-US"}};
+        ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+        EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+        EditorModalHost modals{editorEvents, input};
+        const Theme::Fonts &fonts = imgui.Fonts();
+        ThemeContext theme{fonts};
+        EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settings.Snapshot()};
+        RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                               "opengl"};
+
+        GuiScreenHost host{gui,
+                           modals,
+                           settings,
+                           localization,
+                           engineEvents,
+                           creation,
+                           jobs.Get(),
+                           input,
+                           renderers,
+                           ScreenRegistry{},
+                           WorkspacePanelRegistry{}};
+        ExerciseUiPreviewScenarios(host, modals, imgui);
 
         host.Shutdown();
-        REQUIRE((stats.leaves == 1));
-        REQUIRE((stats.destructions == 1));
-        const Result<void> navigation = host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}});
-        REQUIRE((navigation.HasError()));
-        REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
-        REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
-        jobs.Shutdown(ShutdownPolicy::Cancel);
+        CHECK(host.IsShutdown());
+        CHECK(host.StartUiPreview("asset-import-empty").HasError());
     }
 }  // namespace

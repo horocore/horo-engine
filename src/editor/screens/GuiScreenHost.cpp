@@ -17,6 +17,8 @@
 #include "NavigationErrors.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
+#include "editor/ui_preview/EditorUiPreviewCatalog.h"
+#include "editor/ui_preview/EditorUiPreviewGallery.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <algorithm>
@@ -84,12 +86,12 @@ namespace Horo::Editor {
                                  const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
                                  WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace)
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, NativeDialogs *nativeDialogs)
 
         : context_(&context), modalHost_(&modalHost), settingsService_(&settingsService), localization_(&localization),
           engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
-          extensionMarketplace_(extensionMarketplace), screenRegistry_(std::move(screenRegistry)),
-          workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
+          extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs), inputRouter_(&inputRouter),
+          screenRegistry_(std::move(screenRegistry)), workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
         services_.Register(*this);
         services_.RegisterConst(context);
         services_.Register(modalHost);
@@ -142,13 +144,6 @@ namespace Horo::Editor {
                                              .label = rendererAvailability.Find(rendererAvailability.ActiveBackendId()) != nullptr
                                                           ? rendererAvailability.Find(rendererAvailability.ActiveBackendId())->displayName
                                                           : std::string{rendererAvailability.ActiveBackendId()}}));
-        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.cpu",
-                                                                                  .labelKey = "status.cpu.label",
-                                                                                  .alignment = EditorStatusBarAlignment::Right,
-                                                                                  .priority = 90,
-                                                                                  .order = 20,
-                                                                                  .maxWidth = 112.0F},
-                                                       EditorStatusItemContent{.value = "0.0 ms"}));
         static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.document",
                                                                                   .alignment = EditorStatusBarAlignment::Left,
                                                                                   .priority = 100,
@@ -418,9 +413,6 @@ namespace Horo::Editor {
                                                                                                              ? "status.navigation.busy"
                                                                                                              : "status.navigation.idle")}));
         }
-        const std::string cpuFrameTime = std::format("{:.1f} ms", static_cast<double>(dt * 1000.0F));
-        static_cast<void>(statusItemRegistry_.Update("horo.status.cpu", EditorStatusItemContent{.value = cpuFrameTime}));
-
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
             activeScreen_->OnUpdate(dt);
@@ -451,6 +443,10 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::Draw() {
+        if (!uiPreviewScenario_.empty()) {
+            DrawUiPreview();
+            return;
+        }
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         const float contentHeight = std::max(0.0F, viewport->WorkSize.y - EditorStatusBar::Height);
         const GuiContentRegion contentRegion{viewport->WorkPos.x, viewport->WorkPos.y, viewport->WorkSize.x, contentHeight};
@@ -496,7 +492,8 @@ namespace Horo::Editor {
                 if (context_ && modalHost_ && !modalHost_->HasOpenModal()) {
                     auto modal =
                         std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
-                                                           services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>());
+                                                           services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>(),
+                                                           localization_, nativeDialogs_, inputRouter_);
                     modal->SetProjectRoot(CurrentProjectRoot());
                     if (invocation.assetDestination.has_value())
                         modal->SetDefaultDestination(*invocation.assetDestination);

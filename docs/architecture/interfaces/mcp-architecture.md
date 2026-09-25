@@ -564,7 +564,7 @@ import logic, build behavior, or release policy.
 
 ## Related Documents
 
-- [MCP Panel](./mcp-panel.html): HTML reference design for MCP sessions,
+- [MCP Panel](../../../mock-studio/designs.md#architecture-interfaces-mcp-panel): React mock design for MCP sessions,
   tool-call history, approval queue, request inspection, and audit surface.
 - [System Design](../foundation/system-design.md): host boundaries and dependency direction.
 - [Engine Data Bus](../foundation/engine-data-bus.md): how MCP publishes history

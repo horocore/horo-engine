@@ -37,15 +37,35 @@ namespace Horo::Editor {
         return HierarchyNodeType::Empty;
     }
 
+    void HierarchyEditSession::RevealObjectAncestors(const EditorWorkspaceViewModel &viewModel) {
+        if (!viewModel.hierarchyRevealObject.has_value() || viewModel.hierarchyRevealRevision == m_handledRevealRevision)
+            return;
+
+        std::optional<SceneObjectId> ancestor = viewModel.hierarchyRevealObject;
+        while (ancestor.has_value()) {
+            const auto object = std::ranges::find(viewModel.objects, *ancestor, &SceneObject::id);
+            if (object == viewModel.objects.end())
+                break;
+            if (object->parent.has_value())
+                static_cast<void>(m_model.SetExpanded(object->parent->value, true));
+            ancestor = object->parent;
+        }
+        m_handledRevealRevision = viewModel.hierarchyRevealRevision;
+    }
+
     /** @copydoc HierarchyEditSession::Synchronize */
     void HierarchyEditSession::Synchronize(const EditorWorkspaceViewModel &viewModel) {
         if (!m_projectionInitialized || m_projectedRevision != viewModel.documentRevision) {
             m_inputs.clear();
             m_inputs.reserve(viewModel.objects.size());
+            m_parentByNode.clear();
+            m_parentByNode.reserve(viewModel.objects.size());
             for (const SceneObject &object : viewModel.objects) {
+                const std::optional<HierarchyNodeId> parent =
+                    object.parent.has_value() ? std::optional<HierarchyNodeId>{object.parent->value} : std::nullopt;
                 m_inputs.push_back({
                     .id = object.id.value,
-                    .parent = object.parent.has_value() ? std::optional<HierarchyNodeId>{object.parent->value} : std::nullopt,
+                    .parent = parent,
                     .name = object.name,
                     .type = ResolveHierarchyNodeType(object),
                     .locallyVisible = object.editorState.visible,
@@ -55,25 +75,14 @@ namespace Horo::Editor {
                     .hiddenByParent = object.hiddenByParent,
                     .lockedByParent = object.lockedByParent,
                 });
+                m_parentByNode.try_emplace(object.id.value, parent);
             }
             m_model.Replace(m_inputs);
             m_projectedRevision = viewModel.documentRevision;
             m_projectionInitialized = true;
         }
 
-        if (viewModel.hierarchyRevealObject.has_value() && viewModel.hierarchyRevealRevision != m_handledRevealRevision) {
-            std::optional<SceneObjectId> ancestor = viewModel.hierarchyRevealObject;
-            while (ancestor.has_value()) {
-                const auto object = std::ranges::find(viewModel.objects, *ancestor, &SceneObject::id);
-                if (object == viewModel.objects.end())
-                    break;
-                if (object->parent.has_value()) {
-                    static_cast<void>(m_model.SetExpanded(object->parent->value, true));
-                }
-                ancestor = object->parent;
-            }
-            m_handledRevealRevision = viewModel.hierarchyRevealRevision;
-        }
+        RevealObjectAncestors(viewModel);
 
         if (viewModel.primarySelection.has_value()) {
             static_cast<void>(m_model.Select(viewModel.primarySelection->value));
@@ -97,6 +106,12 @@ namespace Horo::Editor {
     /** @copydoc HierarchyEditSession::Find */
     const HierarchyNode *HierarchyEditSession::Find(const HierarchyNodeId id) const noexcept {
         return m_model.Find(id);
+    }
+
+    /** @copydoc HierarchyEditSession::ParentId */
+    std::optional<HierarchyNodeId> HierarchyEditSession::ParentId(const HierarchyNodeId id) const noexcept {
+        const auto found = m_parentByNode.find(id);
+        return found != m_parentByNode.end() ? found->second : std::nullopt;
     }
 
     /** @copydoc HierarchyEditSession::SelectedId */

@@ -50,6 +50,54 @@ namespace {
         CHECK(EvaluateAssetSceneDrop(malformed).rejection == AssetSceneDropRejection::InvalidPayload);
     }
 
+    TEST_CASE("Hierarchy asset drop resolves row center as child and edges as siblings", "[unit][editor][asset-drop]") {
+        const SceneObjectId hovered{7};
+        const SceneObjectId parent{3};
+
+        const HierarchyAssetDropPlacement before = ResolveHierarchyAssetDropPlacement(0.1F, hovered, parent);
+        CHECK(before.zone == HierarchyAssetDropZone::BeforeSibling);
+        CHECK(before.target == AssetSceneDropTarget::HierarchySibling);
+        CHECK(before.parent == parent);
+
+        const HierarchyAssetDropPlacement child = ResolveHierarchyAssetDropPlacement(0.5F, hovered, parent);
+        CHECK(child.zone == HierarchyAssetDropZone::Child);
+        CHECK(child.target == AssetSceneDropTarget::HierarchyChild);
+        CHECK(child.parent == hovered);
+
+        const HierarchyAssetDropPlacement rootSibling = ResolveHierarchyAssetDropPlacement(0.9F, hovered, std::nullopt);
+        CHECK(rootSibling.zone == HierarchyAssetDropZone::AfterSibling);
+        CHECK(rootSibling.target == AssetSceneDropTarget::HierarchySibling);
+        CHECK_FALSE(rootSibling.parent.has_value());
+    }
+
+    TEST_CASE("Asset placement preview is transient tinted and non-pickable", "[unit][editor][asset-drop]") {
+        Render::MeshData mesh;
+        mesh.vertices = {
+            {{-0.5F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, {}},
+            {{0.5F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, {}},
+            {{0.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 1.0F}, {}},
+        };
+        mesh.indices = {0, 1, 2};
+        mesh.localBounds = {{-0.5F, 0.0F, 0.0F}, {0.5F, 1.0F, 0.0F}};
+        const EditorAssetMeshView meshView{.handle = {{91}, 1}, .mesh = &mesh};
+        EditorViewportSceneSnapshot scene;
+
+        REQUIRE(
+            (ApplyAssetViewportPlacementPreview(scene, meshView, AssetViewportPlacement{.worldPosition = {2.0F, 3.0F, 4.0F}}).HasValue()));
+        REQUIRE((scene.meshResources.size() == 1));
+        REQUIRE((scene.instances.size() == 1));
+        CHECK(scene.instances.front().presentation.tintStrength > 0.0F);
+        CHECK(scene.instancePickable == std::vector<std::uint8_t>{0U});
+        CHECK(Math::TransformPoint(scene.instances.front().localToWorld, {}) == Math::Vec3{2.0F, 3.0F, 4.0F});
+
+        REQUIRE(ClearAssetViewportPlacementPreview(scene));
+        CHECK(scene.instances.empty());
+        CHECK(scene.instanceObjects.empty());
+        CHECK(scene.instancePickable.empty());
+        CHECK(scene.meshResources.empty());
+        CHECK_FALSE(ClearAssetViewportPlacementPreview(scene));
+    }
+
     TEST_CASE("Viewport asset placement prefers surface then ground plane then camera front", "[unit][editor][asset-drop]") {
         SECTION("surface hit") {
             ExtractedScene scene{true};

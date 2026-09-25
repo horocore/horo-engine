@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <string>
 
 namespace {
@@ -40,6 +41,47 @@ namespace {
         ImGuiIO *io{nullptr};
         Horo::Editor::Theme::Fonts fonts;
     };
+
+    struct SiblingSubmenuHoverState {
+        ImVec2 firstRowCenter{};
+        ImVec2 secondRowCenter{};
+        bool firstOpen{false};
+        bool secondOpen{false};
+        bool openRoot{true};
+    };
+
+    void DrawSiblingSubmenuHoverFrame(ImGuiTestContext &imgui, SiblingSubmenuHoverState &state) {
+        using namespace Horo::Editor::Ui;
+        ImGui::SetNextWindowPos({20.0F, 20.0F});
+        ImGui::SetNextWindowSize({240.0F, 200.0F});
+        ImGui::Begin("SubmenuHoverTest");
+        if (state.openRoot) {
+            ImGui::OpenPopup("##root");
+            state.openRoot = false;
+        }
+        if (BeginMenuPopup("##root")) {
+            state.firstOpen = BeginContextSubmenu("Cameras###cameras", imgui.fonts);
+            if (state.firstOpen) {
+                static_cast<void>(ContextMenuItem("Perspective", nullptr, imgui.fonts));
+                EndContextSubmenu();
+            } else {
+                const ImVec2 minimum = ImGui::GetItemRectMin();
+                const ImVec2 maximum = ImGui::GetItemRectMax();
+                state.firstRowCenter = {(minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F};
+            }
+            state.secondOpen = BeginContextSubmenu("Lights###lights", imgui.fonts);
+            if (state.secondOpen) {
+                static_cast<void>(ContextMenuItem("Point Light", nullptr, imgui.fonts));
+                EndContextSubmenu();
+            } else {
+                const ImVec2 minimum = ImGui::GetItemRectMin();
+                const ImVec2 maximum = ImGui::GetItemRectMax();
+                state.secondRowCenter = {(minimum.x + maximum.x) * 0.5F, (minimum.y + maximum.y) * 0.5F};
+            }
+            EndMenuPopup();
+        }
+        ImGui::End();
+    }
 
     /** @brief Renders one complete Dear ImGui test frame. */
     template <typename DrawFrame> void RenderImGuiFrame(DrawFrame &&drawFrame) {
@@ -144,12 +186,20 @@ TEST_CASE("Editor icon registry resolves canonical and catalog tokens", "[unit][
     REQUIRE(UiIconRegistry::Resolve("action.checkbox_unchecked") == UiIcon::CheckboxUnchecked);
     REQUIRE(UiIconRegistry::Resolve("primitive.light.directional") == UiIcon::DirectionalLight);
     REQUIRE(UiIconRegistry::Resolve("primitive.collider.sphere") == UiIcon::Sphere);
+    REQUIRE(UiIconRegistry::Resolve("primitive.box") == UiIcon::SceneObject);
     REQUIRE(UiIconRegistry::Resolve("asset.folder") == UiIcon::Folder);
     REQUIRE(UiIconRegistry::Resolve("location.package") == UiIcon::Package);
     REQUIRE(UiIconRegistry::Resolve("navigation.arrow_back") == UiIcon::ArrowBack);
     REQUIRE_FALSE(UiIconRegistry::Resolve("unknown.icon").has_value());
     REQUIRE(std::string(UiIconRegistry::Token(UiIcon::VisibilityOff)) == "action.visibility_off");
+    REQUIRE(UiIconRegistry::Token(UiIcon::SceneObject) == "scene.object");
     REQUIRE(UiIconRegistry::Token(UiIcon::None).empty());
+    for (std::uint8_t value = 1; value < static_cast<std::uint8_t>(UiIcon::Count); ++value) {
+        const UiIcon icon = static_cast<UiIcon>(value);
+        const std::string_view token = UiIconRegistry::Token(icon);
+        REQUIRE_FALSE(token.empty());
+        REQUIRE(UiIconRegistry::Resolve(token) == icon);
+    }
 
     const std::span glyphRanges = UiIconRegistry::MaterialSymbolGlyphRanges();
     REQUIRE(glyphRanges.size() >= 3U);
@@ -165,7 +215,9 @@ TEST_CASE("Editor icon registry resolves canonical and catalog tokens", "[unit][
     REQUIRE(containsGlyph(0xE8B8));
     REQUIRE(containsGlyph(0xE2C7));
     REQUIRE(containsGlyph(0xE5C4));
+    REQUIRE(containsGlyph(0xE5C9));
     REQUIRE(containsGlyph(0xE9B0));
+    REQUIRE(containsGlyph(0xEF4A));
     REQUIRE(containsGlyph(0xE145));
     REQUIRE(containsGlyph(0xE1A1));
     REQUIRE(containsGlyph(0xE88E));
@@ -288,8 +340,9 @@ TEST_CASE("Side dock tabs preserve reference padding height and interaction", "[
         startY = ImGui::GetCursorScreenPos().y;
         activeTab = DrawSideDockTabs(tabs, activeTab, imgui.fonts);
         endY = ImGui::GetCursorScreenPos().y;
-        const float inspectorWidth = defaultFont->CalcTextSizeA(12.0F, 100000.0F, 0.0F, tabs.front()).x + 20.0F;
-        const float sceneWidth = defaultFont->CalcTextSizeA(12.0F, 100000.0F, 0.0F, tabs.back()).x + 20.0F;
+        const float tabFontSize = Theme::TextPx::Label();
+        const float inspectorWidth = defaultFont->CalcTextSizeA(tabFontSize, 100000.0F, 0.0F, tabs.front()).x + 20.0F;
+        const float sceneWidth = defaultFont->CalcTextSizeA(tabFontSize, 100000.0F, 0.0F, tabs.back()).x + 20.0F;
         sceneTabCenter = {ImGui::GetWindowPos().x + ImGui::GetStyle().WindowPadding.x + 10.0F + inspectorWidth + sceneWidth * 0.5F,
                           startY + 18.0F};
         ImGui::End();
@@ -328,6 +381,27 @@ TEST_CASE("Workspace popup rows keep the design-system menu geometry", "[unit][e
     REQUIRE(popupWidth < 224.0F);
 }
 
+TEST_CASE("Hovering a sibling context submenu switches its children without clicking", "[unit][editor][gui][design-system]") {
+    ImGuiTestContext imgui{{640.0F, 480.0F}};
+    SiblingSubmenuHoverState state;
+
+    const auto drawFrame = [&] {
+        DrawSiblingSubmenuHoverFrame(imgui, state);
+    };
+
+    RenderImGuiFrame(drawFrame);
+    imgui.io->AddMousePosEvent(state.firstRowCenter.x, state.firstRowCenter.y);
+    RenderImGuiFrame(drawFrame);
+    RenderImGuiFrame(drawFrame);
+    REQUIRE(state.firstOpen);
+
+    imgui.io->AddMousePosEvent(state.secondRowCenter.x, state.secondRowCenter.y);
+    RenderImGuiFrame(drawFrame);
+    REQUIRE(state.secondOpen);
+    RenderImGuiFrame(drawFrame);
+    REQUIRE_FALSE(state.firstOpen);
+}
+
 TEST_CASE("Menu-bar dropdowns reuse workspace popup rows", "[unit][editor][gui][design-system]") {
     using namespace Horo::Editor;
     using namespace Horo::Editor::Ui;
@@ -362,6 +436,7 @@ TEST_CASE("Component metrics use theme overrides while global scaling is disable
         output << R"({
             "name": "Component token test",
             "tokens": {
+                "typography": {"sansCompactBase": 12, "caption": 12, "label": 12},
                 "componentSizes": {
                     "xs": {
                         "fontSize": 11,
@@ -378,8 +453,11 @@ TEST_CASE("Component metrics use theme overrides while global scaling is disable
 
     Theme::ThemeEntry entry;
     REQUIRE(Theme::LoadThemeFromJson(path.string().c_str(), entry));
+    REQUIRE(entry.designTokens.typography.sansCompactBase == 16.0F);
+    REQUIRE(entry.designTokens.typography.caption == 16.0F);
+    REQUIRE(entry.designTokens.typography.label == 16.0F);
     const ComponentSizeMetrics &xs = MetricsFor(entry.designTokens, ComponentSize::XS);
-    REQUIRE(xs.fontSize == 14.0F);
+    REQUIRE(xs.fontSize == 16.0F);
     REQUIRE(xs.minimumHeight == 20.0F);
     REQUIRE(SpacingFor(entry.designTokens, SpacingSize::Medium) == 13.0F);
     std::error_code removeError;
@@ -502,6 +580,90 @@ TEST_CASE("Shared modal shell composes badge split panes and fixed footer", "[un
     REQUIRE(drewLeading);
     REQUIRE(drewContent);
     REQUIRE(preservedContentSpacing);
+}
+
+TEST_CASE("Shared modal shell close icon requests dismissal", "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{1280.0F, 720.0F}};
+    const auto draw = [&] {
+        ImGui::NewFrame();
+        bool closeRequested = false;
+        {
+            ScopedModalShell modal({.id = "ModalCloseTest",
+                                    .title = "Import Assets",
+                                    .requestedSize = {1000.0F, 690.0F},
+                                    .headerHeight = 38.0F,
+                                    .footerHeight = 68.0F},
+                                   imgui.fonts);
+            closeRequested = modal.CloseRequested();
+        }
+        ImGui::Render();
+        return closeRequested;
+    };
+
+    REQUIRE_FALSE(draw());
+    const ImGuiWindow *window = ImGui::FindWindowByName("ModalCloseTest");
+    REQUIRE(window != nullptr);
+    imgui.io->AddMousePosEvent(window->Pos.x + window->Size.x - 36.0F, window->Pos.y + 19.0F);
+    imgui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    REQUIRE_FALSE(draw());
+    imgui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    REQUIRE(draw());
+}
+
+TEST_CASE("Shared modal shell supports full-header dragging and remains inside the work area", "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{1280.0F, 720.0F}};
+    const auto drawModal = [&] {
+        ScopedModalShell modal(
+            {
+                .id = "MovableModalShellTest",
+                .title = "Movable Modal",
+                .requestedSize = {640.0F, 480.0F},
+                .headerHeight = 48.0F,
+            },
+            imgui.fonts);
+    };
+
+    RenderImGuiFrame(drawModal);
+    const ImGuiWindow *window = ImGui::FindWindowByName("MovableModalShellTest");
+    REQUIRE(window != nullptr);
+    const ImVec2 initialPosition = window->Pos;
+
+    ImGuiIO &io = *imgui.io;
+    // Begin over the visible title text rather than the empty middle of the header.
+    io.AddMousePosEvent(initialPosition.x + 28.0F, initialPosition.y + 24.0F);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    RenderImGuiFrame(drawModal);
+    io.AddMousePosEvent(-400.0F, -300.0F);
+    RenderImGuiFrame(drawModal);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    RenderImGuiFrame(drawModal);
+
+    window = ImGui::FindWindowByName("MovableModalShellTest");
+    REQUIRE(window != nullptr);
+    REQUIRE(window->Pos.x == Catch::Approx(ImGui::GetMainViewport()->WorkPos.x));
+    REQUIRE(window->Pos.y == Catch::Approx(ImGui::GetMainViewport()->WorkPos.y));
+
+    // The right side of the header remains draggable outside the close action.
+    io.AddMousePosEvent(window->Pos.x + window->Size.x - 80.0F, window->Pos.y + 24.0F);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    RenderImGuiFrame(drawModal);
+    io.AddMousePosEvent(2000.0F, 1400.0F);
+    RenderImGuiFrame(drawModal);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    RenderImGuiFrame(drawModal);
+
+    window = ImGui::FindWindowByName("MovableModalShellTest");
+    REQUIRE(window != nullptr);
+    const ImVec2 workMaximum{ImGui::GetMainViewport()->WorkPos.x + ImGui::GetMainViewport()->WorkSize.x - window->Size.x,
+                             ImGui::GetMainViewport()->WorkPos.y + ImGui::GetMainViewport()->WorkSize.y - window->Size.y};
+    REQUIRE(window->Pos.x == Catch::Approx(workMaximum.x));
+    REQUIRE(window->Pos.y == Catch::Approx(workMaximum.y));
 }
 
 TEST_CASE("Selectable text block copies a selection spanning multiple lines", "[unit][editor][gui][design-system]") {

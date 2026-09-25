@@ -81,6 +81,18 @@ namespace Horo::Editor {
         [[nodiscard]] bool MatchesAuditFilter(const AuditRow &row, const bool all, const bool mutations, const bool errors) noexcept {
             return all || (mutations && row.permission == Permission::Mutation) || (errors && row.status == Status::Denied);
         }
+
+        [[nodiscard]] float SessionControlWidth(const EditorGuiContext &context) {
+            const auto &localization = context.localization;
+            const auto &fonts = context.theme.fonts;
+            const float scale = Theme::GetActiveTokens().sizes.uiScale;
+            const float currentWidth = MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
+                                                                  localization.Get("editor", "workspace.global_dock.mcp.session.current"));
+            const float lastHourWidth =
+                MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Label(),
+                                           localization.Get("editor", "workspace.global_dock.mcp.session.last_hour"));
+            return std::max(128.0F * scale, std::max(currentWidth, lastHourWidth) + 32.0F * scale);
+        }
     }  // namespace
 
     struct GlobalDockMcpPane::TableLayout {
@@ -94,10 +106,9 @@ namespace Horo::Editor {
     void GlobalDockMcpPane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         DrawToolbar(regions.toolbarOrigin, regions.toolbarWidth, context);
         DrawTable(regions.contentOrigin, regions.contentWidth, regions.contentHeight, context);
-        DrawFooter(regions.footerOrigin, regions.footerWidth, context);
     }
 
     void GlobalDockMcpPane::DrawToolbar(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
@@ -105,7 +116,7 @@ namespace Horo::Editor {
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
             return context.localization.Get("editor", key);
         };
@@ -127,11 +138,15 @@ namespace Horo::Editor {
     float GlobalDockMcpPane::MeasureToolbarActions(const EditorGuiContext &context) const {
         const auto &fonts = context.theme.fonts;
         const auto &localization = context.localization;
-        const GlobalDockToolbarChipProps all{.id = "McpAll", .label = localization.Get("editor", "workspace.global_dock.mcp.filter.all")};
+        const GlobalDockToolbarChipProps all{.id = "McpAll",
+                                             .label = localization.Get("editor", "workspace.global_dock.mcp.filter.all"),
+                                             .count = 18U};
         const GlobalDockToolbarChipProps mutations{.id = "McpMutations",
-                                                   .label = localization.Get("editor", "workspace.global_dock.mcp.filter.mutations")};
+                                                   .label = localization.Get("editor", "workspace.global_dock.mcp.filter.mutations"),
+                                                   .count = 3U};
         const GlobalDockToolbarChipProps errors{.id = "McpErrors",
-                                                .label = localization.Get("editor", "workspace.global_dock.mcp.filter.errors")};
+                                                .label = localization.Get("editor", "workspace.global_dock.mcp.filter.errors"),
+                                                .count = 1U};
         const GlobalDockToolbarChipProps pause{.id = "McpPause",
                                                .label = localization.Get("editor", m_paused ? "workspace.global_dock.mcp.resume"
                                                                                             : "workspace.global_dock.mcp.pause"),
@@ -140,10 +155,9 @@ namespace Horo::Editor {
                                                      .label = localization.Get("editor", "workspace.global_dock.mcp.export"),
                                                      .icon = Ui::UiIcon::Download};
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        return 128.0F * Theme::GetActiveTokens().sizes.uiScale + MeasureGlobalDockToolbarChip(all, fonts) +
-               MeasureGlobalDockToolbarChip(mutations, fonts) + MeasureGlobalDockToolbarChip(errors, fonts) +
-               MeasureGlobalDockToolbarChip(pause, fonts) + MeasureGlobalDockToolbarChip(exportAudit, fonts) + metrics.toolbarGap * 7.0F +
-               Theme::GetActiveTokens().sizes.uiScale;
+        return SessionControlWidth(context) + MeasureGlobalDockToolbarChip(all, fonts) + MeasureGlobalDockToolbarChip(mutations, fonts) +
+               MeasureGlobalDockToolbarChip(errors, fonts) + MeasureGlobalDockToolbarChip(pause, fonts) +
+               MeasureGlobalDockToolbarChip(exportAudit, fonts) + metrics.toolbarGap * 7.0F + Theme::GetActiveTokens().sizes.uiScale;
     }
 
     void GlobalDockMcpPane::DrawFilterActions(float &x, const float y, const EditorGuiContext &context) {
@@ -182,7 +196,7 @@ namespace Horo::Editor {
     void GlobalDockMcpPane::DrawSessionActions(float x, const float y, const EditorGuiContext &context) {
         const auto &fonts = context.theme.fonts;
         const auto &localization = context.localization;
-        const float sessionWidth = 128.0F * Theme::GetActiveTokens().sizes.uiScale;
+        const float sessionWidth = SessionControlWidth(context);
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const GlobalDockToolbarChipProps pause{.id = "McpPause",
                                                .label = localization.Get("editor", m_paused ? "workspace.global_dock.mcp.resume"
@@ -242,6 +256,7 @@ namespace Horo::Editor {
         const float rowsHeight = std::max(1.0F, contentHeight - metrics.tableHeaderHeight);
         ImGui::SetCursorScreenPos(rowsOrigin);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0F, 0.0F});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0F, 0.0F});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::BottomDockContentSurface());
         ImGui::BeginChild("##McpRows", {contentWidth, rowsHeight}, false,
                           ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoSavedSettings);
@@ -249,7 +264,7 @@ namespace Horo::Editor {
             DrawAuditRow(index, contentWidth, layout, context);
         ImGui::EndChild();
         ImGui::PopStyleColor();
-        ImGui::PopStyleVar();
+        ImGui::PopStyleVar(2);
     }
 
     void GlobalDockMcpPane::DrawAuditRow(const std::size_t index, const float width, const TableLayout &layout,
@@ -265,13 +280,14 @@ namespace Horo::Editor {
             return;
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
+        const float rowHeight = metrics.tableRowHeight;
         ImGui::PushID(static_cast<int>(index));
         const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-        ImGui::InvisibleButton("##audit-row", {width, metrics.tableRowHeight});
-        DrawGlobalDockTableRowSurface(rowMin, width, metrics.tableRowHeight, ImGui::IsItemHovered());
+        ImGui::InvisibleButton("##audit-row", {width, rowHeight});
+        DrawGlobalDockTableRowSurface(rowMin, width, rowHeight, ImGui::IsItemHovered());
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
-        const float bottom = rowMin.y + metrics.tableRowHeight;
+        const float textY = rowMin.y + (rowHeight - Theme::TextPx::Label()) * 0.5F;
+        const float bottom = rowMin.y + rowHeight;
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.time, textY},
                                   {layout.tool - metrics.columnGap, bottom}, Theme::Muted(), row.time);
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.tool, textY},
@@ -282,33 +298,9 @@ namespace Horo::Editor {
                                   {layout.request - metrics.columnGap, bottom}, permissionColor, permission);
         DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {layout.request, textY},
                                   {layout.status - metrics.columnGap, bottom}, Theme::Text(), request);
-        static_cast<void>(DrawGlobalDockStatePill({layout.status, rowMin.y + (metrics.tableRowHeight - 22.0F * scale) * 0.5F}, status,
+        static_cast<void>(DrawGlobalDockStatePill({layout.status, rowMin.y + (rowHeight - 22.0F * scale) * 0.5F}, status,
                                                   StatusTone(row.status), context.theme.fonts));
         ImGui::PopID();
     }
 
-    void GlobalDockMcpPane::DrawFooter(const ImVec2 &origin, const float width, const EditorGuiContext &context) const {
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
-        };
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        DrawGlobalDockFooterSurface(origin, width, metrics.footerHeight);
-        const float footerY = origin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        const std::string &bridge = localized("workspace.global_dock.mcp.footer.bridge_active");
-        const float bridgeWidth =
-            DrawGlobalDockStatePill({origin.x + metrics.contentPadding, origin.y + (metrics.footerHeight - 22.0F * scale) * 0.5F}, bridge,
-                                    GlobalDockTone::Positive, fonts);
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                          {origin.x + metrics.contentPadding + bridgeWidth + metrics.toolbarGap, footerY}, Theme::U32(Theme::Muted()),
-                          "horo.mcp.bridge@0.4.0");
-        const std::string &audit = localized("workspace.global_dock.mcp.footer.audit");
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                          {origin.x + width - metrics.contentPadding -
-                               MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), audit),
-                           footerY},
-                          Theme::U32(Theme::Muted()), audit.c_str());
-    }
 }  // namespace Horo::Editor

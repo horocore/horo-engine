@@ -1,0 +1,7 @@
+.graph-canvas-scroll { min-width:0; width:100%; overflow:auto; border:1px solid var(--mock-border); border-radius:var(--mock-radius); background:#0d1218; }
+.graph-canvas-design { position:relative; min-width:100%; background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px); background-size:24px 24px; }
+.graph-canvas-design>svg { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+.graph-canvas-node { position:absolute; display:flex; flex-direction:column; align-items:flex-start; gap:7px; width:160px; min-height:66px; padding:9px; border:1px solid var(--mock-border-strong); border-top:2px solid var(--mock-accent); border-radius:var(--mock-radius); background:var(--mock-panel); box-shadow:0 7px 20px rgba(0,0,0,.28); text-align:left; }
+.graph-canvas-node.selected { border-color:var(--mock-accent); box-shadow:0 0 0 2px rgba(4,165,252,.16),0 7px 20px rgba(0,0,0,.28); }
+.graph-canvas-node strong { font-size:12px; font-weight:600; }
+.graph-canvas-node small { color:var(--mock-muted); font-size:11px; line-height:1.35; }

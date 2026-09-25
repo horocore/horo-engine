@@ -313,6 +313,58 @@ namespace Horo::Editor {
         });
     }
 
+    /** @copydoc SetProjectDefaultScenePath */
+    Result<void> SetProjectDefaultScenePath(const std::filesystem::path &absoluteProjectRoot,
+                                            const std::filesystem::path &absoluteScenePath, const ProjectMutationCoordinator &mutations,
+                                            DurableFileSystem &files) {
+        const std::filesystem::path projectRoot = absoluteProjectRoot.lexically_normal();
+        const std::filesystem::path scenePath = absoluteScenePath.lexically_normal();
+        if (!projectRoot.is_absolute() || !scenePath.is_absolute() || !IsResolvedContainedBy(projectRoot, scenePath) ||
+            scenePath.extension() != ".horo") {
+            return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Default scene must be a project-contained .horo file."));
+        }
+        const std::filesystem::path relativeScene = scenePath.lexically_relative(projectRoot);
+        if (!IsSafeProjectRelativePath(relativeScene))
+            return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Default scene path is not a safe project-relative path."));
+
+        if (const auto lease = mutations.TryAcquire(ProjectMutationRequest{
+                .projectRoot = projectRoot,
+                .owner = ProjectMutationOwner::Save,
+                .operationId = "set-project-default-scene",
+            });
+            lease.HasError())
+            return Result<void>::Failure(lease.ErrorValue());
+
+        const std::filesystem::path metadataPath = projectRoot / ".horo/project.json";
+        const Result<std::string> contents = ReadBoundedFile(metadataPath, kMaximumProjectMetadataBytes);
+        if (contents.HasError())
+            return Result<void>::Failure(contents.ErrorValue());
+        Json metadata;
+        try {
+            metadata = Json::parse(contents.Value());
+        } catch (const Json::exception &) {
+            return Result<void>::Failure(PersistenceError(SceneReadFailed, "Project metadata is not valid JSON."));
+        }
+        if (!metadata.is_object() || !metadata.contains("settings") || !metadata["settings"].is_object() ||
+            !metadata["settings"].contains("defaultScene") || !metadata["settings"]["defaultScene"].is_string()) {
+            return Result<void>::Failure(PersistenceError(ScenePathInvalid, "Project metadata has no valid settings.defaultScene field."));
+        }
+        metadata["settings"]["defaultScene"] = relativeScene.generic_string();
+
+        std::filesystem::path prepared = metadataPath;
+        prepared += ".save.tmp";
+        const std::vector<std::byte> bytes = Bytes(metadata.dump(2) + "\n");
+        if (const Result<void> written = files.WriteDurable(prepared, bytes); written.HasError()) {
+            static_cast<void>(files.RemoveDurable(prepared));
+            return written;
+        }
+        if (const Result<void> replaced = files.AtomicReplace(prepared, metadataPath); replaced.HasError()) {
+            static_cast<void>(files.RemoveDurable(prepared));
+            return replaced;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc WriteProjectSceneRecovery */
     Result<void> WriteProjectSceneRecovery(const std::filesystem::path &absoluteProjectRoot, const std::filesystem::path &absoluteScenePath,
                                            const SceneDocumentSnapshot &snapshot, const DocumentRevision savedRevision,

@@ -19,6 +19,7 @@
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
@@ -82,8 +83,8 @@ namespace Horo::Editor {
                                                                                               const std::string &requestedDirectory) {
             using enum GameplayBehaviorKind;
             const std::filesystem::path normalizedProjectRoot = NormalizeAbsolutePath(projectRoot);
-            const std::filesystem::path assetsRoot = normalizedProjectRoot / "assets";
-            const std::filesystem::path scriptsRoot = assetsRoot / "scripts";
+            const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(normalizedProjectRoot);
+            const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(normalizedProjectRoot);
             const std::filesystem::path requested = NormalizeAbsolutePath(requestedDirectory);
             std::filesystem::path destination;
             if (kind == Native) {
@@ -321,7 +322,9 @@ namespace Horo::Editor {
             }
 
             bool HandleMenuInvocation(const EditorMenuInvocation &invocation) override {
-                const EditorMenuAction action = invocation.action;
+                EditorMenuAction action = invocation.action;
+                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+                    action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
                     EditorWorkspaceViewCommandData command;
                     command.command = EditorWorkspaceViewCommand::CreatePrimitive;
@@ -333,11 +336,8 @@ namespace Horo::Editor {
                 }
                 if (controller_ && (action == EditorMenuAction::SaveSceneAs || action == EditorMenuAction::SaveSceneCopyAs)) {
                     const auto &currentPath = controller_->CurrentScenePath();
-                    if (!currentPath.has_value()) {
-                        LOG_ERROR("editor.scene_document", "Scene destination dialog rejected because the "
-                                                           "active scene path is unavailable.");
-                        return true;
-                    }
+                    const std::filesystem::path projectRoot{controller_->ViewModel().projectRoot};
+                    const std::filesystem::path suggestedPath = currentPath.value_or(ProjectLayout::ScenesRoot(projectRoot) / "main.horo");
 
                     auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.scene_save"},
                                                                         Input::InputContextKind::NativeDialog);
@@ -346,9 +346,9 @@ namespace Horo::Editor {
                     // portable-file-dialogs forwards this value to AppleScript's
                     // `default name`, where a full path is interpreted as a literal
                     // filename and its separators become colons.
-                    const std::string dialogDefault = currentPath->filename().string();
+                    const std::string dialogDefault = suggestedPath.filename().string();
 #else
-                    const std::string dialogDefault = currentPath->string();
+                    const std::string dialogDefault = suggestedPath.string();
 #endif
                     pfd::save_file dialog(std::string{context_.localization.Get("editor", copyOnly ? "workspace.scene_save_copy_as.title"
                                                                                                    : "workspace.scene_save_as.title")},

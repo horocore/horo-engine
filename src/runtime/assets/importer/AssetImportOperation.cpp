@@ -9,6 +9,7 @@
 #include "Horo/Assets/AssetImportMetadata.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/TransparentString.h"
 
 #include <algorithm>
@@ -318,8 +319,9 @@ namespace Horo::Assets {
             return Result<AssetImportSnapshot>::Failure(admission.ErrorValue());
 
         const std::scoped_lock lock{mutex_};
+        const std::string destination = ProjectLayout::AssetRoot(projectRoot).filename().string();
         for (const auto &sourceFile : sourceFiles) {
-            auto item = BuildImportItem(sourceFile, projectRoot, "assets", *catalog_);
+            auto item = BuildImportItem(sourceFile, projectRoot, destination, *catalog_);
             if (item.has_value())
                 snapshot_.items.push_back(std::move(*item));
         }

@@ -1,6 +1,7 @@
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Paths.h"
 #include "editor/EditorServiceErrors.h"
 
 #include <algorithm>
@@ -77,22 +78,23 @@ namespace Horo::Editor {
         }
         error.clear();
 
-        if (const std::filesystem::path scriptsDir = projectRoot / "assets" / "scripts";
+        if (const std::filesystem::path scriptsDir = ProjectLayout::ScriptsRoot(projectRoot);
             !std::filesystem::is_directory(scriptsDir, error)) {
             report.issues.push_back(ProjectIntegrityIssue{
                 .kind = ProjectIntegrityIssueKind::MissingScriptsDirectory,
                 .targetPath = scriptsDir,
-                .description = "Project scripts directory (assets/scripts) is missing.",
+                .description = "Project scripts directory is missing.",
                 .isAutoFixable = true,
             });
         }
         error.clear();
 
-        if (const std::filesystem::path scenesDir = projectRoot / "assets" / "scenes"; !std::filesystem::is_directory(scenesDir, error)) {
+        if (const std::filesystem::path scenesDir = ProjectLayout::ScenesRoot(projectRoot);
+            !std::filesystem::is_directory(scenesDir, error)) {
             report.issues.push_back(ProjectIntegrityIssue{
                 .kind = ProjectIntegrityIssueKind::MissingScenesDirectory,
                 .targetPath = scenesDir,
-                .description = "Project scenes directory (assets/scenes) is missing.",
+                .description = "Project scenes directory is missing.",
                 .isAutoFixable = true,
             });
         }

@@ -60,7 +60,7 @@ behaviors do not use manual project registration.
 
 ## Related Documents
 
-- [Gameplay Integration Config UI Reference](./module-config.html): game libraries, package contributions, services, script runtime, and verification panel.
+- [Gameplay Integration Config UI Reference](../../../mock-studio/designs.md#architecture-extensions-module-config): game libraries, package contributions, services, script runtime, and verification panel.
 
 - [System Design](../foundation/system-design.md)
 - [Scene Runtime](../runtime/scene-runtime.md)

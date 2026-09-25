@@ -5,9 +5,29 @@
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.h"
 
 #include <algorithm>
+#include <memory>
 #include <ranges>
 
 namespace Horo::Editor {
+    namespace {
+        [[nodiscard]] bool IsTransformTool(const EditorTransformTool tool) noexcept {
+            using enum EditorTransformTool;
+            return tool == Move || tool == Rotate || tool == Scale;
+        }
+
+        [[nodiscard]] const SceneObject *FindSelectedObject(const EditorWorkspaceViewModel &viewModel) noexcept {
+            if (!viewModel.primarySelection.has_value())
+                return nullptr;
+            const auto selected = std::ranges::find(viewModel.objects, *viewModel.primarySelection, &SceneObject::id);
+            return selected == viewModel.objects.end() ? nullptr : std::to_address(selected);
+        }
+
+        [[nodiscard]] bool CanDrawTransformGizmo(const EditorWorkspaceViewModel &viewModel, const SceneObject *selectedObject) noexcept {
+            return IsTransformTool(viewModel.activeTransformTool) && selectedObject != nullptr && !selectedObject->effectivelyLocked &&
+                   viewModel.primarySelectionWorldTransform.has_value() && viewModel.primarySelectionParentWorldTransform.has_value();
+        }
+    }  // namespace
+
     void TransformGizmoController::OnCaptureCancelled() noexcept {
         if (drag_.has_value())
             cancelPreviewOnNextDraw_ = true;
@@ -24,6 +44,15 @@ namespace Horo::Editor {
         return drag_.has_value();
     }
 
+    bool TransformGizmoController::HasInvalidDrag(const SceneObject *selectedObject,
+                                                  const EditorWorkspaceViewModel &viewModel) const noexcept {
+        if (!drag_.has_value())
+            return false;
+        return selectedObject == nullptr || selectedObject->id != drag_->object || !IsTransformTool(viewModel.activeTransformTool) ||
+               selectedObject->effectivelyLocked || viewModel.activeTransformTool != drag_->tool ||
+               viewModel.activeTransformSpace != drag_->space;
+    }
+
     bool TransformGizmoController::Draw(ImDrawList &drawList, const TransformGizmoDrawContext &context,
                                         ViewportInteractionCapture &capture) {
         if (cancelPreviewOnNextDraw_) {
@@ -33,23 +62,16 @@ namespace Horo::Editor {
         }
 
         const EditorWorkspaceViewModel &viewModel = context.viewModel;
-        const auto selectedObject = viewModel.primarySelection.has_value()
-                                        ? std::ranges::find(viewModel.objects, *viewModel.primarySelection, &SceneObject::id)
-                                        : viewModel.objects.end();
-        const bool transformTool = viewModel.activeTransformTool == EditorTransformTool::Move ||
-                                   viewModel.activeTransformTool == EditorTransformTool::Rotate ||
-                                   viewModel.activeTransformTool == EditorTransformTool::Scale;
-        if (drag_.has_value() && (selectedObject == viewModel.objects.end() || selectedObject->id != drag_->object || !transformTool ||
-                                  selectedObject->effectivelyLocked || viewModel.activeTransformTool != drag_->tool ||
-                                  viewModel.activeTransformSpace != drag_->space)) {
+        const SceneObject *selectedObject = FindSelectedObject(viewModel);
+        if (HasInvalidDrag(selectedObject, viewModel)) {
             capture.Cancel(Input::CaptureCancellationReason::Explicit);
             cancelPreviewOnNextDraw_ = false;
             context.command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
             return true;
         }
 
-        if (transformTool && selectedObject != viewModel.objects.end() && !selectedObject->effectivelyLocked &&
-            viewModel.primarySelectionWorldTransform.has_value() && viewModel.primarySelectionParentWorldTransform.has_value()) {
+        std::optional<ImVec2> rotationCenter;
+        if (CanDrawTransformGizmo(viewModel, selectedObject)) {
             const Math::Mat4 &worldTransform = viewModel.primarySelectionPreviewWorldTransform.has_value()
                                                    ? *viewModel.primarySelectionPreviewWorldTransform
                                                    : *viewModel.primarySelectionWorldTransform;
@@ -83,6 +105,7 @@ namespace Horo::Editor {
                 return false;
             }
             geometryFailureReported_ = false;
+            rotationCenter = geometry.Value().center;
             const Result<void> begun = TryBeginDrag(geometry.Value(), worldTransform, *selectedObject, context, capture);
             if (begun.HasError()) {
                 LOG_ERROR("editor.viewport_gizmo", "Gizmo drag rejected: %s", begun.ErrorValue().message.c_str());
@@ -92,6 +115,17 @@ namespace Horo::Editor {
         if (!drag_.has_value())
             return false;
         AdvanceDrag(context, capture);
+        if (drag_.has_value() && drag_->tool == EditorTransformTool::Rotate && rotationCenter.has_value()) {
+            const Result<void> sweep =
+                DrawTransformGizmoRotationSweep(drawList, viewModel.viewportCamera, *rotationCenter, drag_->math.worldAxis,
+                                                drag_->math.startRotationVector, drag_->currentRotationVector);
+            if (sweep.HasError())
+                LOG_ERROR("editor.viewport_gizmo", "Gizmo rotation sweep failed: %s", sweep.ErrorValue().message.c_str());
+            const Result<void> pin = DrawTransformGizmoRotationPin(drawList, viewModel.viewportCamera, *rotationCenter,
+                                                                   drag_->currentRotationVector, drag_->axis);
+            if (pin.HasError())
+                LOG_ERROR("editor.viewport_gizmo", "Gizmo rotation pin failed: %s", pin.ErrorValue().message.c_str());
+        }
         return true;
     }
 
@@ -105,10 +139,11 @@ namespace Horo::Editor {
             return Result<void>::Success();
 
         const int axis = *geometry.hoveredAxis;
-        const Math::Vec3 chosenAxis = axis < 3 ? geometry.worldAxes[axis] : Math::Vec3{};
+        const Math::Vec3 chosenAxis = axis < 3 ? geometry.worldAxes[axis] : axis >= 4 ? geometry.worldAxes[axis - 4] : Math::Vec3{};
         const ImVec2 direction = axis < 3 ? geometry.screenDirections[axis] : ImVec2{0.7071F, -0.7071F};
         const ImVec2 pointer{input.pointer.x, input.pointer.y};
         std::optional<Math::Vec3> startRotationVector;
+        std::optional<Math::Vec3> startPlanePoint;
         if (viewModel.activeTransformTool == EditorTransformTool::Rotate) {
             const Result<std::optional<Math::Vec3>> projected = ProjectTransformGizmoRotationVector({.camera = viewModel.viewportCamera,
                                                                                                      .center = geometry.worldPosition,
@@ -127,6 +162,24 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             }
             startRotationVector = projected.Value();
+        } else if (viewModel.activeTransformTool == EditorTransformTool::Move && axis >= 4) {
+            const Result<std::optional<Math::Vec3>> projected = ProjectTransformGizmoPlanePoint({.camera = viewModel.viewportCamera,
+                                                                                                 .center = geometry.worldPosition,
+                                                                                                 .normal = chosenAxis,
+                                                                                                 .pointer = pointer,
+                                                                                                 .origin = context.origin,
+                                                                                                 .width = context.width,
+                                                                                                 .height = context.height,
+                                                                                                 .depthRange = context.depthRange});
+            if (projected.HasError()) {
+                capture.Finish();
+                return Result<void>::Failure(projected.ErrorValue());
+            }
+            if (!projected.Value().has_value()) {
+                capture.Finish();
+                return Result<void>::Success();
+            }
+            startPlanePoint = projected.Value();
         }
 
         Result<TransformGizmoMathSession> math = BeginTransformGizmoMath(BeginTransformGizmoMathRequest{
@@ -153,6 +206,8 @@ namespace Horo::Editor {
             .draftTransform = selectedObject.localTransform,
             .math = std::move(math).Value(),
             .currentWorldPosition = geometry.worldPosition,
+            .currentRotationVector = startRotationVector.value_or(Math::Vec3{}),
+            .startPlanePoint = startPlanePoint,
             .startMouse = pointer,
             .screenDirection = direction,
         };
@@ -185,6 +240,7 @@ namespace Horo::Editor {
         const ImVec2 mouseDelta{pointer.x - drag_->startMouse.x, pointer.y - drag_->startMouse.y};
         const float projectedPixels = mouseDelta.x * drag_->screenDirection.x + mouseDelta.y * drag_->screenDirection.y;
         std::optional<Math::Vec3> currentRotationVector;
+        std::optional<Math::Vec3> worldTranslation;
         if (drag_->tool == EditorTransformTool::Rotate) {
             const Result<std::optional<Math::Vec3>> projected =
                 ProjectTransformGizmoRotationVector({.camera = context.viewModel.viewportCamera,
@@ -205,12 +261,32 @@ namespace Horo::Editor {
             if (!projected.Value().has_value())
                 return;
             currentRotationVector = projected.Value();
+        } else if (drag_->tool == EditorTransformTool::Move && drag_->axis >= 4) {
+            const Result<std::optional<Math::Vec3>> projected = ProjectTransformGizmoPlanePoint({.camera = context.viewModel.viewportCamera,
+                                                                                                 .center = drag_->math.initialWorldPosition,
+                                                                                                 .normal = drag_->math.worldAxis,
+                                                                                                 .pointer = pointer,
+                                                                                                 .origin = context.origin,
+                                                                                                 .width = context.width,
+                                                                                                 .height = context.height,
+                                                                                                 .depthRange = context.depthRange});
+            if (projected.HasError()) {
+                LOG_ERROR("editor.viewport_gizmo", "Gizmo plane projection failed: %s", projected.ErrorValue().message.c_str());
+                capture.Cancel(Input::CaptureCancellationReason::Explicit);
+                cancelPreviewOnNextDraw_ = false;
+                context.command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
+                return;
+            }
+            if (!projected.Value().has_value())
+                return;
+            worldTranslation = *projected.Value() - *drag_->startPlanePoint;
         }
 
         Result<TransformGizmoMathOutcome> outcome =
             EvaluateTransformGizmoMath(drag_->math, TransformGizmoMathUpdate{
                                                         .projectedPixels = projectedPixels,
                                                         .currentRotationVector = currentRotationVector,
+                                                        .worldTranslation = worldTranslation,
                                                     });
         if (outcome.HasError()) {
             LOG_ERROR("editor.viewport_gizmo", "Gizmo update failed: %s", outcome.ErrorValue().message.c_str());
@@ -221,6 +297,8 @@ namespace Horo::Editor {
         }
 
         drag_->currentWorldPosition = outcome.Value().worldPosition;
+        if (currentRotationVector.has_value())
+            drag_->currentRotationVector = *currentRotationVector;
         if (outcome.Value().localTransform != drag_->draftTransform) {
             drag_->draftTransform = outcome.Value().localTransform;
             context.command.command = EditorWorkspaceViewCommand::PreviewObjectTransform;

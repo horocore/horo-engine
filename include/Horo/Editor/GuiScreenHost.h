@@ -21,6 +21,7 @@
 
 namespace Horo {
     class EngineDataBus;
+    class NativeDialogs;
 }  // namespace Horo
 
 namespace Horo::Input {
@@ -76,6 +77,7 @@ namespace Horo::Editor {
          * @param logoTexture Optional renderer-owned editor logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional extension marketplace service.
+         * @param nativeDialogs Optional host-owned file picker for editor workflows.
          */
         explicit GuiScreenHost(const EditorGuiContext &context, EditorModalHost &modalHost,  // NOSONAR(cpp:S107) Service aggregate
                                EditorSettingsService &settingsService, LocalizationService &localization, EngineDataBus &engineEvents,
@@ -83,7 +85,8 @@ namespace Horo::Editor {
                                const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
                                WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture = 0,
                                Extensions::ExtensionInventory *extensionInventory = nullptr,
-                               Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr);
+                               Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
+                               NativeDialogs *nativeDialogs = nullptr);
 
         ~GuiScreenHost();
 
@@ -98,6 +101,13 @@ namespace Horo::Editor {
          * @return Success when the initial screen entered, or a typed lifecycle/navigation failure.
          */
         [[nodiscard]] Result<void> Start(GuiRoute initialRoute);
+
+        /**
+         * @brief Starts the isolated UI gallery without entering a normal editor route.
+         * @param scenarioId Registered scenario to open.
+         * @return Success when the preview surface was admitted.
+         */
+        [[nodiscard]] Result<void> StartUiPreview(std::string_view scenarioId);
 
         /** @brief Leaves and destroys the active screen exactly once, then revokes borrowed services. */
         void Shutdown() noexcept;
@@ -162,6 +172,9 @@ namespace Horo::Editor {
          */
         void DispatchMenuInvocation(const EditorMenuInvocation &invocation);
 
+        /** @brief Opens one inert editor UI preview scenario by its catalog identity. */
+        [[nodiscard]] bool OpenUiPreview(std::string_view scenarioId);
+
         /** @brief Returns mutable service registry used for dependency injection. */
         [[nodiscard]] EditorServiceRegistry &Services() noexcept;
 
@@ -187,6 +200,7 @@ namespace Horo::Editor {
         Result<void> ExecuteLeaveCheckAndCommit(const LeaveTarget &target);
         Result<void> CommitApplicationClose();
         void FlushPendingNavigation();
+        void DrawUiPreview();
         void CommitRoute(GuiRoute destination);
         void PresentLeaveDialog(const LeaveRequirement &requirement, const LeaveTarget &target);
         void ExecuteLeaveResolution(LeaveAction action, const LeaveRequirement &requirement, const LeaveTarget &target);
@@ -200,6 +214,8 @@ namespace Horo::Editor {
         std::uintptr_t logoTexture_{0};
         Extensions::ExtensionInventory *extensionInventory_{};
         Extensions::ExtensionMarketplaceService *extensionMarketplace_{};
+        NativeDialogs *nativeDialogs_{};
+        Input::InputRouter *inputRouter_{};
 
         EditorServiceRegistry services_;
         ScreenRegistry screenRegistry_;
@@ -214,6 +230,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 
         GuiRoute activeRoute_{GuiRouteKind::Welcome, WelcomeRouteParameters{}};
+        std::string uiPreviewScenario_;
         GuiRouteRevision activeRevision_{0};
 
         std::unique_ptr<GuiScreen> activeScreen_;

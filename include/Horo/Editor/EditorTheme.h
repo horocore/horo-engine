@@ -254,7 +254,7 @@ namespace Horo::Editor::Theme {
         constexpr float Sans = DesignSystem::DefaultDesignTokens().typography.sansBase;
         constexpr float SansCompact = DesignSystem::DefaultDesignTokens().typography.sansCompactBase;
         constexpr float SansEmphasis = DesignSystem::DefaultDesignTokens().typography.sansEmphasisBase;
-        constexpr float Icon = 16.0f; /**< Pixel size for Material Symbols icon font. */
+        constexpr float Icon = 20.0f; /**< Pixel size for Material Symbols icon font. */
     }  // namespace FontPx
 
     /** @brief Theme-resolved semantic visible-text sizes. */

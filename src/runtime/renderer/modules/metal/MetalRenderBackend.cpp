@@ -83,7 +83,8 @@ namespace Horo::Render {
                 return QueryMemoryCost("Metal buffer memory requirements require an initialized backend.", [this, &descriptor] {
                     if (!capabilities_.support.Supports(descriptor))
                         return UnsupportedResource<RenderMemoryCostPlan>(
-                            "Metal buffer descriptor exceeds the admitted capability contract.");
+                            "Metal buffer memory-cost query failed: " +
+                            DescribeRenderBufferAdmissionFailure(descriptor, capabilities_.support));
                     return runtime_->QueryBufferMemoryCost(descriptor);
                 });
             }
@@ -93,7 +94,8 @@ namespace Horo::Render {
                 return QueryMemoryCost("Metal texture memory requirements require an initialized backend.", [this, &descriptor] {
                     if (!capabilities_.support.Supports(descriptor))
                         return UnsupportedResource<RenderMemoryCostPlan>(
-                            "Metal texture descriptor exceeds the admitted capability contract.");
+                            "Metal texture memory-cost query failed: " +
+                            DescribeRenderTextureAdmissionFailure(descriptor, capabilities_.support));
                     return runtime_->QueryTextureMemoryCost(descriptor);
                 });
             }
@@ -104,7 +106,8 @@ namespace Horo::Render {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal buffer creation requires an initialized backend.");
                 if (!capabilities_.support.Supports(descriptor))
-                    return UnsupportedResource<std::uint64_t>("Metal buffer descriptor exceeds the admitted capability contract.");
+                    return UnsupportedResource<std::uint64_t>("Metal buffer creation failed: " +
+                                                              DescribeRenderBufferAdmissionFailure(descriptor, capabilities_.support));
                 return runtime_->CreateBuffer(descriptor, initialData, placement);
             }
 
@@ -123,7 +126,8 @@ namespace Horo::Render {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal texture creation requires an initialized backend.");
                 if (!capabilities_.support.Supports(descriptor))
-                    return UnsupportedResource<std::uint64_t>("Metal texture descriptor exceeds the admitted capability contract.");
+                    return UnsupportedResource<std::uint64_t>("Metal texture creation failed: " +
+                                                              DescribeRenderTextureAdmissionFailure(descriptor, capabilities_.support));
                 return runtime_->CreateTexture(descriptor, initialData, placement);
             }
 

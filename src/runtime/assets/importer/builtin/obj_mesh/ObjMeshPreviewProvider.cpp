@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace Horo::Assets {
@@ -18,6 +20,7 @@ namespace Horo::Assets {
         constexpr std::uint32_t kMaximumVertices = 1'000'000;
         constexpr std::uint32_t kMaximumTriangleIndices = 6'000'000;
         constexpr std::uint32_t kMaximumRasterizedTriangles = 100'000;
+        constexpr std::size_t kMaximumPointSamples = 2048;
 
         struct PreviewVertex {
             float x{};
@@ -29,6 +32,12 @@ namespace Horo::Assets {
             float x{};
             float y{};
             float depth{};
+        };
+
+        struct DecodedPreviewMesh {
+            std::vector<PreviewVertex> vertices;
+            std::size_t indexHeader{};
+            std::optional<std::uint32_t> indexCount;
         };
 
         [[nodiscard]] bool ReadU32(const std::span<const std::uint8_t> bytes, const std::size_t offset, std::uint32_t &value) {
@@ -149,6 +158,109 @@ namespace Horo::Assets {
             }
         }
 
+        void RasterizePoint(AssetPreviewImage &image, const ProjectedVertex &point, const std::uint8_t shade) {
+            const int centerX = std::clamp(static_cast<int>(std::lround(point.x)), 0, static_cast<int>(image.width) - 1);
+            const int centerY = std::clamp(static_cast<int>(std::lround(point.y)), 0, static_cast<int>(image.height) - 1);
+            for (int y = std::max(0, centerY - 1); y <= std::min(static_cast<int>(image.height) - 1, centerY + 1); ++y) {
+                for (int x = std::max(0, centerX - 1); x <= std::min(static_cast<int>(image.width) - 1, centerX + 1); ++x) {
+                    const std::size_t pixel = static_cast<std::size_t>(y) * image.width + static_cast<std::size_t>(x);
+                    const std::size_t color = pixel * 4U;
+                    image.pixels[color] = shade;
+                    image.pixels[color + 1U] = static_cast<std::uint8_t>(std::min<unsigned>(shade + 5U, 255U));
+                    image.pixels[color + 2U] = static_cast<std::uint8_t>(std::min<unsigned>(shade + 2U, 255U));
+                    image.pixels[color + 3U] = 255U;
+                }
+            }
+        }
+
+        [[nodiscard]] Result<DecodedPreviewMesh> DecodePreviewMesh(const std::span<const std::uint8_t> bytes) {
+            std::uint32_t schema = 0;
+            std::uint32_t vertexCount = 0;
+            std::uint32_t faceCount = 0;
+            std::uint32_t positionBytes = 0;
+            std::uint32_t texcoordBytes = 0;
+            std::uint32_t normalBytes = 0;
+            if (bytes.size() < kHeaderBytes || !ReadU32(bytes, 0, schema) || !ReadU32(bytes, 4, vertexCount) ||
+                !ReadU32(bytes, 8, faceCount) || !ReadU32(bytes, 36, positionBytes) || !ReadU32(bytes, 40, texcoordBytes) ||
+                !ReadU32(bytes, 44, normalBytes) || schema != MeshEditorPayloadSchemaVersion || vertexCount == 0 ||
+                vertexCount > kMaximumVertices || positionBytes != static_cast<std::uint64_t>(vertexCount) * 3U * sizeof(float) ||
+                kHeaderBytes + static_cast<std::uint64_t>(positionBytes) + texcoordBytes + normalBytes > bytes.size()) {
+                return Result<DecodedPreviewMesh>::Failure(MakeError(AssetErrors::IndexMalformed));
+            }
+            static_cast<void>(faceCount);
+
+            std::vector<PreviewVertex> vertices;
+            vertices.reserve(vertexCount);
+            for (std::uint32_t index = 0; index < vertexCount; ++index) {
+                const std::size_t offset = kHeaderBytes + static_cast<std::size_t>(index) * 3U * sizeof(float);
+                PreviewVertex vertex;
+                if (!ReadFloat(bytes, offset, vertex.x) || !ReadFloat(bytes, offset + 4U, vertex.y) ||
+                    !ReadFloat(bytes, offset + 8U, vertex.z)) {
+                    return Result<DecodedPreviewMesh>::Failure(MakeError(AssetErrors::IndexMalformed));
+                }
+                vertices.push_back(vertex);
+            }
+
+            const std::size_t indexHeader = kHeaderBytes + static_cast<std::size_t>(positionBytes) + texcoordBytes + normalBytes;
+            std::uint32_t indexCount = 0;
+            if (!ReadU32(bytes, indexHeader, indexCount)) {
+                if (indexHeader != bytes.size())
+                    return Result<DecodedPreviewMesh>::Failure(MakeError(AssetErrors::IndexMalformed));
+                return Result<DecodedPreviewMesh>::Success(
+                    DecodedPreviewMesh{.vertices = std::move(vertices), .indexHeader = indexHeader, .indexCount = std::nullopt});
+            }
+            return Result<DecodedPreviewMesh>::Success(
+                DecodedPreviewMesh{.vertices = std::move(vertices), .indexHeader = indexHeader, .indexCount = indexCount});
+        }
+
+        void RenderPointPreview(AssetPreviewImage &image, const std::vector<PreviewVertex> &vertices, const BuiltinMeshPreviewView view) {
+            const std::size_t sampleCount = std::min(vertices.size(), kMaximumPointSamples);
+            std::vector<PreviewVertex> samples;
+            samples.reserve(sampleCount);
+            for (std::size_t sample = 0; sample < sampleCount; ++sample) {
+                const std::size_t vertexIndex = sampleCount == vertices.size() ? sample : (sample * vertices.size()) / sampleCount;
+                samples.push_back(vertices[vertexIndex]);
+            }
+            const std::vector<ProjectedVertex> projected = ProjectVertices(samples, image.width, image.height, view);
+            for (const ProjectedVertex &point : projected)
+                RasterizePoint(image, point, 198);
+        }
+
+        [[nodiscard]] Result<AssetPreviewImage> RenderTrianglePreview(const std::span<const std::uint8_t> bytes, AssetPreviewImage image,
+                                                                      const DecodedPreviewMesh &mesh, const BuiltinMeshPreviewView view,
+                                                                      const CancellationToken &cancellation) {
+            const std::uint32_t indexCount = mesh.indexCount.value();
+            if (indexCount % 3U != 0 || indexCount > kMaximumTriangleIndices ||
+                mesh.indexHeader + 4U + static_cast<std::uint64_t>(indexCount) * 4U > bytes.size()) {
+                return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
+            }
+
+            const std::vector<ProjectedVertex> projected = ProjectVertices(mesh.vertices, image.width, image.height, view);
+            std::vector depthBuffer(static_cast<std::size_t>(image.width) * image.height, std::numeric_limits<float>::infinity());
+            const std::uint32_t triangleCount = indexCount / 3U;
+            const std::uint32_t rasterizedTriangleCount = std::min(triangleCount, kMaximumRasterizedTriangles);
+            for (std::uint32_t triangle = 0; triangle < rasterizedTriangleCount; ++triangle) {
+                if ((triangle & 0x0fffU) == 0U && cancellation.IsCancellationRequested())
+                    return Result<AssetPreviewImage>::Failure(MakeError(ImportErrors::ImportCancelled));
+
+                const auto sourceTriangle =
+                    static_cast<std::uint32_t>(static_cast<std::uint64_t>(triangle) * triangleCount / rasterizedTriangleCount);
+                const std::uint32_t index = sourceTriangle * 3U;
+                std::uint32_t a = 0;
+                std::uint32_t b = 0;
+                std::uint32_t c = 0;
+                if (!ReadU32(bytes, mesh.indexHeader + 4U + index * 4U, a) ||
+                    !ReadU32(bytes, mesh.indexHeader + 4U + (index + 1U) * 4U, b) ||
+                    !ReadU32(bytes, mesh.indexHeader + 4U + (index + 2U) * 4U, c) || a >= projected.size() || b >= projected.size() ||
+                    c >= projected.size()) {
+                    return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
+                }
+                RasterizeTriangle(image, depthBuffer, projected[a], projected[b], projected[c],
+                                  TriangleShade(mesh.vertices[a], mesh.vertices[b], mesh.vertices[c]));
+            }
+            return Result<AssetPreviewImage>::Success(std::move(image));
+        }
+
         class BuiltinMeshPreviewProvider final : public IAssetPreviewProvider {
         public:
             explicit BuiltinMeshPreviewProvider(const BuiltinMeshPreviewView view) : view_(view) {}
@@ -161,72 +273,20 @@ namespace Horo::Assets {
                 if (input.width < 16 || input.height < 16 || input.width > 512 || input.height > 512)
                     return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
 
-                std::uint32_t schema = 0;
-                std::uint32_t vertexCount = 0;
-                std::uint32_t faceCount = 0;
-                std::uint32_t positionBytes = 0;
-                std::uint32_t texcoordBytes = 0;
-                std::uint32_t normalBytes = 0;
-                if (input.editorPayload.size() < kHeaderBytes || !ReadU32(input.editorPayload, 0, schema) ||
-                    !ReadU32(input.editorPayload, 4, vertexCount) || !ReadU32(input.editorPayload, 8, faceCount) ||
-                    !ReadU32(input.editorPayload, 36, positionBytes) || !ReadU32(input.editorPayload, 40, texcoordBytes) ||
-                    !ReadU32(input.editorPayload, 44, normalBytes) || schema != MeshEditorPayloadSchemaVersion || vertexCount == 0 ||
-                    vertexCount > kMaximumVertices || positionBytes != static_cast<std::uint64_t>(vertexCount) * 3U * sizeof(float) ||
-                    kHeaderBytes + static_cast<std::uint64_t>(positionBytes) + texcoordBytes + normalBytes > input.editorPayload.size()) {
-                    return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
-                }
-                static_cast<void>(faceCount);
-
-                std::vector<PreviewVertex> vertices;
-                vertices.reserve(vertexCount);
-                for (std::uint32_t index = 0; index < vertexCount; ++index) {
-                    const std::size_t offset = kHeaderBytes + static_cast<std::size_t>(index) * 3U * sizeof(float);
-                    PreviewVertex vertex;
-                    if (!ReadFloat(input.editorPayload, offset, vertex.x) || !ReadFloat(input.editorPayload, offset + 4U, vertex.y) ||
-                        !ReadFloat(input.editorPayload, offset + 8U, vertex.z)) {
-                        return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
-                    }
-                    vertices.push_back(vertex);
-                }
+                const Result<DecodedPreviewMesh> mesh = DecodePreviewMesh(input.editorPayload);
+                if (mesh.HasError())
+                    return Result<AssetPreviewImage>::Failure(mesh.ErrorValue());
 
                 AssetPreviewImage image{
                     .width = input.width,
                     .height = input.height,
                     .pixels = std::vector<std::uint8_t>(static_cast<std::size_t>(input.width) * input.height * 4U, 0),
                 };
-                const std::size_t indexHeader = kHeaderBytes + static_cast<std::size_t>(positionBytes) + texcoordBytes + normalBytes;
-                std::uint32_t indexCount = 0;
-                if (!ReadU32(input.editorPayload, indexHeader, indexCount) || indexCount == 0 || indexCount % 3U != 0 ||
-                    indexCount > kMaximumTriangleIndices ||
-                    indexHeader + 4U + static_cast<std::uint64_t>(indexCount) * 4U > input.editorPayload.size()) {
-                    return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
+                if (!mesh.Value().indexCount.has_value() || *mesh.Value().indexCount == 0) {
+                    RenderPointPreview(image, mesh.Value().vertices, view_);
+                    return Result<AssetPreviewImage>::Success(std::move(image));
                 }
-
-                const std::vector<ProjectedVertex> projected = ProjectVertices(vertices, input.width, input.height, view_);
-                std::vector depthBuffer(static_cast<std::size_t>(input.width) * input.height, std::numeric_limits<float>::infinity());
-                const std::uint32_t triangleCount = indexCount / 3U;
-
-                const std::uint32_t rasterizedTriangleCount = std::min(triangleCount, kMaximumRasterizedTriangles);
-                for (std::uint32_t triangle = 0; triangle < rasterizedTriangleCount; ++triangle) {
-                    if ((triangle & 0x0fffU) == 0U && cancellation.IsCancellationRequested())
-                        return Result<AssetPreviewImage>::Failure(MakeError(ImportErrors::ImportCancelled));
-
-                    const auto sourceTriangle =
-                        static_cast<std::uint32_t>(static_cast<std::uint64_t>(triangle) * triangleCount / rasterizedTriangleCount);
-                    const std::uint32_t index = sourceTriangle * 3U;
-                    std::uint32_t a = 0;
-                    std::uint32_t b = 0;
-                    std::uint32_t c = 0;
-                    if (!ReadU32(input.editorPayload, indexHeader + 4U + index * 4U, a) ||
-                        !ReadU32(input.editorPayload, indexHeader + 4U + (index + 1U) * 4U, b) ||
-                        !ReadU32(input.editorPayload, indexHeader + 4U + (index + 2U) * 4U, c) || a >= projected.size() ||
-                        b >= projected.size() || c >= projected.size()) {
-                        return Result<AssetPreviewImage>::Failure(MakeError(AssetErrors::IndexMalformed));
-                    }
-                    RasterizeTriangle(image, depthBuffer, projected[a], projected[b], projected[c],
-                                      TriangleShade(vertices[a], vertices[b], vertices[c]));
-                }
-                return Result<AssetPreviewImage>::Success(std::move(image));
+                return RenderTrianglePreview(input.editorPayload, std::move(image), mesh.Value(), view_, cancellation);
             }
 
         private:

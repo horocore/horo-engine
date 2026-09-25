@@ -181,6 +181,7 @@ namespace Horo::Editor {
         EditorAssetMeshCache m_assetMeshCache;
         EditorViewportSceneSnapshot m_viewportScene;
         std::uint64_t m_viewportSceneRevision{};
+        bool m_assetPlacementPreviewActive{false};
         std::optional<SceneDocumentSnapshot> m_deferredRuntimeSnapshot;
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
         std::unique_ptr<ProjectGameplayRegistry> m_pendingGameplayRegistry;
@@ -241,6 +242,7 @@ namespace Horo::Editor {
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
         void ScheduleContentBrowserPreviews();
         void PollContentBrowserPreviews();
+        [[nodiscard]] bool PollContentBrowserPreview(PendingContentBrowserPreview &pending);
 
         struct NativeGameplayReloadTransaction {
             enum class Phase : std::uint8_t {
@@ -327,9 +329,12 @@ namespace Horo::Editor {
         void ExtractPlayViewportScene();
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
-                                                       Math::Transform &localTransform) const;
+                                                       Math::Transform &localTransform, bool publishFailure = true) const;
+        void PreviewAssetPlacement(const AssetSceneDropRequest &request);
+        void CancelAssetPlacementPreview();
         void HandleInstantiateAsset(const AssetSceneDropRequest &request);
-        [[nodiscard]] const Assets::AssetRecord *ResolveAssetDropRecord(const AssetSceneDropRequest &request) const;
+        [[nodiscard]] const Assets::AssetRecord *ResolveAssetDropRecord(const AssetSceneDropRequest &request,
+                                                                        bool publishFailure = true) const;
         void HandleInstantiatedAssetCommand(const Result<SceneCommandResult> &result);
         void LoadDocumentAssetMeshes();
         [[nodiscard]] std::string Localized(std::string_view key, std::string_view fallback) const;

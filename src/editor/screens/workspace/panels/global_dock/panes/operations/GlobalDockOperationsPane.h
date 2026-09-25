@@ -56,7 +56,6 @@ namespace Horo::Editor {
                               const EditorGuiContext &context);
         void DrawOperationAction(const OperationRecord &operation, ImVec2 rowMinimum, const TableLayout &layout,
                                  const EditorGuiContext &context);
-        void DrawFooter(const GlobalDockPaneRegions &regions, const OperationCounts &counts, const EditorGuiContext &context) const;
         void RebuildFilter();
 
         const IOperationQuery *m_operationQuery{nullptr};

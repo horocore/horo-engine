@@ -2,14 +2,13 @@
 
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
-#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "ViewportOverlay.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -44,6 +43,26 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc ViewportPanel::GetId */
+    std::string ViewportPanel::GetId() const {
+        return "horo.viewport";
+    }
+
+    /** @copydoc ViewportPanel::GetDisplayName */
+    std::string ViewportPanel::GetDisplayName() const {
+        return "workspace.panel.viewport";
+    }
+
+    /** @copydoc ViewportPanel::GetDefaultDockArea */
+    WorkspaceDockArea ViewportPanel::GetDefaultDockArea() const {
+        return WorkspaceDockArea::Document;
+    }
+
+    /** @copydoc ViewportPanel::GetObservedEventTypes */
+    std::vector<std::string> ViewportPanel::GetObservedEventTypes() const {
+        return {"SceneDocumentChangedEvent", "SelectionChangedEvent"};
+    }
+
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
         viewportRenderer_ = context.viewportRenderer;
@@ -55,6 +74,7 @@ namespace Horo::Editor {
     void ViewportPanel::OnDetach() {
         interaction_.Detach();
         viewportRenderer_ = nullptr;
+        gridOverride_.reset();
     }
 
     /** @copydoc ViewportPanel::DrawIcon */
@@ -68,18 +88,13 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::DrawPanel */
     void ViewportPanel::DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        const std::array tabNames{context.localization.Get("editor", "workspace.panel.viewport").c_str()};
-        Ui::DrawDockTabs(tabNames, 0, context.theme.fonts);
-
-        constexpr float tabBarHeight = 28.0F;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        ImGui::BeginChild("##Content", ImVec2(size.x, size.y - tabBarHeight), false,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::BeginChild("##Content", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
 
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
-        const float height = size.y - tabBarHeight;
+        const float height = size.y;
         const float centerX = origin.x + width * 0.5F;
         const float horizon = origin.y + height * 0.38F;
         const float ground = origin.y + height;
@@ -102,8 +117,29 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
 
-        DrawProjectionControl(origin, viewModel, command, context);
-        DrawObjectCount(origin, viewModel, context);
+        const ViewportOverlayAction overlay =
+            DrawViewportOverlay(origin, {width, height},
+                                ViewportOverlayState{.camera = viewModel.viewportCamera,
+                                                     .tool = viewModel.activeTransformTool,
+                                                     .gridVisible = gridOverride_.value_or(context.settings.settings.gridOverlay),
+                                                     .canFocusSelection = viewModel.primarySelectionWorldBounds.has_value(),
+                                                     .objectCount = viewModel.objects.size()},
+                                context.theme.fonts, context.localization);
+        if (overlay.projection) {
+            command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
+            command.viewportProjectionPayload = *overlay.projection;
+        } else if (overlay.axisView) {
+            command.command = EditorWorkspaceViewCommand::AlignViewportToAxis;
+            command.viewportAxisPayload = *overlay.axisView;
+        } else if (overlay.tool) {
+            command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
+            command.transformToolPayload = *overlay.tool;
+        } else if (overlay.focusSelection && viewModel.primarySelectionWorldBounds && height > 0.0F) {
+            command.command = EditorWorkspaceViewCommand::FocusViewportSelection;
+            command.floatPayload = width / height;
+        }
+        if (overlay.toggleGrid)
+            gridOverride_ = !gridOverride_.value_or(context.settings.settings.gridOverlay);
         if (!hasRenderedViewport)
             DrawMissingRendererMessage(centerX, origin.y, height, context);
 
@@ -116,7 +152,7 @@ namespace Horo::Editor {
         if (viewportRenderer_ == nullptr)
             return;
         viewportRenderer_->RequestGrid(EditorViewportGridOptions{
-            .visible = context.settings.settings.gridOverlay,
+            .visible = gridOverride_.value_or(context.settings.settings.gridOverlay),
         });
         EditorViewportLightVisualizerOptions lightVisualizer;
         if (viewModel.primarySelection.has_value()) {
@@ -128,36 +164,82 @@ namespace Horo::Editor {
         viewportRenderer_->RequestLightVisualizer(lightVisualizer);
     }
 
+    void ViewportPanel::CancelAssetPlacementPreview(EditorWorkspaceViewCommandData &command) {
+        if (!assetPlacementPreviewActive_)
+            return;
+        command = {};
+        command.command = EditorWorkspaceViewCommand::CancelAssetPlacementPreview;
+        assetPlacementPreviewActive_ = false;
+    }
+
+    void ViewportPanel::DrawAssetPlacementHint(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const ImVec2 pointer,
+                                               const EditorGuiContext &context) {
+        const std::string &hint = context.localization.Get("editor", "workspace.viewport.asset_drop_hint");
+        const ImVec2 hintSize = ImGui::CalcTextSize(hint.c_str());
+        const ImVec2 hintMin{std::clamp(pointer.x + 14.0F, layout.origin.x + 8.0F, layout.origin.x + layout.width - hintSize.x - 20.0F),
+                             std::clamp(pointer.y + 18.0F, layout.origin.y + 8.0F, layout.origin.y + layout.height - hintSize.y - 16.0F)};
+        drawList.AddRectFilled(hintMin, {hintMin.x + hintSize.x + 12.0F, hintMin.y + hintSize.y + 8.0F}, Theme::U32(Theme::Bg0()),
+                               Theme::Layout::Radius);
+        drawList.AddText({hintMin.x + 6.0F, hintMin.y + 4.0F}, Theme::U32(Theme::Text()), hint.c_str());
+    }
+
+    bool ViewportPanel::HandleAcceptedAssetDrop(const ImGuiPayload *accepted, ImDrawList &drawList, const ViewportSurfaceLayout &layout,
+                                                const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                                const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
+        const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted);
+        if (!payload.has_value()) {
+            CancelAssetPlacementPreview(command);
+            return false;
+        }
+
+        const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
+        drawList.AddRect(layout.origin, {layout.origin.x + layout.width, layout.origin.y + layout.height},
+                         Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err()), 3.0F, 0, 2.0F);
+        if (!policy.canInstantiate) {
+            CancelAssetPlacementPreview(command);
+            return true;
+        }
+
+        const ImVec2 pointer = ImGui::GetMousePos();
+        const AssetSceneDropRequest request{
+            .assetId = payload->assetId.data(),
+            .assetType = payload->assetType.data(),
+            .absoluteAssetPath = payload->absolutePath.data(),
+            .parent = std::nullopt,
+            .target = AssetSceneDropTarget::Viewport,
+            .normalizedX = std::clamp((pointer.x - layout.origin.x) / layout.width, 0.0F, 1.0F),
+            .normalizedY = std::clamp((pointer.y - layout.origin.y) / layout.height, 0.0F, 1.0F),
+            .aspect = layout.width / layout.height,
+            .depthRange = depthRange,
+            .documentRevision = viewModel.documentRevision,
+        };
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            CancelAssetPlacementPreview(command);
+            assetPlacementCancelled_ = true;
+        } else if (!assetPlacementCancelled_) {
+            command = {};
+            command.command =
+                accepted->IsDelivery() ? EditorWorkspaceViewCommand::InstantiateAsset : EditorWorkspaceViewCommand::PreviewAssetPlacement;
+            command.assetSceneDrop = request;
+            assetPlacementPreviewActive_ = !accepted->IsDelivery();
+            DrawAssetPlacementHint(drawList, layout, pointer, context);
+        }
+        return true;
+    }
+
     bool ViewportPanel::AcceptViewportAssetDrop(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                                                const Math::ClipDepthRange depthRange) {
-        if (!ImGui::BeginDragDropTarget())
+                                                const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
+        if (ImGui::GetDragDropPayload() == nullptr)
+            assetPlacementCancelled_ = false;
+        if (!ImGui::BeginDragDropTarget()) {
+            CancelAssetPlacementPreview(command);
             return false;
-        bool active = false;
+        }
         const ImGuiPayload *accepted =
             ImGui::AcceptDragDropPayload(AssetSceneDragPayloadType,
                                          ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
-        if (const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted); payload.has_value()) {
-            active = true;
-            const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
-            drawList.AddRect(layout.origin, {layout.origin.x + layout.width, layout.origin.y + layout.height},
-                             Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err()), 3.0F, 0, 2.0F);
-            if (accepted->IsDelivery()) {
-                const ImVec2 pointer = ImGui::GetMousePos();
-                command.command = EditorWorkspaceViewCommand::InstantiateAsset;
-                command.assetSceneDrop = AssetSceneDropRequest{
-                    .assetId = payload->assetId.data(),
-                    .assetType = payload->assetType.data(),
-                    .parent = viewModel.primarySelection,
-                    .target = AssetSceneDropTarget::Viewport,
-                    .normalizedX = std::clamp((pointer.x - layout.origin.x) / layout.width, 0.0F, 1.0F),
-                    .normalizedY = std::clamp((pointer.y - layout.origin.y) / layout.height, 0.0F, 1.0F),
-                    .aspect = layout.width / layout.height,
-                    .depthRange = depthRange,
-                    .documentRevision = viewModel.documentRevision,
-                };
-            }
-        }
+        const bool active = HandleAcceptedAssetDrop(accepted, drawList, layout, viewModel, command, context, depthRange);
         ImGui::EndDragDropTarget();
         return active;
     }
@@ -165,12 +247,9 @@ namespace Horo::Editor {
     void ViewportPanel::DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
-        const ImVec2 projectionMinimum{layout.origin.x + 10.0F, layout.origin.y + 8.0F};
-        const ImVec2 projectionMaximum{projectionMinimum.x + 190.0F, projectionMinimum.y + ImGui::GetFontSize() + 14.0F};
         const ImVec2 pointer = ImGui::GetMousePos();
-        const bool pointerOverProjection = pointer.x >= projectionMinimum.x && pointer.x <= projectionMaximum.x &&
-                                           pointer.y >= projectionMinimum.y && pointer.y <= projectionMaximum.y;
-        const bool surfaceInteractive = !pointerOverProjection || interaction_.IsActive();
+        const bool pointerOverControls = pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F;
+        const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
         bool surfaceHovered = false;
         if (surfaceInteractive) {
             ImGui::SetCursorScreenPos(layout.origin);
@@ -179,7 +258,10 @@ namespace Horo::Editor {
                                        ImGuiButtonFlags_MouseButtonMiddle);
             surfaceHovered = ImGui::IsItemHovered();
         }
-        const bool assetDragActive = surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, depthRange);
+        if (!surfaceInteractive)
+            CancelAssetPlacementPreview(command);
+        const bool assetDragActive =
+            surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
@@ -252,33 +334,6 @@ namespace Horo::Editor {
                                          ImGui::GetColorU32(ImVec4(0.01F, 0.22F, 0.44F, 0.0F)),
                                          ImGui::GetColorU32(ImVec4(0.03F, 0.38F, 0.60F, 0.35F)),
                                          ImGui::GetColorU32(ImVec4(0.03F, 0.38F, 0.60F, 0.35F)));
-    }
-
-    void ViewportPanel::DrawProjectionControl(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel,
-                                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        using enum Runtime::CameraProjection;
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0F, origin.y + 8.0F));
-        const std::array<const char *, 2> projectionItems{
-            context.localization.Get("editor", "workspace.viewport.perspective_shaded").c_str(),
-            context.localization.Get("editor", "workspace.viewport.orthographic_shaded").c_str(),
-        };
-        int projectionIndex = viewModel.viewportCamera.projection == Perspective ? 0 : 1;
-        ImGui::PushItemWidth(190.0F);
-        if (Ui::ComboControl("viewport_projection", &projectionIndex, projectionItems.data(), 2, context.theme.fonts)) {
-            command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
-            command.viewportProjectionPayload = projectionIndex == 0 ? Perspective : Orthographic;
-        }
-        ImGui::PopItemWidth();
-    }
-
-    void ViewportPanel::DrawObjectCount(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) {
-        ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0F, origin.y + 42.0F));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.32F, 0.38F, 0.48F, 1.0F));
-        const std::size_t objectCountValue = viewModel.objects.size();
-        const std::string objectCount =
-            std::vformat(context.localization.Get("editor", "workspace.viewport.object_count"), std::make_format_args(objectCountValue));
-        ImGui::TextUnformatted(objectCount.c_str());
-        ImGui::PopStyleColor();
     }
 
     void ViewportPanel::DrawMissingRendererMessage(const float centerX, const float originY, const float height,

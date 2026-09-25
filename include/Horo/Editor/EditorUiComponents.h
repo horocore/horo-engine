@@ -357,6 +357,7 @@ namespace Horo::Editor::Ui {
         float height{0.0F};
         ComponentSize componentSize{ComponentSize::Small};
         ComboControlSurface surface{ComboControlSurface::Default};
+        UiIcon leadingIcon{UiIcon::None}; /**< Optional semantic icon before the selected value. */
     };
 
     /** @brief Renders a styled dropdown with optional error styling. Returns true if the selection changed. */
@@ -471,11 +472,29 @@ namespace Horo::Editor::Ui {
         Milliseconds,
     };
 
-    /** @brief Integer input with shared frame styling. */
-    void InputIntControl(const char *id, int *value, const Theme::Fonts &fonts);
+    /**
+     * @brief Integer input with shared frame styling.
+     * @param id Stable UI identity.
+     * @param value Edited value.
+     * @param fonts Editor font handles.
+     * @param showSteppers Whether to show the native step buttons.
+     */
+    void InputIntControl(const char *id, int *value, const Theme::Fonts &fonts, bool showSteppers = true);
 
     /** @brief Float input with shared frame styling. */
     void InputFloatControl(const char *id, float *value, const Theme::Fonts &fonts);
+
+    /**
+     * @brief Draws a single numeric field with compact in-field increment and decrement actions.
+     * @param id Stable control identity.
+     * @param value Edited value.
+     * @param fonts Editor font handles.
+     * @param step Amount applied by each arrow action.
+     * @param showSteppers Whether to draw the increment and decrement actions.
+     * @return True when typing or an arrow action changed the value.
+     */
+    [[nodiscard]] bool InputFloatStepperControl(const char *id, float *value, const Theme::Fonts &fonts, float step = 0.1F,
+                                                bool showSteppers = true);
 
     /**
      * @brief Custom slider imitating an HTML <input type="range">.
@@ -500,9 +519,10 @@ namespace Horo::Editor::Ui {
      * @param label The label to show next to the checkbox.
      * @param value Pointer to the boolean state.
      * @param fonts The application font set.
+     * @param minimumBoxSize Optional minimum square size in logical pixels.
      * @return True when the checkbox was clicked.
      */
-    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts);
+    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts, float minimumBoxSize = 0.0F);
 
     // ── Higher-order helpers ─────────────────────────────────────────────
 
@@ -537,6 +557,12 @@ namespace Horo::Editor::Ui {
 
     // ── Modal layout primitives ──────────────────────────────────────────
 
+    /** @brief Optional screen-space region in which a modal is centered and dragged. */
+    struct ModalPlacementRegion {
+        ImVec2 position{};
+        ImVec2 size{};
+    };
+
     /** @brief Shared geometry and chrome configuration for an editor workflow modal. */
     struct ModalShellProps {
         const char *id = "EditorModal"; /**< Stable ImGui window identity. */
@@ -547,6 +573,7 @@ namespace Horo::Editor::Ui {
         float minimumHeight = 360.0F;
         float headerHeight = Theme::Layout::HeaderH;
         float footerHeight = Theme::Layout::FooterH;
+        std::optional<ModalPlacementRegion> placementRegion; /**< Defaults to the main viewport's usable area. */
         ImTextureID logo = 0;
         bool showBrandMark = false;
         bool showClose = true;

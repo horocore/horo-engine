@@ -1,3 +1,4 @@
+#include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "../support/AssetImportTestSupport.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
@@ -5,6 +6,7 @@
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Input.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -21,7 +23,7 @@ namespace {
     using namespace Horo::Editor;
     using namespace Horo::Assets;
 
-    using ScopedTempDirectory = Tests::ScopedAssetImportTempDirectory;
+    using ScopedTempDirectory = ::Horo::Tests::ScopedAssetImportTempDirectory;
 
     /** @brief Test double that overrides Draw for headless testing. */
     class TestAssetImportModal : public AssetImportModal {
@@ -40,8 +42,34 @@ namespace {
         bool m_preparedCalled{false};
     };
 
+    /** @brief Checks that picker calls retain the native-dialog input context. */
+    class RecordingNativeDialogs final : public NativeDialogs {
+    public:
+        explicit RecordingNativeDialogs(Input::InputRouter &router) : router_(router) {}
+
+        std::vector<std::filesystem::path> ChooseOpenFiles(std::string_view title) override {
+            CHECK(title == "Choose files to import");
+            CHECK(router_.HasHigherPriorityContext(Input::InputContextKind::ModalRoot));
+            ++fileCalls;
+            return {};
+        }
+
+        std::optional<std::filesystem::path> ChooseFolder(std::string_view title) override {
+            CHECK(title == "Choose destination folder");
+            CHECK(router_.HasHigherPriorityContext(Input::InputContextKind::ModalRoot));
+            ++folderCalls;
+            return std::nullopt;
+        }
+
+        int fileCalls{};
+        int folderCalls{};
+
+    private:
+        Input::InputRouter &router_;
+    };
+
     [[nodiscard]] AssetImporterContribution BasicContribution() {
-        return Tests::BasicAssetImporterContribution();
+        return ::Horo::Tests::BasicAssetImporterContribution();
     }
 
     [[nodiscard]] AssetImporterContribution PresetContribution() {
@@ -67,7 +95,7 @@ namespace {
     }
 
     [[nodiscard]] std::shared_ptr<const AssetImporterCatalogSnapshot> PublishCatalog(AssetImporterContribution contribution) {
-        auto published = Tests::PublishAssetImporterCatalog(std::move(contribution));
+        auto published = ::Horo::Tests::PublishAssetImporterCatalog(std::move(contribution));
         REQUIRE(published != nullptr);
         return published;
     }
@@ -105,7 +133,38 @@ namespace {
         CHECK(item.settings.at("settings.sourceTag") == "second-source");
     }
 
+    void CompleteImport(OperationStore &operations, const std::string &title) {
+        const auto operation = operations.Begin(OperationDescriptor{
+            .kind = OperationKind::Import,
+            .title = title,
+            .phase = "import",
+            .message = "Importing assets",
+            .progress = 0.0F,
+        });
+        REQUIRE(operation.has_value());
+        REQUIRE(operations.Update(*operation, OperationUpdate{.state = OperationState::Succeeded,
+                                                              .phase = "complete",
+                                                              .message = "Asset import completed",
+                                                              .progress = 1.0F}));
+    }
+
 }  // namespace
+
+TEST_CASE("AssetImportModal picker keeps native input context for both browse actions", "[native]") {
+    Input::InputRouter inputRouter;
+    RecordingNativeDialogs dialogs{inputRouter};
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, nullptr, nullptr, &dialogs, &inputRouter};
+    modal.SetProjectRoot(std::filesystem::current_path());
+
+    modal.BrowseSourceFiles();
+    modal.BrowseDestination();
+
+    CHECK(dialogs.fileCalls == 1);
+    CHECK(dialogs.folderCalls == 1);
+    CHECK_FALSE(inputRouter.HasHigherPriorityContext(Input::InputContextKind::ModalRoot));
+}
 
 TEST_CASE("AssetImportModal lifecycle completes the visible operation before the modal closes", "[native]") {
     const ScopedTempDirectory project{"horo-asset-import-modal-lifecycle"};
@@ -168,6 +227,78 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
     REQUIRE_FALSE(operations.SnapshotIfChanged(completedOperations->revision).has_value());
 }
 
+TEST_CASE("AssetImportModal closes an idle failed preparation queue", "[native][editor][asset-import]") {
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()));
+    auto *modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+
+    modalPtr->MutableSnapshot().phase = AssetImportPhase::Committing;
+    REQUIRE(modalHost.RequestClose(modalPtr->Id(), ModalCloseReason::Cancelled).HasError());
+    modalPtr->MutableSnapshot().phase = AssetImportPhase::Preparing;
+    REQUIRE(modalHost.RequestClose(modalPtr->Id(), ModalCloseReason::Cancelled).HasValue());
+    modalHost.OnUpdate(0.016F);
+    REQUIRE_FALSE(modalHost.HasOpenModal());
+}
+
+TEST_CASE("AssetImportModal restores retained import history when reopened", "[native]") {
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    OperationStore operations{4, 4};
+
+    const auto operation = operations.Begin(OperationDescriptor{
+        .kind = OperationKind::Import,
+        .title = "sylvan_razorback",
+        .phase = "import",
+        .message = "Importing assets",
+        .progress = 0.0F,
+    });
+    REQUIRE(operation.has_value());
+    REQUIRE(operations.Update(*operation, OperationUpdate{.state = OperationState::Succeeded,
+                                                          .phase = "complete",
+                                                          .message = "Asset import completed",
+                                                          .progress = 1.0F}));
+
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto *modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+
+    REQUIRE(modalPtr->Snapshot().items.empty());
+    REQUIRE(modalPtr->ImportHistory().size() == 1);
+    CHECK(modalPtr->ImportHistory().front().title == "sylvan_razorback");
+    CHECK(modalPtr->ImportHistory().front().state == OperationState::Succeeded);
+}
+
+TEST_CASE("AssetImportModal keeps bounded incremental import history", "[native]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    OperationStore operations{64, 64};
+    for (int index = 0; index < 55; ++index)
+        CompleteImport(operations, std::format("import-{}", index));
+
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto *modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+    const auto &history = modalPtr->ImportHistory();
+    REQUIRE(history.size() == 50);
+    CHECK(history.front().title == "import-54");
+    CHECK(history.back().title == "import-5");
+}
+
 TEST_CASE("AssetImportModal presets are scoped by importer contribution and extension", "[native]") {
     const Theme::Fonts fonts{};
     JobSystem jobs;
@@ -225,7 +356,7 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
                      .fileExtensions = {"fbx"},
                      .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
                      .subfolderCategory = "Meshes",
-                     .strategy = std::make_shared<const Tests::BasicAssetImporter>(),
+                     .strategy = std::make_shared<const ::Horo::Tests::BasicAssetImporter>(),
                  })
                  .HasValue()));
     auto catalogSnapshot = catalog.Publish();
@@ -250,4 +381,145 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
 
     REQUIRE((std::filesystem::exists(projectRoot / "assets/Meshes/source.horoasset")));
     REQUIRE((!std::filesystem::exists(projectRoot / "assets/Meshes/Meshes")));
+}
+
+TEST_CASE("AssetImportModal tracks included queue items and appends files safely", "[native]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    OperationStore operations{4, 4};
+    const ScopedTempDirectory project{"horo-import-inclusion"};
+    const auto firstSource = project.Path() / "first.obj";
+    const auto secondSource = project.Path() / "second.obj";
+    {
+        std::ofstream first{firstSource};
+        first << "first";
+        std::ofstream second{secondSource};
+        second << "second";
+    }
+
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    modal.SetProjectRoot(project.Path());
+    std::filesystem::create_directories(project.Path() / "assets/Imported");
+    modal.SetDefaultDestination(project.Path() / "assets/Imported");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+    modal.SetDefaultDestination(project.Path() / "outside");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+    modal.SetDefaultDestination("assets/Imported");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+
+    CancellationToken cancellation;
+    REQUIRE((modal.BeginImport({firstSource}, project.Path(), cancellation).HasValue()));
+    REQUIRE((modal.BeginImport({secondSource}, project.Path(), cancellation).HasValue()));
+    REQUIRE(modal.Snapshot().items.size() == 2);
+    REQUIRE(modal.SourceFileSize(0).has_value());
+    REQUIRE(modal.SourceFileSize(1).has_value());
+    CHECK(modal.IncludedItemCount() == 2);
+
+    modal.SetItemIncluded(0, false);
+    modal.SetItemIncluded(1, false);
+    modal.SetItemIncluded(99, true);
+    CHECK_FALSE(modal.IsItemIncluded(0));
+    CHECK_FALSE(modal.IsItemIncluded(1));
+    CHECK(modal.IncludedItemCount() == 0);
+    REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
+    CHECK_FALSE(modal.IsImportComplete());
+    modal.SetItemIncluded(0, true);
+    modal.SetItemIncluded(1, true);
+    CHECK(modal.IncludedItemCount() == 2);
+    REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
+    CHECK(modal.IsImportComplete());
+    REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
+    CHECK_FALSE(modal.SourceFileSize(99).has_value());
+
+    TestAssetImportModal batchModal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    REQUIRE((batchModal.BeginImport({firstSource, secondSource}, project.Path(), cancellation).HasValue()));
+    const auto visibleOperations = operations.SnapshotIfChanged(0);
+    REQUIRE(visibleOperations.has_value());
+    CHECK(visibleOperations->operations.back().title == "first +1");
+}
+
+TEST_CASE("AssetImportModal rejects unresolved conflicts and invalid batch items", "[native]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    const ScopedTempDirectory project{"horo-import-validation"};
+    const auto source = project.Path() / "source.obj";
+    {
+        std::ofstream output{source};
+        output << "source";
+    }
+    std::filesystem::create_directories(project.Path() / "Assets");
+    {
+        std::ofstream existing{project.Path() / "Assets/source.horoasset"};
+        existing << "existing";
+    }
+
+    CancellationToken cancellation;
+    TestAssetImportModal conflictModal{fonts, jobs, PublishCatalog(BasicContribution())};
+    REQUIRE((conflictModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    REQUIRE((conflictModal.ImportSingleItem(0, cancellation).HasValue()));
+    REQUIRE(conflictModal.HasPendingConflicts());
+    const auto blocked = conflictModal.ImportIncludedItems(cancellation);
+    REQUIRE(blocked.HasError());
+    CHECK(blocked.ErrorValue().code.Value() == "editor.asset_import.conflict_pending");
+    conflictModal.ResolveCurrentConflict(AssetImportModal::ConflictChoice::Skip, false);
+    CHECK_FALSE(conflictModal.HasPendingConflicts());
+    CHECK(conflictModal.IsImportComplete());
+
+    TestAssetImportModal invalidModal{fonts, jobs, PublishCatalog(BasicContribution())};
+    REQUIRE((invalidModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    invalidModal.MutableSnapshot().items.front().displayName.clear();
+    const auto invalid = invalidModal.ImportIncludedItems(cancellation);
+    REQUIRE(invalid.HasError());
+    CHECK(invalid.ErrorValue().code.Value() == "editor.asset_import.invalid_asset_name");
+
+    OperationStore operations{4, 4};
+    TestAssetImportModal cancelledModal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    REQUIRE((cancelledModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    const auto visibleOperations = operations.SnapshotIfChanged(0);
+    REQUIRE(visibleOperations.has_value());
+    REQUIRE(operations.RequestCancel(visibleOperations->operations.front().id));
+    CHECK(cancelledModal.ImportIncludedItems(cancellation).HasError());
+}
+
+TEST_CASE("AssetImportModal projects terminal import history while ignoring other operations", "[native]") {
+    ::Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    EditorDataBus events;
+    Input::InputRouter inputRouter;
+    EditorModalHost modalHost{events, inputRouter};
+    ::Horo::Editor::Tests::ScopedJobSystem jobs;
+    OperationStore operations{8, 8};
+
+    const auto build = operations.Begin(OperationDescriptor{
+        .kind = OperationKind::Build,
+        .title = "build",
+        .phase = "build",
+        .message = "Building",
+    });
+    REQUIRE(build.has_value());
+    REQUIRE(operations.Update(*build, OperationUpdate{.state = OperationState::Succeeded, .phase = "complete", .message = "Built"}));
+    const auto import = operations.Begin(OperationDescriptor{
+        .kind = OperationKind::Import,
+        .title = "queued-import",
+        .phase = "import",
+        .message = "Importing",
+    });
+    REQUIRE(import.has_value());
+
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto *const modalPtr = modal.get();
+    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
+    modalHost.OnUpdate(0.016F);
+    CHECK(modalPtr->ImportHistory().empty());
+
+    REQUIRE(operations.Update(*import, OperationUpdate{.state = OperationState::Failed, .phase = "import", .message = "Import failed"}));
+    imgui.BeginFrame();
+    static_cast<void>(modalPtr->Draw());
+    imgui.EndFrame();
+    REQUIRE(modalPtr->ImportHistory().size() == 1);
+    CHECK(modalPtr->ImportHistory().front().title == "queued-import");
+
+    imgui.BeginFrame();
+    static_cast<void>(modalPtr->Draw());
+    imgui.EndFrame();
+    CHECK(modalPtr->ImportHistory().size() == 1);
 }

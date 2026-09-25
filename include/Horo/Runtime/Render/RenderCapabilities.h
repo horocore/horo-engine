@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 namespace Horo::Render {
     /** @brief Independently reported renderer capabilities. */
@@ -209,4 +210,38 @@ namespace Horo::Render {
             return features.Supports(RenderCapability::TextureResources) && limits.Supports(descriptor) && formats.Supports(descriptor);
         }
     };
+
+    /**
+     * @brief Formats a buffer request for an operation error.
+     * @param descriptor Buffer descriptor to describe.
+     * @return Human-readable size, usage, and access policy.
+     */
+    [[nodiscard]] std::string DescribeRenderBufferRequest(const RenderBufferDescriptor &descriptor);
+
+    /**
+     * @brief Formats a texture request for an operation error.
+     * @param descriptor Texture descriptor to describe.
+     * @return Human-readable extent, format, dimension, usage, and subresource shape.
+     */
+    [[nodiscard]] std::string DescribeRenderTextureRequest(const RenderTextureDescriptor &descriptor);
+
+    /**
+     * @brief Explains a buffer request rejected by a capability snapshot.
+     * @param descriptor Rejected buffer descriptor.
+     * @param capabilities Snapshot used for admission.
+     * @return Human-readable request, admitted limit, and failed checks.
+     * @pre `capabilities.Supports(descriptor)` is false.
+     */
+    [[nodiscard]] std::string DescribeRenderBufferAdmissionFailure(const RenderBufferDescriptor &descriptor,
+                                                                   const RenderCapabilitySnapshot &capabilities);
+
+    /**
+     * @brief Explains a texture request rejected by a capability snapshot.
+     * @param descriptor Rejected texture descriptor.
+     * @param capabilities Snapshot used for admission.
+     * @return Human-readable request, admitted limits, and failed checks.
+     * @pre `capabilities.Supports(descriptor)` is false.
+     */
+    [[nodiscard]] std::string DescribeRenderTextureAdmissionFailure(const RenderTextureDescriptor &descriptor,
+                                                                    const RenderCapabilitySnapshot &capabilities);
 }  // namespace Horo::Render

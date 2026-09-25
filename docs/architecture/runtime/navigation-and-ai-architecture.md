@@ -2093,7 +2093,7 @@ These are required downstream runtime/CI tests, not tests implemented by this AD
 - [Header Visibility and Ownership](../foundation/header-visibility-and-ownership.md)
 - [ADR-016: Navigation Target Ownership and Dependency Boundary](../../adr/016-navigation-target-ownership-and-dependency-boundary.md)
 - [ADR-104: Default Navigation Provider and Recast-Detour Adoption](../../adr/104-default-navigation-provider-and-recast-detour-adoption.md)
-- [Navigation Bake UI Reference](./navigation-bake.html)
+- [Navigation Bake UI Reference](../../../mock-studio/designs.md#architecture-runtime-navigation-bake)
 
 - [ADR-021: Gameplay AI Ownership, Scheduling and Behavior Boundary](../../adr/021-gameplay-ai-ownership-scheduling-and-behavior-boundary.md)
 - [ADR-022: AI Fixed-Tick Order, Authority and Simulation Budget](../../adr/022-ai-fixed-tick-order-authority-and-simulation-budget.md)
@@ -2111,6 +2111,6 @@ These are required downstream runtime/CI tests, not tests implemented by this AD
 - [ADR-114: Canonical Runtime World Persistence Boundary](../../adr/114-canonical-runtime-world-persistence-boundary.md)
 - [ADR-137: Terrain and Foliage Ownership, Data, Tier and Lifecycle](../../adr/137-terrain-foliage-ownership-data-tier-and-lifecycle.md)
 - [ADR-141: Terrain/Foliage Cross-System Ownership and Readiness](../../adr/141-terrain-foliage-cross-system-ownership-and-readiness.md)
-- [Navigation Bake UI HTML Reference](./navigation-bake.html): non-normative
+- [Navigation Bake UI Mock Reference](../../../mock-studio/designs.md#architecture-runtime-navigation-bake): non-normative
   static UI reference
 - [Debug Console And Overlays](./debug-console-and-overlays.md): AI debug visualization

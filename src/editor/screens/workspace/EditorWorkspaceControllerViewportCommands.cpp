@@ -16,6 +16,17 @@ namespace Horo::Editor {
                     }
                 }
                 break;
+            case EditorWorkspaceViewCommand::AlignViewportToAxis:
+                if (cmd.viewportAxisPayload.has_value()) {
+                    const Result<void> aligned = m_viewport.AlignToAxis(*cmd.viewportAxisPayload);
+                    if (aligned.HasError())
+                        LOG_ERROR("editor.viewport", "Viewport axis alignment failed: %s", aligned.ErrorValue().message.c_str());
+                    else {
+                        m_viewportScene.camera = m_viewport.Current().camera;
+                        m_viewModel.viewportCamera = m_viewport.Current().camera;
+                    }
+                }
+                break;
             case EditorWorkspaceViewCommand::ChangeViewportProjection:
                 if (cmd.viewportProjectionPayload.has_value()) {
                     const Result<void> changed = m_viewport.SetProjection(*cmd.viewportProjectionPayload);

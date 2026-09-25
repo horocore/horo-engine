@@ -8,6 +8,7 @@
 #include "AssetImportFileFacts.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
 
 #include <atomic>
 #include <chrono>
@@ -89,7 +90,7 @@ namespace Horo::Assets {
                 .projectRoot = Detail::NormalizeAssetImportPath(request.absoluteProjectRoot),
                 .assetPath = Detail::NormalizeAssetImportPath(request.absoluteAssetPath),
             };
-            if (const std::filesystem::path assetRoot = Detail::NormalizeAssetImportPath(paths.projectRoot / "assets");
+            if (const std::filesystem::path assetRoot = Detail::NormalizeAssetImportPath(ProjectLayout::AssetRoot(paths.projectRoot));
                 paths.projectRoot.empty() || assetRoot.empty() || paths.assetPath.empty() || !request.absoluteAssetPath.is_absolute() ||
                 !HasPathPrefix(assetRoot, paths.assetPath)) {
                 return Result<ReimportPaths>::Failure(

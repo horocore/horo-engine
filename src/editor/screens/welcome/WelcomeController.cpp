@@ -183,6 +183,8 @@ namespace Horo::Editor {
         const Json root = Json::parse(content, nullptr, false);
         if (root.is_discarded() || !root.is_array() || root.size() > 128)
             return BuildDefaultBootstrapRecentProjects();
+        if (root.empty())
+            return {};
         for (const Json &value : root) {
             if (auto entry = ParseRecentProjectEntry(value); entry && IsDisplayableRecentProject(*entry))
                 results.push_back(std::move(*entry));
@@ -237,6 +239,36 @@ namespace Horo::Editor {
         }
         LOG_INFO("editor.welcome", "Saved %zu recent projects to '%s'", projects.size(), path.string().c_str());
         return true;
+    }
+
+    /** @copydoc DeleteRecentProjectFiles */
+    bool DeleteRecentProjectFiles(const std::filesystem::path &root) {
+        std::error_code error;
+        if (!root.is_absolute() || root == root.root_path() || std::filesystem::is_symlink(root, error) || error ||
+            !std::filesystem::is_directory(root, error) || error || !std::filesystem::is_regular_file(root / ".horo/project.json", error) ||
+            error)
+            return false;
+
+        const std::filesystem::path resolved = std::filesystem::canonical(root, error);
+        if (error)
+            return false;
+        const std::filesystem::path current = std::filesystem::current_path(error);
+        if (error)
+            return false;
+        const std::filesystem::path temporary = std::filesystem::canonical(std::filesystem::temp_directory_path(error), error);
+        if (error)
+            return false;
+        const std::filesystem::path home = std::filesystem::canonical(ResolveEditorSettingsPath().parent_path().parent_path(), error);
+        if (error)
+            return false;
+        // A malformed recent-project entry must never target a shared directory.
+        for (const std::filesystem::path &protectedPath : {current, temporary, home}) {
+            if (std::mismatch(resolved.begin(), resolved.end(), protectedPath.begin(), protectedPath.end()).first == resolved.end())
+                return false;
+        }
+
+        std::filesystem::remove_all(root, error);
+        return !error;
     }
 
     /** @copydoc WelcomeScreenController::WelcomeScreenController */

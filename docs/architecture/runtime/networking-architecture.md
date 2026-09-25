@@ -729,5 +729,5 @@ The networking subsystem requires targeted automated verification:
 - [Multiplayer Replication Architecture](./multiplayer-replication-architecture.md)
 - [Runtime Lifecycle](./runtime-lifecycle.md)
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md)
-- [Network Debugger UI Reference](./network-debugger.html)
+- [Network Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-network-debugger)
 - [Application Security Architecture](../security/application-security.md)

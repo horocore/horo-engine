@@ -99,10 +99,11 @@ TEST_CASE("Welcome presentation renders recent-project compatibility states and 
                                                                                      : RecentProjectInspectionState::Fresh));
     }
     model.recentProjects.push_back(RecentProjectEntry{"Legacy Project", "/projects/legacy", "Last week", "legacy", std::nullopt});
+    WelcomeViewState state;
 
     fixture.imgui.BeginFrame();
     const WelcomeViewResult result =
-        DrawWelcomeView(model, fixture.context, WelcomeViewAssets{}, GuiContentRegion{0.0F, 0.0F, 1280.0F, 800.0F});
+        DrawWelcomeView(model, state, fixture.context, WelcomeViewAssets{}, GuiContentRegion{0.0F, 0.0F, 1280.0F, 800.0F});
     fixture.imgui.EndFrame();
 
     REQUIRE(result.command == WelcomeViewCommand::None);

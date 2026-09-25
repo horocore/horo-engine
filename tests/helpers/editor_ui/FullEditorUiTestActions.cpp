@@ -95,26 +95,6 @@ namespace Horo::Tests::FullEditorActions {
     }
 
     namespace {
-        void AddInputMappingStep(UiScenarioPipe &pipeline) {
-            pipeline.Step("Exercise input mapping pages and profile actions", [](ImGuiTestContext &ui) {
-                ui.ItemClick("//**/horo.input_mapping/##ActivityItem");
-                ui.Yield();
-                IM_CHECK(ui.ItemExists("//**/Action Maps"));
-                IM_CHECK(ui.ItemExists("//**/Rebind"));
-                ui.ItemClick("//**/Rebind");
-                ui.Yield();
-                ui.KeyPress(ImGuiKey_K);
-                ui.Yield();
-                ui.ItemClick("//**/Devices");
-                ui.Yield();
-                ui.ItemClick("//**/Profiles");
-                ui.Yield();
-                IM_CHECK(ui.ItemExists("//**/Save Profile"));
-                ui.ItemClick("//**/Save Profile");
-                ui.ItemClick("//**/Save Project Override");
-            });
-        }
-
         void AddGlobalDockSteps(UiScenarioPipe &pipeline) {
             pipeline.Step("Exercise every global dock pane", [](ImGuiTestContext &ui) {
                 if (!ui.ItemExists("//**/Assets")) {
@@ -260,7 +240,6 @@ namespace Horo::Tests::FullEditorActions {
     }  // namespace
 
     void ExerciseWorkspacePanels(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
-        AddInputMappingStep(pipeline);
         AddGlobalDockSteps(pipeline);
         AddContentBrowserStep(pipeline);
         AddMenuRoutingStep(pipeline, editor);

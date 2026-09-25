@@ -1037,6 +1037,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphLifetimeErrors.cpp
         runtime/renderer/api/RenderGraphValidation.cpp
         runtime/renderer/api/RenderResourceDescriptorErrors.cpp
+        runtime/renderer/api/RenderResourceAdmission.cpp
         runtime/renderer/api/RenderResourceDescriptors.cpp
         runtime/renderer/api/ShaderCompilerPipeline.cpp
         runtime/renderer/api/ShaderCompilerPipelineErrors.cpp
@@ -1095,6 +1096,8 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/BoundedRenderQueueCore.h
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
         runtime/renderer/frontend/RenderFrontend.cpp
+        runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
+        runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
         runtime/renderer/frontend/RenderFrontendErrors.cpp
         runtime/renderer/frontend/RenderMemoryBudget.cpp
@@ -1498,7 +1501,14 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalState.cpp
             editor/modals/asset_import/AssetImportModal.cpp
             editor/modals/asset_import/AssetImportModalLifecycle.cpp
+            editor/modals/asset_import/AssetImportModalActions.cpp
+            editor/modals/asset_import/AssetImportSourcePreview.cpp
             editor/modals/asset_import/AssetImportModalPresentation.cpp
+            editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
+            editor/ui_preview/AssetImportPreviewModal.cpp
+            editor/ui_preview/EditorUiPreviewGallery.cpp
+            editor/ui_preview/GuiScreenHostUiPreview.cpp
+            editor/ui_preview/ViewportPreview.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/screens/welcome/WelcomeView.cpp
@@ -1515,6 +1525,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
+            editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp

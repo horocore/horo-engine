@@ -506,9 +506,9 @@ Cook-time diagnostics:
 
 ## Related Documents
 
-- [Shader Graph UI Reference](./shader-graph-editor.html)
+- [Shader Graph UI Reference](../../../mock-studio/designs.md#architecture-runtime-shader-graph-editor)
 
-- [Material Editor UI Reference](./material-editor.html): preview, shader domain, texture slots, parameters, and tier compatibility panel.
+- [Material Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-material-editor): preview, shader domain, texture slots, parameters, and tier compatibility panel.
 
 - [Rendering Architecture](./rendering-architecture.md): render graph, backend
   abstraction, pass extraction.
