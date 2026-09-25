@@ -665,7 +665,7 @@ namespace Horo::PlatformServices {
         }
 
         [[nodiscard]] PlatformProviderFailureCategory ProviderCategory(const std::uint32_t code) noexcept {
-            switch (code) {
+            switch (code) {  // NOSONAR(cpp:S6177) C11 ABI enumerators are unscoped; using enum adds no scope here.
                 case HORO_PLATFORM_PROVIDER_OFFLINE:
                     return PlatformProviderFailureCategory::Offline;
                 case HORO_PLATFORM_PROVIDER_NOT_SIGNED_IN:
@@ -865,11 +865,10 @@ namespace Horo::PlatformServices {
             });
             if (found != state.inFlight.end()) {
                 RequestHandle handle{found->id, found->generation};
-                std::uint64_t currentSessionRevision{};
-                {
+                const auto currentSessionRevision = [&state] {
                     std::scoped_lock lock{state.mutex};
-                    currentSessionRevision = state.session.revision;
-                }
+                    return state.session.revision;
+                }();
                 if (completion.sessionRevision != found->sessionRevision || currentSessionRevision != found->sessionRevision)
                     static_cast<void>(state.requests.CompleteFailure(handle, MakeError(PlatformSessionErrors::StaleSession)));
                 else if (completion.resultCode == HORO_PLATFORM_PROVIDER_SUCCESS)

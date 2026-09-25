@@ -255,7 +255,7 @@ typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate);
 typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);
 
 /** @brief Provider-neutral completion status; adapters translate native results before crossing the ABI. */
-enum HoroPlatformProviderResultCode {
+enum HoroPlatformProviderResultCode {  // NOSONAR(cpp:S3642) Shared C11 ABI requires unscoped provider status constants.
     HORO_PLATFORM_PROVIDER_SUCCESS = 0,
     HORO_PLATFORM_PROVIDER_OFFLINE = 1,
     HORO_PLATFORM_PROVIDER_NOT_SIGNED_IN = 2,

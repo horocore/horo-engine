@@ -6,7 +6,7 @@
 #include "Horo/PlatformServices/PlatformUserSession.h"
 
 #include <array>
-#include <string>
+#include <format>
 
 namespace Horo::PlatformServices {
     namespace PlatformServiceErrors {
@@ -128,7 +128,7 @@ namespace Horo::PlatformServices {
         Error cause = MakeError(*Descriptors[index]);
         cause.diagnostics.push_back({.code = DiagnosticCode{"platform.provider.correlation"},
                                      .severity = DiagnosticSeverity::Note,
-                                     .message = "request=" + std::to_string(requestId) + "; generation=" + std::to_string(generation)});
+                                     .message = std::format("request={}; generation={}", requestId, generation)});
         return WithCause(MakeError(PlatformServiceErrors::ProviderFailed), std::move(cause));
     }
 
