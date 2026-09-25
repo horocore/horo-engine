@@ -54,6 +54,36 @@ namespace Horo::Physics {
                     PhysicsDebugQuery{hit},
                     PhysicsDebugPipeline{1, 2, 3}};
         }
+
+#if HORO_TEST_PHYSICS_NATIVE
+        /** @brief Checks the native projection's supported categories and copied identities. */
+        void RequireProjectedEvidence(const PhysicsDebugSnapshot &snapshot, const BodyHandle body, const ShapeHandle shape,
+                                      const ConstraintHandle constraint, const PhysicsPublishedTick &published) {
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Body).captured == 1);
+            REQUIRE(std::get<PhysicsDebugBody>(snapshot.Records(PhysicsDebugCategory::Body)[0]).body == body);
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Shape).captured == 1);
+            REQUIRE(std::get<PhysicsDebugShape>(snapshot.Records(PhysicsDebugCategory::Shape)[0]).shape == shape);
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Constraint).captured == 1);
+            REQUIRE(std::get<PhysicsDebugConstraint>(snapshot.Records(PhysicsDebugCategory::Constraint)[0]).constraint == constraint);
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Contact).availability == PhysicsDebugAvailability::Available);
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Broadphase).availability == PhysicsDebugAvailability::Unavailable);
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Query).availability == PhysicsDebugAvailability::Unavailable);
+            REQUIRE(snapshot.Evidence(PhysicsDebugCategory::Pipeline).captured == 1);
+            REQUIRE(std::get<PhysicsDebugPipeline>(snapshot.Records(PhysicsDebugCategory::Pipeline)[0]).eventCount == published.eventCount);
+        }
+
+        /** @brief Confirms that per-category zero limits filter native records without losing evidence. */
+        void RequireBoundedProjection(const PhysicsWorld &world) {
+            auto limited = Budget();
+            limited.categories[static_cast<std::size_t>(PhysicsDebugCategory::Body)] = {};
+            limited.categories[static_cast<std::size_t>(PhysicsDebugCategory::Constraint)] = {};
+            const auto bounded = world.CaptureDebugSnapshot(limited);
+            REQUIRE(bounded.HasValue());
+            REQUIRE(bounded.Value()->Evidence(PhysicsDebugCategory::Body).captured == 0);
+            REQUIRE(bounded.Value()->Evidence(PhysicsDebugCategory::Body).truncated == 1);
+            REQUIRE(bounded.Value()->Evidence(PhysicsDebugCategory::Constraint).truncated == 1);
+        }
+#endif
     }  // namespace
 
     TEST_CASE("Physics debug snapshot copies every category and survives source destruction", "[physics][debug]") {
@@ -195,25 +225,8 @@ namespace Horo::Physics {
         REQUIRE(offThreadRejected);
         auto retained = world->CaptureDebugSnapshot(Budget()).Value();
         REQUIRE(retained->Matches(World(), published));
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Body).captured == 1);
-        REQUIRE(std::get<PhysicsDebugBody>(retained->Records(PhysicsDebugCategory::Body)[0]).body == body.Value());
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Shape).captured == 1);
-        REQUIRE(std::get<PhysicsDebugShape>(retained->Records(PhysicsDebugCategory::Shape)[0]).shape == shape.Value());
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Constraint).captured == 1);
-        REQUIRE(std::get<PhysicsDebugConstraint>(retained->Records(PhysicsDebugCategory::Constraint)[0]).constraint == constraint.Value());
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Contact).availability == PhysicsDebugAvailability::Available);
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Broadphase).availability == PhysicsDebugAvailability::Unavailable);
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Query).availability == PhysicsDebugAvailability::Unavailable);
-        REQUIRE(retained->Evidence(PhysicsDebugCategory::Pipeline).captured == 1);
-        REQUIRE(std::get<PhysicsDebugPipeline>(retained->Records(PhysicsDebugCategory::Pipeline)[0]).eventCount == published.eventCount);
-        auto limited = Budget();
-        limited.categories[static_cast<std::size_t>(PhysicsDebugCategory::Body)] = {};
-        limited.categories[static_cast<std::size_t>(PhysicsDebugCategory::Constraint)] = {};
-        const auto bounded = world->CaptureDebugSnapshot(limited);
-        REQUIRE(bounded.HasValue());
-        REQUIRE(bounded.Value()->Evidence(PhysicsDebugCategory::Body).captured == 0);
-        REQUIRE(bounded.Value()->Evidence(PhysicsDebugCategory::Body).truncated == 1);
-        REQUIRE(bounded.Value()->Evidence(PhysicsDebugCategory::Constraint).truncated == 1);
+        RequireProjectedEvidence(*retained, body.Value(), shape.Value(), constraint.Value(), published);
+        RequireBoundedProjection(*world);
         REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = delta}).HasValue());
         REQUIRE_FALSE(retained->Matches(World(), world->PublishedTick()));
         REQUIRE(world->UnloadScene().HasValue());

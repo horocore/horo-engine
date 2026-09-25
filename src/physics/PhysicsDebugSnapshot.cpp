@@ -41,10 +41,47 @@ namespace Horo::Physics {
         [[nodiscard]] bool ValidBudget(const PhysicsDebugBudget &budget) noexcept {
             if (budget.maximumPayloadBytes == 0 || budget.maximumPayloadBytes > MaximumPhysicsDebugPayloadBytes)
                 return false;
-            for (const auto &category : budget.categories)
-                if (category.maximumRecords > MaximumPhysicsDebugRecords || category.maximumPayloadBytes > MaximumPhysicsDebugPayloadBytes)
-                    return false;
-            return true;
+            return std::ranges::all_of(budget.categories, [](const PhysicsDebugCategoryBudget &category) {
+                return category.maximumRecords <= MaximumPhysicsDebugRecords &&
+                       category.maximumPayloadBytes <= MaximumPhysicsDebugPayloadBytes;
+            });
+        }
+
+        /** @brief Copies one category while charging its record and byte limits to the aggregate budget. */
+        [[nodiscard]] Result<void> CopyCategory(const PhysicsDebugSourceCategory &input, const PhysicsDebugCategoryBudget &limit,
+                                                const PhysicsDebugSource &source, const PhysicsDebugBudget &budget, const std::size_t index,
+                                                PhysicsDebugCategoryEvidence &evidence, std::vector<PhysicsDebugRecord> &output,
+                                                std::uint32_t &payloadBytes, std::uint32_t &totalRecords) {
+            if (input.availability > PhysicsDebugAvailability::Available ||
+                (input.availability == PhysicsDebugAvailability::Unavailable &&
+                 (!input.records.empty() || input.truncatedBeforeCapture != 0 || input.droppedBeforeCapture != 0)))
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Malformed Physics debug source category."));
+            evidence.availability = input.availability;
+            evidence.dropped = input.droppedBeforeCapture;
+            if (input.availability == PhysicsDebugAvailability::Unavailable)
+                return Result<void>::Success();
+            if (input.records.size() > std::numeric_limits<std::uint32_t>::max())
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded, "Physics debug source count is unrepresentable."));
+            const std::size_t permitted = std::min({input.records.size(), static_cast<std::size_t>(limit.maximumRecords),
+                                                    static_cast<std::size_t>(MaximumPhysicsDebugRecords - totalRecords),
+                                                    static_cast<std::size_t>(limit.maximumPayloadBytes) / RecordBytes,
+                                                    static_cast<std::size_t>(budget.maximumPayloadBytes - payloadBytes) / RecordBytes});
+            output.reserve(permitted);
+            for (std::size_t recordIndex = 0; recordIndex < permitted; ++recordIndex) {
+                const PhysicsDebugRecord &record = input.records[recordIndex];
+                if (record.index() != index || !ValidRecord(record, source.world, source.simulationTick))
+                    return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Malformed Physics debug record."));
+                output.push_back(record);
+            }
+            evidence.captured = static_cast<std::uint32_t>(output.size());
+            const std::uint64_t additionallyTruncated = input.records.size() - output.size();
+            if (input.truncatedBeforeCapture > std::numeric_limits<std::uint64_t>::max() - additionallyTruncated)
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Physics debug truncation count overflow."));
+            evidence.truncated = input.truncatedBeforeCapture + additionallyTruncated;
+            evidence.payloadBytes = static_cast<std::uint32_t>(output.size() * RecordBytes);
+            payloadBytes += evidence.payloadBytes;
+            totalRecords += evidence.captured;
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -80,48 +117,17 @@ namespace Horo::Physics {
                 MakeError(PhysicsErrors::CapacityExceeded, "Physics debug budget is outside the bounded profile."));
 
         try {
-            std::shared_ptr<PhysicsDebugSnapshot> snapshot{new PhysicsDebugSnapshot};
+            auto snapshot = std::make_shared<PhysicsDebugSnapshot>();
             snapshot->world_ = source.world;
             snapshot->simulationTick_ = source.simulationTick;
             snapshot->publicationRevision_ = source.publicationRevision;
             std::uint32_t totalRecords{};
             for (std::size_t index = 0; index < PhysicsDebugCategoryCount; ++index) {
-                const auto &input = source.categories[index];
-                const auto &limit = budget.categories[index];
-                auto &evidence = snapshot->evidence_[index];
-                if (input.availability > PhysicsDebugAvailability::Available ||
-                    (input.availability == PhysicsDebugAvailability::Unavailable &&
-                     (!input.records.empty() || input.truncatedBeforeCapture != 0 || input.droppedBeforeCapture != 0)))
-                    return SnapshotResult::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Malformed Physics debug source category."));
-                evidence.availability = input.availability;
-                evidence.dropped = input.droppedBeforeCapture;
-                if (input.availability == PhysicsDebugAvailability::Unavailable)
-                    continue;
-                if (input.records.size() > std::numeric_limits<std::uint32_t>::max())
-                    return SnapshotResult::Failure(
-                        MakeError(PhysicsErrors::CapacityExceeded, "Physics debug source count is unrepresentable."));
-                auto &output = snapshot->records_[index];
-                const std::size_t perRecordBytes = RecordBytes;
-                const std::size_t permitted =
-                    std::min({input.records.size(), static_cast<std::size_t>(limit.maximumRecords),
-                              static_cast<std::size_t>(MaximumPhysicsDebugRecords - totalRecords),
-                              static_cast<std::size_t>(limit.maximumPayloadBytes) / perRecordBytes,
-                              static_cast<std::size_t>(budget.maximumPayloadBytes - snapshot->payloadBytes_) / perRecordBytes});
-                output.reserve(permitted);
-                for (std::size_t recordIndex = 0; recordIndex < permitted; ++recordIndex) {
-                    const PhysicsDebugRecord &record = input.records[recordIndex];
-                    if (record.index() != index || !ValidRecord(record, source.world, source.simulationTick))
-                        return SnapshotResult::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Malformed Physics debug record."));
-                    output.push_back(record);
-                }
-                evidence.captured = static_cast<std::uint32_t>(output.size());
-                const std::uint64_t additionallyTruncated = input.records.size() - output.size();
-                if (input.truncatedBeforeCapture > std::numeric_limits<std::uint64_t>::max() - additionallyTruncated)
-                    return SnapshotResult::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Physics debug truncation count overflow."));
-                evidence.truncated = input.truncatedBeforeCapture + additionallyTruncated;
-                evidence.payloadBytes = static_cast<std::uint32_t>(output.size() * perRecordBytes);
-                snapshot->payloadBytes_ += evidence.payloadBytes;
-                totalRecords += evidence.captured;
+                const auto copied =
+                    CopyCategory(source.categories[index], budget.categories[index], source, budget, index, snapshot->evidence_[index],
+                                 snapshot->records_[index], snapshot->payloadBytes_, totalRecords);
+                if (copied.HasError())
+                    return SnapshotResult::Failure(copied.ErrorValue());
             }
             return SnapshotResult::Success(std::move(snapshot));
         } catch (const std::bad_alloc &) {
