@@ -171,9 +171,9 @@ namespace Horo::PlatformServices {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
         if (valid.HasError())
             return Result<PlatformRequestHandle<CloudObjectPage>>::Failure(valid.ErrorValue());
-        const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
-                                               .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
-        if (ValidateCloudListRequest(request, limits).HasError())
+        if (const CloudObjectContractLimits limits{.maxPageEntries = valid.Value()->limits.maxPageEntries,
+                                                   .maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
+            ValidateCloudListRequest(request, limits).HasError())
             return Failure<PlatformRequestHandle<CloudObjectPage>>(FrontendErrors::InvalidRequest);
         return ValidatedDispatch(backend_->ListCloudObjects(std::move(request)));
     }
@@ -183,8 +183,8 @@ namespace Horo::PlatformServices {
         const auto valid = ValidateSubjectService(PlatformServiceKind::Cloud, request.subject);
         if (valid.HasError())
             return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(valid.ErrorValue());
-        const CloudObjectContractLimits limits{.maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
-        if (ValidateCloudBlobReadRequest(request, limits).HasError())
+        if (const CloudObjectContractLimits limits{.maxObjectBytes = valid.Value()->limits.maxPayloadBytes};
+            ValidateCloudBlobReadRequest(request, limits).HasError())
             return Failure<PlatformRequestHandle<CloudBlobReadResult>>(FrontendErrors::InvalidRequest);
         return ValidatedDispatch(backend_->ReadCloudObject(std::move(request)));
     }

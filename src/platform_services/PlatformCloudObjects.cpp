@@ -136,8 +136,7 @@ namespace Horo::PlatformServices {
     /** @copydoc ValidateCloudObjectPage */
     Result<void> ValidateCloudObjectPage(const CloudObjectPage &page, const CloudListRequest &request,
                                          const PlatformSubjectHandle &currentSubject, const CloudObjectContractLimits &limits) {
-        const auto requestValidation = ValidateCloudListRequest(request, limits);
-        if (requestValidation.HasError())
+        if (const auto requestValidation = ValidateCloudListRequest(request, limits); requestValidation.HasError())
             return requestValidation;
         if (!currentSubject.IsValid() || currentSubject != request.subject || !page.subject.IsValid() || page.subject != request.subject ||
             page.sessionGeneration != currentSubject.SessionGeneration())
@@ -165,8 +164,7 @@ namespace Horo::PlatformServices {
     /** @copydoc ValidateCloudBlobReadCompletion */
     Result<void> ValidateCloudBlobReadCompletion(const CloudBlobReadResult &result, const CloudBlobReadRequest &request,
                                                  const PlatformSubjectHandle &currentSubject, const CloudObjectContractLimits &limits) {
-        const auto requestValidation = ValidateCloudBlobReadRequest(request, limits);
-        if (requestValidation.HasError())
+        if (const auto requestValidation = ValidateCloudBlobReadRequest(request, limits); requestValidation.HasError())
             return Result<void>::Failure(requestValidation.ErrorValue());
         if (!currentSubject.IsValid() || currentSubject != request.subject || !result.subject.IsValid() ||
             result.subject != request.subject || result.sessionGeneration != currentSubject.SessionGeneration())
