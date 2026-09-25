@@ -75,7 +75,7 @@ namespace Horo::PlatformOfflineQueue {
         PlatformOfflineIntentState state{PlatformOfflineIntentState::Pending};
         PlatformOfflineOperationKind operation{PlatformOfflineOperationKind::ProgressionMutation};
         std::uint64_t sequence{};       /**< Nonzero partition-local ordering sequence. */
-        std::vector<std::byte> payload; /**< Canonical Horo payload; never provider-native bytes. */
+        std::vector<std::byte> payload; /**< Bounded canonical Horo bytes supplied by the semantic owner. */
 
         /** @brief Checks identity, lifecycle, operation and sequence invariants. @return True when structurally valid. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -106,8 +106,9 @@ namespace Horo::PlatformOfflineQueue {
 
     /**
      * @brief Owns one partition's versioned queue document and publishes it atomically.
-     * @details The adapter stores only opaque Horo identities and bounded canonical payload bytes. It never accepts a provider account
-     * identifier, live subject handle, credential, callback or cloud archive.
+     * @details The adapter stores opaque Horo identities and treats bounded payload bytes as opaque. Callers must provide canonical Horo
+     * intent bytes and must not supply provider-native data or cloud archive bytes. The adapter does not inspect payload contents and
+     * never accepts a provider account identifier, live subject handle, credential or callback.
      */
     class PlatformOfflineQueueStorage final {
     public:
@@ -132,7 +133,7 @@ namespace Horo::PlatformOfflineQueue {
          * @brief Durably replaces one complete partition document.
          * @param partition Pseudonymous same-binding partition.
          * @param records Complete bounded replacement snapshot; every record must use @p partition.
-         * @return Success only after lock, durable preparation, atomic replacement and directory synchronization.
+         * @return Success only after lock, durable preparation and the host atomic replacement's directory synchronization.
          */
         [[nodiscard]] Result<void> Publish(const PlatformOfflineSubjectPartition &partition,
                                            std::span<const PlatformOfflineQueueRecord> records) const;
