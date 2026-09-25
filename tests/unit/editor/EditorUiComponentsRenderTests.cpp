@@ -582,6 +582,37 @@ TEST_CASE("Shared modal shell composes badge split panes and fixed footer", "[un
     REQUIRE(preservedContentSpacing);
 }
 
+TEST_CASE("Shared modal shell close icon requests dismissal", "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{1280.0F, 720.0F}};
+    const auto draw = [&] {
+        ImGui::NewFrame();
+        bool closeRequested = false;
+        {
+            ScopedModalShell modal({.id = "ModalCloseTest",
+                                    .title = "Import Assets",
+                                    .requestedSize = {1000.0F, 690.0F},
+                                    .headerHeight = 38.0F,
+                                    .footerHeight = 68.0F},
+                                   imgui.fonts);
+            closeRequested = modal.CloseRequested();
+        }
+        ImGui::Render();
+        return closeRequested;
+    };
+
+    REQUIRE_FALSE(draw());
+    const ImGuiWindow *window = ImGui::FindWindowByName("ModalCloseTest");
+    REQUIRE(window != nullptr);
+    imgui.io->AddMousePosEvent(window->Pos.x + window->Size.x - 36.0F, window->Pos.y + 19.0F);
+    imgui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    REQUIRE_FALSE(draw());
+    imgui.io->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    REQUIRE(draw());
+}
+
 TEST_CASE("Shared modal shell supports full-header dragging and remains inside the work area", "[unit][editor][gui][design-system]") {
     using namespace Horo::Editor;
     using namespace Horo::Editor::Ui;
