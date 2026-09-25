@@ -11,16 +11,7 @@ namespace Horo::Editor {
         constexpr const char *kUiScaleKey = "editor.appearance.ui_scale_percent";
         constexpr const char *kCodeFontSizeKey = "editor.appearance.code_font_size_px";
 
-        void RegisterAppearanceDescriptor(ConfigurationSchema &schema, const char *key, const SettingValueType type,
-                                          SettingValue defaultValue) {
-            const SettingDescriptor descriptor{
-                .key = SettingKey{key},
-                .type = type,
-                .defaultValue = std::move(defaultValue),
-                .scope = SettingScope::User,
-                .reloadPolicy = ReloadPolicy::NextFrame,
-                .sensitivity = SettingSensitivity::Public,
-            };
+        void RegisterAppearanceDescriptor(ConfigurationSchema &schema, const SettingDescriptor &descriptor) {
             const Result<void> registered = schema.Register(descriptor);
             assert(registered.HasValue());
             if (registered.HasError()) {
@@ -56,13 +47,13 @@ namespace Horo::Editor {
     }
 
     /** @copydoc CreateEditorConfigurationService */
-    ConfigurationService CreateEditorConfigurationService(const EditorSettings &settings, EngineDataBus *events) {
-        using enum SettingValueType;
-        ConfigurationSchema schema;
-        RegisterAppearanceDescriptor(schema, kThemeKey, String, std::string{ToConfigurationThemeValue(settings.themePreset)});
-        RegisterAppearanceDescriptor(schema, kAccentColorKey, String, settings.accentColorHex);
-        RegisterAppearanceDescriptor(schema, kUiScaleKey, Integer, static_cast<std::int64_t>(settings.uiScalePercent));
-        RegisterAppearanceDescriptor(schema, kCodeFontSizeKey, Integer, static_cast<std::int64_t>(settings.codeFontSizePx));
+    ConfigurationService CreateEditorConfigurationService(const EditorSettings &settings, EngineDataBus *events,
+                                                          ConfigurationSchema schema) {
+        const ModuleConfigurationContribution contribution = MakeEditorSettingsContribution(settings);
+        for (const SettingDescriptor &descriptor : contribution.settings) {
+            if (schema.FindDescriptor(descriptor.key) == nullptr)
+                RegisterAppearanceDescriptor(schema, descriptor);
+        }
 
         const Result<void> sealed = schema.Seal();
         assert(sealed.HasValue());
@@ -70,6 +61,28 @@ namespace Horo::Editor {
             std::terminate();
         }
         return ConfigurationService{std::move(schema), events};
+    }
+
+    /** @copydoc MakeEditorSettingsContribution */
+    ModuleConfigurationContribution MakeEditorSettingsContribution(const EditorSettings &settings) {
+        const auto setting = [](const char *key, const SettingValueType type, SettingValue value) {
+            return SettingDescriptor{.key = SettingKey{key},
+                                     .type = type,
+                                     .defaultValue = std::move(value),
+                                     .scope = SettingScope::User,
+                                     .reloadPolicy = ReloadPolicy::NextFrame,
+                                     .sensitivity = SettingSensitivity::Public,
+                                     .sourcePolicy = ConfigurationSourcePolicy{
+                                         .allowedSources = ConfigurationSourceMask::Invocation | ConfigurationSourceMask::Environment |
+                                                           ConfigurationSourceMask::Session | ConfigurationSourceMask::User |
+                                                           ConfigurationSourceMask::PackagedProfile}};
+        };
+        return {.module = ModuleId{"horo.editor.services"},
+                .ownerPrefix = "editor",
+                .settings = {setting(kThemeKey, SettingValueType::String, std::string{ToConfigurationThemeValue(settings.themePreset)}),
+                             setting(kAccentColorKey, SettingValueType::String, settings.accentColorHex),
+                             setting(kUiScaleKey, SettingValueType::Integer, static_cast<std::int64_t>(settings.uiScalePercent)),
+                             setting(kCodeFontSizeKey, SettingValueType::Integer, static_cast<std::int64_t>(settings.codeFontSizePx))}};
     }
 
     /** @copydoc MakeEditorAppearanceConfigurationDraft */

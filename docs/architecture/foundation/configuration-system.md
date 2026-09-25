@@ -201,8 +201,9 @@ ad hoc JSON parsing:
 ```cpp
 struct ModuleConfigurationContribution {
     ModuleId module;
-    std::span<const SettingDescriptor> settings;
-    std::span<const EnvironmentVariableBinding> environmentBindings;
+    std::string ownerPrefix;
+    std::vector<SettingDescriptor> settings;
+    std::vector<EnvironmentVariableBinding> environmentBindings;
 };
 ```
 
@@ -220,6 +221,24 @@ The host validates contributions before snapshot resolution:
 
 This keeps the editor modular without creating separate configuration systems
 for GUI, CLI, MCP, game projects, and extensions.
+
+The composition root explicitly passes a contribution to `ModuleHost::Register`
+with its module descriptor. Registration copies the metadata and rejects malformed
+settings, duplicate keys, overlapping dotted owner prefixes, and repeated
+environment names with typed errors before activation. It never invokes module
+callbacks. The host exposes a schema containing active modules' contributions in
+stable module-ID and setting-key order, plus stable environment bindings. The
+editor supplies its persisted appearance defaults through the
+`horo.editor.services` contribution and consumes the host's schema when
+constructing its `ConfigurationService`. The same Foundation resolver supplies
+values and provenance for every key. Contributions for unselected modules are
+rejected by the common application composition root.
+
+`DeactivateAll` excludes stopped modules from newly built schemas and binding
+lists. A `ConfigurationService` constructed earlier owns its sealed schema, and
+snapshots already issued by it retain their captured values through shutdown.
+Host owners must stop publishing the service when its module closure shuts down;
+there is no independent live single-module unload operation in `ModuleHost`.
 
 ## Immutable Snapshots
 
