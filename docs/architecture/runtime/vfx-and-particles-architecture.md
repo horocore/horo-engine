@@ -50,6 +50,10 @@ makes each effect asset a persistent document tab, keeps stack and graph as inde
 frontends, runs live preview through the ordinary cooked runtime pipeline and routes
 decal manipulation through the owning document command model.
 
+The [VFX Foundation Contract Qualification](./vfx-foundation-contract-qualification.md)
+records the implemented identity, parser, buffer, tier, determinism and allocation
+checks, along with the platform evidence boundary for those contracts.
+
 DCC workflows, full fluid solvers, atmospheric scattering and screen-space
 post-processing remain outside this subsystem; see
 [Advanced Rendering Architecture](./advanced-rendering-architecture.md).

@@ -30,6 +30,16 @@ namespace Horo::Extensions {
         std::atomic_bool registered{true};
     };
 
+    class EditorSurfaceRegistryMutex final {
+    public:
+        [[nodiscard]] std::unique_lock<std::mutex> Lock() const {
+            return std::unique_lock{mutex};
+        }
+
+    private:
+        mutable std::mutex mutex;
+    };
+
     struct EditorSurfaceRegistryState final {
         explicit EditorSurfaceRegistryState(const EditorSurfaceRegistryLimits &registryLimits);
 
@@ -39,13 +49,11 @@ namespace Horo::Extensions {
         std::vector<PendingSurfaceState> pending;
         std::vector<ProviderStatusEntry> providers;
         bool shutdown{};
+        EditorSurfaceRegistryMutex mutex;
 
         [[nodiscard]] std::unique_lock<std::mutex> Lock() const {
-            return std::unique_lock{mutex};
+            return mutex.Lock();
         }
-
-    private:
-        mutable std::mutex mutex;
     };
 
     namespace EditorSurfaceRegistryInternal {

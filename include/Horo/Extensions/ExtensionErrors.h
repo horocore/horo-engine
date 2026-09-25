@@ -37,6 +37,22 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor EditorSurfaceRegistrySurfaceClosed;
     /** @brief Persisted external panel/tab state is malformed or exceeds host bounds. */
     extern const ErrorCodeDescriptor EditorSurfaceRegistryStateInvalid;
+    /** @brief A command contribution is malformed or violates its surface contract. */
+    extern const ErrorCodeDescriptor EditorCommandInvalid;
+    /** @brief A command identity is already published by another contribution. */
+    extern const ErrorCodeDescriptor EditorCommandDuplicate;
+    /** @brief A shortcut is already claimed by another command contribution. */
+    extern const ErrorCodeDescriptor EditorCommandShortcutConflict;
+    /** @brief The bounded editor-command registry capacity was exhausted. */
+    extern const ErrorCodeDescriptor EditorCommandCapacityExceeded;
+    /** @brief The requested editor command is not published. */
+    extern const ErrorCodeDescriptor EditorCommandUnknown;
+    /** @brief The requested editor command is currently disabled by its predicates. */
+    extern const ErrorCodeDescriptor EditorCommandNotEnabled;
+    /** @brief The command's activation-scoped provider context is no longer usable. */
+    extern const ErrorCodeDescriptor EditorCommandProviderRevoked;
+    /** @brief Editor-command publication and invocation are closed. */
+    extern const ErrorCodeDescriptor EditorCommandShutdown;
     /** @brief A declarative editor form or standard-component node is malformed. */
     extern const ErrorCodeDescriptor EditorUiFormInvalid;
     /** @brief A declarative editor form exceeded one of its explicit finite bounds. */

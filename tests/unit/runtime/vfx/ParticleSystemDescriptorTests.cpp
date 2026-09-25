@@ -102,6 +102,34 @@ namespace Horo::Vfx {
         RequireError(tooDeep.ErrorValue(), VfxErrors::ParticleDescriptorLimitExceeded);
     }
 
+    TEST_CASE("Particle descriptor schema rejects unknown fields and unsupported minor revisions",
+              "[unit][vfx][particle-descriptor][qualification]") {
+        std::string unknownRootField = ValidJson();
+        const auto rootEnd = unknownRootField.rfind('}');
+        REQUIRE(rootEnd != std::string::npos);
+        unknownRootField.insert(rootEnd, ",\"unknownField\":true");
+        const auto unknownRoot = ParseParticleSystemDescriptor(unknownRootField);
+        REQUIRE(unknownRoot.HasError());
+        RequireError(unknownRoot.ErrorValue(), VfxErrors::ParticleDescriptorMalformed);
+
+        std::string unknownVersionField = ValidJson();
+        const std::string version = "\"schemaVersion\":{\"major\":1,\"minor\":0}";
+        const auto versionStart = unknownVersionField.find(version);
+        REQUIRE(versionStart != std::string::npos);
+        unknownVersionField.replace(versionStart, version.size(), "\"schemaVersion\":{\"major\":1,\"minor\":0,\"patch\":0}");
+        const auto unknownVersion = ParseParticleSystemDescriptor(unknownVersionField);
+        REQUIRE(unknownVersion.HasError());
+        RequireError(unknownVersion.ErrorValue(), VfxErrors::ParticleDescriptorMalformed);
+
+        std::string newerMinor = ValidJson();
+        const auto minorStart = newerMinor.find("\"minor\":0");
+        REQUIRE(minorStart != std::string::npos);
+        newerMinor.replace(minorStart, std::string{"\"minor\":0"}.size(), "\"minor\":1");
+        const auto unsupportedMinor = ParseParticleSystemDescriptor(newerMinor);
+        REQUIRE(unsupportedMinor.HasError());
+        RequireError(unsupportedMinor.ErrorValue(), VfxErrors::ParticleDescriptorVersionUnsupported);
+    }
+
     TEST_CASE("Particle descriptor reports every independent semantic finding deterministically", "[unit][vfx][particle-descriptor]") {
         auto candidate = ValidData();
         candidate.maximumParticles = 0;

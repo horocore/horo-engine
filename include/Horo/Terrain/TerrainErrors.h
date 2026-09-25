@@ -54,6 +54,20 @@ namespace Horo::Terrain::TerrainErrors {
     extern const ErrorCodeDescriptor FoliageWindInvalid;
     /** @brief Optional foliage collision dimensions or flags are inconsistent. */
     extern const ErrorCodeDescriptor FoliageCollisionInvalid;
+    /** @brief A Terrain/Foliage registry identity, capability set, or limit profile is malformed. */
+    extern const ErrorCodeDescriptor RegistryDescriptorInvalid;
+    /** @brief A registry publication already contains the requested typed identity. */
+    extern const ErrorCodeDescriptor RegistryDuplicate;
+    /** @brief A registry publication is closed to new mutation or snapshot capture. */
+    extern const ErrorCodeDescriptor RegistryClosed;
+    /** @brief A registry publication generation cannot advance without wrapping. */
+    extern const ErrorCodeDescriptor RegistryGenerationExhausted;
+    /** @brief A registry handle does not represent a usable typed publication identity. */
+    extern const ErrorCodeDescriptor RegistryHandleInvalid;
+    /** @brief A registry handle belongs to another or older immutable publication. */
+    extern const ErrorCodeDescriptor RegistryHandleStale;
+    /** @brief A requested Terrain/Foliage capability is not explicitly installed. */
+    extern const ErrorCodeDescriptor CapabilityUnsupported;
 
     /**
      * @brief Returns every stable TerrainApi descriptor for module-registry contribution.
