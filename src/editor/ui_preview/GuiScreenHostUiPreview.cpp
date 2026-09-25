@@ -12,6 +12,8 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "ViewportPreview.h"
+#include "editor/modals/build/BuildWorkflowPreviewModal.h"
+#include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/screens/NavigationErrors.h"
 
 #include <algorithm>
@@ -49,6 +51,32 @@ namespace Horo::Editor {
         if (scenarioId == "viewport") {
             uiPreviewScenario_ = scenarioId;
             LOG_INFO("editor.ui_preview", "Opened UI preview scenario 'viewport'.");
+            return true;
+        }
+
+        if (scenarioId == "build" || scenarioId == "run-tests" || scenarioId == "prepare-release" || scenarioId == "publish-candidate") {
+            BuildPreviewKind kind = BuildPreviewKind::Build;
+            if (scenarioId == "run-tests")
+                kind = BuildPreviewKind::Tests;
+            else if (scenarioId == "prepare-release")
+                kind = BuildPreviewKind::Release;
+            else if (scenarioId == "publish-candidate")
+                kind = BuildPreviewKind::Publish;
+
+            if (kind == BuildPreviewKind::Publish && !buildPreviewState_->HasVerifiedCandidate()) {
+                if (buildPreviewState_->Start(BuildPreviewRequest{.kind = BuildPreviewKind::Release,
+                                                                  .name = "DesertRun",
+                                                                  .version = "0.4.2",
+                                                                  .target = "Windows · x86_64 · Shipping",
+                                                                  .output = "releases/0.4.2_windows_x86_64_shipping/"})) {
+                    for (int stage = 0; stage < 7; ++stage)
+                        buildPreviewState_->Update(1.8F);
+                }
+            }
+            if (!modalHost_->OpenRoot(std::make_unique<BuildWorkflowPreviewModal>(*context_, *buildPreviewState_, kind)).HasValue())
+                return false;
+            uiPreviewScenario_ = scenarioId;
+            LOG_INFO("editor.ui_preview", "Opened UI preview scenario '%.*s'.", static_cast<int>(scenarioId.size()), scenarioId.data());
             return true;
         }
 

@@ -25,6 +25,10 @@ namespace Horo::Editor {
         Redo,
         OpenEditorSettings,
         ImportAssets,
+        OpenBuildPreview,
+        OpenTestPreview,
+        OpenReleasePreview,
+        OpenPublishPreview,
         ExitApplication,
         CreatePrimitive,
     };

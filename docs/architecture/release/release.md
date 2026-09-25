@@ -259,7 +259,7 @@ Observers query immutable service snapshots for authoritative state. Closing a
 modal, terminal view, MCP connection or CI log subscriber releases only that
 observer and never changes job lifetime.
 
-## Build & Release Modal Design
+## Prepare Release Modal Design
 
 `BuildReleaseModal` is hosted by `EditorModalHost`. The developer first selects
 one product profile and one platform/architecture/configuration target, then
@@ -281,7 +281,7 @@ The footer stays visible while only form or activity content scrolls. The modal
 owns exclusive editor focus while open. Closing an active job offers an explicit
 keep-running or cancellation path; closing never silently cancels the job.
 
-[Build & Release Modal reference design](../../../mock-studio/designs.md#architecture-release-release-modal-design)
+[Prepare Release reference design](../../../mock-studio/designs.md#architecture-release-release-modal-design)
 
 ## Target Model
 

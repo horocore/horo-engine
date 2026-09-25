@@ -17,11 +17,15 @@ namespace Horo::Editor {
         std::string_view description;
     };
 
-    inline constexpr std::array<EditorUiPreviewScenario, 5> EditorUiPreviewScenarios{{
+    inline constexpr std::array<EditorUiPreviewScenario, 9> EditorUiPreviewScenarios{{
         {"viewport", "ui_preview.viewport", "Viewport controls with a representative scene"},
         {"asset-import", "ui_preview.asset_import", "Asset Import modal with representative files and importer settings"},
         {"asset-import-advanced", "ui_preview.asset_import_advanced", "Asset Import modal with advanced settings expanded"},
         {"asset-import-unsupported", "ui_preview.asset_import_unsupported", "Asset Import modal with an unsupported source file"},
         {"asset-import-empty", "ui_preview.asset_import_empty", "Asset Import modal before files are selected"},
+        {"build", "ui_preview.build", "Build modal with editable local preview settings"},
+        {"run-tests", "ui_preview.run_tests", "Test modal for project or existing package"},
+        {"prepare-release", "ui_preview.prepare_release", "Local candidate preparation and review"},
+        {"publish-candidate", "ui_preview.publish_candidate", "Explicit publication of a verified sample candidate"},
     }};
 }  // namespace Horo::Editor

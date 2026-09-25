@@ -519,6 +519,32 @@ TEST_CASE("Small toolbar primitives share height and fixed action width", "[unit
     REQUIRE(multiSelectSize.y == Catch::Approx(buttonSize.y).margin(0.1F));
 }
 
+TEST_CASE("Modal text input matches the requested combo height", "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    Theme::SetUiScalePercent(100);
+    ImGuiTestContext imgui{{800.0F, 240.0F}};
+    std::array<char, 32> filter{};
+    const std::array<const char *, 1> choices{"Project"};
+    int selection = 0;
+    ImVec2 inputSize{};
+    ImVec2 comboSize{};
+
+    ImGui::NewFrame();
+    ImGui::Begin("ModalFieldGeometry");
+    static_cast<void>(InputTextControl("##Filter", filter.data(), filter.size(), imgui.fonts,
+                                       {.width = 250.0F, .height = 36.0F, .componentSize = ComponentSize::Medium}));
+    inputSize = ImGui::GetItemRectSize();
+    static_cast<void>(ComboControl("##Source", &selection, choices.data(), static_cast<int>(choices.size()), imgui.fonts,
+                                   {.height = 36.0F, .componentSize = ComponentSize::Medium}));
+    comboSize = ImGui::GetItemRectSize();
+    ImGui::End();
+    ImGui::Render();
+
+    REQUIRE(inputSize.y == Catch::Approx(comboSize.y).margin(0.1F));
+}
+
 TEST_CASE("Shared modal shell composes badge split panes and fixed footer", "[unit][editor][gui][design-system]") {
     using namespace Horo::Editor;
     using namespace Horo::Editor::Ui;

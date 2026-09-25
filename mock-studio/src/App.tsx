@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import catalogData from './catalog.json';
-import { NativeScreen, workspaceId } from './screens/registry';
-import type { ReleaseJob, ReleaseRequest } from './releaseJob';
+import { NativeScreen, buildId, publishId, releaseId, testId, workspaceId } from './screens/registry';
+import { releaseStages, type ReleaseJob, type ReleaseRequest } from './releaseJob';
+import type { WorkflowJob, WorkflowRequest } from './workflowJob';
 
 type Design = { id: string; title: string; group: string };
 const catalog = catalogData as Design[];
@@ -9,10 +10,15 @@ const initialId = () => decodeURIComponent(new URLSearchParams(location.hash.sli
 
 type ReleaseServices = {
   releaseJob: ReleaseJob | null;
+  releaseCandidates: ReleaseJob[];
+  workflowJobs: WorkflowJob[];
   startRelease: (request: ReleaseRequest) => void;
   backgroundRelease: () => void;
   cancelRelease: () => void;
   newRelease: () => void;
+  startWorkflow: (request: WorkflowRequest) => void;
+  backgroundWorkflow: (id: number) => void;
+  cancelWorkflow: (id: number) => void;
 };
 
 function Canvas({ design, label, openDesign, navigate, releaseServices }: { design: Design; label: string; openDesign: (id: string) => void; navigate: (id: string) => void; releaseServices: ReleaseServices }) {
@@ -28,6 +34,8 @@ export function App() {
   const [filter, setFilter] = useState('');
   const [modal, setModal] = useState<string | null>(null);
   const [releaseJob, setReleaseJob] = useState<ReleaseJob | null>(null);
+  const [releaseCandidates, setReleaseCandidates] = useState<ReleaseJob[]>([]);
+  const [workflowJobs, setWorkflowJobs] = useState<WorkflowJob[]>([]);
   const [releaseToast, setReleaseToast] = useState(false);
   const active = catalog.find(item => item.id === selected) || catalog[0];
   const compared = catalog.find(item => item.id === compare);
@@ -44,11 +52,21 @@ export function App() {
     if (releaseJob?.status !== 'running') return;
     const timer = window.setInterval(() => setReleaseJob(current => {
       if (!current || current.status !== 'running') return current;
-      if (current.stageIndex === 8) return { ...current, status: 'success', finishedAt: Date.now() };
+      if (current.stageIndex >= releaseStages.length - 1) return { ...current, status: 'success', finishedAt: Date.now() };
       return { ...current, stageIndex: current.stageIndex + 1 };
     }), 2400);
     return () => window.clearInterval(timer);
   }, [releaseJob?.status]);
+
+  useEffect(() => {
+    if (!workflowJobs.some(job => job.status === 'running')) return;
+    const timer = window.setInterval(() => setWorkflowJobs(current => current.map(job => {
+      if (job.status !== 'running') return job;
+      if (job.stageIndex >= job.stages.length - 1) return { ...job, status: 'success', finishedAt: Date.now() };
+      return { ...job, stageIndex: job.stageIndex + 1 };
+    })), 2400);
+    return () => window.clearInterval(timer);
+  }, [workflowJobs.some(job => job.status === 'running')]);
 
   useEffect(() => {
     if (releaseJob?.status === 'success' && releaseJob.background) setReleaseToast(true);
@@ -71,20 +89,41 @@ export function App() {
     open(workspaceId);
   }
 
+  function backgroundWorkflow(id: number) {
+    setWorkflowJobs(current => current.map(job => job.id === id ? { ...job, background: true } : job));
+    setModal(null);
+    open(workspaceId);
+  }
+
   function closeModal() {
-    if (modal === 'architecture/release/release-modal-design.html' && releaseJob?.status === 'running') {
+    if (modal === releaseId && releaseJob?.status === 'running') {
       backgroundRelease();
       return;
     }
+    const kind = modal === buildId ? 'build' : modal === testId ? 'test' : modal === publishId ? 'publish' : null;
+    const runningJob = [...workflowJobs].reverse().find(job => job.kind === kind && job.status === 'running');
+    if (runningJob) { backgroundWorkflow(runningJob.id); return; }
     setModal(null);
   }
 
   const releaseServices: ReleaseServices = {
     releaseJob,
+    releaseCandidates,
+    workflowJobs,
     startRelease,
     backgroundRelease,
     cancelRelease: () => setReleaseJob(current => current?.status === 'running' ? { ...current, status: 'cancelled', finishedAt: Date.now() } : current),
-    newRelease: () => { setReleaseJob(null); setReleaseToast(false); },
+    newRelease: () => {
+      if (releaseJob?.status === 'success') setReleaseCandidates(current => [...current, releaseJob]);
+      setReleaseJob(null);
+      setReleaseToast(false);
+    },
+    startWorkflow: request => {
+      const startedAt = Date.now();
+      setWorkflowJobs(current => [...current, { ...request, id: startedAt + current.length, stageIndex: 0, status: 'running', background: false, startedAt }]);
+    },
+    backgroundWorkflow,
+    cancelWorkflow: id => setWorkflowJobs(current => current.map(job => job.id === id && job.status === 'running' ? { ...job, status: 'cancelled', finishedAt: Date.now() } : job)),
   };
 
   return <div className="studio">
@@ -116,9 +155,9 @@ export function App() {
         {compared && <Canvas design={compared} label="Comparison" openDesign={setModal} navigate={open} releaseServices={releaseServices} />}
       </div>
     </main>
-    {releaseToast && <div className="studio-snackbar" role="status"><span className="studio-snackbar-icon">✓</span><span><strong>Build completed</strong><small>{releaseJob?.path}</small></span><button type="button" onClick={() => { setReleaseToast(false); setModal('architecture/release/release-modal-design.html'); }}>View logs</button><button type="button" aria-label="Dismiss notification" onClick={() => setReleaseToast(false)}>×</button></div>}
+    {releaseToast && <div className="studio-snackbar" role="status"><span className="studio-snackbar-icon">✓</span><span><strong>Release candidate ready</strong><small>{releaseJob?.path}</small></span><button type="button" onClick={() => { setReleaseToast(false); setModal(releaseId); }}>View logs</button><button type="button" aria-label="Dismiss notification" onClick={() => setReleaseToast(false)}>×</button></div>}
     {modalDesign && <div className="overlay" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) closeModal(); }}>
-      <section className="dialog" role="dialog" aria-modal="true" aria-label={modalDesign.title}>
+      <section className={[buildId, testId, publishId].includes(modalDesign.id) ? 'dialog dialog-build-draft' : 'dialog'} role="dialog" aria-modal="true" aria-label={modalDesign.title}>
         <header><strong>{modalDesign.title}</strong><button type="button" aria-label="Close modal" onClick={closeModal}>×</button></header>
         <NativeScreen key={modalDesign.id} designId={modalDesign.id} openDesign={setModal} navigate={open} closeModal={closeModal} {...releaseServices} />
       </section>
