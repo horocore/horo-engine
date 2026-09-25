@@ -68,8 +68,9 @@ namespace Horo::Extensions {
         }
 
         /** @brief Copies a provider claim while all ABI input borrows are live. */
-        HoroExtensionStatus RegisterPlatformProvider(  // NOSONAR(cpp:S5008) C11 callback ABI requires an opaque host context.
-            void *hostContext, const HoroPlatformServicesProviderDescriptor *descriptor) noexcept {
+        HoroExtensionStatus RegisterPlatformProvider(
+            void *hostContext,  // NOSONAR(cpp:S5008) C11 callback ABI requires an opaque host context.
+            const HoroPlatformServicesProviderDescriptor *descriptor) noexcept {
             auto *session = static_cast<AssetImporterRegistrationSession *>(hostContext);
             if (session == nullptr || session->failed)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
@@ -428,8 +429,8 @@ namespace Horo::Extensions {
                 return Result<std::size_t>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable,
                                                               "Host composition has not admitted platform provider contributions."));
             const auto &claim = manifest.contributions.front();
-            const auto owningModule = std::ranges::find(manifest.modules, claim.owningModule, &ExtensionModuleManifest::id);
-            if (owningModule == manifest.modules.end() || !owningModule->imports.empty() ||
+            if (const auto owningModule = std::ranges::find(manifest.modules, claim.owningModule, &ExtensionModuleManifest::id);
+                owningModule == manifest.modules.end() || !owningModule->imports.empty() ||
                 std::ranges::find(owningModule->requiredCapabilities, "platform.services.provider") ==
                     owningModule->requiredCapabilities.end())
                 return Result<std::size_t>::Failure(
@@ -439,8 +440,9 @@ namespace Horo::Extensions {
         }
 
         /** @brief Keeps arbitrary host-composition callback failures inside the manager's result contract. */
+        template <typename Commit>
         [[nodiscard]] Result<ExtensionPlatformProviderPublication> CommitPlatformProvider(ExtensionPlatformProviderCandidate candidate,
-                                                                                          const ExtensionPlatformProviderCommit &commit) {
+                                                                                          const Commit &commit) {
             try {
                 return commit(std::move(candidate));
             } catch (...) {  // NOSONAR(cpp:S2738) Host-composition callback may throw any exception type.
