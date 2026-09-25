@@ -1,13 +1,13 @@
 export const releaseStages = [
-  { label: 'Validate', activity: 'Checking project version, source tag, and release notes…', log: 'Project and release metadata validated' },
-  { label: 'Configure', activity: 'Configuring target toolchain…', log: 'Target toolchain and signing profile configured' },
-  { label: 'Build', activity: 'Compiling runtime and editor modules…', log: 'Runtime and editor modules built' },
+  { label: 'Validate', activity: 'Checking version, source, packages, and target…', log: 'Version, source revision, locked packages, and target validated' },
+  { label: 'Configure', activity: 'Configuring target toolchain…', log: 'Target toolchain configured' },
+  { label: 'Build', activity: 'Compiling game runtime…', log: 'Game runtime built' },
   { label: 'Cook', activity: 'Cooking textures, meshes, and shaders…', log: 'Textures, meshes, and shader permutations cooked' },
   { label: 'Package', activity: 'Packaging assets.horo…', log: 'Assets and runtime files packaged' },
-  { label: 'Pre-Verify', activity: 'Checking candidate contents…', log: 'Candidate contents checked' },
-  { label: 'Sign', activity: 'Signing release artifacts…', log: 'Release artifacts signed' },
-  { label: 'Finalize', activity: 'Promoting verified candidate…', log: 'Verified candidate promoted to output directory' },
-  { label: 'Final Verify', activity: 'Verifying final checksums…', log: 'Final checksums verified' },
+  { label: 'Pre-Verify', activity: 'Checking staged package contents…', log: 'Staged package and archive verified' },
+  { label: 'Sign', activity: 'Signing release artifacts…', log: 'Release artifacts signed using configured profile' },
+  { label: 'Finalize', activity: 'Finalizing candidate metadata…', log: 'Candidate manifest and checksums finalized' },
+  { label: 'Final Verify', activity: 'Running packaged smoke and final verification…', log: 'Final checksums and packaged-player smoke verified' },
 ] as const;
 
 export type ReleaseJob = {
@@ -16,6 +16,13 @@ export type ReleaseJob = {
   path: string;
   name: string;
   version: string;
+  profile: string;
+  sourceRevision: string;
+  notes: string;
+  content: string;
+  testProfile: string;
+  signingProfile: string;
+  packageFormat: string;
   stageIndex: number;
   status: 'running' | 'success' | 'cancelled';
   background: boolean;
@@ -23,10 +30,10 @@ export type ReleaseJob = {
   finishedAt?: number;
 };
 
-export type ReleaseRequest = Pick<ReleaseJob, 'target' | 'path' | 'name' | 'version'>;
+export type ReleaseRequest = Pick<ReleaseJob, 'target' | 'path' | 'name' | 'version' | 'profile' | 'sourceRevision' | 'notes' | 'content' | 'testProfile' | 'signingProfile' | 'packageFormat'>;
 
 export function releaseActivity(job: ReleaseJob): string {
-  if (job.status === 'success') return 'Build completed';
-  if (job.status === 'cancelled') return 'Build cancelled';
+  if (job.status === 'success') return 'Release candidate ready';
+  if (job.status === 'cancelled') return 'Release preparation cancelled';
   return releaseStages[job.stageIndex].activity;
 }

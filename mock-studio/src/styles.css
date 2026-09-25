@@ -1,8 +1,8 @@
 @font-face { font-family: Inter; src: url('/assets/fonts/inter/InterVariable.ttf') format('truetype'); font-weight: 100 900; font-display: swap; }
-:root { font-family: Inter, system-ui, sans-serif; color: #e3e7eb; background: #101419; font-synthesis: none; }
+:root { font-family: var(--mock-editor-font); color: #e3e7eb; background: #101419; font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button, select, input { color: inherit; border: 1px solid #303740; background: #20262d; border-radius: 5px; }
 button { cursor: pointer; }
 button:hover, select:hover { border-color: #04a5fc; }
@@ -37,6 +37,8 @@ button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible
 .dialog > .release-design > .release-header { display: none; }
 .overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.72); }
 .dialog { display: flex; flex-direction: column; width: min(1120px, 100%); height: min(770px, 100%); border: 1px solid #48525e; border-radius: 7px; overflow: hidden; background: #15191e; box-shadow: 0 24px 70px rgba(0,0,0,.6); }
+.dialog-build-draft { width: min(820px, 100%); height: min(570px, 100%); }
+.dialog:has(.release-review-mode) { height: min(620px, 100%); }
 .dialog > header { display: flex; align-items: center; justify-content: space-between; min-height: 38px; padding: 0 12px; border-bottom: 1px solid #303740; font-size: 13px; }
 .dialog > header button { width: 28px; height: 28px; border: 0; background: transparent; font-size: 20px; }
 .studio-snackbar { position: fixed; z-index: 30; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 12px; max-width: min(520px, calc(100vw - 48px)); padding: 12px 14px; border: 1px solid #397154; border-radius: 6px; background: #1c2a23; box-shadow: 0 12px 32px rgba(0,0,0,.45); color: #dce9df; font-size: 13px; }

@@ -15,6 +15,8 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Runtime/Input.h"
 #include "NavigationErrors.h"
+#include "editor/modals/build/BuildWorkflowPreviewModal.h"
+#include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
 #include "editor/ui_preview/EditorUiPreviewCatalog.h"
@@ -91,7 +93,8 @@ namespace Horo::Editor {
         : context_(&context), modalHost_(&modalHost), settingsService_(&settingsService), localization_(&localization),
           engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
           extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs), inputRouter_(&inputRouter),
-          screenRegistry_(std::move(screenRegistry)), workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
+          screenRegistry_(std::move(screenRegistry)), workspacePanelRegistry_(std::move(workspacePanelRegistry)),
+          buildPreviewState_(std::make_unique<BuildWorkflowPreviewState>()) {
         services_.Register(*this);
         services_.RegisterConst(context);
         services_.Register(modalHost);
@@ -162,6 +165,13 @@ namespace Horo::Editor {
                                                                                   .maxWidth = 112.0F},
                                                        EditorStatusItemContent{.value = localization.Get("editor", "status.selection.none"),
                                                                                .available = false}));
+        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.build_preview",
+                                                                                  .alignment = EditorStatusBarAlignment::Left,
+                                                                                  .priority = 60,
+                                                                                  .order = 40,
+                                                                                  .maxWidth = 240.0F,
+                                                                                  .presentation = EditorStatusItemPresentation::Pill},
+                                                       EditorStatusItemContent{.available = false}));
     }
 
     GuiScreenHost::~GuiScreenHost() {
@@ -406,6 +416,29 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::OnUpdate(float dt) {
+        const bool wasRunning = buildPreviewState_->Job() && buildPreviewState_->Job()->status == BuildPreviewStatus::Running;
+        buildPreviewState_->Update(dt);
+        if (wasRunning && buildPreviewState_->Job() && buildPreviewState_->Job()->status == BuildPreviewStatus::Completed &&
+            engineEvents_ != nullptr)
+            engineEvents_->Publish(BuildPreviewCompletedEvent{buildPreviewState_->Job()->request.kind});
+        if (localization_ != nullptr) {
+            EditorStatusItemContent previewContent{.available = false};
+            if (const auto &job = buildPreviewState_->Job(); job.has_value()) {
+                const bool running = job->status == BuildPreviewStatus::Running;
+                previewContent.iconResourceId = "horo.status.build_preview";
+                previewContent.label =
+                    localization_->Get("editor", running                                        ? job->stages[job->stageIndex].activityKey
+                                                 : job->status == BuildPreviewStatus::Completed ? "build.preview.completed"
+                                                                                                : "build.preview.cancelled");
+                previewContent.tone = running                                        ? EditorStatusItemTone::Accent
+                                      : job->status == BuildPreviewStatus::Completed ? EditorStatusItemTone::Success
+                                                                                     : EditorStatusItemTone::Warning;
+                if (running)
+                    previewContent.value = std::to_string(static_cast<int>(buildPreviewState_->Progress() * 100.0F)) + "%";
+                previewContent.available = true;
+            }
+            static_cast<void>(statusItemRegistry_.Update("horo.status.build_preview", std::move(previewContent)));
+        }
         if (localization_ != nullptr) {
             static_cast<void>(
                 statusItemRegistry_.Update("horo.status.navigation",
@@ -505,6 +538,22 @@ namespace Horo::Editor {
                     auto modal = std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_,
                                                                  extensionMarketplace_);
                     static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
+                }
+                return;
+            case OpenBuildPreview:
+            case OpenTestPreview:
+            case OpenReleasePreview:
+            case OpenPublishPreview:
+                if (context_ && modalHost_ && !modalHost_->HasOpenModal()) {
+                    BuildPreviewKind kind = BuildPreviewKind::Build;
+                    if (invocation.action == OpenTestPreview)
+                        kind = BuildPreviewKind::Tests;
+                    else if (invocation.action == OpenReleasePreview)
+                        kind = BuildPreviewKind::Release;
+                    else if (invocation.action == OpenPublishPreview)
+                        kind = BuildPreviewKind::Publish;
+                    static_cast<void>(
+                        modalHost_->OpenRoot(std::make_unique<BuildWorkflowPreviewModal>(*context_, *buildPreviewState_, kind)));
                 }
                 return;
             case ExitApplication:

@@ -982,9 +982,12 @@ target_link_libraries(HoroNotificationServiceTests PRIVATE HoroEngine::EditorSer
 
 add_executable(HoroEditorMenuModelTests
         unit/editor/EditorMenuModelTests.cpp
+        unit/editor/BuildWorkflowPreviewStateTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/editor/modals/build/BuildWorkflowPreviewState.cpp
 )
 
 target_compile_features(HoroEditorMenuModelTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorMenuModelTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(HoroEditorMenuModelTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroEditorStatusBarModelTests
         unit/editor/EditorStatusBarModelTests.cpp

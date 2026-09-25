@@ -201,6 +201,11 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Missing Gameplay Asset Type"));
+        REQUIRE((service.Get("editor", "build.preview.release.review.heading") == "Review release request"));
+        REQUIRE((service.Get("editor", "build.preview.release.review.identity") == "Release identity"));
+        REQUIRE((service.Get("editor", "build.preview.release.review.notice") ==
+                 "The candidate must pass all required checks. This mock does not build files, sign artifacts, or publish to a "
+                 "destination."));
         RequireSettingsCatalogKeys(service);
 
         REQUIRE((service.Prepare(Horo::Editor::LocaleTag{"tr-TR"}, &error)));
@@ -213,6 +218,11 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Varlıklar"));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.localization") == "L10n"));
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Eksik Oynanış Asset Türü"));
+        REQUIRE((service.Get("editor", "build.preview.release.review.heading") == "Sürüm isteğini gözden geçir"));
+        REQUIRE((service.Get("editor", "build.preview.release.review.identity") == "Sürüm kimliği"));
+        REQUIRE(
+            (service.Get("editor", "build.preview.release.review.notice") ==
+             "Aday tüm zorunlu kontrollerden geçmelidir. Bu maket dosya oluşturmaz, yapıtları imzalamaz veya bir hedefe yayımlamaz."));
         RequireSettingsCatalogKeys(service);
     }
 }  // namespace

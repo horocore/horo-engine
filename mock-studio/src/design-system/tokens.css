@@ -1,4 +1,5 @@
 :root {
+  --mock-editor-font: Inter, system-ui, sans-serif;
   --mock-bg: #11151a;
   --mock-panel: #15191e;
   --mock-surface: #1b2026;

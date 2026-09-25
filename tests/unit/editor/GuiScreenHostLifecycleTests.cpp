@@ -11,6 +11,8 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "editor/modals/build/BuildWorkflowPreviewModal.h"
+#include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
@@ -113,6 +115,18 @@ namespace {
         modals.OnUpdate(0.016F);
         REQUIRE_FALSE(modals.HasOpenModal());
 
+        for (const char *scenario : {"build", "run-tests", "prepare-release", "publish-candidate"}) {
+            REQUIRE(host.OpenUiPreview(scenario));
+            imgui.BeginFrame();
+            host.Draw();
+            imgui.EndFrame();
+            const auto workflowModalId = modals.TopModalId();
+            REQUIRE(workflowModalId.has_value());
+            REQUIRE(modals.RequestClose(*workflowModalId, ModalCloseReason::Cancelled).HasValue());
+            modals.OnUpdate(0.016F);
+            REQUIRE_FALSE(modals.HasOpenModal());
+        }
+
         const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
         REQUIRE(gallery != nullptr);
         const float firstButtonTop = EditorUiPreviewHeaderHeight + 54.0F;
@@ -206,6 +220,25 @@ namespace {
                            ScreenRegistry{},
                            WorkspacePanelRegistry{}};
         ExerciseUiPreviewScenarios(host, modals, imgui);
+
+        const auto galleryModalId = modals.TopModalId();
+        REQUIRE(galleryModalId.has_value());
+        REQUIRE(modals.RequestClose(*galleryModalId, ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.016F);
+        BuildWorkflowPreviewState activity;
+        REQUIRE(activity.Start(BuildPreviewRequest{.kind = BuildPreviewKind::Build,
+                                                   .target = "Game Runtime · Linux · x86_64 · Development",
+                                                   .output = "builds/local"}));
+        REQUIRE(modals.OpenRoot(std::make_unique<BuildWorkflowPreviewModal>(gui, activity, BuildPreviewKind::Build)).HasValue());
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
+        for (int stage = 0; stage < 4; ++stage)
+            activity.Update(1.8F);
+        REQUIRE(activity.Job()->status == BuildPreviewStatus::Completed);
+        imgui.BeginFrame();
+        host.Draw();
+        imgui.EndFrame();
 
         host.Shutdown();
         CHECK(host.IsShutdown());
