@@ -229,7 +229,7 @@ namespace Horo::Physics {
         /** @brief Requires the exact host lifecycle publication phase on the owner thread. */
         [[nodiscard]] Result<void> CheckSafePoint(Runtime::RuntimePhase phase) const;
         /** @brief Shuts down and releases one detached or published aggregate. */
-        void Retire(std::unique_ptr<Runtime::SceneActivationCandidate> &candidate) noexcept;
+        void Retire(std::unique_ptr<Runtime::SceneActivationCandidate> &candidate) const noexcept;
         /** @brief Casts the known Physics participant's published candidate to its concrete type. */
         [[nodiscard]] const PhysicsSceneActivationCandidate *ActivePhysics() const noexcept;
         /** @copydoc ActivePhysics */

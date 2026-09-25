@@ -156,7 +156,7 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsPlayWorldSession::Retire */
-    void PhysicsPlayWorldSession::Retire(std::unique_ptr<Runtime::SceneActivationCandidate> &candidate) noexcept {
+    void PhysicsPlayWorldSession::Retire(std::unique_ptr<Runtime::SceneActivationCandidate> &candidate) const noexcept {
         if (candidate)
             candidate->Shutdown();
         candidate.reset();
