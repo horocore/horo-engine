@@ -692,6 +692,32 @@ definition. Stopping play destroys it without modifying authoring transforms.
 Reload rebuilds physics state by default. Preservation of velocity or sleep
 state requires a typed policy keyed by stable object ID.
 
+`PhysicsPlayWorldSession` supplies the Physics-owned part of this contract. A host
+passes a matching immutable `RuntimeSceneDefinition` and resolved
+`RuntimeSceneView` to `Prepare` between fixed ticks. Physics builds an unpublished
+candidate with its own world identity and copied body poses; it retains neither
+the source view nor an editor document pointer. The host keeps the original view's
+scene alive and passes that view back to `Commit` so structural invalidation and
+definition/asset generation changes reject publication. The host calls `Commit` only at
+`CommitDeferredLifecycleChanges`, after fixed work and queries have drained. A
+reload prepares a second candidate while the old world remains active; failed
+preparation or publication validation retires only that candidate. Successful
+commit retires the previous world and invalidates its handles. `Stop` at the same
+safe point retires active and pending worlds; repeated stop is harmless. The host
+must keep the process `PhysicsRuntime` alive through session destruction and
+destroy the session on its owner thread after all work has joined.
+
+The initial reload policy is a cold rebuild. Native solver state, velocity, sleep
+state and contact caches are not transferred. The session can advance its active
+world for an exact host fixed tick, but this API does not publish dynamic poses to
+RuntimeScene or apply them to authoring data. The graphical editor currently
+composes an explicit Null Physics runtime and clones only core scene storage for
+play, without cloning activation participants. A later editor composition ticket
+must select an available solver, create a separate play-scene aggregate with this
+Physics lifecycle, route fixed ticks and runtime transform publication, and stop
+the aggregate before returning to edit mode. This Physics-owned contract alone
+does not make editor Play simulate rigid bodies.
+
 ## Floating Origin Rebasing
 
 The active `PhysicsWorld` executes in local rebased cluster coordinates relative to the dynamic floating origin:
