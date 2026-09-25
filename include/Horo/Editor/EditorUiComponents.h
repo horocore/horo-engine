@@ -151,8 +151,14 @@ namespace Horo::Editor::Ui {
 
     // ── Icon helpers ─────────────────────────────────────────────────────
 
+    /** @brief Visual weight of a close icon inside its full-size hit target. */
+    enum class CloseButtonVariant {
+        Default,
+        Compact
+    };
+
     /** @brief Draws an icon-only close button using vector strokes, not glyph text. */
-    [[nodiscard]] bool IconCloseButton(const char *id, ImVec2 size);
+    [[nodiscard]] bool IconCloseButton(const char *id, ImVec2 size, CloseButtonVariant variant = CloseButtonVariant::Default);
 
     /** @brief Direction rendered by the compact navigation icon button. */
     enum class NavigationIcon : std::uint8_t {
@@ -387,6 +393,7 @@ namespace Horo::Editor::Ui {
     struct InputTextOptions {
         bool error{false};                                   /**< Whether to render validation-error styling. */
         float width{-1.0F};                                  /**< Logical width; negative fills available content. */
+        float height{0.0F};                                  /**< Optional logical minimum height; zero uses the size preset. */
         const char *hint{nullptr};                           /**< Optional placeholder text. */
         float prefixIconWidth{0.0F};                         /**< Left padding reserved for a caller-drawn icon. */
         ComponentSize componentSize{ComponentSize::Small};   /**< Shared theme-backed size preset. */
@@ -522,7 +529,14 @@ namespace Horo::Editor::Ui {
      * @param minimumBoxSize Optional minimum square size in logical pixels.
      * @return True when the checkbox was clicked.
      */
-    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts, float minimumBoxSize = 0.0F);
+    /** @brief Text emphasis for a checkbox label. */
+    enum class CheckboxTextTone {
+        Muted,
+        Primary
+    };
+
+    [[nodiscard]] bool CheckboxControl(const char *label, bool *value, const Theme::Fonts &fonts, float minimumBoxSize = 0.0F,
+                                       CheckboxTextTone textTone = CheckboxTextTone::Muted);
 
     // ── Higher-order helpers ─────────────────────────────────────────────
 
@@ -572,11 +586,14 @@ namespace Horo::Editor::Ui {
         float minimumWidth = 360.0F;
         float minimumHeight = 360.0F;
         float headerHeight = Theme::Layout::HeaderH;
+        float headerHorizontalPadding = 22.0F; /**< Title inset; keeps the shared default unless a modal requests a compact header. */
         float footerHeight = Theme::Layout::FooterH;
         std::optional<ModalPlacementRegion> placementRegion; /**< Defaults to the main viewport's usable area. */
         ImTextureID logo = 0;
         bool showBrandMark = false;
         bool showClose = true;
+        bool foregroundBorder = false; /**< Redraw the rounded outline above child chrome. */
+        CloseButtonVariant closeButtonVariant = CloseButtonVariant::Default;
         float titleFontSize = Theme::TextPx::Title();
         ComponentSize componentSize = ComponentSize::Medium;
     };
@@ -628,6 +645,7 @@ namespace Horo::Editor::Ui {
         float footerHeight_{};
         bool closeRequested_{};
         bool footerOpen_{};
+        bool foregroundBorder_{};
     };
 
     /** @brief Presentation configuration for a modal sidebar/content split. */

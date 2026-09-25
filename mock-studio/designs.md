@@ -96,11 +96,29 @@ Design ID: `architecture/packages/package-manager.html`
 
 Design ID: `ui-prototypes/loading-modal.html`
 
+### architecture-build-build-job
+
+**Build** · Build
+
+Design ID: `architecture/build/build-job.html`
+
+### architecture-build-test-run
+
+**Run Tests** · Build
+
+Design ID: `architecture/build/test-run.html`
+
 ### architecture-release-release-modal-design
 
-**Build & Release Modal** · Release
+**Prepare Release** · Build
 
 Design ID: `architecture/release/release-modal-design.html`
+
+### architecture-release-publish-candidate
+
+**Publish Candidate** · Build
+
+Design ID: `architecture/release/publish-candidate.html`
 
 ### architecture-runtime-animation-editor
 

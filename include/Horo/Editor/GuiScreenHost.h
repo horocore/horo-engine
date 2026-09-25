@@ -44,6 +44,7 @@ namespace Horo::Editor {
     class ProjectCreationService;
     class RendererAvailabilitySnapshot;
     class EditorStatusBar;
+    class BuildWorkflowPreviewState;
 
     /**
      * @file GuiScreenHost.h
@@ -220,13 +221,13 @@ namespace Horo::Editor {
         Extensions::ExtensionInventory *extensionInventory_{};
         Extensions::ExtensionMarketplaceService *extensionMarketplace_{};
         NativeDialogs *nativeDialogs_{};
-        Input::InputRouter *inputRouter_{};
 
         EditorServiceRegistry services_;
         ScreenRegistry screenRegistry_;
         WorkspacePanelRegistry workspacePanelRegistry_;
         EditorStatusItemRegistry statusItemRegistry_;
         std::unique_ptr<EditorStatusBar> statusBar_;
+        std::unique_ptr<BuildWorkflowPreviewState> buildPreviewState_;
         std::vector<std::string_view> activeStatusPanelIds_;
 
         JobSystem m_importJobs{JobSystemConfig{.workerCount = 1}};

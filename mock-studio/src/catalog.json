@@ -75,9 +75,24 @@
     "group": "Prototypes"
   },
   {
+    "id": "architecture/build/build-job.html",
+    "title": "Build",
+    "group": "Build"
+  },
+  {
+    "id": "architecture/build/test-run.html",
+    "title": "Run Tests",
+    "group": "Build"
+  },
+  {
     "id": "architecture/release/release-modal-design.html",
-    "title": "Build & Release Modal",
-    "group": "Release"
+    "title": "Prepare Release",
+    "group": "Build"
+  },
+  {
+    "id": "architecture/release/publish-candidate.html",
+    "title": "Publish Candidate",
+    "group": "Build"
   },
   {
     "id": "architecture/runtime/animation-editor.html",
