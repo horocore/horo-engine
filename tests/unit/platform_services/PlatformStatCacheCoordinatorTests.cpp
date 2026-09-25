@@ -184,6 +184,26 @@ namespace Horo::PlatformServices {
         CHECK(coordinator.CacheEntryCount() == 1);
     }
 
+    TEST_CASE("Cache restore rejects duplicate identities and over-capacity snapshots atomically",
+              "[platform-services][stat][cache][validation]") {
+        const StatFixture fixture;
+        const auto session = ActiveSession();
+        auto coordinator = Coordinator(fixture, session);
+        const auto valid = Record(fixture, session, Evidence(session, fixture.snapshot, PlatformStatValue::FromSigned(7)));
+        REQUIRE(coordinator.RestoreCache({valid}).HasValue());
+
+        RequireError(coordinator.RestoreCache({valid, valid}), StatCoordinatorErrors::CacheCorrupt);
+        CHECK(coordinator.CacheEntryCount() == 1);
+        RequireError(coordinator.RestoreCache({valid, valid, valid}), StatCoordinatorErrors::CapacityExceeded);
+        CHECK(coordinator.CacheEntryCount() == 1);
+
+        const auto cached = coordinator.ReadStat({*session.Subject(), session.AccessRevision(), fixture.snapshot, 12});
+        REQUIRE(cached.HasValue());
+        CHECK(cached.Value().disposition == PlatformStatReadDisposition::FreshCacheHit);
+        REQUIRE(cached.Value().cached.has_value());
+        CHECK(cached.Value().cached->state.value == PlatformStatValue::FromSigned(7));
+    }
+
     TEST_CASE("Stat writes enforce authority value schema revision and exact idempotency", "[platform-services][stat][write]") {
         const StatFixture fixture;
         const auto session = ActiveSession();
