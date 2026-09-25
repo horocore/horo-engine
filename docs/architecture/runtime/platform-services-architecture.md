@@ -173,6 +173,42 @@ pass. The quarantine is a last-resort safety path, not a substitute for drain.
 The next provider generation can be admitted independently after a completed
 retirement.
 
+### PLS-002.4 bounded operation and lifecycle host
+
+Extension ABI minor 1.3 keeps the 1.0/1.1 host prefixes and the 1.2 provider
+registration function. Provider descriptor version 1 is accepted at its original
+prefix size and remains factory/lifetime-only. Descriptor version 2 appends a
+copied, separately versioned operation table. A version-1 provider can still be
+admitted and retired, but exact service-host startup fails with
+`platform.lifecycle.unsupported_profile`; it never pretends to support operations.
+The new profile supplies Horo-only bounded request/completion envelopes and a
+stable host-owned callback sink. Providers do not retain borrowed request payloads
+or completion buffers. They may retain the sink pointer until close-ingress and
+drain both succeed; they must not call it after successful drain.
+
+`PlatformProviderLifecycleHost` selects the exact module, provider key, identity
+and generation from the immutable `PlatformProjectConfiguration` and admitted
+publication. It never resolves the highest compatible alternative. Native service
+initialization returns an available-service mask constrained by the trusted claim
+and required project services. Session observation and completion ingress start in
+that order. The host returns its handle only after all three stages succeed; any
+failure tears down attempted stages in reverse order while keeping the sink and
+module lease if native drain is still BUSY.
+
+At shutdown, the owner lane closes request admission, revokes callback ingress,
+requests cancellation for outstanding operations, and asks the provider to drain.
+Only successful drain permits request-store teardown, session stop, service
+shutdown and candidate lease release. BUSY retains the callback context and code
+for a later owner-lane retry; destruction without a successful retry quarantines
+that generation rather than freeing memory reachable by a native callback.
+Native callbacks only copy bounded evidence into the host queue. An owner-lane
+dispatch turn commits terminal request state and invokes deferred observers.
+Each request and completion carries the captured session revision; a later
+session revision fences an in-flight success from publication.
+The first typed operation is an achievement unlock carrying one canonical Horo
+stable ID for the active provider session. Other service payload schemas and
+complete product-profile routing remain separate follow-on work.
+
 Provider discovery reads only verified `.horopkg` install records and inert manifests;
 it never probes PATH or loads candidates to discover capabilities. Package/Trust
 services resolve integrity, signature, permissions, license and enablement. ExtensionHost

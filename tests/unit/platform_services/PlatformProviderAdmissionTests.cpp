@@ -242,8 +242,7 @@ namespace Horo::PlatformServices::Tests {
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();
-        PlatformProviderAdmission admission{capabilities, services, policy, HostPlatform(),
-                                            PlatformServicesHostProfile::HeadlessServer};
+        PlatformProviderAdmission admission{capabilities, services, policy, HostPlatform(), PlatformServicesHostProfile::HeadlessServer};
         auto audit = std::make_shared<Audit>();
         std::weak_ptr<Audit> code = audit;
         auto published = admission.Commit(Candidate("example.foreign-revoke", 1, audit));
@@ -256,7 +255,9 @@ namespace Horo::PlatformServices::Tests {
             REQUIRE(backend.HasValue());
             auto request = backend.Value().AcquireRequestLease();
             REQUIRE(request.HasValue());
-            std::thread revokeOnForeignThread([publication = std::move(published).Value()]() mutable { publication.reset(); });
+            std::thread revokeOnForeignThread([publication = std::move(published).Value()]() mutable {
+                publication.reset();
+            });
             revokeOnForeignThread.join();
             audit.reset();
             CHECK_FALSE(code.expired());
@@ -348,6 +349,78 @@ namespace Horo::PlatformServices::Tests {
         }
         CHECK(admission.FinalizeOnOwnerThread() == PlatformProviderRetirementDisposition::Busy);
         request.reset();
+        CHECK(admission.FinalizeOnOwnerThread() == PlatformProviderRetirementDisposition::Complete);
+    }
+
+    TEST_CASE("ABI 1.3 provider operation tail loads and completes through exact host composition",
+              "[platform-services][extension][provider][abi]") {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() /
+                              ("horo-provider-ops-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        REQUIRE(fs::create_directory(root));
+
+        struct Cleanup final {
+            fs::path path;
+
+            ~Cleanup() {
+                std::error_code error;
+                fs::remove_all(path, error);
+            }
+        } cleanup{root};
+
+        const fs::path modulePath = root / fs::path{HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE}.filename();
+        REQUIRE(fs::copy_file(HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE, modulePath));
+        {
+            std::ofstream manifest{root / "extension.json"};
+            manifest
+                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
+                << modulePath.filename().generic_string()
+                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
+            REQUIRE(manifest.good());
+        }
+        Extensions::ApplicationCapabilityRegistry capabilities;
+        Extensions::BackendServiceRegistry services;
+        const auto policy = Policy();
+        PlatformProviderAdmission admission{capabilities, services, policy, HostPlatform(), PlatformServicesHostProfile::HeadlessServer};
+        Extensions::ExtensionManager manager{nullptr,
+                                             Extensions::ExtensionHostProfile::Headless,
+                                             {"platform.services.provider"},
+                                             Horo::Tests::CreateAcceptingArtifactGate(),
+                                             {},
+                                             [&admission](auto candidate) {
+            return admission.Commit(std::move(candidate));
+        }};
+        auto loaded = manager.LoadExtension(root.string());
+        REQUIRE(loaded.HasValue());
+        auto consumer = Consumer(policy);
+        auto authority = consumer.Grant({"platform.services.provider"});
+        REQUIRE(authority.HasValue());
+        PlatformProjectConfigurationCandidate draft{.projectId = "example.project",
+                                                    .profile = PlatformServicesHostProfile::HeadlessServer,
+                                                    .provider = {.mode = PlatformProviderSelectionMode::ExactProvider,
+                                                                 .providerKey = "example.provider"}};
+        draft.services[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = PlatformServiceRequirement::Optional;
+        PlatformProviderModuleContribution contribution{.module = {"example.module"},
+                                                        .providerKey = "example.provider",
+                                                        .provider = {42},
+                                                        .interfaceVersion = {PlatformServicesBackendInterfaceMajor,
+                                                                             PlatformServicesBackendInterfaceMinor},
+                                                        .allowedProfiles = PlatformServicesHostProfileMask::HeadlessServer};
+        contribution.supportedServices[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = true;
+        const std::vector contributions{contribution};
+        const std::vector trusted{ModuleId{"example.module"}};
+        auto configuration = BuildPlatformProjectConfiguration(draft, contributions, trusted);
+        REQUIRE(configuration.HasValue());
+        auto started = PlatformProviderLifecycleHost::Start(configuration.Value(), admission, {"example.module", "example.provider", 1},
+                                                            authority.Value(), Version(1), "example.consumer", "consumer.module", 1);
+        REQUIRE(started.HasValue());
+        auto host = std::move(started).Value();
+        auto request = host->UnlockAchievement({1});
+        REQUIRE(request.HasValue());
+        CHECK(host->DispatchCompletions(1) == 1);
+        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Succeeded);
+        REQUIRE(host->Close().HasValue());
+        manager.UnloadExtension(loaded.Value());
         CHECK(admission.FinalizeOnOwnerThread() == PlatformProviderRetirementDisposition::Complete);
     }
 }  // namespace Horo::PlatformServices::Tests
