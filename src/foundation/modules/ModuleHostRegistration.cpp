@@ -69,6 +69,29 @@ namespace Horo {
             return Result<void>::Success();
         }
 
+        /** @brief Checks an incoming contribution against one live owner's settings. */
+        [[nodiscard]] Result<void> ValidateContributionConflicts(const ModuleConfigurationContribution &existing,
+                                                                 const ModuleConfigurationContribution &incoming) {
+            for (const SettingDescriptor &setting : incoming.settings) {
+                if (std::ranges::any_of(existing.settings, [&setting](const SettingDescriptor &other) {
+                    return other.key == setting.key;
+                }))
+                    return ContributionFailure(ModuleDescriptorErrors::DuplicateSetting,
+                                               "Setting '" + setting.key.Value() + "' is already registered.");
+            }
+            for (const EnvironmentVariableBinding &binding : incoming.environmentBindings) {
+                if (std::ranges::any_of(existing.environmentBindings, [&binding](const EnvironmentVariableBinding &other) {
+                    return other.variable == binding.variable;
+                }))
+                    return ContributionFailure(ModuleDescriptorErrors::DuplicateEnvironmentBinding,
+                                               "Environment binding '" + binding.variable + "' is already registered.");
+            }
+            if (Overlaps(existing.ownerPrefix, incoming.ownerPrefix))
+                return ContributionFailure(ModuleDescriptorErrors::SettingOwnerConflict,
+                                           "Settings owners '" + existing.module.value + "' and '" + incoming.module.value + "' overlap.");
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] bool HasRepeatedDependencies(const ModuleDescriptor &descriptor) {
             std::set<std::string, std::less<>> seen;
             return std::ranges::any_of(descriptor.dependencies, [&seen](const ModuleDependency &dep) {
@@ -103,23 +126,8 @@ namespace Horo {
         for (const ModuleConfigurationContribution &existing : m_configurationContributions) {
             if (StateOf(existing.module) == ModuleLifecycleState::Stopped || StateOf(existing.module) == ModuleLifecycleState::Failed)
                 continue;
-            for (const SettingDescriptor &setting : contribution.settings) {
-                if (std::ranges::any_of(existing.settings, [&setting](const SettingDescriptor &other) {
-                    return other.key == setting.key;
-                }))
-                    return ContributionFailure(ModuleDescriptorErrors::DuplicateSetting,
-                                               "Setting '" + setting.key.Value() + "' is already registered.");
-            }
-            for (const EnvironmentVariableBinding &binding : contribution.environmentBindings) {
-                if (std::ranges::any_of(existing.environmentBindings, [&binding](const EnvironmentVariableBinding &other) {
-                    return other.variable == binding.variable;
-                }))
-                    return ContributionFailure(ModuleDescriptorErrors::DuplicateEnvironmentBinding,
-                                               "Environment binding '" + binding.variable + "' is already registered.");
-            }
-            if (Overlaps(existing.ownerPrefix, contribution.ownerPrefix))
-                return ContributionFailure(ModuleDescriptorErrors::SettingOwnerConflict,
-                                           "Settings owners '" + existing.module.value + "' and '" + descriptor.id.value + "' overlap.");
+            if (const Result<void> conflicts = ValidateContributionConflicts(existing, contribution); conflicts.HasError())
+                return conflicts;
         }
         std::size_t settingCount = contribution.settings.size();
         std::size_t bindingCount = contribution.environmentBindings.size();

@@ -1207,6 +1207,20 @@ namespace Horo::Editor {
                                                          settingsContributions);
     }
 
+    /** @brief Applies a saved input profile while retaining defaults on load or validation failure. */
+    static void LoadEditorInputProfile(Input::InputRouter &inputRouter) {
+        const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
+        if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
+            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
+            if (loaded.HasError())
+                LOG_ERROR("editor.input", "Keeping default input bindings; unable to load '%s': %s", editorInputProfile.string().c_str(),
+                          loaded.ErrorValue().message.c_str());
+            else if (const Result<void> applied = inputRouter.SetProfile(loaded.Value()); applied.HasError())
+                LOG_ERROR("editor.input", "Keeping last valid input bindings; profile '%s' is invalid: %s",
+                          editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
+        }
+    }
+
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
@@ -1329,16 +1343,7 @@ namespace Horo::Editor {
         if (const Result<void> installedInputActions = inputRouter.SetActionMap(BuildEditorInputActions());
             installedInputActions.HasError())
             LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installedInputActions.ErrorValue().message.c_str());
-        const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
-        if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
-            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
-            if (loaded.HasError())
-                LOG_ERROR("editor.input", "Keeping default input bindings; unable to load '%s': %s", editorInputProfile.string().c_str(),
-                          loaded.ErrorValue().message.c_str());
-            else if (const Result<void> applied = inputRouter.SetProfile(loaded.Value()); applied.HasError())
-                LOG_ERROR("editor.input", "Keeping last valid input bindings; profile '%s' is invalid: %s",
-                          editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
-        }
+        LoadEditorInputProfile(inputRouter);
         EditorModalHost modalHost{editorEvents, inputRouter};
         GuiRoute initialRoute = opts.projectRoot.empty() ? GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}
                                                          : GuiRoute{GuiRouteKind::ProjectLoading,
