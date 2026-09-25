@@ -479,6 +479,11 @@ publication is serialized through Horo-owned tokens. State queries and copied re
 are fenced by subject, provider/session/access generations, provider revision and the
 registered progress total. Session replacement and shutdown discard old work without
 calling provider code.
+The coordinator's mutation and state-query admission methods take request values by
+const reference so validation does not copy large envelopes before admission. Source
+callers keep the same call form; consumers that took member-function pointers must
+update their signatures. The coordinator copies accepted requests into its owned
+publication and query tokens, so caller lifetime is unchanged.
 
 ### Leaderboards And Stats
 

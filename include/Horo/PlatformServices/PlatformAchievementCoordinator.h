@@ -152,7 +152,7 @@ namespace Horo::PlatformServices {
          * @param request Registered achievement mutation and caller-owned idempotency identity.
          * @return Queued, IgnoredDuplicate, or a typed validation/conflict/capacity failure.
          */
-        [[nodiscard]] Result<PlatformAchievementMutationAdmission> SubmitMutation(PlatformAchievementMutationRequest request);
+        [[nodiscard]] Result<PlatformAchievementMutationAdmission> SubmitMutation(const PlatformAchievementMutationRequest &request);
 
         /**
          * @brief Takes the next mutation for provider publication.
@@ -174,7 +174,7 @@ namespace Horo::PlatformServices {
          * @param request Current subject/access and registered achievement ID.
          * @return Query token or typed validation failure.
          */
-        [[nodiscard]] Result<PlatformAchievementQueryIntent> MakeStateQuery(PlatformAchievementStateQueryRequest request);
+        [[nodiscard]] Result<PlatformAchievementQueryIntent> MakeStateQuery(const PlatformAchievementStateQueryRequest &request);
 
         /**
          * @brief Validates one provider state response before it becomes observable.

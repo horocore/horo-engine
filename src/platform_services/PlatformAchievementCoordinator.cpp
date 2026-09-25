@@ -109,11 +109,9 @@ namespace Horo::PlatformServices {
     };
 
     bool PlatformAchievementMutationId::IsValid() const noexcept {
-        for (const std::byte byte : bytes) {
-            if (byte != std::byte{})
-                return true;
-        }
-        return false;
+        return std::ranges::any_of(bytes, [](const std::byte byte) {
+            return byte != std::byte{};
+        });
     }
 
     /** @copydoc PlatformAchievementCoordinator::Create */
@@ -233,7 +231,7 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformAchievementCoordinator::SubmitMutation */
     Result<PlatformAchievementMutationAdmission> PlatformAchievementCoordinator::SubmitMutation(
-        PlatformAchievementMutationRequest request) {
+        const PlatformAchievementMutationRequest &request) {
         if (closed_)
             return Result<PlatformAchievementMutationAdmission>::Failure(MakeError(AchievementCoordinatorErrors::Closed));
         if (const auto valid = ValidateRequest(request); valid.HasError())
@@ -306,7 +304,8 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformAchievementCoordinator::MakeStateQuery */
-    Result<PlatformAchievementQueryIntent> PlatformAchievementCoordinator::MakeStateQuery(PlatformAchievementStateQueryRequest request) {
+    Result<PlatformAchievementQueryIntent> PlatformAchievementCoordinator::MakeStateQuery(
+        const PlatformAchievementStateQueryRequest &request) {
         if (closed_)
             return Result<PlatformAchievementQueryIntent>::Failure(MakeError(AchievementCoordinatorErrors::Closed));
         if (const auto valid = ValidateQuery(request); valid.HasError())
