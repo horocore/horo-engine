@@ -126,6 +126,20 @@ TEST_CASE("Cancellation is thread-safe idempotent and cannot rewrite a completed
     CHECK(store.Query(request).Value().state == PlatformRequestState::Cancelled);
 }
 
+TEST_CASE("Backend cancellation uses the Horo request identity without knowing its result type", "[platform-services][request][cancel]") {
+    PlatformRequestStore store({.generation = {9}});
+    auto request = Admit<int>(store);
+
+    REQUIRE(store.RequestCancel(request.Id(), request.Generation()).Value() == PlatformRequestMutation::Applied);
+    CHECK(store.RequestCancel(request.Id(), request.Generation()).Value() == PlatformRequestMutation::Unchanged);
+    const auto snapshot = store.Query(request);
+    REQUIRE(snapshot.HasValue());
+    CHECK(snapshot.Value().state == PlatformRequestState::Cancelling);
+    CHECK(snapshot.Value().cancellationRequested);
+
+    CHECK(store.RequestCancel(request.Id(), PlatformRequestGeneration{10}).ErrorValue().code.Value() == RequestErrors::Stale.code.Value());
+}
+
 TEST_CASE("Concurrent success and cancellation publish exactly one coherent terminal result", "[platform-services][request][concurrency]") {
     for (int iteration = 0; iteration < 128; ++iteration) {
         PlatformRequestStore store;
