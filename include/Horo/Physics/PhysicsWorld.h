@@ -256,7 +256,7 @@ namespace Horo::Physics {
          * @param capability Capability issued by this exact world.
          * @return Success, or a typed foreign/stale identity or owner-thread error.
          */
-        [[nodiscard]] Result<void> RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability);
+        [[nodiscard]] Result<void> RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability) const;
         /** @brief Executes one exact host-issued fixed tick and publishes its results atomically.
          * @param input One-based next tick, exact immutable world delta and optional synchronous observer.
          * @return Success or typed affinity/lifecycle/sequence/delta/job/native-capacity error without partial publication.
