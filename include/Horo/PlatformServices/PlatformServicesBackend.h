@@ -12,7 +12,7 @@
 
 namespace Horo::PlatformServices {
     inline constexpr std::uint16_t PlatformServicesBackendInterfaceMajor = 1;
-    inline constexpr std::uint16_t PlatformServicesBackendInterfaceMinor = 0;
+    inline constexpr std::uint16_t PlatformServicesBackendInterfaceMinor = 1;
 
     /** @brief Horo contract version implemented by a provider adapter. */
     struct PlatformServicesBackendInterfaceVersion final {
@@ -67,6 +67,7 @@ namespace Horo::PlatformServices {
         PlatformServiceKind service{PlatformServiceKind::Achievements};
         PlatformServiceAvailability availability{PlatformServiceAvailability::Unavailable};
         PlatformServiceLimits limits;
+        LeaderboardQueryCapabilities leaderboardQueries;
         std::optional<PlatformServiceBindingId> binding;
         std::optional<PlatformServiceUnavailableReason> unavailableReason;
     };
@@ -94,6 +95,8 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor RequiredServiceUnavailable;
         /** @brief A typed service method was called while its capability was unavailable. */
         extern const ErrorCodeDescriptor ServiceUnavailable;
+        /** @brief A supported service is available, but this exact leaderboard query kind is not. */
+        extern const ErrorCodeDescriptor UnsupportedOperation;
     }  // namespace BackendErrors
 
     /**

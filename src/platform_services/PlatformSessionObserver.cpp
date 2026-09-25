@@ -99,7 +99,7 @@ namespace Horo::PlatformServices {
             // The engine thread holds this through callback invocation. Reset/Close may take it from any thread,
             // making their return a fence against new callbacks. Recursive locking permits callback self-revocation;
             // Close releases the state mutex before taking it to avoid a lock-order cycle.
-            std::recursive_mutex invocationMutex;
+            std::recursive_mutex invocationMutex;  // NOSONAR(cpp:S8462): callbacks may revoke their own subscription.
         };
 
         class State final {
@@ -147,7 +147,7 @@ namespace Horo::PlatformServices {
 
     void PlatformSessionObserverSubscription::Reset() noexcept {
         if (slot_ != nullptr) {
-            std::lock_guard lock(slot_->invocationMutex);
+            std::lock_guard lock(slot_->invocationMutex);  // NOSONAR(cpp:S8462): callback self-revocation reenters this lock.
             slot_->active.store(false);
         }
         if (const auto state = state_.lock()) {
@@ -271,7 +271,7 @@ namespace Horo::PlatformServices {
             }
             ++published;
             for (const auto &slot : slots) {
-                std::lock_guard invocationLock(slot->invocationMutex);
+                std::lock_guard invocationLock(slot->invocationMutex);  // NOSONAR(cpp:S8462): callbacks may self-revoke.
                 if (!slot->active.load())
                     continue;
                 try {
@@ -303,7 +303,7 @@ namespace Horo::PlatformServices {
             slots.swap(state_->slots);
         }
         for (const auto &slot : slots) {
-            std::lock_guard invocationLock(slot->invocationMutex);
+            std::lock_guard invocationLock(slot->invocationMutex);  // NOSONAR(cpp:S8462): Close may run inside a callback.
             slot->active.store(false);
         }
         return Result<void>::Success();

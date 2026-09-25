@@ -3,10 +3,10 @@
 #include "Horo/Math/SceneMath.h"
 
 #include "../FoundationErrors.h"
+#include "Horo/Foundation/Assertions.h"
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cmath>
 #include <limits>
 #include <ranges>
@@ -64,17 +64,17 @@ namespace Horo::Math {
     }
 
     Vec2 Normalize(const Vec2 value) noexcept {
-        assert(IsFinite(value) && LengthSquared(value) > DefaultEpsilon * DefaultEpsilon);
+        HORO_ASSERT(IsFinite(value) && LengthSquared(value) > DefaultEpsilon * DefaultEpsilon);
         return value / Length(value);
     }
 
     Vec3 Normalize(const Vec3 value) noexcept {
-        assert(IsFinite(value) && LengthSquared(value) > DefaultEpsilon * DefaultEpsilon);
+        HORO_ASSERT(IsFinite(value) && LengthSquared(value) > DefaultEpsilon * DefaultEpsilon);
         return value / Length(value);
     }
 
     Vec4 Normalize(const Vec4 value) noexcept {
-        assert(IsFinite(value) && LengthSquared(value) > DefaultEpsilon * DefaultEpsilon);
+        HORO_ASSERT(IsFinite(value) && LengthSquared(value) > DefaultEpsilon * DefaultEpsilon);
         return value / Length(value);
     }
 
@@ -130,7 +130,7 @@ namespace Horo::Math {
 
     Quaternion Quaternion::FromAxisAngle(const Vec3 axis, const float radians) noexcept {
         auto result = TryFromAxisAngle(axis, radians);
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
@@ -148,7 +148,7 @@ namespace Horo::Math {
 
     Quaternion Quaternion::FromEulerRadians(const Vec3 radians) noexcept {
         auto result = TryFromEulerRadians(radians);
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
@@ -172,7 +172,7 @@ namespace Horo::Math {
     }
 
     Quaternion Quaternion::Normalized() const noexcept {
-        assert(IsValidQuaternion(*this));
+        HORO_ASSERT(IsValidQuaternion(*this));
         const float inverseLength = 1.0F / std::sqrt(x * x + y * y + z * z + w * w);
         return {x * inverseLength, y * inverseLength, z * inverseLength, w * inverseLength};
     }
@@ -188,7 +188,7 @@ namespace Horo::Math {
     }
 
     Quaternion Quaternion::Inverse() const noexcept {
-        assert(IsValidQuaternion(*this));
+        HORO_ASSERT(IsValidQuaternion(*this));
         const float inverseLengthSquared = 1.0F / (x * x + y * y + z * z + w * w);
         return {-x * inverseLengthSquared, -y * inverseLengthSquared, -z * inverseLengthSquared, w * inverseLengthSquared};
     }
@@ -202,7 +202,7 @@ namespace Horo::Math {
     }
 
     Vec3 Quaternion::Rotate(const Vec3 value) const noexcept {
-        assert(IsValidQuaternion(*this) && IsFinite(value));
+        HORO_ASSERT(IsValidQuaternion(*this) && IsFinite(value));
         const Quaternion rotation = Normalized();
         const Quaternion vector{value.x, value.y, value.z, 0.0F};
         const Quaternion result = rotation * vector * rotation.Inverse();
@@ -222,7 +222,7 @@ namespace Horo::Math {
     }
 
     Quaternion Nlerp(const Quaternion from, Quaternion to, const float alpha) noexcept {
-        assert(IsValidQuaternion(from) && IsValidQuaternion(to) && std::isfinite(alpha));
+        HORO_ASSERT(IsValidQuaternion(from) && IsValidQuaternion(to) && std::isfinite(alpha));
         if (from.x * to.x + from.y * to.y + from.z * to.z + from.w * to.w < 0.0F)
             to = {-to.x, -to.y, -to.z, -to.w};
         return Quaternion{from.x + (to.x - from.x) * alpha, from.y + (to.y - from.y) * alpha, from.z + (to.z - from.z) * alpha,
@@ -231,7 +231,7 @@ namespace Horo::Math {
     }
 
     Quaternion Slerp(const Quaternion from, Quaternion to, const float alpha) noexcept {
-        assert(IsValidQuaternion(from) && IsValidQuaternion(to) && std::isfinite(alpha));
+        HORO_ASSERT(IsValidQuaternion(from) && IsValidQuaternion(to) && std::isfinite(alpha));
         Quaternion first = from.Normalized();
         to = to.Normalized();
         float cosine = first.x * to.x + first.y * to.y + first.z * to.z + first.w * to.w;
@@ -269,7 +269,7 @@ namespace Horo::Math {
 
     Mat4 Transform::ToMatrix() const noexcept {
         auto result = TryToMatrix();
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
@@ -295,7 +295,7 @@ namespace Horo::Math {
     }
 
     Mat4 TranslationMatrix(const Vec3 value) noexcept {
-        assert(IsFinite(value));
+        HORO_ASSERT(IsFinite(value));
         Mat4 result = Mat4::Identity();
         result.values[12] = value.x;
         result.values[13] = value.y;
@@ -304,7 +304,7 @@ namespace Horo::Math {
     }
 
     Mat4 ScaleMatrix(const Vec3 value) noexcept {
-        assert(IsFinite(value));
+        HORO_ASSERT(IsFinite(value));
         Mat4 result = Mat4::Identity();
         result.values[0] = value.x;
         result.values[5] = value.y;
@@ -313,7 +313,7 @@ namespace Horo::Math {
     }
 
     Mat4 RotationMatrix(const Quaternion value) noexcept {
-        assert(IsValidQuaternion(value));
+        HORO_ASSERT(IsValidQuaternion(value));
         const Quaternion q = value.Normalized();
         return Mat4{{1.0F - 2.0F * (q.y * q.y + q.z * q.z), 2.0F * (q.x * q.y + q.w * q.z), 2.0F * (q.x * q.z - q.w * q.y), 0.0F,
                      2.0F * (q.x * q.y - q.w * q.z), 1.0F - 2.0F * (q.x * q.x + q.z * q.z), 2.0F * (q.y * q.z + q.w * q.x), 0.0F,
@@ -452,7 +452,7 @@ namespace Horo::Math {
 
     Mat4 LookAt(const Vec3 eye, const Vec3 target, const Vec3 up) noexcept {
         auto result = TryLookAt(eye, target, up);
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
@@ -476,7 +476,7 @@ namespace Horo::Math {
     Mat4 Perspective(const float verticalFovRadians, const float aspect, const float nearPlane, const float farPlane,
                      const ClipDepthRange depthRange) noexcept {
         auto result = TryPerspective(verticalFovRadians, aspect, nearPlane, farPlane, depthRange);
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
@@ -504,7 +504,7 @@ namespace Horo::Math {
     Mat4 Orthographic(const float verticalHeight, const float aspect, const float nearPlane, const float farPlane,
                       const ClipDepthRange depthRange) noexcept {
         auto result = TryOrthographic(verticalHeight, aspect, nearPlane, farPlane, depthRange);
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
@@ -536,20 +536,20 @@ namespace Horo::Math {
     }
 
     Vec3 TransformAffinePoint(const Mat4 &matrix, const Vec3 point) noexcept {
-        assert(IsAffine(matrix) && IsFinite(point));
+        HORO_ASSERT(IsAffine(matrix) && IsFinite(point));
         const Vec4 result = TransformHomogeneous(matrix, {point.x, point.y, point.z, 1.0F});
         return {result.x, result.y, result.z};
     }
 
     Vec3 TransformDirection(const Mat4 &matrix, const Vec3 direction) noexcept {
-        assert(IsFinite(matrix) && IsFinite(direction));
+        HORO_ASSERT(IsFinite(matrix) && IsFinite(direction));
         const Vec4 result = TransformHomogeneous(matrix, {direction.x, direction.y, direction.z, 0.0F});
         return {result.x, result.y, result.z};
     }
 
     Vec3 TransformPoint(const Mat4 &matrix, const Vec3 point) noexcept {
         auto result = TryTransformPoint(matrix, point);
-        assert(result.HasValue());
+        HORO_ASSERT(result.HasValue());
         return std::move(result).Value();
     }
 
