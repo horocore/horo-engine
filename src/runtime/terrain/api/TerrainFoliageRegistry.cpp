@@ -91,9 +91,9 @@ namespace Horo::Terrain {
             if (const auto content = RequireNextRevision(candidateData.content, currentData.content); content.HasError())
                 return content;
 
-            const bool boundsChanged =
-                candidateData.bounds.minimum != currentData.bounds.minimum || candidateData.bounds.maximum != currentData.bounds.maximum;
-            if (!boundsChanged) {
+            if (const bool boundsChanged = candidateData.bounds.minimum != currentData.bounds.minimum ||
+                                           candidateData.bounds.maximum != currentData.bounds.maximum;
+                !boundsChanged) {
                 if (candidateData.bounds.revision != currentData.bounds.revision)
                     return Result<void>::Failure(MakeError(TerrainErrors::RevisionStale));
                 return Result<void>::Success();

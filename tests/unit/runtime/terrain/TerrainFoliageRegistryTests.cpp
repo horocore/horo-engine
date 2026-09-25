@@ -203,6 +203,60 @@ namespace Horo::Terrain {
         CHECK(newSnapshot.Resolve(newHandle).Value()->descriptor.Data().content.Value() == 13);
     }
 
+    TEST_CASE("Dataset removal publishes a new snapshot and preserves retained readers", "[unit][terrain][registry]") {
+        auto registry = Registry(Capabilities({TerrainFoliageCapability::TerrainQuery}));
+        REQUIRE(registry.RegisterDataset(DatasetRegistration()).HasValue());
+        const auto retained = registry.Snapshot().Value();
+        const auto oldHandle = retained.FindDataset(Dataset()).Value();
+        const auto originalRevision = retained.Binding().revision;
+
+        RequireError(registry.UnregisterDataset({}), TerrainErrors::IdentityInvalid);
+        const auto missing = registry.UnregisterDataset(Dataset("terrain/missing"));
+        REQUIRE(missing.HasValue());
+        CHECK_FALSE(missing.Value());
+        CHECK(registry.Snapshot().Value().Binding().revision == originalRevision);
+
+        const auto removed = registry.UnregisterDataset(Dataset());
+        REQUIRE(removed.HasValue());
+        CHECK(removed.Value());
+        const auto empty = registry.Snapshot().Value();
+        CHECK(empty.Binding().revision > originalRevision);
+        CHECK(empty.Datasets().empty());
+        RequireError(empty.FindDataset(Dataset()), TerrainErrors::IdentityUnknown);
+        CHECK(retained.Resolve(oldHandle).HasValue());
+        CHECK_FALSE(registry.UnregisterDataset(Dataset()).Value());
+
+        REQUIRE(registry.RegisterDataset(DatasetRegistration()).HasValue());
+        const auto restored = registry.Snapshot().Value();
+        RequireError(restored.Resolve(oldHandle), TerrainErrors::RegistryHandleStale);
+        CHECK(restored.FindDataset(Dataset()).HasValue());
+    }
+
+    TEST_CASE("Foliage removal fences handles and closes with the registry", "[unit][terrain][registry]") {
+        auto registry = Registry(Capabilities({TerrainFoliageCapability::FoliageQuery}));
+        REQUIRE(registry.RegisterFoliageType(FoliageRegistration()).HasValue());
+        const auto retained = registry.Snapshot().Value();
+        const auto oldHandle = retained.FindFoliageType(FoliageType()).Value();
+
+        RequireError(registry.UnregisterFoliageType({}), TerrainErrors::IdentityInvalid);
+        const auto missing = registry.UnregisterFoliageType(FoliageType(8));
+        REQUIRE(missing.HasValue());
+        CHECK_FALSE(missing.Value());
+
+        const auto removed = registry.UnregisterFoliageType(FoliageType());
+        REQUIRE(removed.HasValue());
+        CHECK(removed.Value());
+        const auto empty = registry.Snapshot().Value();
+        CHECK(empty.FoliageTypes().empty());
+        CHECK(empty.Binding().revision > retained.Binding().revision);
+        CHECK(retained.Resolve(oldHandle).HasValue());
+        CHECK_FALSE(registry.UnregisterFoliageType(FoliageType()).Value());
+
+        registry.BeginCancellation();
+        RequireError(registry.UnregisterFoliageType(FoliageType()), TerrainErrors::RegistryClosed);
+        CHECK(retained.Resolve(oldHandle).HasValue());
+    }
+
     TEST_CASE("Foliage type replacement requires its exact non-wrapping successor", "[unit][terrain][registry]") {
         auto registry = Registry(Capabilities({TerrainFoliageCapability::FoliageQuery}));
         REQUIRE(registry.RegisterFoliageType(FoliageRegistration()).HasValue());
