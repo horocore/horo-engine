@@ -1,8 +1,8 @@
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/ModuleHost.h"
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <utility>
 
 namespace Horo {
@@ -38,9 +38,8 @@ namespace Horo {
             return r.id == id;
         });
         const bool valid = found != m_states.end() && IsLegalTransition(found->state, to);
-        assert(valid && "Invalid module lifecycle transition.");
-        if (valid)
-            found->state = to;
+        HORO_INVARIANT_MSG(valid, "Invalid module lifecycle transition.");
+        found->state = to;
     }
 
     void ModuleHost::RequestCancellationFrom(const std::size_t base) noexcept {

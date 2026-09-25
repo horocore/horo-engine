@@ -6,6 +6,7 @@ message(STATUS "Configuring target-specific public header boundaries")
 
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/AssetCookTargetId.h
+    Horo/Foundation/Assertions.h
     Horo/Foundation/BuildOutputStore.h
     Horo/Foundation/CancellationToken.h
     Horo/Foundation/Configuration.h
@@ -78,6 +79,8 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/AchievementDefinitionRegistry.h
     Horo/PlatformServices/PlatformAchievementCoordinator.h
+    Horo/PlatformServices/PlatformOfflineQueue.h
+    Horo/PlatformServices/PlatformOfflineQueueErrors.h
     Horo/PlatformServices/PlatformDefinitionRegistries.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
     Horo/PlatformServices/PlatformRequest.h
