@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -118,6 +119,16 @@ namespace Horo::PlatformServices {
         class MetricCaptureSink final : public Telemetry::ISink {
         public:
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
+                {
+                    std::unique_lock lock(exportMutex_);
+                    if (holdNextExport_) {
+                        exportEntered_ = true;
+                        exportReady_.notify_all();
+                        exportReady_.wait(lock, [this] {
+                            return !holdNextExport_;
+                        });
+                    }
+                }
                 if (record.Kind() != Telemetry::RecordKind::Metric || descriptor == nullptr)
                     return;
 
@@ -148,6 +159,27 @@ namespace Horo::PlatformServices {
 
             void Flush() override {}
 
+            void HoldNextExport() {
+                std::lock_guard lock(exportMutex_);
+                holdNextExport_ = true;
+                exportEntered_ = false;
+            }
+
+            [[nodiscard]] bool WaitForHeldExport(const std::chrono::milliseconds timeout) {
+                std::unique_lock lock(exportMutex_);
+                return exportReady_.wait_for(lock, timeout, [this] {
+                    return exportEntered_;
+                });
+            }
+
+            void ReleaseExport() {
+                {
+                    std::lock_guard lock(exportMutex_);
+                    holdNextExport_ = false;
+                }
+                exportReady_.notify_all();
+            }
+
             [[nodiscard]] double Value(const std::string_view name, const std::string_view key = {},
                                        const std::string_view value = {}) const {
                 std::lock_guard lock(mutex_);
@@ -173,19 +205,19 @@ namespace Horo::PlatformServices {
 
             mutable std::mutex mutex_;
             std::vector<MetricSeries> series_;
+            std::mutex exportMutex_;
+            std::condition_variable exportReady_;
+            bool holdNextExport_{};
+            bool exportEntered_{};
         };
 
-        template <typename RecordMetric> [[nodiscard]] bool RecordMetricUntilAccepted(RecordMetric &&recordMetric) {
-            for (std::size_t attempt = 0; attempt < 128; ++attempt) {
-                const std::uint64_t acceptedBefore = Telemetry::Runtime::GetStatistics().acceptedRecords;
-                if (recordMetric().HasError())
-                    return false;
-                if (Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore)
-                    return true;
-                std::this_thread::yield();
+        struct MetricExportRelease final {
+            MetricCaptureSink &sink;
+
+            ~MetricExportRelease() {
+                sink.ReleaseExport();
             }
-            return false;
-        }
+        };
 
         struct TelemetryShutdown final {
             ~TelemetryShutdown() {
@@ -431,6 +463,13 @@ namespace Horo::PlatformServices {
         const auto sink = std::make_shared<MetricCaptureSink>();
         REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 256, .enabled = true}, sink));
         [[maybe_unused]] const TelemetryShutdown telemetryShutdown;
+        sink->HoldNextExport();
+        [[maybe_unused]] const MetricExportRelease exportRelease{*sink};
+        const auto marker =
+            Telemetry::Runtime::RegisterCounter({.name = "horo.platform_services.test_export_gate", .subsystem = "platform_services"});
+        REQUIRE(static_cast<bool>(marker));
+        marker.Add();
+        REQUIRE(sink->WaitForHeldExport(std::chrono::seconds{2}));
 
         auto backend = std::make_shared<RoutingBackend>(1);
         const auto session = Session();
@@ -441,12 +480,8 @@ namespace Horo::PlatformServices {
         REQUIRE(successful.HasValue());
         auto handle = std::move(successful).Value();
         REQUIRE(backend->requests.MarkRunning(handle).HasValue());
-        REQUIRE(RecordMetricUntilAccepted([&backend, &handle] {
-            return backend->requests.RecordThrottled(handle);
-        }));
-        REQUIRE(RecordMetricUntilAccepted([&backend, &handle] {
-            return backend->requests.RecordRetryScheduled(handle);
-        }));
+        REQUIRE(backend->requests.RecordThrottled(handle).HasValue());
+        REQUIRE(backend->requests.RecordRetryScheduled(handle).HasValue());
         CHECK(backend->requests.Query(handle).Value().state == PlatformRequestState::Running);
         REQUIRE(backend->requests.CompleteSuccess(handle).HasValue());
 
@@ -457,6 +492,7 @@ namespace Horo::PlatformServices {
         REQUIRE(backend->requests.Admit<int>().HasValue());
         RequireError(frontend.UnlockAchievement({subject, {1}}), RequestErrors::CapacityExceeded);
         REQUIRE(frontend.Close().HasValue());
+        sink->ReleaseExport();
         REQUIRE(Telemetry::Runtime::Flush(std::chrono::seconds{2}));
 
         CHECK(sink->Value("horo.platform_services.request.lifecycle", "outcome", "accepted") == 1.0);
