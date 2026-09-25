@@ -36,12 +36,18 @@ namespace Horo::Physics {
         float maximumMeters{1.0F};
     };
 
+    /** @brief Whether two body endpoints may generate contacts while their joint exists. */
+    enum class PhysicsJointCollisionPolicy : std::uint8_t {
+        DisableBetweenBodies,
+        AllowBetweenBodies
+    };
+
     /**
      * @brief Owned structural runtime request; contains no native state, resource lease or published constraint identity.
      *
      * The first endpoint is always a body; the second is a body or an explicit world anchor.
      * Defaults deliberately leave the first handle invalid. Fixed and distance parameters are the
-     * initial descriptor vocabulary, not a claim that the runtime implements either solver operation.
+     * initial descriptor vocabulary implemented by the canonical scene runtime.
      * Hinge/slider/cone-twist/six-DOF and drive/break policies belong to subsequent typed contracts;
      * they must not be approximated by one of these alternatives.
      *
@@ -52,6 +58,7 @@ namespace Horo::Physics {
         PhysicsBodyAnchor first;
         std::variant<PhysicsBodyAnchor, PhysicsWorldAnchor> second{PhysicsWorldAnchor{}};
         std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint> parameters;
+        PhysicsJointCollisionPolicy collisionPolicy{PhysicsJointCollisionPolicy::DisableBetweenBodies};
     };
 
     /**

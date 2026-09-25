@@ -439,14 +439,56 @@ enter the fatal path when recovery cannot be guaranteed.
 
 ## Assertions And Invariants
 
-Assertions indicate programmer errors, not invalid user content.
+Assertions indicate programmer errors, not invalid user content. `HORO_ASSERT`
+checks programmer preconditions only when `NDEBUG` is not defined;
+`HORO_INVARIANT` checks an internal invariant in every build. Both route failure
+through the Foundation assertion boundary, which writes a `Critical` emergency
+record with source location and terminates. `HORO_ASSERT` is compiled out in
+release configurations without evaluating its condition or message.
 
-- Debug and development builds fail fast with source context.
-- Release builds preserve safety checks required to prevent corruption.
-- User-provided project, asset, scene, network, or protocol data is validated
-  and returns errors instead of triggering assertions.
-- An assertion failure emits an emergency record before termination when the
-  logging runtime is available.
+The standard CMake configuration policy is:
+
+| CMake build type | `NDEBUG` | `HORO_ASSERT` | `HORO_INVARIANT` |
+|---|---:|---|---|
+| `Debug` | unset | Evaluated; failure reports and terminates | Evaluated; failure reports and terminates |
+| `Release` | set | Compiled out | Evaluated; failure reports and terminates |
+| `RelWithDebInfo` | set | Compiled out | Evaluated; failure reports and terminates |
+| `MinSizeRel` | set | Compiled out | Evaluated; failure reports and terminates |
+
+Custom configurations follow their `NDEBUG` definition. Keep assertion
+expressions free of side effects. Use the mechanisms below according to the
+condition being represented:
+
+| Condition | Debug | Release configurations | Contract |
+|---|---|---|---|
+| Invalid project, asset, scene, network, or protocol input | Return typed `Result`/`Error` or validation diagnostics | Same | Validate at the input boundary; never assert on user-controlled data. |
+| Expected operation failure | Return typed `Result`/`Error`; log at the actionable owner when useful | Same | Callers branch on typed identity and status, never text. |
+| Programmer precondition violation | `HORO_ASSERT` reports source context and terminates | `HORO_ASSERT` is absent | A release caller must not depend on the check for memory or persistent-data safety. |
+| Internal invariant whose violation makes continued use unsafe | `HORO_INVARIANT` reports and terminates | Same | Keep the check active in every build. |
+| Non-fatal execution evidence | Structured diagnostics/logs | Same | Reporting does not become an operation result or control-flow input. |
+
+Release safety checks belong in typed validation and always-on invariants. A
+debug-only assertion cannot guard memory safety, resource lifetime, persisted
+state, or another property required to continue safely. `Result` accessors use
+always-on invariants for invalid `Value()`/`ErrorValue()` access, avoiding a
+release-only standard-library exception or unchecked dereference.
+
+`Logger::WriteEmergency` bypasses filtering and queued sinks, writes directly to
+standard error, flushes it, and returns no status. It is used for fail-fast
+reporting; normal `LOG_*` calls remain supporting evidence and never decide
+operation success, failure, or recovery.
+
+Expected severities convert exactly as follows:
+
+| `ErrorSeverity` | `DiagnosticSeverity` |
+|---|---|
+| `Info` | `Note` |
+| `Warning` | `Warning` |
+| `Error` | `Error` |
+| `Critical` | `Fatal` |
+
+Logging levels remain a separate evidence vocabulary. Similar names do not
+create an implicit conversion or control-flow contract.
 
 ## Host Translation
 
@@ -501,6 +543,8 @@ Required tests cover:
 - redaction of error metadata
 - no success event after a failed operation
 - release-build invariant checks that protect memory or persistent data
+- build-policy helper behavior: debug assertions follow `NDEBUG`, always-on
+  invariants remain evaluated, and error-to-diagnostic severity mapping is exact
 
 ## Related Documents
 
