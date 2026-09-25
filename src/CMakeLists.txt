@@ -1694,6 +1694,12 @@ target_link_libraries(HoroExtensions
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz
 )
 
+# Host composition bridge: neither Platform Services nor Extensions depends on the other.
+add_library(HoroPlatformServicesExtension STATIC platform_services/PlatformProviderAdmission.cpp)
+add_library(HoroEngine::PlatformServicesExtension ALIAS HoroPlatformServicesExtension)
+target_compile_features(HoroPlatformServicesExtension PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformServicesExtension PUBLIC HoroEngine::PlatformServices HoroEngine::Extensions)
+
 if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroGui PRIVATE HoroEngine::Extensions)
 endif ()
