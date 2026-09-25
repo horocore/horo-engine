@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -164,6 +165,23 @@ namespace Horo::Physics {
                 }
             }
             queryEventCapabilities.clear();
+        }
+
+        [[nodiscard]] Result<void> CheckPublicationRevisionCapacity() const {
+            if (published.publicationRevision == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
+            return Result<void>::Success();
+        }
+
+        void InvalidateQueryEventPublication() noexcept {
+            Detail::PublicationGuard publicationGuard{publicationLock};
+            if (published.completedTick == 0)
+                return;
+            // An immediate structural edit changes query results without completing a new event tick.
+            ++published.publicationRevision;
+            published.eventTick = 0;
+            published.eventCount = 0;
+            published.droppedEventCount = 0;
         }
 
         [[nodiscard]] Result<void> Reinitialize() {
