@@ -480,6 +480,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine:
 
 add_library(HoroNetworkRuntime STATIC
         runtime/networking/TransportBackendComposition.cpp
+        runtime/networking/NetworkDiagnostics.cpp
         runtime/networking/AuthenticationSessionAdapter.cpp
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp

@@ -237,6 +237,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/TransportBackendComposition.h
+    Horo/Network/NetworkDiagnostics.h
     Horo/Network/AuthenticationSessionAdapter.h
     Horo/Network/HandshakeNegotiation.h
     Horo/Network/NetworkObjectMapping.h

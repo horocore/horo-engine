@@ -234,6 +234,7 @@ if(HORO_BUILD_NETWORK_GNS)
 endif()
 add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/AuthenticationSessionAdapterTests.cpp
+        unit/runtime/networking/NetworkDiagnosticsTests.cpp
         unit/runtime/networking/HandshakeNegotiationTests.cpp
         unit/runtime/networking/NetworkObjectMappingTests.cpp
         unit/runtime/networking/PeerSessionLifecycleTests.cpp
