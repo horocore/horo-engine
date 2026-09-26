@@ -204,6 +204,14 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotIndexLimitExceeded;
     /** @brief Private slot-index candidate or diagnostic storage could not be allocated. */
     extern const ErrorCodeDescriptor SlotIndexAllocationFailed;
+    /** @brief Cloud metadata schema, scope, state, or provider evidence is malformed. */
+    extern const ErrorCodeDescriptor CloudMetadataInvalid;
+    /** @brief Cloud metadata names a different local index revision or slot generation. */
+    extern const ErrorCodeDescriptor CloudMetadataStale;
+    /** @brief Cloud metadata exceeds a finite record, object-key, or revision bound. */
+    extern const ErrorCodeDescriptor CloudMetadataLimitExceeded;
+    /** @brief A bounded cloud metadata snapshot could not be allocated. */
+    extern const ErrorCodeDescriptor CloudMetadataAllocationFailed;
     /** @brief A local storage operation request, address, payload, or configured limit is invalid. */
     extern const ErrorCodeDescriptor StorageOperationInvalid;
     /** @brief The selected storage provider does not implement the requested operation. */

@@ -1115,6 +1115,31 @@ Platform Services treats that key and finalized archive bytes as opaque and cann
 edit local storage. The application/profile-owned `CloudSaveCoordinator` is the one
 sync state authority; Platform Services and UI are transport/presentation adapters.
 
+The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
+complete local `SaveNamespaceId` plus distinct provider and account identities. Each
+record names one current slot generation and exact `ArchiveContentHash`, with bounded
+opaque provider object key, optional CAS revision, typed sync state and last confirmed
+mutation. Provider revisions are not ordered and are never substituted for generation
+or archive identity. The sidecar is not an archive field or a credential store.
+The older `SaveSlotPublicationMetadata.cloudState` is only a non-causal catalog
+listing hint; it cannot override this generation-bound coordinator state or grant a
+remote mutation. Presentation adapters derive current sync status from a validated
+coordinator snapshot instead of treating that hint as a second authority.
+
+The local storage authority persists the sidecar and matching `SaveSlotIndex` as one
+atomic catalog publication under the namespace/slot lease. Readers expose only a
+validated immutable pair; a mismatched index revision, generation, hash, scope,
+schema or limit is not a usable cloud state. A missing or stale sidecar is rebuilt
+from the authoritative local index: exact same-scope generation/hash rows may retain
+confirmed evidence even when another slot advanced the index. Changed rows become
+`Unknown`; sidecars naming a newer index than the local input are rejected rather than
+rolled back. In-flight upload/download
+states return to `Unknown` for journal reconciliation after restart. Missing rows
+never imply deletion; `Deleted` explicitly describes a confirmed remote state for a
+still-named local generation, with durable deletion intent owned by the separate sync
+journal. Existing catalogs need no archive migration: first open creates an all-unknown
+sidecar before cloud scheduling. No cloud failure changes local-save success.
+
 Automatic remote mutation requires provider-enforced conditional revision. A read
 followed by unconditional write, a process-local mutex, advisory lease or provider
 timestamp is insufficient. An uncoordinated blob backend disables background
