@@ -109,6 +109,13 @@ fifteen-minute timeout, and cancellation escalates from a two-second graceful
 window to forced tree termination while stdout and stderr remain continuously
 drained.
 
+The service exposes a project-scoped, owned snapshot of the active build for
+presentation clients. A workspace may detach and reopen its Build Output panel
+without owning or cancelling the session. The snapshot includes its monotonic
+start time so elapsed time is derived by the reader; cancellation always routes
+through the service using the session ID. Terminal results remain in Build Output
+and Operations rather than in the active-session projection.
+
 Freshness is a SHA-256 identity over project CMake files, native sources and
 headers, declared extra inputs, SDK fingerprint, selected configuration,
 generator/toolset/platform, and compiler identity. Compiler binary SHA-256 is

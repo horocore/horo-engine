@@ -173,6 +173,8 @@ namespace Horo::Application {
             {
                 std::lock_guard lock(session->Mutex());
                 id = session->snapshot.operationId;
+                if (progress.has_value())
+                    session->snapshot.progress = progress;
             }
             if (state.operations != nullptr && id.has_value())
                 static_cast<void>(state.operations->Update(*id, {operationState, phase, message, progress, std::move(error)}));
@@ -738,6 +740,7 @@ namespace Horo::Application {
 
             auto session = std::make_shared<GameplayBuildService::State::Session>();
             session->snapshot.id = state->nextId++;
+            session->snapshot.startedAt = std::chrono::steady_clock::now();
             if (state->output != nullptr) {
                 session->outputSessionId = state->output->BeginSession();
                 if (!session->outputSessionId.has_value())
@@ -766,8 +769,9 @@ namespace Horo::Application {
                 std::string phase;
                 {
                     std::lock_guard lock(target->Mutex());
-                    if (IsTerminal(target->snapshot.state))
+                    if (IsTerminal(target->snapshot.state) || target->snapshot.cancellationRequested)
                         return;
+                    target->snapshot.cancellationRequested = true;
                     target->cancellation.RequestCancellation();
                     phase = target->snapshot.phase;
                     target->pendingRequest.reset();
@@ -994,6 +998,36 @@ namespace Horo::Application {
         return session->snapshot;
     }
 
+    /** @copydoc GameplayBuildService::QueryActiveProject */
+    std::optional<GameplayBuildSnapshot> GameplayBuildService::QueryActiveProject(const std::filesystem::path &projectRoot) const {
+        std::error_code error;
+        const std::filesystem::path absolute = std::filesystem::absolute(projectRoot, error);
+        if (error)
+            return std::nullopt;
+        const std::string projectKey = absolute.lexically_normal().generic_string();
+        std::shared_ptr<State::Session> session;
+        GameplayBuildSessionId sessionId{};
+        {
+            std::lock_guard lock(state_->Mutex());
+            const auto active = state_->activeProjects.find(projectKey);
+            if (active == state_->activeProjects.end())
+                return std::nullopt;
+            const auto found = state_->sessions.find(active->second);
+            if (found == state_->sessions.end())
+                return std::nullopt;
+            sessionId = active->second;
+            session = found->second;
+        }
+        std::scoped_lock lock(state_->Mutex(), session->Mutex());
+        if (const auto active = state_->activeProjects.find(projectKey);
+            active == state_->activeProjects.end() || active->second != sessionId)
+            return std::nullopt;
+        if (const auto found = state_->sessions.find(sessionId);
+            found == state_->sessions.end() || found->second != session || IsTerminal(session->snapshot.state))
+            return std::nullopt;
+        return session->snapshot;
+    }
+
     bool GameplayBuildService::RequestCancel(const GameplayBuildSessionId id) const {
         const std::shared_ptr<State::Session> session = FindSession(state_, id);
         if (!session)
@@ -1002,8 +1036,9 @@ namespace Horo::Application {
         std::string phase;
         {
             std::lock_guard lock(session->Mutex());
-            if (IsTerminal(session->snapshot.state))
+            if (IsTerminal(session->snapshot.state) || session->snapshot.cancellationRequested)
                 return false;
+            session->snapshot.cancellationRequested = true;
             session->cancellation.RequestCancellation();
             session->pendingRequest.reset();
             session->snapshot.pendingInputHash.reset();
@@ -1041,8 +1076,10 @@ namespace Horo::Application {
         }
         for (const auto &session : sessions) {
             std::lock_guard lock(session->Mutex());
-            if (!IsTerminal(session->snapshot.state))
+            if (!IsTerminal(session->snapshot.state)) {
+                session->snapshot.cancellationRequested = true;
                 session->cancellation.RequestCancellation();
+            }
         }
         for (const auto &session : sessions) {
             std::shared_ptr<JobHandle> job;

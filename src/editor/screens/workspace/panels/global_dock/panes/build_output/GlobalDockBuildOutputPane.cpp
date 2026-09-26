@@ -163,6 +163,30 @@ namespace Horo::Editor {
                 return std::format("{}:{}", source->absolutePath, source->line);
             return std::format("{}:{}:{}", source->absolutePath, source->line, source->column);
         }
+
+        [[nodiscard]] const char *ActiveBuildStateKey(const Application::GameplayBuildState state) noexcept {
+            using enum Application::GameplayBuildState;
+            switch (state) {
+                case Queued:
+                    return "workspace.global_dock.build_output.active_state.queued";
+                case AcquiringLock:
+                    return "workspace.global_dock.build_output.active_state.acquiring_lock";
+                case WaitingForExternalBuild:
+                    return "workspace.global_dock.build_output.active_state.waiting";
+                case Configuring:
+                    return "workspace.global_dock.build_output.active_state.configuring";
+                case Building:
+                    return "workspace.global_dock.build_output.active_state.building";
+                case Validating:
+                    return "workspace.global_dock.build_output.active_state.validating";
+                case Succeeded:
+                case Failed:
+                case Cancelled:
+                case TimedOut:
+                    return "workspace.global_dock.build_output.active_state.queued";
+            }
+            return "workspace.global_dock.build_output.active_state.queued";
+        }
     }  // namespace
 
     /** @copydoc GlobalDockBuildOutputPane::ProjectStatusPresentation */
@@ -172,8 +196,11 @@ namespace Horo::Editor {
     }
 
     /** @copydoc GlobalDockBuildOutputPane::Attach */
-    void GlobalDockBuildOutputPane::Attach(const IBuildOutputQuery *buildOutputQuery) noexcept {
+    void GlobalDockBuildOutputPane::Attach(const IBuildOutputQuery *buildOutputQuery,
+                                           const Application::GameplayBuildService *gameplayBuilds, const std::string_view projectRoot) {
         m_buildOutputQuery = buildOutputQuery;
+        m_gameplayBuilds = gameplayBuilds;
+        m_projectRoot = projectRoot;
         m_snapshot = {};
         m_revision = 0;
         m_filteredIndices.clear();
@@ -184,6 +211,8 @@ namespace Horo::Editor {
     /** @copydoc GlobalDockBuildOutputPane::Detach */
     void GlobalDockBuildOutputPane::Detach() noexcept {
         m_buildOutputQuery = nullptr;
+        m_gameplayBuilds = nullptr;
+        m_projectRoot.clear();
         m_snapshot = {};
         m_revision = 0;
         m_filteredIndices.clear();
@@ -196,9 +225,11 @@ namespace Horo::Editor {
         if (m_filterDirty)
             RebuildFilter();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
-        const GlobalDockPaneRegions regions =
+        GlobalDockPaneRegions regions =
             ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
+        const auto active =
+            m_gameplayBuilds != nullptr && !m_projectRoot.empty() ? m_gameplayBuilds->QueryActiveProject(m_projectRoot) : std::nullopt;
 
         std::size_t errorCount = 0U;
         std::size_t warningCount = 0U;
@@ -207,8 +238,49 @@ namespace Horo::Editor {
             warningCount += IsWarningRecord(record) ? 1U : 0U;
         }
         DrawToolbar(regions, metrics, context, errorCount, warningCount);
+        if (active.has_value()) {
+            const float activeHeight = std::min(metrics.toolbarHeight, std::max(0.0F, regions.contentHeight - metrics.tableHeaderHeight));
+            if (activeHeight >= metrics.controlHeight) {
+                DrawActiveBuild(*active, regions, metrics, context, activeHeight);
+                regions.contentOrigin.y += activeHeight;
+                regions.contentHeight -= activeHeight;
+            }
+        }
         DrawTable(regions, metrics, context, command, snapshotChanged);
         DrawFooter(regions, metrics, context, errorCount, warningCount);
+    }
+
+    void GlobalDockBuildOutputPane::DrawActiveBuild(const Application::GameplayBuildSnapshot &snapshot,
+                                                    const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
+                                                    const EditorGuiContext &context, const float height) const {
+        const GlobalDockToolbarChipProps cancel{
+            .id = "BuildCancelActive",
+            .label = context.localization.Get("editor", snapshot.cancellationRequested ? "workspace.global_dock.build_output.cancelling"
+                                                                                       : "workspace.global_dock.build_output.cancel"),
+            .tone = GlobalDockTone::Warning,
+            .disabled = snapshot.cancellationRequested,
+        };
+        const float y = regions.contentOrigin.y;
+        const float buttonWidth = std::min(MeasureGlobalDockToolbarChip(cancel, context.theme.fonts),
+                                           std::max(1.0F, regions.contentWidth - 2.0F * metrics.contentPadding));
+        const float buttonX = regions.contentOrigin.x + regions.contentWidth - metrics.contentPadding - buttonWidth;
+        const float controlY = y + (height - metrics.controlHeight) * 0.5F;
+        DrawGlobalDockToolbarSurface({regions.contentOrigin.x, y}, regions.contentWidth, height);
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - snapshot.startedAt);
+        const std::string progress =
+            snapshot.progress.has_value() ? std::format(" · {}%", static_cast<int>(*snapshot.progress * 100.0F)) : std::string{};
+        const std::string label =
+            std::format("{} · {}{} · {}:{:02d}", context.localization.Get("editor", "workspace.global_dock.build_output.active"),
+                        context.localization.Get("editor", ActiveBuildStateKey(snapshot.state)), progress, elapsed.count() / 60,
+                        elapsed.count() % 60);
+        const float textY = y + (height - Theme::TextPx::Label()) * 0.5F;
+        DrawGlobalDockClippedText(*ImGui::GetWindowDrawList(), context.theme.fonts.sansCompact, Theme::TextPx::Label(),
+                                  {regions.contentOrigin.x + metrics.contentPadding, textY}, {buttonX - metrics.toolbarGap, y + height},
+                                  Theme::Text(), label);
+
+        if (DrawGlobalDockToolbarChip({buttonX, controlY}, buttonWidth, cancel, context.theme.fonts))
+            static_cast<void>(m_gameplayBuilds->RequestCancel(snapshot.id));
     }
 
     void GlobalDockBuildOutputPane::DrawToolbar(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
