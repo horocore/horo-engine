@@ -99,7 +99,7 @@ namespace Horo::Navigation {
          * @param current Fresh combined-world observation at publication.
          * @return Success or invalid/stale descriptor; on failure the existing path is unchanged.
          */
-        [[nodiscard]] Result<void> Install(PathId id, NavigationPath path, NavigationOutcomeProvenance provenance,
+        [[nodiscard]] Result<void> Install(PathId id, NavigationPath path, const NavigationOutcomeProvenance &provenance,
                                            NavigationCoverageEvidence coverage, std::uint64_t linkRevision, std::uint64_t goalRevision,
                                            const NavigationPathObservation &current);
 
@@ -165,7 +165,7 @@ namespace Horo::Navigation {
         /** @brief Find the first changed source dependency in deterministic precedence. */
         [[nodiscard]] static NavigationPathInvalidation Compare(const Held &held, const NavigationPathObservation &current) noexcept;
         /** @brief Replace the single pending intent with the newest observed goal and source. */
-        void Queue(NavigationPathInvalidation cause, const NavigationPathObservation &current, bool forced) noexcept;
+        void Queue(const NavigationPathInvalidation &cause, const NavigationPathObservation &current, bool forced) noexcept;
 
         NavigationRepathPolicy policy_;
         std::optional<Held> held_;

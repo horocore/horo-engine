@@ -166,6 +166,23 @@ namespace Horo::Navigation {
         REQUIRE(policy.Decide(23).action == NavigationRepathAction::Submit);
     }
 
+    TEST_CASE("Tick zero remains an observed and submitted tick", "[unit][navigation][path-policy]") {
+        const auto source = Source();
+        auto now = Observation(source, {}, 0);
+        NavigationPathPolicy policy({.debounceTicks = 0, .cooldownTicks = 3});
+        REQUIRE(policy.ForceRepath(now).HasValue());
+        REQUIRE(policy.Decide(0).action == NavigationRepathAction::Submit);
+        REQUIRE(policy.MarkSubmitted(0));
+
+        now.goalRevision = 11;
+        now.tick = 1;
+        REQUIRE(policy.Observe(now).HasValue());
+        REQUIRE(policy.Decide(1).action == NavigationRepathAction::CoolingDown);
+        now.tick = 3;
+        REQUIRE(policy.Observe(now).HasValue());
+        REQUIRE(policy.Decide(3).action == NavigationRepathAction::Submit);
+    }
+
     TEST_CASE("Partial corridor tracks missing coverage and cannot be mislabeled complete", "[unit][navigation][path-policy]") {
         const auto source = Source();
         const std::array covered{NavigationCoverageDependency{.region = 41, .generation = Identity<NavigationGeneration>(3)}};

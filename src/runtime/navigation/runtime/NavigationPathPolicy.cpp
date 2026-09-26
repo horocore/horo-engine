@@ -16,21 +16,17 @@ namespace Horo::Navigation {
         /** @brief Reject a path whose status or canonical corridor identities contradict its source. */
         bool ValidCorridor(const NavigationPath &path, const NavigationOutcomeProvenance &provenance,
                            const NavigationCoverageEvidence &coverage) noexcept {
-            if (path.sourceGeneration != provenance.topology ||
-                (path.status != NavigationPathStatus::Reachable && path.status != NavigationPathStatus::Partial))
+            using enum NavigationPathStatus;
+            if (path.sourceGeneration != provenance.topology || (path.status != Reachable && path.status != Partial))
                 return false;
-            if ((path.status == NavigationPathStatus::Reachable && !coverage.IsComplete()) ||
-                (path.status == NavigationPathStatus::Partial && coverage.IsComplete()))
+            if ((path.status == Reachable && !coverage.IsComplete()) || (path.status == Partial && coverage.IsComplete()))
                 return false;
-            for (const auto &polygon : path.corridor) {
-                if (polygon.provenance.world != provenance.world || polygon.provenance.topology != provenance.topology)
-                    return false;
-            }
-            for (const auto &waypoint : path.waypoints) {
-                if (waypoint.provenance.polygon.world != provenance.world || waypoint.provenance.polygon.topology != provenance.topology)
-                    return false;
-            }
-            return true;
+            const bool corridorMatches = std::ranges::all_of(path.corridor, [&](const auto &polygon) {
+                return polygon.provenance.world == provenance.world && polygon.provenance.topology == provenance.topology;
+            });
+            return corridorMatches && std::ranges::all_of(path.waypoints, [&](const auto &waypoint) {
+                return waypoint.provenance.polygon.world == provenance.world && waypoint.provenance.polygon.topology == provenance.topology;
+            });
         }
 
         /** @brief Check one bounded covered-or-missing dependency set against the current sorted region slice. */
@@ -66,7 +62,7 @@ namespace Horo::Navigation {
 
     /** @brief Reject time or same-world revision rollback after an earlier owner observation. */
     bool NavigationPathPolicy::ValidAdvance(const NavigationPathObservation &current) const noexcept {
-        if (lastObservedTick_ && current.tick < *lastObservedTick_)
+        if (lastObservedTick_.has_value() && current.tick < *lastObservedTick_)
             return false;
         if (!lastObservedProvenance_ || lastObservedProvenance_->world != current.provenance.world)
             return true;
@@ -80,20 +76,21 @@ namespace Horo::Navigation {
 
     /** @brief Find the first changed source dependency in deterministic precedence. */
     NavigationPathInvalidation NavigationPathPolicy::Compare(const Held &held, const NavigationPathObservation &current) noexcept {
+        using enum NavigationPathInvalidationKind;
         const auto &source = held.provenance;
         const auto &now = current.provenance;
         if (source.world != now.world)
-            return Change(NavigationPathInvalidationKind::World, source.world.Value(), now.world.Value());
+            return Change(World, source.world.Value(), now.world.Value());
         if (source.filterRevision != now.filterRevision)
-            return Change(NavigationPathInvalidationKind::Filter, source.filterRevision, now.filterRevision);
+            return Change(Filter, source.filterRevision, now.filterRevision);
         if (source.profileRevision != now.profileRevision)
-            return Change(NavigationPathInvalidationKind::Profile, source.profileRevision, now.profileRevision);
+            return Change(Profile, source.profileRevision, now.profileRevision);
         if (source.originRevision != now.originRevision)
-            return Change(NavigationPathInvalidationKind::Origin, source.originRevision, now.originRevision);
+            return Change(Origin, source.originRevision, now.originRevision);
         if (source.obstacleRevision != now.obstacleRevision)
-            return Change(NavigationPathInvalidationKind::Obstacle, source.obstacleRevision, now.obstacleRevision);
+            return Change(Obstacle, source.obstacleRevision, now.obstacleRevision);
         if (held.linkRevision != current.linkRevision)
-            return Change(NavigationPathInvalidationKind::Link, held.linkRevision, current.linkRevision);
+            return Change(Link, held.linkRevision, current.linkRevision);
 
         if (held.coverage.Scope() == NavigationCoverageScope::ExactRegions) {
             if (const auto changed = ChangedRegion(held.coverage.Covered(), current.regions); changed.IsStale())
@@ -103,14 +100,14 @@ namespace Horo::Navigation {
         }
         // Corridor polygon indices are scoped to a whole topology generation even if exact regions survived.
         if (source.topology != now.topology)
-            return Change(NavigationPathInvalidationKind::Topology, source.topology.Value(), now.topology.Value());
+            return Change(Topology, source.topology.Value(), now.topology.Value());
         if (held.goalRevision != current.goalRevision)
-            return Change(NavigationPathInvalidationKind::Target, held.goalRevision, current.goalRevision);
+            return Change(Target, held.goalRevision, current.goalRevision);
         return {};
     }
 
     /** @brief Replace the single pending intent with the newest observed goal and source. */
-    void NavigationPathPolicy::Queue(const NavigationPathInvalidation cause, const NavigationPathObservation &current,
+    void NavigationPathPolicy::Queue(const NavigationPathInvalidation &cause, const NavigationPathObservation &current,
                                      const bool forced) noexcept {
         const bool wasForced = pending_.has_value() && pending_->forced;
         pending_ = Pending{.cause = cause,
@@ -121,7 +118,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationPathPolicy::Install */
-    Result<void> NavigationPathPolicy::Install(const PathId id, NavigationPath path, NavigationOutcomeProvenance provenance,
+    Result<void> NavigationPathPolicy::Install(const PathId id, NavigationPath path, const NavigationOutcomeProvenance &provenance,
                                                NavigationCoverageEvidence coverage, const std::uint64_t linkRevision,
                                                const std::uint64_t goalRevision, const NavigationPathObservation &current) {
         if (!id.IsValid() || id.world != provenance.world || lastInvalidation_.kind == NavigationPathInvalidationKind::World ||
@@ -194,10 +191,9 @@ namespace Horo::Navigation {
     Result<void> NavigationPathPolicy::ForceRepath(const NavigationPathObservation &current) {
         if (!ValidObservation(current) || !ValidAdvance(current))
             return Result<void>::Failure(MakeError(NavigationErrors::OutcomeDescriptorInvalid));
-        const auto observed = Observe(current);
-        if (observed.HasError())
+        if (const auto observed = Observe(current); observed.HasError())
             return Result<void>::Failure(observed.ErrorValue());
-        if (observed.Value().kind == NavigationPathInvalidationKind::World)
+        else if (observed.Value().kind == NavigationPathInvalidationKind::World)
             return Result<void>::Failure(MakeError(NavigationErrors::InvalidWorld));
         Queue({}, current, true);
         return Result<void>::Success();
@@ -205,7 +201,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationPathPolicy::Decide */
     NavigationRepathDecision NavigationPathPolicy::Decide(const std::uint64_t tick) const noexcept {
-        if (!pending_ || !lastObservedTick_ || tick != *lastObservedTick_)
+        if (!pending_ || !lastObservedTick_.has_value() || tick != *lastObservedTick_)
             return {};
         NavigationRepathDecision decision{.action = NavigationRepathAction::Submit,
                                           .cause = pending_->cause,
@@ -215,7 +211,7 @@ namespace Horo::Navigation {
         if (!pending_->forced) {
             if (tick < pending_->changedTick || tick - pending_->changedTick < policy_.debounceTicks)
                 decision.action = NavigationRepathAction::Debouncing;
-            else if (lastSubmittedTick_ && (tick < *lastSubmittedTick_ || tick - *lastSubmittedTick_ < policy_.cooldownTicks))
+            else if (lastSubmittedTick_.has_value() && (tick < *lastSubmittedTick_ || tick - *lastSubmittedTick_ < policy_.cooldownTicks))
                 decision.action = NavigationRepathAction::CoolingDown;
         }
         return decision;
