@@ -526,6 +526,7 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/builtin/obj_mesh/ObjMeshPreviewProvider.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshImporter.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshParser.cpp
+        runtime/assets/importer/builtin/fbx_mesh/PreFracturedFbxParser.cpp
 )
 add_library(HoroEngine::Assets ALIAS HoroAssets)
 target_compile_features(HoroAssets PUBLIC cxx_std_20)
@@ -818,6 +819,14 @@ add_library(HoroDestructionApi STATIC
 add_library(HoroEngine::DestructionApi ALIAS HoroDestructionApi)
 target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+
+add_library(HoroDestructionCook STATIC
+        runtime/destruction/cook/PreFracturedIntersection.cpp
+        runtime/destruction/cook/PreFracturedImport.cpp
+)
+add_library(HoroEngine::DestructionCook ALIAS HoroDestructionCook)
+target_compile_features(HoroDestructionCook PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionCook PUBLIC HoroEngine::DestructionApi HoroEngine::Assets)
 
 add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp

@@ -472,6 +472,16 @@ target_link_libraries(HoroDestructionApiTests PRIVATE HoroEngine::DestructionApi
 target_include_directories(HoroDestructionApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 horo_register_catch_test(HoroDestructionApiTests LABELS "unit;destruction;headless")
 
+add_executable(HoroPreFracturedImportTests
+        unit/runtime/destruction/PreFracturedImportTests.cpp
+        unit/runtime/destruction/PreFracturedIntersectionTests.cpp
+)
+target_compile_features(HoroPreFracturedImportTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPreFracturedImportTests PRIVATE HoroEngine::DestructionCook)
+target_include_directories(HoroPreFracturedImportTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/destruction/cook)
+target_compile_definitions(HoroPreFracturedImportTests PRIVATE HORO_UFBX_TEST_DATA_DIR="${ufbx_SOURCE_DIR}/data")
+horo_register_catch_test(HoroPreFracturedImportTests LABELS "unit;destruction;headless")
+
 add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/CurveSamplingTests.cpp
