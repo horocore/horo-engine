@@ -218,6 +218,7 @@ add_library(HoroRuntime STATIC
         runtime/lifecycle/RuntimeHost.cpp
         runtime/lifecycle/RuntimeErrors.cpp
         runtime/save/SaveErrors.cpp
+        runtime/save/SaveProtectionErrors.cpp
         runtime/save/SaveDiagnostics.cpp
         runtime/save/SaveIdentity.cpp
         runtime/save/SaveRootResolver.cpp
@@ -239,6 +240,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveReader.cpp
         runtime/save/SaveArchiveReaderValidation.cpp
+        runtime/save/SaveArchiveProtection.cpp
+        runtime/save/SaveArchiveAuthenticity.cpp
         runtime/save/SaveCanonicalCodec.cpp
         runtime/save/SaveCanonicalScalarCodec.cpp
         runtime/save/SaveCanonicalCompositeWriter.cpp
