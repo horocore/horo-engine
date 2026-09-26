@@ -84,6 +84,8 @@ namespace Horo::PlatformServices {
         friend class PlatformProviderFactory;
         friend class PlatformProviderLifecycleHost;
         explicit PlatformProviderCandidateLease(std::shared_ptr<PlatformProviderCandidateState> state) noexcept;
+        [[nodiscard]] HoroPlatformProviderOperations Operations() const noexcept;
+        [[nodiscard]] void *NativeCandidate() const noexcept;
         std::shared_ptr<PlatformProviderCandidateState> state_;
     };
 
@@ -103,9 +105,19 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor ShutdownFailed;
     }  // namespace PlatformProviderLifecycleErrors
 
+    /** @brief Finite monotonic timeout for each service, fixed when a host starts. */
+    struct PlatformProviderRequestPolicy final {
+        /** @brief Per-service admission deadline, default 30 seconds. */
+        std::array<std::chrono::milliseconds, static_cast<std::size_t>(PlatformServiceKind::Count)> timeouts = [] {
+            std::array<std::chrono::milliseconds, static_cast<std::size_t>(PlatformServiceKind::Count)> values{};
+            values.fill(std::chrono::seconds{30});
+            return values;
+        }();
+    };
+
     class PlatformProviderAdmission;
 
-    /** @brief Complete exact selection and consumer authority used to start a provider lifecycle. */
+    /** @brief Complete exact selection, consumer authority, and finite request policy for one provider lifecycle. */
     struct PlatformProviderLifecycleStartContext final {
         const PlatformProjectConfiguration &configuration;                 /**< Immutable selected provider and required service set. */
         const PlatformProviderAdmission &admission;                        /**< Host-owned admission registry. */
@@ -115,16 +127,7 @@ namespace Horo::PlatformServices {
         std::string_view consumerExtensionId;                              /**< Stable consuming extension identity. */
         std::string_view consumerModuleId;                                 /**< Stable consuming module identity. */
         std::uint64_t consumerGeneration{};                                /**< Current consumer generation. */
-    };
-
-    /** @brief Finite monotonic timeout for each service, fixed when a host starts. */
-    struct PlatformProviderRequestPolicy final {
-        /** @brief Per-service admission deadline, default 30 seconds. */
-        std::array<std::chrono::milliseconds, static_cast<std::size_t>(PlatformServiceKind::Count)> timeouts = [] {
-            std::array<std::chrono::milliseconds, static_cast<std::size_t>(PlatformServiceKind::Count)> values{};
-            values.fill(std::chrono::seconds{30});
-            return values;
-        }();
+        PlatformProviderRequestPolicy requestPolicy{}; /**< Finite per-service timeouts; zero or over 24 hours is rejected. */
     };
 
     /**
@@ -137,13 +140,12 @@ namespace Horo::PlatformServices {
     public:
         using RequestHandle = PlatformRequestHandle<void>;
 
-        /** @brief Resolves the exact immutable selection and starts each operation stage in declared order.
+        /** @brief Resolves the exact selection, authority, and request policy and starts each operation stage.
          * @param context Complete selection and consumer authority captured by the host.
-         * @param requestPolicy Finite per-service timeouts; zero or over 24 hours fails before native creation.
          * @return Started host or typed configuration/provider failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start(
-            const PlatformProviderLifecycleStartContext &context, PlatformProviderRequestPolicy requestPolicy = {});
+            const PlatformProviderLifecycleStartContext &context);
 
         ~PlatformProviderLifecycleHost();
         PlatformProviderLifecycleHost(const PlatformProviderLifecycleHost &) = delete;
