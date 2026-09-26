@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Logging/Logger.h"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <span>
@@ -23,24 +24,25 @@ namespace Horo::Network {
         }
 
         [[nodiscard]] bool MatchesIdentity(const NetworkTerminalRecord &terminal, const NetworkLogIdentity &identity) {
-            for (const NetworkFailureContextEntry &entry : terminal.Context()) {
+            return std::ranges::all_of(terminal.Context(), [&](const NetworkFailureContextEntry &entry) {
                 if (entry.key == NetworkFailureContextKey::Connection &&
                     std::get<TransportHandleDiagnostic>(entry.value) != identity.connection.Diagnostic())
                     return false;
                 if (entry.key == NetworkFailureContextKey::SessionGeneration &&
                     std::get<std::uint64_t>(entry.value) != identity.session.Value())
                     return false;
-            }
-            return true;
+                return true;
+            });
         }
 
         [[nodiscard]] constexpr const char *Category(const NetworkLogKind kind) noexcept {
+            using enum NetworkLogKind;
             switch (kind) {
-                case NetworkLogKind::Failure:
+                case Failure:
                     return "network.security.failure";
-                case NetworkLogKind::SuppressedSummary:
+                case SuppressedSummary:
                     return "network.security.suppressed";
-                case NetworkLogKind::SessionTerminal:
+                case SessionTerminal:
                     return "network.session.terminal";
             }
             return "network.diagnostic.invalid";
@@ -55,10 +57,10 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkLogStream::Create */
-    Result<NetworkLogStream> NetworkLogStream::Create(const NetworkLogIdentity identity, const NetworkLogPolicy policy,
-                                                      const NetworkLogSink sink) {
+    Result<NetworkLogStream> NetworkLogStream::Create(const NetworkLogIdentity &identity, const NetworkLogPolicy policy,
+                                                      INetworkLogSink *sink) {
         if (!ValidIdentity(identity) || policy.windowTicks == 0 || policy.firstPerKind == 0 || policy.firstPerKind > 8 ||
-            (policy.enabled && sink.emit == nullptr))
+            (policy.enabled && sink == nullptr))
             return Result<NetworkLogStream>::Failure(InvalidLogState());
         return Result<NetworkLogStream>::Success(NetworkLogStream{identity, policy, sink});
     }
@@ -66,9 +68,9 @@ namespace Horo::Network {
     /** @brief Transfers sole publication ownership and disables the source stream. */
     NetworkLogStream::NetworkLogStream(NetworkLogStream &&other) noexcept
         : identity_(other.identity_), policy_(other.policy_), sink_(other.sink_), buckets_(std::move(other.buckets_)),
-          lastTick_(other.lastTick_), finished_(other.finished_) {
+          lastTick_(other.lastTick_), sinkFailures_(other.sinkFailures_), finished_(other.finished_) {
         other.finished_ = true;
-        other.sink_.emit = nullptr;
+        other.sink_ = nullptr;
     }
 
     /** @brief Rejects stale generations and time reversal before any sink work. */
@@ -82,18 +84,20 @@ namespace Horo::Network {
     }
 
     /** @brief Keeps observability failures from changing gameplay/network outcomes. */
-    void NetworkLogStream::Emit(const NetworkLogRecord &record) const noexcept {
+    void NetworkLogStream::Emit(const NetworkLogRecord &record) noexcept {
         if (!policy_.enabled)
             return;
         try {
-            sink_.emit(sink_.context, record);
+            sink_->Emit(record);
         } catch (...) {
-            // Logging is best-effort; the owner state transition remains authoritative.
+            // A failed sink cannot change the network outcome; retain bounded evidence for host qualification.
+            if (sinkFailures_ != std::numeric_limits<std::uint64_t>::max())
+                ++sinkFailures_;
         }
     }
 
     /** @brief Publishes one bounded count and latest tick, never a copy of hostile input. */
-    void NetworkLogStream::EmitSummary(Bucket &bucket) const {
+    void NetworkLogStream::EmitSummary(Bucket &bucket) {
         if (bucket.suppressed == 0 || !bucket.latest)
             return;
         NetworkLogRecord summary = *bucket.latest;
@@ -182,8 +186,8 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkLogStream::Replace */
-    Result<void> NetworkLogStream::Replace(const NetworkLogIdentity next) {
-        if (!finished_ || (policy_.enabled && sink_.emit == nullptr) || !ValidIdentity(next) ||
+    Result<void> NetworkLogStream::Replace(const NetworkLogIdentity &next) {
+        if (!finished_ || (policy_.enabled && sink_ == nullptr) || !ValidIdentity(next) ||
             next.connection.Slot() != identity_.connection.Slot() ||
             identity_.connection.Generation() == std::numeric_limits<std::uint32_t>::max() ||
             next.connection.Generation() != identity_.connection.Generation() + 1)
@@ -191,6 +195,7 @@ namespace Horo::Network {
         identity_ = next;
         buckets_ = {};
         lastTick_ = 0;
+        sinkFailures_ = 0;
         finished_ = false;
         return Result<void>::Success();
     }
@@ -211,16 +216,16 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    /** @copydoc EmitNetworkLogToTelemetry */
-    void EmitNetworkLogToTelemetry(void *, const NetworkLogRecord &record) {
+    /** @copydoc NetworkTelemetryLogSink::Emit */
+    void NetworkTelemetryLogSink::Emit(const NetworkLogRecord &record) {
         constexpr auto level = Log::Level::Warn;
         const char *category = Category(record.kind);
         if (!Log::Logger::IsEnabled(level) || !Telemetry::Runtime::IsEventEnabled(category, level))
             return;
         std::vector<Telemetry::Field> fields;
-        fields.reserve(14);
+        fields.reserve(16);
         const auto add = [&fields](const char *key, const std::uint64_t value) {
-            fields.push_back({key, value, Telemetry::FieldPrivacy::Public});
+            fields.emplace_back(key, value, Telemetry::FieldPrivacy::Public);
         };
         add("host_operation", record.identity.hostOperation.Value());
         add("connection_slot", record.identity.connection.Slot());
@@ -244,8 +249,8 @@ namespace Horo::Network {
         }
         if (record.backendEvidence.observed) {
             add("backend_detail_bytes_bounded", record.backendEvidence.observedBytes);
-            fields.push_back({"backend_detail_truncated", record.backendEvidence.truncated, Telemetry::FieldPrivacy::Public});
-            fields.push_back({"backend_detail_malformed", record.backendEvidence.malformed, Telemetry::FieldPrivacy::Public});
+            fields.emplace_back("backend_detail_truncated", record.backendEvidence.truncated, Telemetry::FieldPrivacy::Public);
+            fields.emplace_back("backend_detail_malformed", record.backendEvidence.malformed, Telemetry::FieldPrivacy::Public);
         }
         Telemetry::Record envelope;
         envelope.subsystem = category;

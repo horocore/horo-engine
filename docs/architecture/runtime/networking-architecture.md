@@ -694,7 +694,8 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
   requires the exact next non-wrapping handle generation, so late callbacks cannot
   terminate a new connection.
 - Hosts compose one `NetworkLogStream` per admitted connection/session generation
-  with an explicit sink (normally `EmitNetworkLogToTelemetry`). The stream consumes
+  with a borrowed, host-owned `INetworkLogSink` (normally a
+  `NetworkTelemetryLogSink`). The stream consumes
   canonical `NetworkTerminalRecord` failures and owner-published
   `PeerSessionTerminalSnapshot` lifecycle outcomes; its closed categories and fields
   carry host-operation, connection slot/generation, session, optional runtime-scene
@@ -712,8 +713,10 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
   call one even when provided.
   Exact connection/session generations and monotonic ticks fence late callbacks;
   replacement requires the next connection generation after terminal publication.
-  Hosts must bound admitted streams with their connection capacity. Logging sink
-  failure cannot change a network result. This additive `NetworkRuntime` public
+  Hosts must bound admitted streams with their connection capacity. A saturating
+  generation-scoped sink-failure count preserves evidence when an export throws,
+  resets on connection replacement, and never changes the network result. This
+  additive `NetworkRuntime` public
   header has no migration requirement for existing callers; hosts opt in by
   composing the stream at their connection owner boundary.
 

@@ -19,17 +19,19 @@
 
 namespace Horo::Network {
     namespace {
-        struct Probe final {
+        struct Probe final : INetworkLogSink {
             std::vector<NetworkLogRecord> records;
 
-            static void Emit(void *context, const NetworkLogRecord &record) {
-                static_cast<Probe *>(context)->records.push_back(record);
+            void Emit(const NetworkLogRecord &record) override {
+                records.push_back(record);
             }
         };
 
-        void ThrowingSink(void *, const NetworkLogRecord &) {
-            throw std::runtime_error("sink failed");
-        }
+        struct ThrowingSink final : INetworkLogSink {
+            void Emit(const NetworkLogRecord &) override {
+                throw std::runtime_error("sink failed");
+            }
+        };
 
         class CollectingSink final : public Telemetry::ISink {
         public:
@@ -82,7 +84,7 @@ namespace Horo::Network {
         }
 
         [[nodiscard]] NetworkLogStream Stream(Probe &probe, const NetworkLogPolicy policy = {10, 2, true}) {
-            return NetworkLogStream::Create(Identity(), policy, {&probe, &Probe::Emit}).Value();
+            return NetworkLogStream::Create(Identity(), policy, &probe).Value();
         }
     }  // namespace
 
@@ -99,11 +101,11 @@ namespace Horo::Network {
 
     TEST_CASE("Network diagnostics reject malformed configuration and stale generations", "[network][diagnostics]") {
         Probe probe;
-        REQUIRE(NetworkLogStream::Create({}, {10, 1, true}, {&probe, &Probe::Emit}).HasError());
-        REQUIRE(NetworkLogStream::Create(Identity(), {0, 1, true}, {&probe, &Probe::Emit}).HasError());
-        REQUIRE(NetworkLogStream::Create(Identity(), {10, 0, true}, {&probe, &Probe::Emit}).HasError());
-        REQUIRE(NetworkLogStream::Create(Identity(), {10, 9, true}, {&probe, &Probe::Emit}).HasError());
-        REQUIRE(NetworkLogStream::Create(Identity(), {10, 1, true}, {}).HasError());
+        REQUIRE(NetworkLogStream::Create({}, {10, 1, true}, &probe).HasError());
+        REQUIRE(NetworkLogStream::Create(Identity(), {0, 1, true}, &probe).HasError());
+        REQUIRE(NetworkLogStream::Create(Identity(), {10, 0, true}, &probe).HasError());
+        REQUIRE(NetworkLogStream::Create(Identity(), {10, 9, true}, &probe).HasError());
+        REQUIRE(NetworkLogStream::Create(Identity(), {10, 1, true}, nullptr).HasError());
 
         auto stream = Stream(probe);
         const auto failure = Malformed();
@@ -156,7 +158,7 @@ namespace Horo::Network {
     }
 
     TEST_CASE("Disabled network instrumentation does not call a sink or change terminal semantics", "[network][diagnostics]") {
-        auto stream = NetworkLogStream::Create(Identity(), {10, 1, false}, {}).Value();
+        auto stream = NetworkLogStream::Create(Identity(), {10, 1, false}, nullptr).Value();
         const auto failure = Malformed();
         for (std::uint64_t tick = 1; tick <= 100; ++tick)
             REQUIRE(stream.Failure(Identity().connection, Identity().session, failure, tick).HasValue());
@@ -221,10 +223,16 @@ namespace Horo::Network {
     }
 
     TEST_CASE("Observability sink failure does not change a terminal result", "[network][diagnostics]") {
-        auto stream = NetworkLogStream::Create(Identity(), {10, 1, true}, {nullptr, &ThrowingSink}).Value();
+        ThrowingSink sink;
+        auto stream = NetworkLogStream::Create(Identity(), {10, 1, true}, &sink).Value();
         REQUIRE(stream.Failure(Identity().connection, Identity().session, Malformed(), 1).HasValue());
         REQUIRE(stream.Finish(Terminal(2)).HasValue());
         REQUIRE(stream.IsFinished());
+        REQUIRE(stream.SinkFailureCount() == 2);
+        REQUIRE(stream.Replace(Identity(2, 1)).HasValue());
+        REQUIRE(stream.SinkFailureCount() == 0);
+        REQUIRE(stream.Failure(Identity(2, 1).connection, Identity(2, 1).session, Malformed(), 1).HasValue());
+        REQUIRE(stream.SinkFailureCount() == 1);
     }
 
     TEST_CASE("Foundation logger adapter exports only allowlisted numeric correlation", "[network][diagnostics]") {
@@ -237,7 +245,8 @@ namespace Horo::Network {
         configuration.additionalSinks.push_back(sink);
         configuration.echoToStderr = false;
         REQUIRE(Log::Logger::Init(configuration));
-        auto stream = NetworkLogStream::Create(Identity(), {10, 1, true}, {nullptr, &EmitNetworkLogToTelemetry}).Value();
+        NetworkTelemetryLogSink networkSink;
+        auto stream = NetworkLogStream::Create(Identity(), {10, 1, true}, &networkSink).Value();
         constexpr std::string_view hostile = "Bearer private-password account-name";
         const auto normalized =
             NormalizePrivateBackendFailure(NetworkFailureLayer::Transport, NetworkFailureKind::TransportUnavailable, hostile);

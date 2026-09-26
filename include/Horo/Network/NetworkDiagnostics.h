@@ -93,10 +93,19 @@ namespace Horo::Network {
         NetworkBackendEvidenceSummary backendEvidence{}; /**< Bounded flags, never private detail. */
     };
 
-    /** @brief Non-owning synchronous callback; must copy a record before returning if retained. */
-    struct NetworkLogSink final {
-        void *context{};                                  /**< Borrowed host-owned callback state, valid for the stream lifetime. */
-        void (*emit)(void *, const NetworkLogRecord &){}; /**< Synchronous callback; optional only when disabled. */
+    /** @brief Host-owned synchronous sink; implementations must copy any record retained after Emit returns. */
+    class INetworkLogSink {
+    public:
+        virtual ~INetworkLogSink() = default;
+        /** @brief Consumes one sanitized record on the connection owner thread. @param record Borrowed record valid for this call. */
+        virtual void Emit(const NetworkLogRecord &record) = 0;
+    };
+
+    /** @brief Explicit adapter to the process-owned Foundation telemetry runtime. */
+    class NetworkTelemetryLogSink final : public INetworkLogSink {
+    public:
+        /** @copydoc INetworkLogSink::Emit */
+        void Emit(const NetworkLogRecord &record) override;
     };
 
     /**
@@ -114,8 +123,14 @@ namespace Horo::Network {
         NetworkLogStream(NetworkLogStream &&other) noexcept;
         NetworkLogStream &operator=(NetworkLogStream &&) = delete;
 
-        /** @brief Validates identity, policy, and sink. @return Stream or typed lifecycle-invalid failure. */
-        [[nodiscard]] static Result<NetworkLogStream> Create(NetworkLogIdentity identity, NetworkLogPolicy policy, NetworkLogSink sink);
+        /** @brief Validates identity, policy, and sink.
+         * @param identity Exact host/connection/session correlation.
+         * @param policy Owner-clock emission budget and enabled state.
+         * @param sink Borrowed host-owned sink; nullable only when instrumentation is disabled.
+         * @return Stream or typed lifecycle-invalid failure.
+         */
+        [[nodiscard]] static Result<NetworkLogStream> Create(const NetworkLogIdentity &identity, NetworkLogPolicy policy,
+                                                             INetworkLogSink *sink);
 
         /**
          * @brief Records canonical peer-controlled failure under a fixed per-kind/window budget.
@@ -140,7 +155,7 @@ namespace Horo::Network {
          * @param next Host-issued identity for the replacement connection/session generation.
          * @return Success or typed stale/lifecycle failure without replacing active state.
          */
-        [[nodiscard]] Result<void> Replace(NetworkLogIdentity next);
+        [[nodiscard]] Result<void> Replace(const NetworkLogIdentity &next);
 
         /** @brief Emits pending summaries at a bounded owner-clock safe point. @param tick Monotonic owner-clock tick.
          * @return Typed stale-clock failure or success.
@@ -152,6 +167,13 @@ namespace Horo::Network {
             return finished_;
         }
 
+        /** @brief Returns handled sink exceptions for the current connection generation; Replace resets it.
+         * @return Saturating generation-scoped failure count without network outcome mutation.
+         */
+        [[nodiscard]] constexpr std::uint64_t SinkFailureCount() const noexcept {
+            return sinkFailures_;
+        }
+
     private:
         struct Bucket final {
             std::uint64_t windowStart{};
@@ -161,24 +183,19 @@ namespace Horo::Network {
             std::optional<NetworkLogRecord> latest;
         };
 
-        NetworkLogStream(NetworkLogIdentity identity, NetworkLogPolicy policy, NetworkLogSink sink) noexcept
+        NetworkLogStream(const NetworkLogIdentity &identity, NetworkLogPolicy policy, INetworkLogSink *sink) noexcept
             : identity_(identity), policy_(policy), sink_(sink) {}
 
         [[nodiscard]] Result<void> Validate(ConnectionHandle connection, NetworkOperationGeneration session, std::uint64_t tick) const;
-        void Emit(const NetworkLogRecord &record) const noexcept;
-        void EmitSummary(Bucket &bucket) const;
+        void Emit(const NetworkLogRecord &record) noexcept;
+        void EmitSummary(Bucket &bucket);
 
         NetworkLogIdentity identity_{};
         NetworkLogPolicy policy_{};
-        NetworkLogSink sink_{};
+        INetworkLogSink *sink_{}; /**< Borrowed host-owned sink; never deleted by the stream. */
         std::array<Bucket, static_cast<std::size_t>(NetworkFailureKind::Count)> buckets_{};
         std::uint64_t lastTick_{};
+        std::uint64_t sinkFailures_{};
         bool finished_{};
     };
-
-    /** @brief Foundation telemetry adapter for explicit host composition with no inherited thread-local text context.
-     * @param unused Ignored callback context.
-     * @param record Sanitized typed record projected to fixed category and allowlisted numeric fields.
-     */
-    void EmitNetworkLogToTelemetry(void *unused, const NetworkLogRecord &record);
 }  // namespace Horo::Network
