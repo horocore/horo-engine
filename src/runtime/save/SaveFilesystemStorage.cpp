@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
+#include <format>
 #include <limits>
 #include <memory>
 #include <string>
@@ -369,7 +370,7 @@ namespace Horo::Runtime {
         std::vector<Handle> directories;
         std::vector<std::wstring> names;
         directories.push_back(std::move(openedRoot));
-        const auto step = [&directories, &names](const std::string &component) -> Result<void> {
+        const auto step = [&directories, &names](const std::string &component) {
             const std::wstring wide(component.begin(), component.end());
             auto child = RelativeOpen(directories.back(), wide,
                                       FILE_READ_ATTRIBUTES | FILE_TRAVERSE | FILE_ADD_SUBDIRECTORY | FILE_ADD_FILE | FILE_DELETE_CHILD,
@@ -396,7 +397,7 @@ namespace Horo::Runtime {
         std::vector<Directory> directories;
         std::vector<std::string> names;
         directories.emplace_back(rootFd);
-        const auto step = [&directories, &names](const std::string &component) -> Result<void> {
+        const auto step = [&directories, &names](const std::string &component) {
             auto child = Child(directories.back(), component);
             if (child.HasError())
                 return Result<void>::Failure(child.ErrorValue());
@@ -521,8 +522,8 @@ namespace Horo::Runtime {
         if (auto safe = ExistingTargetSafe(Slots(), destination); safe.HasError())
             return safe;
         static std::atomic_uint64_t sequence{0};
-        const std::string temporary = "." + destination + "." + std::to_string(::getpid()) + "." +
-                                      std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)) + ".temporary";
+        const std::string temporary =
+            std::format(".{}.{}.{}.temporary", destination, ::getpid(), sequence.fetch_add(1, std::memory_order_relaxed));
         const int fd = ::openat(Slots().Fd(), temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (fd < 0)
             return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "temporary creation", errno));
