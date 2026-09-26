@@ -229,6 +229,18 @@ namespace Horo::Network {
         REQUIRE(consumer.records.empty());
     }
 
+    TEST_CASE("Retained completion producer rejects publication after its dependent service is destroyed",
+              "[unit][network][io][qualification]") {
+        auto fixture = MakeService(ScriptedPollSource::Script::RetainProducer);
+        REQUIRE(fixture.service->PollBackend(1).HasValue());
+        REQUIRE(fixture.source->retainedProducer.has_value());
+        auto lateProducer = *fixture.source->retainedProducer;
+        fixture.service.reset();
+        auto completion = NetworkIoCompletion::MakeOperation(NetworkIoCompletionKind::OperationSucceeded, Connection());
+        REQUIRE(completion.HasValue());
+        RequireError(lateProducer.Publish(std::move(completion).Value()), NetworkErrors::TransportShuttingDown);
+    }
+
     TEST_CASE("Network I/O service validates construction hard bounds", "[unit][network][io]") {
         RequireError(NetworkIoService::Create({}, {1, 1, 1}), NetworkErrors::NetworkIoServiceInvalid);
         auto source = std::make_unique<ScriptedPollSource>(ScriptedPollSource::Script::Success);

@@ -215,17 +215,22 @@ target_link_libraries(HoroNetworkApiTests PRIVATE HoroEngine::NetworkApi)
 target_include_directories(HoroNetworkApiTests PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
 horo_register_catch_test(HoroNetworkApiTests LABELS "unit;network;headless")
 add_executable(HoroNetworkTransportNullTests
+        support/AllocationProbe.cpp
         unit/runtime/networking/DeterministicTransportTests.cpp
+        unit/runtime/networking/DeterministicTransportQualificationTests.cpp
 )
 target_compile_features(HoroNetworkTransportNullTests PRIVATE cxx_std_20)
+target_include_directories(HoroNetworkTransportNullTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroNetworkTransportNullTests PRIVATE HoroEngine::NetworkTransportNull)
 horo_register_catch_test(HoroNetworkTransportNullTests LABELS "unit;network;headless")
 if(HORO_BUILD_NETWORK_GNS)
     add_executable(HoroNetworkTransportGnsTests
+            support/AllocationProbe.cpp
             unit/runtime/networking/GnsTransportTests.cpp
+            unit/runtime/networking/GnsTransportQualificationTests.cpp
     )
     target_compile_features(HoroNetworkTransportGnsTests PRIVATE cxx_std_20)
-    target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns)
+    target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns ${PROJECT_SOURCE_DIR}/tests/support)
     target_compile_definitions(HoroNetworkTransportGnsTests PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE GameNetworkingSockets::static c-ares::cares)
     target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
