@@ -916,6 +916,14 @@ add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
 target_compile_features(HoroTerrainApi PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainApi PUBLIC HoroEngine::Foundation)
 
+add_library(HoroTerrainImport STATIC
+        runtime/terrain/import/TerrainSourceImport.cpp
+)
+add_library(HoroEngine::TerrainImport ALIAS HoroTerrainImport)
+target_compile_features(HoroTerrainImport PUBLIC cxx_std_20)
+target_include_directories(HoroTerrainImport PRIVATE ${PROJECT_SOURCE_DIR}/vendor/stb)
+target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine::Assets)
+
 add_library(HoroNavigationNull STATIC
         runtime/navigation/backends/null/NullProvider.cpp
 )

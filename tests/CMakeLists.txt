@@ -568,6 +568,13 @@ target_compile_features(HoroTerrainApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi Threads::Threads)
 horo_register_catch_test(HoroTerrainApiTests LABELS "unit;terrain;headless")
 
+add_executable(HoroTerrainImportTests
+        unit/runtime/terrain/TerrainSourceImportTests.cpp
+)
+target_compile_features(HoroTerrainImportTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainImportTests PRIVATE HoroEngine::TerrainImport)
+horo_register_catch_test(HoroTerrainImportTests LABELS "unit;terrain;assets;headless")
+
 add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/NetworkStreamingAuthorityTests.cpp
         unit/runtime/world_streaming/OriginFrameTests.cpp

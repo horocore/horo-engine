@@ -20,6 +20,17 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## TRF-002.2 Import Boundary
+
+`HoroTerrainImport` owns `Horo/Terrain/TerrainSourceImport.h` and depends on
+`HoroTerrainApi`; runtime Terrain consumers continue to link `HoroTerrainApi` alone.
+The new header is additive: there are no callers to migrate. Hosts that import
+Terrain sources link `HoroTerrainImport`, pin any optional decoder contribution for
+the synchronous invocation, then publish a detached candidate against the exact
+current source revision. Format and codec types do not enter TerrainApi or runtime
+headers. The generated public-header consumer compiles the header through the new
+target's staged include view.
+
 ## PLS-002.3 Migration Notes
 
 `HoroEngine::Extensions` owns the additive `ExtensionPlatformProvider.h` candidate
