@@ -1787,6 +1787,25 @@ When that backend is composed, group coordination may request:
 - Safe-velocity evaluation for Gameplay-authored formation/lane preferred velocities
 - Bounded density facts used only by the local solver
 
+`NavigationCrowdSnapshot` is the NAV-006.2 owner-safe-point fact boundary below
+the coordinator. It combines an exact immutable logical-agent publication,
+the same Scene/world dynamic-registry publication, committed per-agent motion
+samples, and authored profile fact caps. It owns contiguous agent, neighbor,
+boundary, and cell arrays; workers retain the snapshot, not Scene/registry
+pointers. Ground-plane XZ cells, distance ties, and source identity order are
+stable for both best-effort and deterministic-qualified capture modes. Searches
+scan occupied cells rather than walking empty coordinates, so a neighborhood
+radius may exceed the cell size. Enabled
+obstacles and exclusion modifiers contribute finite planar segments; cylinders
+use a conservative enclosing square, not provider-native geometry. Segment
+selection also respects the source's vertical extent. Missing or
+malformed samples, mismatched generations, and work/storage ceiling failures
+reject the whole capture. Per-agent and per-profile omitted-fact counts expose
+quality-cap truncation; capture never silently truncates global storage. Result
+publication still rechecks the captured Scene/world binding, dynamic revision,
+agent generation, and tick. This additive runtime contract does not change
+existing agent-registry callers; hosts opt in at their fixed-tick capture point.
+
 ```cpp
 struct CrowdAgentConfig {
     float    neighborRadius;

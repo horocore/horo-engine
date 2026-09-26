@@ -910,6 +910,9 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationBakeJobs.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshot.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshotGather.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshotPartition.cpp
         runtime/navigation/runtime/NavigationDynamicRegistry.cpp
         runtime/navigation/runtime/NavigationDynamicRegistryCommit.cpp
         runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp

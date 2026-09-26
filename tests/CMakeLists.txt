@@ -544,6 +544,7 @@ horo_register_catch_test(HoroNavigationApiTests LABELS "unit;navigation;headless
 add_executable(HoroNavigationRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
+        unit/runtime/navigation/NavigationCrowdSnapshotTests.cpp
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
