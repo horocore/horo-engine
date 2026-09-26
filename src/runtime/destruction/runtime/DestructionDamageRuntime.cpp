@@ -116,7 +116,7 @@ namespace Horo::Destruction {
         if (machine.HasError())
             return Result<DestructionDamageRuntime>::Failure(machine.ErrorValue());
         return Result<DestructionDamageRuntime>::Success(
-            DestructionDamageRuntime{descriptor, std::move(machine.Value()), std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+            DestructionDamageRuntime{descriptor, std::move(machine).Value(), std::nullopt, std::nullopt, std::nullopt, std::nullopt});
     }
 
     /** @copydoc DestructionDamageRuntime::Snapshot */
@@ -164,7 +164,7 @@ namespace Horo::Destruction {
         if (prepared.HasError())
             return Result<DestructionDamageTransition>::Failure(prepared.ErrorValue());
         return Result<DestructionDamageTransition>::Success(
-            DestructionDamageTransition{command, std::move(prepared.Value()), context.simulationTick, context.safePoint});
+            DestructionDamageTransition{command, std::move(prepared).Value(), context.simulationTick, context.safePoint});
     }
 
     /** @copydoc DestructionDamageRuntime::Commit */
@@ -202,9 +202,9 @@ namespace Horo::Destruction {
         auto tick = lastDamageTick_;
         if (transition.StateTransition().Command().Kind() == DestructionStateCommandKind::ApplyDamage)
             tick = transition.Tick();
-        return Result<DestructionDamageRuntime>::Success(DestructionDamageRuntime{descriptor_, std::move(committed.Value()),
+        return Result<DestructionDamageRuntime>::Success(DestructionDamageRuntime{descriptor_, std::move(committed).Value(),
                                                                                   transition.Command(), transition.Tick(), tick,
-                                                                                  std::move(result.Value())});
+                                                                                  std::move(result).Value()});
     }
 
     /** @copydoc DestructionDamageRuntime::Replace */
@@ -214,7 +214,7 @@ namespace Horo::Destruction {
         if (machine.HasError())
             return Result<DestructionDamageRuntime>::Failure(machine.ErrorValue());
         return Result<DestructionDamageRuntime>::Success(
-            DestructionDamageRuntime{descriptor, std::move(machine.Value()), std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+            DestructionDamageRuntime{descriptor, std::move(machine).Value(), std::nullopt, std::nullopt, std::nullopt, std::nullopt});
     }
 
     /** @copydoc DestructionDamageRuntime::BeginShutdown */
