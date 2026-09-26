@@ -128,6 +128,9 @@ namespace Horo::Assets::CookErrors {
     const ErrorCodeDescriptor OutputIdentityExhausted{kCookDomain, ErrorCode{"asset.cook.output_identity_exhausted"}, kCookError,
                                                       "The build-output session identity space is exhausted.",
                                                       "Restart the owning project session before submitting more cook work."};
+    const ErrorCodeDescriptor OperationAdmissionFailed{kCookDomain, ErrorCode{"asset.cook.operation_admission_failed"}, kCookError,
+                                                       "The operation store cannot admit another cook operation.",
+                                                       "Wait for an active cook operation to finish before retrying."};
 }  // namespace Horo::Assets::CookErrors
 
 namespace Horo::Assets::ImportErrors {

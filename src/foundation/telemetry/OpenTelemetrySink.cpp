@@ -24,6 +24,8 @@ namespace Horo::Telemetry {
                     return "By";
                 case Seconds:
                     return "s";
+                case Milliseconds:
+                    return "ms";
             }
             return {};
         }

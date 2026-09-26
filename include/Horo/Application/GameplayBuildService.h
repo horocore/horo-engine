@@ -68,13 +68,16 @@ namespace Horo::Application {
     /** @brief Owned thread-safe projection of one build session. */
     struct GameplayBuildSnapshot {
         GameplayBuildSessionId id{};
+        std::chrono::steady_clock::time_point startedAt{};
         GameplayBuildState state{GameplayBuildState::Queued};
         std::string phase;
+        std::optional<float> progress;
         std::string activeInputHash;
         std::string desiredInputHash;
         std::optional<std::string> pendingInputHash;
         std::uint64_t coalescedRequestCount{};
         bool newerInputsPending{false};
+        bool cancellationRequested{false};
         std::string externalLockOwner;
         std::optional<std::chrono::steady_clock::time_point> timeoutDeadline;
         std::optional<OperationId> operationId;
@@ -99,6 +102,12 @@ namespace Horo::Application {
         [[nodiscard]] Result<GameplayBuildSessionId> Start(GameplayBuildRequest request) const;
         /** @brief Returns the latest session snapshot. */
         [[nodiscard]] std::optional<GameplayBuildSnapshot> Query(GameplayBuildSessionId id) const;
+        /**
+         * @brief Returns the active session for one project, if any.
+         * @param projectRoot Project root used when starting the build.
+         * @return An owned snapshot; terminal sessions are excluded.
+         */
+        [[nodiscard]] std::optional<GameplayBuildSnapshot> QueryActiveProject(const std::filesystem::path &projectRoot) const;
         /** @brief Requests cooperative cancellation for an active session. */
         [[nodiscard]] bool RequestCancel(GameplayBuildSessionId id) const;
         /** @brief Reports whether the last validated build matches current project inputs. */

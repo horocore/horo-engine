@@ -372,6 +372,38 @@ TEST_CASE("OpenTelemetry preserves counter gauge histogram and timing signal sha
     REQUIRE(metrics.at(3).at("histogram").at("dataPoints").at(0).at("sum") == 0.012);
 }
 
+TEST_CASE("OpenTelemetry exports millisecond gauges with the OTLP ms unit", "[foundation][observability][opentelemetry][metrics]") {
+    RuntimeGuard runtimeGuard;
+    auto transport = std::make_shared<CapturingTransport>();
+    Horo::Telemetry::OpenTelemetryConfiguration configuration;
+    configuration.maxBatchRecords = 1;
+    configuration.maxBufferedRecords = 1;
+    configuration.maxAttempts = 1;
+    configuration.exportApproved = true;
+    const auto sink = Horo::Telemetry::OpenTelemetrySink::Create(configuration, transport);
+    REQUIRE(sink != nullptr);
+    REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 8, .enabled = true}, sink));
+
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "test.rtt_ms", .subsystem = "Foundation.Tests", .unit = Horo::Telemetry::MetricUnit::Milliseconds});
+    REQUIRE(gauge);
+    const auto acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
+    for (int attempt = 0; attempt < 10'000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt) {
+        gauge.Set(37.0);
+        std::this_thread::yield();
+    }
+    REQUIRE(Horo::Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore);
+    REQUIRE(Horo::Telemetry::Runtime::Shutdown());
+
+    const auto calls = transport->Snapshot();
+    REQUIRE(calls.size() == 1);
+    const nlohmann::json payload = nlohmann::json::parse(calls.front().payload);
+    const auto &metric = payload.at("resourceMetrics").at(0).at("scopeMetrics").at(0).at("metrics").at(0);
+    REQUIRE(metric.at("name") == "test.rtt_ms");
+    REQUIRE(metric.at("unit") == "ms");
+    REQUIRE(metric.at("gauge").at("dataPoints").at(0).at("asDouble") == 37.0);
+}
+
 TEST_CASE("OpenTelemetry retries are bounded and exporter failure remains isolated from producers",
           "[foundation][observability][opentelemetry][retry][failure]") {
     RuntimeGuard runtimeGuard;

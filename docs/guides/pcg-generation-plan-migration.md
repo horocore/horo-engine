@@ -1,5 +1,17 @@
 # PCG Generation Plan Migration
 
+## Point-cloud workspace migration (HORO-2022)
+
+PCG evaluators obtain one `PCGPointCloudWorkspace` per admitted operation from the
+exact `PCGCookedPlan`, declaring the schema and worst-case point count of every
+PointSet output pin. The plan's `Tier()` accessor supplies the tier for matching
+schemas and scratch reservations; cooked bytes and compiler version remain version 1.
+Callers advance nodes in plan order, seal each output before finishing its node, and
+read routed inputs only while evaluating their target node. Retain a previous
+workspace's `ReservedBytes()` as replacement overlap until its workers and borrows
+have retired. Existing immutable `PCGPointStorage` candidates remain the boundary for
+detached published snapshots; they are not the intermediate allocation owner.
+
 PCG evaluators must now return a detached `PCGGenerationPlanCandidate` instead of
 issuing target commands or exposing mutable output containers. Target mutation remains
 a later host-coordinated operation.

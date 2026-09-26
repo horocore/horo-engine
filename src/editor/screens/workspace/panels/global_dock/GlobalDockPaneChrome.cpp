@@ -128,9 +128,13 @@ namespace Horo::Editor {
         drawList->AddLine({origin.x, origin.y + height - 1.0F}, {origin.x + width, origin.y + height - 1.0F}, Theme::U32(Theme::Border()));
     }
 
-    void DrawGlobalDockTableRowSurface(const ImVec2 origin, const float width, const float height, const bool hovered) {
+    void DrawGlobalDockTableRowSurface(const ImVec2 origin, const float width, const float height, const bool hovered,
+                                       const bool selected) {
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        if (hovered)
+        if (selected)
+            drawList->AddRectFilled(origin, {origin.x + width, origin.y + height},
+                                    Theme::U32(Theme::Mix(Theme::Hover(), Theme::Accent(), 0.16F)));
+        else if (hovered)
             drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, Theme::U32(Theme::Hover()));
         drawList->AddLine({origin.x, origin.y + height - 1.0F}, {origin.x + width, origin.y + height - 1.0F},
                           Theme::U32(Theme::ConsoleRowBorder()));
@@ -335,6 +339,26 @@ namespace Horo::Editor {
             return;
         drawList.PushClipRect(minimum, maximum, true);
         drawList.AddText(ResolveFont(font), fontSize, minimum, Theme::U32(color), text.data(), text.data() + text.size());
+        drawList.PopClipRect();
+    }
+
+    void DrawGlobalDockEllipsizedText(ImDrawList &drawList, ImFont *font, const float fontSize, const ImVec2 minimum, const ImVec2 maximum,
+                                      const ImVec4 color, const std::string_view text) {
+        if (text.empty() || maximum.x <= minimum.x)
+            return;
+        if (MeasureGlobalDockTextWidth(font, fontSize, text) <= maximum.x - minimum.x) {
+            DrawGlobalDockClippedText(drawList, font, fontSize, minimum, maximum, color, text);
+            return;
+        }
+        constexpr std::string_view ellipsis = "…";
+        const float ellipsisWidth = MeasureGlobalDockTextWidth(font, fontSize, ellipsis);
+        if (ellipsisWidth >= maximum.x - minimum.x)
+            return;
+        const ImVec2 textMaximum{maximum.x - ellipsisWidth, maximum.y};
+        DrawGlobalDockClippedText(drawList, font, fontSize, minimum, textMaximum, color, text);
+        drawList.PushClipRect(minimum, maximum, true);
+        drawList.AddText(ResolveFont(font), fontSize, {textMaximum.x, minimum.y}, Theme::U32(color), ellipsis.data(),
+                         ellipsis.data() + ellipsis.size());
         drawList.PopClipRect();
     }
 }  // namespace Horo::Editor

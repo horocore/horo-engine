@@ -190,6 +190,14 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor NetworkLifecycleTransitionInvalid;
     /** @brief A completion names a retired handle or asynchronous operation generation. */
     extern const ErrorCodeDescriptor NetworkLifecycleOperationStale;
+    /** @brief Fixed-tick alignment policy, sample, or advance order is malformed. */
+    extern const ErrorCodeDescriptor NetworkClockInvalid;
+    /** @brief A clock sample names an old connection, session, epoch, sequence, or server tick. */
+    extern const ErrorCodeDescriptor NetworkClockSampleStale;
+    /** @brief Mapping is unavailable before the first sample or outside an active session. */
+    extern const ErrorCodeDescriptor NetworkClockUnavailable;
+    /** @brief A clock epoch or tick cannot advance without wrapping. */
+    extern const ErrorCodeDescriptor NetworkClockOverflow;
     /** @brief Protocol identity contributions or version ranges are malformed. */
     extern const ErrorCodeDescriptor ProtocolIdentityDescriptorInvalid;
     /** @brief A protocol-scoped stable identity is registered more than once. */
