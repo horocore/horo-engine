@@ -509,6 +509,36 @@ same typed unsupported result rather than fabricated empty success. `Close()` en
 publication and releases the live catalog while already issued snapshots retain their
 owned immutable data.
 
+## Async Operation And Invalidation Boundary
+
+`Horo/PCG/PCGAsyncOperation.h` is the PCG-1.6 owner-lane operation coordinator.
+It accepts only exact registered scene/cell/graph scopes and captures the durable
+`GraphGeneration` together with the digest of canonical source bytes. Its fence
+also carries a never-reused runtime generation and exact plan, input and authority
+publications. A matching graph revision with different source bytes is not current.
+The coordinator does not depend on a concrete cooked-plan type; a host attaching a
+plan checks its graph generation and source digest on the owner lane before
+admission and again at any later transaction boundary.
+
+Worker callbacks prepare owned immutable candidates and may spawn structured
+children. The parent cannot finish until every accepted child is joined. Only the
+creating owner lane advances completion and publishes an immutable PCG candidate or
+result after an exact-current fence check. This is not permission to commit Scene,
+Terrain/Foliage or another target: target preparation and aggregate commit remain
+external host/target-owner transactions that revalidate authority and revisions.
+Every accepted operation reaches one immutable success, failure, cancellation or
+stale terminal with typed cause and child/work accounting. Repeated completion and
+late cancellation cannot change it.
+
+Graph, cell, scene and host invalidation close matching admission/publication and
+request cancellation. The host retains exact inputs, plans, modules, candidate and
+target-owner leases until every worker, child and owner completion drains. Scope
+re-registration needs a strictly newer compatible fence after that drain; shutdown
+cannot fabricate completion, detach work or release an owner still reachable by it.
+An owner can sweep all completions without blocking, then forget terminal records and
+retire a closed graph scope to return its finite admission capacity. Scope retirement
+requires no retained operation record and never changes an issued terminal result.
+
 ## Pre-Compile Graph Validation Contract
 
 `Horo/PCG/PCGGraphValidation.h` is the PCG-2.3 boundary between canonical authored

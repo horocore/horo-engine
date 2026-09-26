@@ -436,6 +436,7 @@ add_executable(HoroPCGTests
         unit/runtime/pcg/PCGProvenanceTests.cpp
         unit/runtime/pcg/PCGSpatialSnapshotTests.cpp
         unit/runtime/pcg/PCGRegistryTests.cpp
+        unit/runtime/pcg/PCGAsyncOperationTests.cpp
 )
 target_compile_features(HoroPCGTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGTests PRIVATE HoroEngine::PCG)

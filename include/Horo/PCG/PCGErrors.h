@@ -106,4 +106,22 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor ProvenanceStale;
     /** @brief Provenance admission is closed by cancellation or shutdown. */
     extern const ErrorCodeDescriptor ProvenanceLifecycleUnavailable;
+    /** @brief An async operation, exact fence, scope, or callback is malformed. */
+    extern const ErrorCodeDescriptor AsyncInvalid;
+    /** @brief The async operation or registered scene/cell/graph scope is unknown. */
+    extern const ErrorCodeDescriptor AsyncUnknown;
+    /** @brief Async admission or publication is closed by invalidation or shutdown. */
+    extern const ErrorCodeDescriptor AsyncClosed;
+    /** @brief Captured source/content/authority evidence is no longer current. */
+    extern const ErrorCodeDescriptor AsyncStale;
+    /** @brief Async operation or scope retention exceeds its finite ceiling. */
+    extern const ErrorCodeDescriptor AsyncCapacityExceeded;
+    /** @brief An async owner-lane method was called from another thread. */
+    extern const ErrorCodeDescriptor AsyncWrongThread;
+    /** @brief The operation cannot retire while worker, child, or owner work remains. */
+    extern const ErrorCodeDescriptor AsyncNotReady;
+    /** @brief An owner-lane publication callback threw an exception. */
+    extern const ErrorCodeDescriptor AsyncPublicationFailed;
+    /** @brief A never-reused async operation identity cannot advance without wraparound. */
+    extern const ErrorCodeDescriptor AsyncGenerationExhausted;
 }  // namespace Horo::PCG::PCGErrors
