@@ -97,6 +97,8 @@ namespace Horo::Network {
                 std::scoped_lock lock{mutex};
                 names.push_back(descriptor->name);
                 bounded = bounded && descriptor->dimensions.empty() && descriptor->maxSeries == 1;
+                if (descriptor->name == "net.rtt_ms")
+                    rttMilliseconds = rttMilliseconds && descriptor->unit == Telemetry::MetricUnit::Milliseconds;
             }
 
             void Flush() override {}
@@ -104,6 +106,7 @@ namespace Horo::Network {
             std::mutex mutex;
             std::vector<std::string> names;
             bool bounded{true};
+            bool rttMilliseconds{true};
         };
 
         bool HasRequiredMetricNames(MetricSink &sink) {
@@ -136,14 +139,17 @@ namespace Horo::Network {
                     statistics.contentionDrops, statistics.queueFullDrops, statistics.invalidInstrumentRegistrations);
             std::vector<std::string> observedNames;
             bool bounded{};
+            bool rttMilliseconds{};
             {
                 std::scoped_lock lock{sink.mutex};
                 observedNames = sink.names;
                 bounded = sink.bounded;
+                rttMilliseconds = sink.rttMilliseconds;
             }
             CAPTURE(observedNames);
             REQUIRE(HasRequiredMetricNames(sink));
             REQUIRE(bounded);
+            REQUIRE(rttMilliseconds);
         }
     }  // namespace
 

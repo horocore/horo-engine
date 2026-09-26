@@ -102,7 +102,7 @@ namespace Horo::Network {
             handles.replication[index] = Counter("net.replication." + std::string{Replication[index]}, Count);
         handles.lost = Counter("net.packets_lost", Count);
         handles.connections = Gauge("net.active_connections", Count);
-        handles.rtt = Gauge("net.rtt_ms", Count);
+        handles.rtt = Gauge("net.rtt_ms", Milliseconds);
         return handles;
     }
 

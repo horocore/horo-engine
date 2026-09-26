@@ -696,6 +696,9 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
 
 - **Counters**: `net.bytes_sent`, `net.bytes_received`, `net.packets_lost`, `net.packets_dropped`.
 - **Gauges**: `net.active_connections`, `net.inbound_queue_depth`, `net.outbound_queue_depth`, `net.rtt_ms`.
+- `net.rtt_ms` uses the appended `MetricUnit::Milliseconds` descriptor, exported as
+  OTLP unit `ms`. Existing metric-unit numeric identities are unchanged; hosts
+  using typed descriptors need no migration.
 - **Tracing**: Transport connection events and session handshakes log to the `LogCategory::Network` category. Payloads are scrubbed of sensitive data by default.
 
 The host may compose `NetworkMetrics` with the selected transport, I/O service,
