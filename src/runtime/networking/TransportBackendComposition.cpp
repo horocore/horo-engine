@@ -6,6 +6,8 @@
 #include <utility>
 
 namespace Horo::Network {
+    using enum TransportBackendCompositionState;
+
     namespace {
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
@@ -29,11 +31,11 @@ namespace Horo::Network {
 
     /** @copydoc TransportBackendComposition::Register */
     Result<void> TransportBackendComposition::Register(TransportBackendDescriptor descriptor) {
-        if (state_ == TransportBackendCompositionState::Closed)
+        if (state_ == Closed)
             return Failure<void>(NetworkErrors::TransportBackendShuttingDown);
-        if (state_ == TransportBackendCompositionState::Cancelling)
+        if (state_ == Cancelling)
             return Failure<void>(NetworkErrors::TransportBackendCancelled);
-        if (state_ != TransportBackendCompositionState::Configuring)
+        if (state_ != Configuring)
             return Failure<void>(NetworkErrors::TransportBackendConflict);
         if (!descriptor.id.IsValid() || !ValidateTransportCapabilities(descriptor.capabilities) || !descriptor.factory)
             return Failure<void>(NetworkErrors::TransportBackendInvalid);
@@ -49,24 +51,24 @@ namespace Horo::Network {
 
     /** @copydoc TransportBackendComposition::Seal */
     Result<void> TransportBackendComposition::Seal() noexcept {
-        if (state_ == TransportBackendCompositionState::Closed)
+        if (state_ == Closed)
             return Failure<void>(NetworkErrors::TransportBackendShuttingDown);
-        if (state_ == TransportBackendCompositionState::Cancelling)
+        if (state_ == Cancelling)
             return Failure<void>(NetworkErrors::TransportBackendCancelled);
-        if (state_ == TransportBackendCompositionState::Configuring)
-            state_ = TransportBackendCompositionState::Sealed;
+        if (state_ == Configuring)
+            state_ = Sealed;
         return Result<void>::Success();
     }
 
     /** @copydoc TransportBackendComposition::Select */
     Result<void> TransportBackendComposition::Select(const TransportBackendId &id) {
-        if (state_ == TransportBackendCompositionState::Closed)
+        if (state_ == Closed)
             return Failure<void>(NetworkErrors::TransportBackendShuttingDown);
-        if (state_ == TransportBackendCompositionState::Cancelling)
+        if (state_ == Cancelling)
             return Failure<void>(NetworkErrors::TransportBackendCancelled);
-        if (!id.IsValid() || state_ == TransportBackendCompositionState::Configuring)
+        if (!id.IsValid() || state_ == Configuring)
             return Failure<void>(NetworkErrors::TransportBackendInvalid);
-        if (state_ == TransportBackendCompositionState::Active || state_ == TransportBackendCompositionState::Selected)
+        if (state_ == Active || state_ == Selected)
             return selected_ == id ? Result<void>::Success() : Failure<void>(NetworkErrors::TransportBackendConflict);
         const auto found = std::ranges::find_if(descriptors_, [&id](const auto &entry) {
             return entry.id == id;
@@ -78,19 +80,19 @@ namespace Horo::Network {
         if (!found->configured)
             return Failure<void>(NetworkErrors::TransportBackendNotConfigured);
         selected_ = id;
-        state_ = TransportBackendCompositionState::Selected;
+        state_ = Selected;
         return Result<void>::Success();
     }
 
     /** @copydoc TransportBackendComposition::Activate */
     Result<void> TransportBackendComposition::Activate() {
-        if (state_ == TransportBackendCompositionState::Closed)
+        if (state_ == Closed)
             return Failure<void>(NetworkErrors::TransportBackendShuttingDown);
-        if (state_ == TransportBackendCompositionState::Cancelling)
+        if (state_ == Cancelling)
             return Failure<void>(NetworkErrors::TransportBackendCancelled);
-        if (state_ == TransportBackendCompositionState::Active)
+        if (state_ == Active)
             return Result<void>::Success();
-        if (state_ != TransportBackendCompositionState::Selected || !selected_.has_value())
+        if (state_ != Selected || !selected_.has_value())
             return Failure<void>(NetworkErrors::TransportBackendInvalid);
         const auto found = std::ranges::find_if(descriptors_, [this](const auto &entry) {
             return entry.id == *selected_;
@@ -100,7 +102,7 @@ namespace Horo::Network {
         Result<TransportBackendInstance> created = [&found]() {
             try {
                 return found->factory();
-            } catch (...) {
+            } catch (...) {  // NOSONAR: host/extension factories may throw non-standard types; keep this boundary fail-closed.
                 return Failure<TransportBackendInstance>(NetworkErrors::TransportBackendFactoryFailed);
             }
         }();
@@ -109,7 +111,7 @@ namespace Horo::Network {
         if (!created.Value())
             return Failure<void>(NetworkErrors::TransportBackendFactoryFailed);
         active_ = std::move(created).Value();
-        state_ = TransportBackendCompositionState::Active;
+        state_ = Active;
         return Result<void>::Success();
     }
 
@@ -124,7 +126,7 @@ namespace Horo::Network {
             return Result<TransportBackendStatus>::Success({});
         const bool selected = selected_ == id;
         return Result<TransportBackendStatus>::Success(
-            {true, found->hostSupported, found->configured, selected, selected && state_ == TransportBackendCompositionState::Active});
+            {true, found->hostSupported, found->configured, selected, selected && state_ == Active});
     }
 
     /** @copydoc TransportBackendComposition::InstalledIds */
@@ -138,16 +140,16 @@ namespace Horo::Network {
 
     /** @copydoc TransportBackendComposition::BeginCancellation */
     void TransportBackendComposition::BeginCancellation() noexcept {
-        if (state_ == TransportBackendCompositionState::Cancelling || state_ == TransportBackendCompositionState::Closed)
+        if (state_ == Cancelling || state_ == Closed)
             return;
-        state_ = TransportBackendCompositionState::Cancelling;
+        state_ = Cancelling;
         if (active_)
             active_->RequestCancellation();
     }
 
     /** @copydoc TransportBackendComposition::Shutdown */
     void TransportBackendComposition::Shutdown() noexcept {
-        if (state_ == TransportBackendCompositionState::Closed)
+        if (state_ == Closed)
             return;
         BeginCancellation();
         if (active_) {
@@ -155,6 +157,6 @@ namespace Horo::Network {
             active_.reset();
         }
         selected_.reset();
-        state_ = TransportBackendCompositionState::Closed;
+        state_ = Closed;
     }
 }  // namespace Horo::Network

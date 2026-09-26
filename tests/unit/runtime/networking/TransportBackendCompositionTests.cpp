@@ -169,6 +169,21 @@ namespace Horo::Network {
             REQUIRE(composition.Lifecycle() == TransportBackendCompositionState::Closed);
         }
 
+        TEST_CASE("Transport composition translates non-standard factory exceptions without activating",
+                  "[unit][network][transport-composition][failure]") {
+            TransportBackendComposition composition;
+            REQUIRE(composition
+                        .Register({{"throwing"}, true, true, Capabilities(), []() -> Result<TransportBackendInstance> {
+                throw 7;
+            }}).HasValue());
+            REQUIRE(composition.Seal().HasValue());
+            REQUIRE(composition.Select({"throwing"}).HasValue());
+            RequireError(composition.Activate(), NetworkErrors::TransportBackendFactoryFailed);
+            REQUIRE(composition.Status({"throwing"}).Value().selected);
+            REQUIRE_FALSE(composition.Status({"throwing"}).Value().active);
+            composition.Shutdown();
+        }
+
         TEST_CASE("Transport composition cancellation and shutdown are idempotent and terminal",
                   "[unit][network][transport-composition][lifecycle]") {
             Counters counters{};
