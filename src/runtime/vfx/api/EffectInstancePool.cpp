@@ -8,6 +8,7 @@
 #include <new>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Horo::Vfx {
     namespace Detail {
@@ -34,14 +35,21 @@ namespace Horo::Vfx {
             bool cancelled{};
         };
 
+        /** @brief Lifetime overload totals independent of current slot occupancy. */
+        struct EffectPoolTelemetry final {
+            std::uint64_t rejected{};
+            std::uint64_t expired{};
+            std::uint64_t cancelled{};
+        };
+
         struct EffectInstancePoolState final {
             EffectPoolPlan plan{};
             EffectPoolPolicy policy{};
             VfxIdentityScope scene{};
             std::thread::id ownerThread{};
-            std::unique_ptr<EffectPoolSlot[]> slots;
-            std::unique_ptr<std::uint32_t[]> freeSlots;
-            std::unique_ptr<DelayedEffectRequest[]> delayed;
+            std::vector<EffectPoolSlot> slots;
+            std::vector<std::uint32_t> freeSlots;
+            std::vector<DelayedEffectRequest> delayed;
             std::uint32_t freeCount{};
             std::uint32_t delayedHead{};
             std::uint32_t delayedCount{};
@@ -50,9 +58,7 @@ namespace Horo::Vfx {
             std::uint32_t cosmeticOccupied{};
             std::uint32_t permanentlyRetired{};
             std::uint32_t peakActive{};
-            std::uint64_t rejected{};
-            std::uint64_t expired{};
-            std::uint64_t cancelled{};
+            EffectPoolTelemetry telemetry{};
             std::uint64_t currentTick{};
             std::uint64_t nextTicket{1};
             bool shutDown{};
@@ -68,16 +74,18 @@ namespace Horo::Vfx {
             return std::this_thread::get_id() == state.ownerThread;
         }
 
-        [[nodiscard]] EffectPoolStatus ValidateHandle(const EffectInstancePoolState &state, const EffectSystemId instance,
-                                                      EffectPoolSlot *&slot) noexcept {
+        /** @brief Resolves a generation-safe slot without discarding state constness. */
+        template <typename State, typename Slot>
+        [[nodiscard]] EffectPoolStatus ValidateHandle(State &state, const EffectSystemId instance, Slot *&slot) noexcept {
+            using enum EffectPoolStatus;
             if (!instance.IsValid() || instance.scope != state.scene || instance.slot >= state.plan.capacity)
-                return EffectPoolStatus::InvalidHandle;
+                return InvalidHandle;
             slot = &state.slots[instance.slot];
             if (instance.generation != slot->generation)
-                return EffectPoolStatus::StaleHandle;
+                return StaleHandle;
             if (slot->state == EffectSlotState::Free || slot->state == EffectSlotState::PermanentlyRetired)
-                return EffectPoolStatus::InvalidHandle;
-            return EffectPoolStatus::Admitted;
+                return InvalidHandle;
+            return Admitted;
         }
 
         [[nodiscard]] EffectSystemId Identity(const EffectInstancePoolState &state, const std::uint32_t index) noexcept {
@@ -85,8 +93,8 @@ namespace Horo::Vfx {
         }
 
         [[nodiscard]] std::uint32_t AvailableSlot(const EffectInstancePoolState &state, const VfxRequirementClass requirement) noexcept {
-            const std::uint32_t usableCapacity = state.plan.capacity - state.permanentlyRetired;
-            if (requirement == VfxRequirementClass::Cosmetic &&
+            if (const std::uint32_t usableCapacity = state.plan.capacity - state.permanentlyRetired;
+                requirement == VfxRequirementClass::Cosmetic &&
                 (usableCapacity <= state.plan.requiredReserve || state.cosmeticOccupied >= usableCapacity - state.plan.requiredReserve))
                 return state.plan.capacity;
             return state.freeCount == 0 ? state.plan.capacity : state.freeSlots[0];
@@ -97,7 +105,7 @@ namespace Horo::Vfx {
             const std::uint32_t index = AvailableSlot(state, request.requirement);
             if (index == state.plan.capacity)
                 return {.status = EffectPoolStatus::Rejected};
-            std::pop_heap(state.freeSlots.get(), state.freeSlots.get() + state.freeCount, std::greater<>{});
+            std::pop_heap(state.freeSlots.data(), state.freeSlots.data() + state.freeCount, std::greater<>{});
             --state.freeCount;
             EffectPoolSlot &slot = state.slots[index];
             slot.owner = request.owner;
@@ -116,6 +124,24 @@ namespace Horo::Vfx {
             slot.state = EffectSlotState::Retiring;
             --state.active;
             ++state.retiring;
+        }
+
+        /** @brief Adds one dependent lease to a live slot without releasing its reservation. */
+        [[nodiscard]] EffectPoolStatus RetainSlot(EffectPoolSlot &slot) noexcept {
+            using enum EffectPoolStatus;
+            if (slot.state != EffectSlotState::Active || slot.retainedReaders == std::numeric_limits<std::uint32_t>::max())
+                return InvalidRequest;
+            ++slot.retainedReaders;
+            return Admitted;
+        }
+
+        /** @brief Releases one dependent lease, including while the slot is retiring. */
+        [[nodiscard]] EffectPoolStatus AcknowledgeSlot(EffectPoolSlot &slot) noexcept {
+            using enum EffectPoolStatus;
+            if (slot.retainedReaders == 0)
+                return InvalidRequest;
+            --slot.retainedReaders;
+            return Admitted;
         }
 
         void PopDelayed(EffectInstancePoolState &state) noexcept {
@@ -165,24 +191,34 @@ namespace Horo::Vfx {
             capacity > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t))
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
 
-        std::unique_ptr<EffectInstancePoolState> state{new (std::nothrow) EffectInstancePoolState{}};
-        if (!state)
+        std::unique_ptr<EffectInstancePoolState> state;
+        try {
+            state = std::make_unique<EffectInstancePoolState>();
+            if (capacity > state->slots.max_size() || capacity > state->freeSlots.max_size() || delayedCapacity > state->delayed.max_size())
+                return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
+            state->slots.resize(capacity);
+            state->freeSlots.resize(capacity);
+            state->delayed.resize(delayedCapacity);
+        } catch (const std::bad_alloc &) {
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
-        state->slots.reset(new (std::nothrow) EffectPoolSlot[capacity]);
-        if (!state->slots)
-            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
-        state->freeSlots.reset(new (std::nothrow) std::uint32_t[capacity]);
-        if (!state->freeSlots)
-            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
+        }
+        // Vector capacity can exceed size; charge any extra storage before the pool becomes playable.
+        const std::uint64_t plannedBytes = fixedBytes + static_cast<std::uint64_t>(capacity) * bytesPerSlot;
+        std::uint64_t remainingBytes = budget.maximumBytes - plannedBytes;
+        const auto chargeExtra = [&remainingBytes](const std::size_t elements, const std::size_t elementBytes) noexcept {
+            if (elements > remainingBytes / elementBytes)
+                return false;
+            remainingBytes -= elements * elementBytes;
+            return true;
+        };
+        if (!chargeExtra(state->slots.capacity() - capacity, sizeof(EffectPoolSlot)) ||
+            !chargeExtra(state->freeSlots.capacity() - capacity, sizeof(std::uint32_t)) ||
+            !chargeExtra(state->delayed.capacity() - delayedCapacity, sizeof(Detail::DelayedEffectRequest)))
+            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
         state->freeCount = capacity;
         for (std::uint32_t index = 0; index < capacity; ++index)
             state->freeSlots[index] = index;
-        std::make_heap(state->freeSlots.get(), state->freeSlots.get() + capacity, std::greater<>{});
-        if (delayedCapacity != 0) {
-            state->delayed.reset(new (std::nothrow) Detail::DelayedEffectRequest[delayedCapacity]);
-            if (!state->delayed)
-                return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
-        }
+        std::make_heap(state->freeSlots.data(), state->freeSlots.data() + capacity, std::greater<>{});
         state->scene = descriptor.scene;
         state->ownerThread = std::this_thread::get_id();
         state->policy = policy;
@@ -190,169 +226,165 @@ namespace Horo::Vfx {
                        .requiredReserve = budget.requiredReserve,
                        .delayedCapacity = delayedCapacity,
                        .reservedEmitterSlots = static_cast<std::uint64_t>(capacity) * descriptor.emittersPerInstance,
-                       .reservedBytes = fixedBytes + static_cast<std::uint64_t>(capacity) * bytesPerSlot};
+                       .reservedBytes = budget.maximumBytes - remainingBytes};
         return Result<EffectInstancePool>::Success(EffectInstancePool{std::move(state)});
     }
 
     /** @copydoc EffectInstancePool::Play */
     EffectPoolOutcome EffectInstancePool::Play(const EffectPlaybackRequest &request) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (!OwnerThread(*state_))
-            return {.status = EffectPoolStatus::ThreadViolation};
+            return {.status = ThreadViolation};
         if (state_->shutDown)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (!request.owner.IsValid() || request.ownerGeneration == 0 || request.requirement >= VfxRequirementClass::Count ||
             request.tick < state_->currentTick)
-            return {.status = EffectPoolStatus::InvalidRequest};
+            return {.status = InvalidRequest};
         state_->currentTick = request.tick;
         if (request.requirement == VfxRequirementClass::GameplayRequired || state_->delayedCount == 0) {
             auto admission = Admit(*state_, request);
-            if (admission.status == EffectPoolStatus::Admitted)
+            if (admission.status == Admitted)
                 return admission;
         }
         if (request.requirement == VfxRequirementClass::Cosmetic && state_->policy.overBudget == EffectPoolOverBudgetPolicy::DelayBounded) {
             if (state_->delayedCount == state_->plan.delayedCapacity || state_->nextTicket == std::numeric_limits<std::uint64_t>::max()) {
-                ++state_->rejected;
-                return {.status = EffectPoolStatus::DelayQueueFull};
+                ++state_->telemetry.rejected;
+                return {.status = DelayQueueFull};
             }
             const auto tail = static_cast<std::uint32_t>((static_cast<std::uint64_t>(state_->delayedHead) + state_->delayedCount) %
                                                          state_->plan.delayedCapacity);
             const std::uint64_t ticket = state_->nextTicket++;
             state_->delayed[tail] = {.request = request, .ticket = ticket};
             ++state_->delayedCount;
-            return {.status = EffectPoolStatus::Delayed, .delayedTicket = ticket};
+            return {.status = Delayed, .delayedTicket = ticket};
         }
-        ++state_->rejected;
-        return {.status = EffectPoolStatus::Rejected};
+        ++state_->telemetry.rejected;
+        return {.status = Rejected};
     }
 
     /** @copydoc EffectInstancePool::PumpDelayed */
     EffectPoolOutcome EffectInstancePool::PumpDelayed(const std::uint64_t tick) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (!OwnerThread(*state_))
-            return {.status = EffectPoolStatus::ThreadViolation};
+            return {.status = ThreadViolation};
         if (state_->shutDown)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (tick < state_->currentTick)
-            return {.status = EffectPoolStatus::InvalidRequest};
+            return {.status = InvalidRequest};
         state_->currentTick = tick;
         if (state_->delayedCount == 0)
-            return {.status = EffectPoolStatus::Empty};
+            return {.status = Empty};
         const auto &front = state_->delayed[state_->delayedHead];
         const std::uint64_t ticket = front.ticket;
         if (front.cancelled) {
             PopDelayed(*state_);
-            ++state_->cancelled;
-            return {.status = EffectPoolStatus::Cancelled, .delayedTicket = ticket};
+            ++state_->telemetry.cancelled;
+            return {.status = Cancelled, .delayedTicket = ticket};
         }
         if (tick == front.request.tick)
-            return {.status = EffectPoolStatus::Waiting, .delayedTicket = ticket};
+            return {.status = Waiting, .delayedTicket = ticket};
         if (tick - front.request.tick >= state_->policy.maximumDelayTicks) {
             PopDelayed(*state_);
-            ++state_->expired;
-            return {.status = EffectPoolStatus::DelayExpired, .delayedTicket = ticket};
+            ++state_->telemetry.expired;
+            return {.status = DelayExpired, .delayedTicket = ticket};
         }
         auto ready = front.request;
         ready.tick = tick;
         auto admitted = Admit(*state_, ready, ticket);
-        if (admitted.status == EffectPoolStatus::Rejected)
-            return {.status = EffectPoolStatus::Waiting, .delayedTicket = ticket};
+        if (admitted.status == Rejected)
+            return {.status = Waiting, .delayedTicket = ticket};
         PopDelayed(*state_);
         return admitted;
     }
 
     /** @copydoc EffectInstancePool::Restart */
     EffectPoolOutcome EffectInstancePool::Restart(const EffectSystemId instance, const std::uint64_t tick) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (!OwnerThread(*state_))
-            return {.status = EffectPoolStatus::ThreadViolation};
+            return {.status = ThreadViolation};
         if (state_->shutDown)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (tick < state_->currentTick)
-            return {.status = EffectPoolStatus::InvalidRequest};
+            return {.status = InvalidRequest};
         EffectPoolSlot *slot{};
-        const auto status = ValidateHandle(*state_, instance, slot);
-        if (status != EffectPoolStatus::Admitted)
+        if (const auto status = ValidateHandle(*state_, instance, slot); status != Admitted)
             return {.status = status};
         if (slot->state != EffectSlotState::Active)
-            return {.status = EffectPoolStatus::InvalidHandle};
+            return {.status = InvalidHandle};
         if (slot->retainedReaders != 0)
-            return {.status = EffectPoolStatus::RetentionPending};
+            return {.status = RetentionPending};
         if (slot->generation == std::numeric_limits<std::uint32_t>::max())
-            return {.status = EffectPoolStatus::GenerationExhausted};
+            return {.status = GenerationExhausted};
         state_->currentTick = tick;
         ++slot->generation;
         slot->admittedTick = tick;
-        return {.status = EffectPoolStatus::Admitted, .instance = Identity(*state_, instance.slot)};
+        return {.status = Admitted, .instance = Identity(*state_, instance.slot)};
     }
 
     /** @copydoc EffectInstancePool::Stop */
     EffectPoolStatus EffectInstancePool::Stop(const EffectSystemId instance) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         if (!OwnerThread(*state_))
-            return EffectPoolStatus::ThreadViolation;
+            return ThreadViolation;
         EffectPoolSlot *slot{};
-        const auto status = ValidateHandle(*state_, instance, slot);
-        if (status != EffectPoolStatus::Admitted)
+        if (const auto status = ValidateHandle(*state_, instance, slot); status != Admitted)
             return status;
         if (slot->state != EffectSlotState::Active)
-            return EffectPoolStatus::InvalidHandle;
+            return InvalidHandle;
         StopSlot(*state_, *slot);
-        return EffectPoolStatus::Admitted;
+        return Admitted;
     }
 
     /** @copydoc EffectInstancePool::Retain */
     EffectPoolStatus EffectInstancePool::Retain(const EffectSystemId instance) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         if (!OwnerThread(*state_))
-            return EffectPoolStatus::ThreadViolation;
+            return ThreadViolation;
         if (state_->shutDown)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         EffectPoolSlot *slot{};
-        const auto status = ValidateHandle(*state_, instance, slot);
-        if (status != EffectPoolStatus::Admitted)
+        if (const auto status = ValidateHandle(*state_, instance, slot); status != Admitted)
             return status;
-        if (slot->state != EffectSlotState::Active || slot->retainedReaders == std::numeric_limits<std::uint32_t>::max())
-            return EffectPoolStatus::InvalidRequest;
-        ++slot->retainedReaders;
-        return EffectPoolStatus::Admitted;
+        return RetainSlot(*slot);
     }
 
     /** @copydoc EffectInstancePool::Acknowledge */
     EffectPoolStatus EffectInstancePool::Acknowledge(const EffectSystemId instance) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         if (!OwnerThread(*state_))
-            return EffectPoolStatus::ThreadViolation;
+            return ThreadViolation;
         EffectPoolSlot *slot{};
-        const auto status = ValidateHandle(*state_, instance, slot);
-        if (status != EffectPoolStatus::Admitted)
+        if (const auto status = ValidateHandle(*state_, instance, slot); status != Admitted)
             return status;
-        if (slot->retainedReaders == 0)
-            return EffectPoolStatus::InvalidRequest;
-        --slot->retainedReaders;
-        return EffectPoolStatus::Admitted;
+        return AcknowledgeSlot(*slot);
     }
 
     /** @copydoc EffectInstancePool::CompleteRetirement */
     EffectPoolStatus EffectInstancePool::CompleteRetirement(const EffectSystemId instance) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         if (!OwnerThread(*state_))
-            return EffectPoolStatus::ThreadViolation;
+            return ThreadViolation;
         EffectPoolSlot *slot{};
-        const auto status = ValidateHandle(*state_, instance, slot);
-        if (status != EffectPoolStatus::Admitted)
+        if (const auto status = ValidateHandle(*state_, instance, slot); status != Admitted)
             return status;
         if (slot->state != EffectSlotState::Retiring)
-            return EffectPoolStatus::InvalidRequest;
+            return InvalidRequest;
         if (slot->retainedReaders != 0)
-            return EffectPoolStatus::RetentionPending;
+            return RetentionPending;
         --state_->retiring;
         if (slot->requirement == VfxRequirementClass::Cosmetic)
             --state_->cosmeticOccupied;
@@ -366,22 +398,23 @@ namespace Horo::Vfx {
             ++slot->generation;
             slot->state = EffectSlotState::Free;
             state_->freeSlots[state_->freeCount++] = instance.slot;
-            std::push_heap(state_->freeSlots.get(), state_->freeSlots.get() + state_->freeCount, std::greater<>{});
+            std::push_heap(state_->freeSlots.data(), state_->freeSlots.data() + state_->freeCount, std::greater<>{});
         }
-        return EffectPoolStatus::Admitted;
+        return Admitted;
     }
 
     /** @copydoc EffectInstancePool::CancelOwner */
     EffectPoolCancelOutcome EffectInstancePool::CancelOwner(const VfxIdentityScope owner, const std::uint64_t ownerGeneration) noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (!OwnerThread(*state_))
-            return {.status = EffectPoolStatus::ThreadViolation};
+            return {.status = ThreadViolation};
         if (state_->shutDown)
-            return {.status = EffectPoolStatus::ShutDown};
+            return {.status = ShutDown};
         if (!owner.IsValid() || ownerGeneration == 0)
-            return {.status = EffectPoolStatus::InvalidRequest};
-        EffectPoolCancelOutcome outcome{.status = EffectPoolStatus::Cancelled};
+            return {.status = InvalidRequest};
+        EffectPoolCancelOutcome outcome{.status = Cancelled};
         for (std::uint32_t index = 0; index < state_->plan.capacity; ++index) {
             auto &slot = state_->slots[index];
             if (slot.state == EffectSlotState::Active && slot.owner == owner && slot.ownerGeneration == ownerGeneration) {
@@ -403,32 +436,33 @@ namespace Horo::Vfx {
 
     /** @copydoc EffectInstancePool::Shutdown */
     EffectPoolStatus EffectInstancePool::Shutdown() noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         if (!OwnerThread(*state_))
-            return EffectPoolStatus::ThreadViolation;
+            return ThreadViolation;
         if (state_->shutDown)
-            return EffectPoolStatus::Admitted;
+            return Admitted;
         state_->shutDown = true;
-        state_->cancelled += state_->delayedCount;
+        state_->telemetry.cancelled += state_->delayedCount;
         state_->delayedCount = 0;
         for (std::uint32_t index = 0; index < state_->plan.capacity; ++index) {
             auto &slot = state_->slots[index];
             if (slot.state == EffectSlotState::Active)
                 StopSlot(*state_, slot);
         }
-        return EffectPoolStatus::Admitted;
+        return Admitted;
     }
 
     /** @copydoc EffectInstancePool::Inspect */
     EffectPoolStatus EffectInstancePool::Inspect(const EffectSystemId instance, EffectInstanceSnapshot &output) const noexcept {
+        using enum EffectPoolStatus;
         if (!state_)
-            return EffectPoolStatus::ShutDown;
+            return ShutDown;
         if (!OwnerThread(*state_))
-            return EffectPoolStatus::ThreadViolation;
-        EffectPoolSlot *slot{};
-        const auto status = ValidateHandle(*state_, instance, slot);
-        if (status != EffectPoolStatus::Admitted)
+            return ThreadViolation;
+        const EffectPoolSlot *slot{};
+        if (const auto status = ValidateHandle(*state_, instance, slot); status != Admitted)
             return status;
         output = {.instance = instance,
                   .owner = slot->owner,
@@ -437,7 +471,7 @@ namespace Horo::Vfx {
                   .requirement = slot->requirement,
                   .retainedReaders = slot->retainedReaders,
                   .retiring = slot->state == EffectSlotState::Retiring};
-        return EffectPoolStatus::Admitted;
+        return Admitted;
     }
 
     /** @copydoc EffectInstancePool::Statistics */
@@ -450,9 +484,9 @@ namespace Horo::Vfx {
                 .permanentlyRetired = state_->permanentlyRetired,
                 .delayed = state_->delayedCount,
                 .peakActive = state_->peakActive,
-                .rejected = state_->rejected,
-                .expired = state_->expired,
-                .cancelled = state_->cancelled};
+                .rejected = state_->telemetry.rejected,
+                .expired = state_->telemetry.expired,
+                .cancelled = state_->telemetry.cancelled};
     }
 
     /** @copydoc EffectInstancePool::Quiescent */

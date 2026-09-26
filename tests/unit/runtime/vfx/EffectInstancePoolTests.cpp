@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <thread>
 #include <utility>
@@ -68,9 +69,18 @@ namespace Horo::Vfx {
         CHECK(HasErrorCode(EffectInstancePool::Prepare(Descriptor(0), Budget(), {}), VfxErrors::EffectPoolInvalid));
         CHECK(HasErrorCode(EffectInstancePool::Prepare(Descriptor(), Budget(), {.overBudget = EffectPoolOverBudgetPolicy::DelayBounded}),
                            VfxErrors::EffectPoolInvalid));
-        {
-            Tests::AllocationProbe::ScopedFailure failFirstAllocation;
+        for (std::size_t successfulAllocations = 0; successfulAllocations < 3; ++successfulAllocations) {
+            Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
             CHECK(HasErrorCode(EffectInstancePool::Prepare(Descriptor(), Budget(), {}), VfxErrors::EffectPoolAllocationFailed));
+        }
+        auto delayedBudget = Budget();
+        delayedBudget.maximumDelayed = 1;
+        for (std::size_t successfulAllocations = 0; successfulAllocations < 4; ++successfulAllocations) {
+            Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
+            CHECK(
+                HasErrorCode(EffectInstancePool::Prepare(Descriptor(), delayedBudget,
+                                                         {.overBudget = EffectPoolOverBudgetPolicy::DelayBounded, .maximumDelayTicks = 2}),
+                             VfxErrors::EffectPoolAllocationFailed));
         }
     }
 
