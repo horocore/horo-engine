@@ -1,21 +1,19 @@
 #include "Horo/Runtime/Save/SaveFilesystemStorage.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "SaveFilesystemStorageDetails.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
-#include <system_error>
 #include <utility>
 #include <vector>
 
 #ifdef _WIN32
-#define NOMINMAX
 #include <Windows.h>
 #include <winternl.h>
 #else
@@ -27,18 +25,8 @@
 
 namespace Horo::Runtime {
     namespace {
-        [[nodiscard]] Error Failure(const ErrorCodeDescriptor &descriptor, const char *operation, const int nativeError = 0) {
-            std::string message{"Save file "};
-            message.append(operation);
-            if (nativeError != 0)
-                message.append(" failed with filesystem code ").append(std::to_string(nativeError));
-            message.push_back('.');
-            return MakeError(descriptor, std::move(message));
-        }
-
-        [[nodiscard]] std::string SlotName(const SaveGameSlotId slot) {
-            return slot.ToString() + ".horosave";
-        }
+        using SaveFilesystemDetails::Failure;
+        using SaveFilesystemDetails::SlotName;
 
 #ifdef _WIN32
         class Handle final {
@@ -86,6 +74,8 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<Handle> RelativeOpen(const Handle &parent, const std::wstring &name, const ACCESS_MASK access,
                                                   const ULONG disposition, const ULONG options, const ULONG attributes) {
+            if (name.empty() || name.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
+                return Result<Handle>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows component length"));
             const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
             const auto create = library ? reinterpret_cast<decltype(&NtCreateFile)>(::GetProcAddress(library, "NtCreateFile")) : nullptr;
             if (!create)
@@ -140,6 +130,8 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ExistingWindowsTargetSafe(const Handle &directory, const std::wstring &name) {
+            if (name.empty() || name.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
+                return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows target length"));
             const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
             const auto create = library ? reinterpret_cast<decltype(&NtCreateFile)>(::GetProcAddress(library, "NtCreateFile")) : nullptr;
             if (!create)
@@ -168,27 +160,19 @@ namespace Horo::Runtime {
                 !::GetFileInformationByHandle(target.Get(), &info) || (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
                 info.nNumberOfLinks != 1)
                 return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "unsafe Windows target"));
+            const DWORD length = ::GetFinalPathNameByHandleW(target.Get(), nullptr, 0, FILE_NAME_NORMALIZED);
+            if (length == 0)
+                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows target name inspection", ::GetLastError()));
+            std::wstring finalName(length + 1, L'\0');
+            const DWORD written =
+                ::GetFinalPathNameByHandleW(target.Get(), finalName.data(), static_cast<DWORD>(finalName.size()), FILE_NAME_NORMALIZED);
+            if (written == 0 || written >= finalName.size())
+                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows target name inspection", ::GetLastError()));
+            finalName.resize(written);
+            if (finalName.substr(finalName.find_last_of(L"\\/") + 1) != name)
+                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows target case alias"));
             return Result<void>::Success();
         }
-
-        class WindowsTemporary final {
-        public:
-            explicit WindowsTemporary(HANDLE file) noexcept : file_(file) {}
-
-            ~WindowsTemporary() {
-                if (file_ != INVALID_HANDLE_VALUE) {
-                    FILE_DISPOSITION_INFO disposition{TRUE};
-                    (void)::SetFileInformationByHandle(file_, FileDispositionInfo, &disposition, sizeof(disposition));
-                }
-            }
-
-            void Published() noexcept {
-                file_ = INVALID_HANDLE_VALUE;
-            }
-
-        private:
-            HANDLE file_;
-        };
 
         [[nodiscard]] Result<void> WriteWindowsBytes(HANDLE file, std::span<const std::byte> bytes) {
             std::size_t offset = 0;
@@ -209,10 +193,13 @@ namespace Horo::Runtime {
             if (destination.empty() || destination.size() > (std::numeric_limits<DWORD>::max() / sizeof(wchar_t)))
                 return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination length"));
             const std::size_t byteLength = destination.size() * sizeof(wchar_t);
-            if (byteLength > std::numeric_limits<DWORD>::max() - offsetof(FILE_RENAME_INFO, FileName))
+            // FILE_RENAME_INFO includes a one-character tail member; reserve the full
+            // fixed structure plus the variable-length name for Win32's size check.
+            if (byteLength > std::numeric_limits<DWORD>::max() - sizeof(FILE_RENAME_INFO))
                 return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination buffer"));
-            const std::size_t size = offsetof(FILE_RENAME_INFO, FileName) + byteLength;
-            std::vector<std::uint64_t> buffer((size + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t));
+            const std::size_t size = sizeof(FILE_RENAME_INFO) + byteLength;
+            const std::size_t words = size / sizeof(std::uint64_t) + (size % sizeof(std::uint64_t) != 0);
+            std::vector<std::uint64_t> buffer(words);
             auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
             rename->ReplaceIfExists = TRUE;
             rename->RootDirectory = directory;
@@ -366,25 +353,6 @@ namespace Horo::Runtime {
     SaveFilesystemStorage &SaveFilesystemStorage::operator=(SaveFilesystemStorage &&) noexcept = default;
     SaveFilesystemStorage::~SaveFilesystemStorage() = default;
 
-    namespace {
-        template <typename Step> [[nodiscard]] Result<void> OpenNamespaceComponents(const SaveNamespaceId &name, Step &&step) {
-            if (auto opened = step(name.environment.ToString()); opened.HasError())
-                return opened;
-            if (const auto *profile = std::get_if<UserProfileOwner>(&name.owner)) {
-                if (auto opened = step("profile"); opened.HasError())
-                    return opened;
-                if (auto opened = step(profile->user.ToString() + "_" + profile->profile.ToString()); opened.HasError())
-                    return opened;
-            } else {
-                if (auto opened = step("server"); opened.HasError())
-                    return opened;
-                if (auto opened = step(std::get<ServerWorldOwner>(name.owner).owner.ToString()); opened.HasError())
-                    return opened;
-            }
-            return step("slots");
-        }
-    }  // namespace
-
 #ifdef _WIN32
     Result<std::unique_ptr<SaveFilesystemStorage::State>> SaveFilesystemStorage::State::OpenWindows(const ProductSaveRoot &root,
                                                                                                     const SaveNamespaceId &name) {
@@ -412,7 +380,7 @@ namespace Horo::Runtime {
             directories.push_back(std::move(child).Value());
             return Result<void>::Success();
         };
-        if (auto opened = OpenNamespaceComponents(name, step); opened.HasError())
+        if (auto opened = SaveFilesystemDetails::OpenNamespaceComponents(name, step); opened.HasError())
             return Result<std::unique_ptr<State>>::Failure(opened.ErrorValue());
         auto state = std::make_unique<State>(root.CanonicalPath(), std::move(directories), std::move(names));
         if (auto valid = state->Verify(); valid.HasError())
@@ -436,7 +404,7 @@ namespace Horo::Runtime {
             directories.push_back(std::move(child).Value());
             return Result<void>::Success();
         };
-        if (auto opened = OpenNamespaceComponents(name, step); opened.HasError())
+        if (auto opened = SaveFilesystemDetails::OpenNamespaceComponents(name, step); opened.HasError())
             return Result<std::unique_ptr<State>>::Failure(opened.ErrorValue());
         auto state = std::make_unique<State>(root.CanonicalPath(), std::move(directories), std::move(names));
         if (auto valid = state->Verify(); valid.HasError())
@@ -463,9 +431,9 @@ namespace Horo::Runtime {
     Result<std::vector<std::byte>> SaveFilesystemStorage::Read(const SaveGameSlotId slot, const std::size_t maximumBytes) const {
         if (!state_ || !slot.IsValid() || maximumBytes == 0)
             return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StorageOperationInvalid, "read validation"));
-#ifdef _WIN32
         if (auto valid = state_->Verify(); valid.HasError())
             return Result<std::vector<std::byte>>::Failure(valid.ErrorValue());
+#ifdef _WIN32
         const std::string narrow = SlotName(slot);
         const std::wstring name(narrow.begin(), narrow.end());
         auto opened = RelativeOpen(state_->Slots(), name, GENERIC_READ, kOpen, kNonDirectoryFile, FILE_ATTRIBUTE_NORMAL);
@@ -486,8 +454,6 @@ namespace Horo::Runtime {
         }
         return Result<std::vector<std::byte>>::Success(std::move(bytes));
 #else
-        if (auto valid = state_->Verify(); valid.HasError())
-            return Result<std::vector<std::byte>>::Failure(valid.ErrorValue());
         const std::string name = SlotName(slot);
         const int fd = ::openat(state_->Slots().Fd(), name.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
         if (fd < 0)
@@ -504,6 +470,8 @@ namespace Horo::Runtime {
         std::size_t offset = 0;
         while (offset < bytes.size()) {
             const std::size_t remaining = std::min(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            // EINTR retries unchanged; EOF/errors return; a positive read advances by at most remaining.
+            // flawfinder: ignore - offset < bytes.size() and remaining <= bytes.size() - offset.
             const ssize_t read = ::read(fd, bytes.data() + offset, remaining);
             if (read < 0 && errno == EINTR)
                 continue;
@@ -531,7 +499,7 @@ namespace Horo::Runtime {
         if (created.HasError())
             return Result<void>::Failure(created.ErrorValue());
         Handle file = std::move(created).Value();
-        WindowsTemporary cleanup{file.Get()};
+        SaveFilesystemDetails::WindowsTemporary cleanup{file.Get()};
         if (auto written = WriteWindowsBytes(file.Get(), bytes); written.HasError())
             return written;
         if (auto valid = Verify(); valid.HasError())
