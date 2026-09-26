@@ -332,7 +332,7 @@ The service schedules one job per admitted cell and preserves validation
 rejections as terminal cell evidence. `SummarizeReleaseTargetMatrix` derives a
 group decision from complete immutable membership and terminal outcomes. It
 remains incomplete while any admitted cell lacks a terminal outcome. Results
-must match both job and target identity; duplicate or foreign terminal results
+must match group, job and target identity; duplicate or foreign terminal results
 fail closed. Success requires every required member
 to succeed with a final-verified candidate; optional failures remain visible.
 The summary never replaces a job's terminal result or candidate verification.

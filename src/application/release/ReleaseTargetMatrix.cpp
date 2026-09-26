@@ -153,13 +153,13 @@ namespace Horo::Release {
             return planned;
         }
 
-        /** @brief Finds the exact job/target terminal and rejects duplicate evidence. */
-        [[nodiscard]] const ReleaseTargetTerminal *FindTerminal(const ReleaseMatrixCellPlan &cell,
+        /** @brief Finds the exact group/job/target terminal and rejects duplicate evidence. */
+        [[nodiscard]] const ReleaseTargetTerminal *FindTerminal(const std::string_view groupId, const ReleaseMatrixCellPlan &cell,
                                                                 const std::span<const ReleaseTargetTerminal> terminals,
                                                                 std::vector<ReleaseTargetIssue> &issues, bool &invalidEvidence) {
             const ReleaseTargetTerminal *matched = nullptr;
             for (const ReleaseTargetTerminal &terminal : terminals) {
-                if (terminal.jobId != cell.jobId || terminal.targetId != cell.targetId)
+                if (terminal.groupId != groupId || terminal.jobId != cell.jobId || terminal.targetId != cell.targetId)
                     continue;
                 if (matched) {
                     AddIssue(issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal",
@@ -256,7 +256,7 @@ namespace Horo::Release {
                          "Admitted target plan and validation evidence disagree.");
                 requiredFailed = true;
             }
-            const ReleaseTargetTerminal *matched = FindTerminal(cell, terminals, summary.issues, requiredFailed);
+            const ReleaseTargetTerminal *matched = FindTerminal(matrix.groupId, cell, terminals, summary.issues, requiredFailed);
             if (matched)
                 ApplyTerminal(cell, *matched, member, summary.issues, requiredFailed);
             if (cell.requirement == ReleaseMatrixRequirement::Required) {
@@ -266,7 +266,7 @@ namespace Horo::Release {
             summary.members.push_back(std::move(member));
         }
         for (const ReleaseTargetTerminal &terminal : terminals) {
-            if (std::ranges::none_of(matrix.cells, [&terminal](const ReleaseMatrixCellPlan &cell) {
+            if (terminal.groupId != matrix.groupId || std::ranges::none_of(matrix.cells, [&terminal](const ReleaseMatrixCellPlan &cell) {
                 return cell.jobId == terminal.jobId && cell.targetId == terminal.targetId;
             })) {
                 AddIssue(summary.issues, ReleaseTargetIssueCode::InvalidMatrix, terminal.targetId, "terminal",

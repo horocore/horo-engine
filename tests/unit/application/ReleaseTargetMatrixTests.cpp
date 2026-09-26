@@ -163,9 +163,9 @@ TEST_CASE("Windows macOS and Linux cells retain distinct jobs and complete termi
         CHECK(cell.plan.has_value());
         CHECK(cell.validatedTarget.has_value());
     }
-    const std::vector<ReleaseTargetTerminal> terminals{{"job-windows", "windows", ReleaseTargetTerminalState::Succeeded, true},
-                                                       {"job-linux", "linux", ReleaseTargetTerminalState::Failed, false},
-                                                       {"job-macos", "macos", ReleaseTargetTerminalState::Succeeded, true}};
+    const std::vector<ReleaseTargetTerminal> terminals{{"release-1", "job-windows", "windows", ReleaseTargetTerminalState::Succeeded, true},
+                                                       {"release-1", "job-linux", "linux", ReleaseTargetTerminalState::Failed, false},
+                                                       {"release-1", "job-macos", "macos", ReleaseTargetTerminalState::Succeeded, true}};
     const ReleaseMatrixSummary failed = SummarizeReleaseTargetMatrix(matrix, terminals);
     CHECK(failed.state == ReleaseMatrixState::Failed);
     REQUIRE(failed.members.size() == 3);
@@ -233,11 +233,15 @@ TEST_CASE("Mixed matrix results preserve every member and block failed required 
         return cell.plan.has_value();
     }));
 
-    const std::vector<ReleaseTargetTerminal> partial{{"job-required-ok", "required-ok", ReleaseTargetTerminalState::Succeeded, true}};
+    const std::vector<ReleaseTargetTerminal> partial{
+        {"release-1", "job-required-ok", "required-ok", ReleaseTargetTerminalState::Succeeded, true}};
     CHECK(SummarizeReleaseTargetMatrix(matrix, partial).state == ReleaseMatrixState::Incomplete);
-    const std::vector<ReleaseTargetTerminal> mixed{{"job-required-ok", "required-ok", ReleaseTargetTerminalState::Succeeded, true},
-                                                   {"job-required-fail", "required-fail", ReleaseTargetTerminalState::Failed, false},
-                                                   {"job-optional-fail", "optional-fail", ReleaseTargetTerminalState::Cancelled, false}};
+    const std::vector<ReleaseTargetTerminal> mixed{{"release-1", "job-required-ok", "required-ok", ReleaseTargetTerminalState::Succeeded,
+                                                    true},
+                                                   {"release-1", "job-required-fail", "required-fail", ReleaseTargetTerminalState::Failed,
+                                                    false},
+                                                   {"release-1", "job-optional-fail", "optional-fail",
+                                                    ReleaseTargetTerminalState::Cancelled, false}};
     const auto failed = SummarizeReleaseTargetMatrix(matrix, mixed);
     CHECK(failed.state == ReleaseMatrixState::Failed);
     REQUIRE(failed.members.size() == 3);
@@ -247,7 +251,7 @@ TEST_CASE("Mixed matrix results preserve every member and block failed required 
     CHECK(failed.members[2].state == ReleaseMatrixMemberState::Cancelled);
 
     auto succeeded = mixed;
-    succeeded[1] = {"job-required-fail", "required-fail", ReleaseTargetTerminalState::Succeeded, true};
+    succeeded[1] = {"release-1", "job-required-fail", "required-fail", ReleaseTargetTerminalState::Succeeded, true};
     CHECK(SummarizeReleaseTargetMatrix(matrix, succeeded).state == ReleaseMatrixState::Succeeded);
     succeeded[1].candidateFinalVerified = false;
     CHECK(SummarizeReleaseTargetMatrix(matrix, succeeded).state == ReleaseMatrixState::Failed);
@@ -265,8 +269,8 @@ TEST_CASE("Duplicate cells and terminal results cannot produce a successful grou
 
     const ReleaseMatrixCellRequest single = Cell("one", host.platform, host.architecture, DistributionPackageFormat::TarGzip);
     const auto valid = PlanReleaseTargetMatrix("release-2", host, std::span{&single, 1U}, std::span{&toolchain, 1U});
-    const std::vector<ReleaseTargetTerminal> duplicate{{"job-one", "one", ReleaseTargetTerminalState::Succeeded, true},
-                                                       {"job-one", "one", ReleaseTargetTerminalState::Succeeded, true}};
+    const std::vector<ReleaseTargetTerminal> duplicate{{"release-2", "job-one", "one", ReleaseTargetTerminalState::Succeeded, true},
+                                                       {"release-2", "job-one", "one", ReleaseTargetTerminalState::Succeeded, true}};
     CHECK(SummarizeReleaseTargetMatrix(valid, duplicate).state == ReleaseMatrixState::Failed);
 }
 
@@ -278,15 +282,15 @@ TEST_CASE("Invalid, foreign and rejected terminal evidence cannot produce a succ
     REQUIRE(valid.cells.size() == 1);
     REQUIRE(valid.cells[0].plan.has_value());
 
-    const ReleaseTargetTerminal invalid{"job-one", "one", static_cast<ReleaseTargetTerminalState>(255), false};
+    const ReleaseTargetTerminal invalid{"release-1", "job-one", "one", static_cast<ReleaseTargetTerminalState>(255), false};
     const ReleaseMatrixSummary invalidSummary = SummarizeReleaseTargetMatrix(valid, std::span{&invalid, 1U});
     CHECK(invalidSummary.state == ReleaseMatrixState::Failed);
     REQUIRE(invalidSummary.members.size() == 1);
     CHECK(invalidSummary.members[0].terminal.has_value());
     CHECK(invalidSummary.members[0].state == ReleaseMatrixMemberState::Pending);
 
-    const std::vector<ReleaseTargetTerminal> foreign{{"job-one", "one", ReleaseTargetTerminalState::Succeeded, true},
-                                                     {"job-foreign", "one", ReleaseTargetTerminalState::Succeeded, true}};
+    const std::vector<ReleaseTargetTerminal> foreign{{"release-1", "job-one", "one", ReleaseTargetTerminalState::Succeeded, true},
+                                                     {"release-1", "job-foreign", "one", ReleaseTargetTerminalState::Succeeded, true}};
     CHECK(SummarizeReleaseTargetMatrix(valid, foreign).state == ReleaseMatrixState::Failed);
 
     ReleaseMatrixCellRequest rejectedCell = cell;
@@ -294,8 +298,31 @@ TEST_CASE("Invalid, foreign and rejected terminal evidence cannot produce a succ
     const ReleaseTargetMatrixPlan rejected =
         PlanReleaseTargetMatrix("release-2", host, std::span{&rejectedCell, 1U}, std::span{&toolchain, 1U});
     REQUIRE_FALSE(rejected.cells[0].plan.has_value());
-    const ReleaseTargetTerminal claimed{"job-one", "one", ReleaseTargetTerminalState::Succeeded, true};
+    const ReleaseTargetTerminal claimed{"release-2", "job-one", "one", ReleaseTargetTerminalState::Succeeded, true};
     const ReleaseMatrixSummary rejectedSummary = SummarizeReleaseTargetMatrix(rejected, std::span{&claimed, 1U});
     CHECK(rejectedSummary.state == ReleaseMatrixState::Failed);
     CHECK(rejectedSummary.members[0].state == ReleaseMatrixMemberState::ValidationFailed);
+}
+
+TEST_CASE("A terminal from another release group cannot satisfy the same job and target labels", "[unit][application][release][matrix]") {
+    const ReleaseMachine host{DistributionPlatform::Linux, DistributionArchitecture::X64};
+    const ReleaseMatrixCellRequest cell = Cell("one", host.platform, host.architecture, DistributionPackageFormat::TarGzip);
+    const ReleaseToolchainDescriptor toolchain = Toolchain(host, host, DistributionPackageFormat::TarGzip);
+    const ReleaseTargetMatrixPlan groupA = PlanReleaseTargetMatrix("release-a", host, std::span{&cell, 1U}, std::span{&toolchain, 1U});
+    const ReleaseTargetMatrixPlan groupB = PlanReleaseTargetMatrix("release-b", host, std::span{&cell, 1U}, std::span{&toolchain, 1U});
+    REQUIRE(groupA.cells[0].plan.has_value());
+    REQUIRE(groupB.cells[0].plan.has_value());
+
+    const ReleaseTargetTerminal terminalB{"release-b", "job-one", "one", ReleaseTargetTerminalState::Succeeded, true};
+    CHECK(SummarizeReleaseTargetMatrix(groupB, std::span{&terminalB, 1U}).state == ReleaseMatrixState::Succeeded);
+    const ReleaseMatrixSummary wrongGroup = SummarizeReleaseTargetMatrix(groupA, std::span{&terminalB, 1U});
+    CHECK(wrongGroup.state == ReleaseMatrixState::Failed);
+    REQUIRE(wrongGroup.members.size() == 1);
+    CHECK(wrongGroup.members[0].state == ReleaseMatrixMemberState::Pending);
+    CHECK_FALSE(wrongGroup.members[0].terminal.has_value());
+    CHECK_FALSE(wrongGroup.issues.empty());
+
+    const ReleaseTargetTerminal terminalA{"release-a", "job-one", "one", ReleaseTargetTerminalState::Succeeded, true};
+    const std::vector<ReleaseTargetTerminal> mixed{terminalA, terminalB};
+    CHECK(SummarizeReleaseTargetMatrix(groupA, mixed).state == ReleaseMatrixState::Failed);
 }

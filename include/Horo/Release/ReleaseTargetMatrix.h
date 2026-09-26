@@ -149,8 +149,9 @@ namespace Horo::Release {
         Cancelled
     };
 
-    /** @brief Service-owned terminal result; success requires a final-verified candidate. */
+    /** @brief Service-owned terminal result bound to one immutable group; success requires a final-verified candidate. */
     struct ReleaseTargetTerminal final {
+        std::string groupId;
         std::string jobId;
         std::string targetId;
         ReleaseTargetTerminalState state{ReleaseTargetTerminalState::Failed};
@@ -192,7 +193,7 @@ namespace Horo::Release {
     /**
      * @brief Derives one truthful candidate result without dropping failed or missing members.
      * @param matrix Complete group plan returned by PlanReleaseTargetMatrix.
-     * @param terminals Latest terminal outcomes keyed by exact target identity.
+     * @param terminals Latest terminal outcomes keyed by exact group, job and target identity.
      * @return Failed for any required failure or invalid evidence, incomplete while required work remains, otherwise succeeded.
      */
     [[nodiscard]] ReleaseMatrixSummary SummarizeReleaseTargetMatrix(const ReleaseTargetMatrixPlan &matrix,

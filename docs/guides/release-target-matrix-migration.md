@@ -20,8 +20,17 @@ Each accepted `ReleaseMatrixCellPlan` is an independent job input. Consume its
 `plan` and `validatedTarget` together and recheck the frozen identities before
 execution. A rejected cell carries its validation issues and must never launch
 build or packaging stages. After each admitted job reaches exactly one terminal
-result, supply the complete result set with exact job and target IDs to
+result, supply the complete result set with exact group, job and target IDs to
 `SummarizeReleaseTargetMatrix`. Retain
 every returned member result, including optional failures and validation
 rejections. Only a `Succeeded` group with final-verified required candidates is
 eligible to be presented as a successful multi-platform candidate.
+
+`ReleaseTargetTerminal` now carries `groupId` as its first field. Callers using
+aggregate initialization must prepend the service-assigned ID of the group
+that produced the result; adapters must not reconstruct it from labels or
+paths. This contract change affects matrix-result producers and their tests,
+not single-target preflight callers. Without this binding, a terminal from a
+different group with the same job and target labels could falsely satisfy a
+required member. The summarizer rejects cross-group results even when those
+labels match.
