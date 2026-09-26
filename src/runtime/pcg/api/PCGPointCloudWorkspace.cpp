@@ -209,8 +209,7 @@ namespace Horo::PCG {
             for (const auto &bound : bounds) {
                 if (const auto valid = ValidateOutputBound(plan, bound, limits); valid.HasError())
                     return valid;
-                state.outputs.emplace_back(
-                    PCGPointCloudWorkspace::State::Output{bound.node, bound.pin, 0, bound.maximumPoints, 0, state.nodeCount});
+                state.outputs.emplace_back(bound.node, bound.pin, 0, bound.maximumPoints, 0, state.nodeCount);
             }
             std::ranges::sort(state.outputs, {}, [](const auto &output) {
                 return std::tuple(output.node, output.pin);
@@ -309,8 +308,7 @@ namespace Horo::PCG {
                     if (next.HasError())
                         return next;
                     bytes = next.Value();
-                    state.slots.emplace_back(PCGPointCloudWorkspace::State::Slot{PCGPointStorageCandidate{bound.schema},
-                                                                                 output.maximumPoints, output.lastReader});
+                    state.slots.emplace_back(PCGPointStorageCandidate{bound.schema}, output.maximumPoints, output.lastReader);
                 } else {
                     state.slots[slotIndex].lastReader = output.lastReader;
                 }
@@ -328,8 +326,7 @@ namespace Horo::PCG {
                 core.seeds.resize(slot.capacity);
                 slot.columns.attributes.reserve(slot.columns.schema->Attributes().size());
                 for (const auto &attribute : slot.columns.schema->Attributes())
-                    slot.columns.attributes.emplace_back(
-                        PCGAttributeColumn{std::string(attribute.key.Value()), AllocateValues(attribute.type, slot.capacity)});
+                    slot.columns.attributes.emplace_back(std::string(attribute.key.Value()), AllocateValues(attribute.type, slot.capacity));
                 const auto charge = SlotBytes(*slot.columns.schema, slot.capacity);
                 if (charge.HasError() || ActualSlotBytes(slot.columns) > charge.Value())
                     return Reject<void>(PCGErrors::PointCapacityExceeded);
