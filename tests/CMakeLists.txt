@@ -189,9 +189,26 @@ add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
         unit/runtime/input/InputContextTests.cpp
+        unit/runtime/input/TextInputTests.cpp
 )
 target_compile_features(HoroInputTests PRIVATE cxx_std_20)
 target_link_libraries(HoroInputTests PRIVATE HoroEngine::Input)
+add_executable(HoroRuntimeUiInputTests
+        unit/runtime/input/RuntimeUiTextInputTests.cpp
+)
+target_compile_features(HoroRuntimeUiInputTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiInputTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/ui/input)
+target_link_libraries(HoroRuntimeUiInputTests PRIVATE HoroEngine::RuntimeUiInput)
+horo_register_catch_test(HoroRuntimeUiInputTests LABELS "unit;input;runtime_ui;headless")
+if (HORO_BUILD_INPUT_SDL3)
+    add_executable(HoroInputSdlTests
+            unit/runtime/input/SdlTextInputTests.cpp
+    )
+    target_compile_features(HoroInputSdlTests PRIVATE cxx_std_20)
+    target_include_directories(HoroInputSdlTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/input/sdl)
+    target_link_libraries(HoroInputSdlTests PRIVATE HoroEngine::InputSdl ${HORO_SDL3_TARGET})
+    horo_register_catch_test(HoroInputSdlTests LABELS "unit;input;sdl;headless")
+endif ()
 add_executable(HoroNetworkApiTests
         unit/runtime/networking/MessageEnvelopeTests.cpp
         unit/runtime/networking/NetworkAddressTests.cpp
@@ -199,7 +216,9 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/NetworkFailureTests.cpp
         unit/runtime/networking/NetworkIoServiceTests.cpp
         unit/runtime/networking/NetworkLifecycleTests.cpp
+        unit/runtime/networking/NetworkMetricsTests.cpp
         unit/runtime/networking/NetworkProjectSettingsTests.cpp
+        unit/runtime/networking/NetworkTargetCapabilitiesTests.cpp
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
@@ -220,10 +239,23 @@ add_executable(HoroNetworkTransportNullTests
 target_compile_features(HoroNetworkTransportNullTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportNullTests PRIVATE HoroEngine::NetworkTransportNull)
 horo_register_catch_test(HoroNetworkTransportNullTests LABELS "unit;network;headless")
+if(HORO_BUILD_NETWORK_GNS)
+    add_executable(HoroNetworkTransportGnsTests
+            unit/runtime/networking/GnsTransportTests.cpp
+    )
+    target_compile_features(HoroNetworkTransportGnsTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns)
+    target_compile_definitions(HoroNetworkTransportGnsTests PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
+    target_link_libraries(HoroNetworkTransportGnsTests PRIVATE GameNetworkingSockets::static c-ares::cares)
+    target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
+    horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
+endif()
 add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/AuthenticationSessionAdapterTests.cpp
+        unit/runtime/networking/NetworkDiagnosticsTests.cpp
         unit/runtime/networking/HandshakeNegotiationTests.cpp
         unit/runtime/networking/NetworkObjectMappingTests.cpp
+        unit/runtime/networking/NetworkTickAlignmentTests.cpp
         unit/runtime/networking/PeerSessionLifecycleTests.cpp
         unit/runtime/networking/ReplicationWorldLifecycleTests.cpp
 )
@@ -396,8 +428,10 @@ add_executable(HoroAITests
         unit/runtime/ai/BlackboardInstanceTests.cpp
         unit/runtime/ai/BlackboardSchemaTests.cpp
         unit/runtime/ai/DecisionAssetValidationTests.cpp
+        unit/runtime/ai/EnvironmentQuerySchemaTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
+        unit/runtime/ai/PerceptionMemoryTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
 target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration)
@@ -417,6 +451,7 @@ target_link_libraries(HoroAnimationApiTests PRIVATE HoroEngine::AnimationApi)
 horo_register_catch_test(HoroAnimationApiTests LABELS "unit;animation;headless")
 
 add_executable(HoroPCGTests
+        unit/runtime/pcg/PCGCookedPlanTests.cpp
         unit/runtime/pcg/PCGGraphAssetTests.cpp
         unit/runtime/pcg/PCGGraphValidationTests.cpp
         unit/runtime/pcg/PCGGenerationPlanTests.cpp
@@ -425,6 +460,7 @@ add_executable(HoroPCGTests
         unit/runtime/pcg/PCGProvenanceTests.cpp
         unit/runtime/pcg/PCGSpatialSnapshotTests.cpp
         unit/runtime/pcg/PCGRegistryTests.cpp
+        unit/runtime/pcg/PCGAsyncOperationTests.cpp
 )
 target_compile_features(HoroPCGTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGTests PRIVATE HoroEngine::PCG)
@@ -481,6 +517,12 @@ target_link_libraries(HoroPreFracturedImportTests PRIVATE HoroEngine::Destructio
 target_include_directories(HoroPreFracturedImportTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/destruction/cook)
 target_compile_definitions(HoroPreFracturedImportTests PRIVATE HORO_UFBX_TEST_DATA_DIR="${ufbx_SOURCE_DIR}/data")
 horo_register_catch_test(HoroPreFracturedImportTests LABELS "unit;destruction;headless")
+add_executable(HoroDestructionRuntimeTests
+        unit/runtime/destruction/DestructionDamageRuntimeTests.cpp
+)
+target_compile_features(HoroDestructionRuntimeTests PRIVATE cxx_std_20)
+target_link_libraries(HoroDestructionRuntimeTests PRIVATE HoroEngine::DestructionRuntime)
+horo_register_catch_test(HoroDestructionRuntimeTests LABELS "unit;destruction;headless")
 
 add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
@@ -534,8 +576,10 @@ horo_register_catch_test(HoroNavigationApiTests LABELS "unit;navigation;headless
 add_executable(HoroNavigationRuntimeTests
         support/AllocationProbe.cpp
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
+        unit/runtime/navigation/NavigationCrowdSnapshotTests.cpp
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
+        unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationRuntimeQueuesTests.cpp
         unit/runtime/navigation/NavigationWorldLifecycleTests.cpp
@@ -572,6 +616,7 @@ horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 
 add_executable(HoroTerrainApiTests
         unit/runtime/terrain/FoliageDefinitionTests.cpp
+        unit/runtime/terrain/TerrainCompositionTests.cpp
         unit/runtime/terrain/TerrainDescriptorTests.cpp
         unit/runtime/terrain/TerrainFoliageRegistryTests.cpp
         unit/runtime/terrain/TerrainIdentityTests.cpp
@@ -579,6 +624,13 @@ add_executable(HoroTerrainApiTests
 target_compile_features(HoroTerrainApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi Threads::Threads)
 horo_register_catch_test(HoroTerrainApiTests LABELS "unit;terrain;headless")
+
+add_executable(HoroTerrainAsyncJobsTests
+        unit/runtime/terrain/TerrainAsyncJobsTests.cpp
+)
+target_compile_features(HoroTerrainAsyncJobsTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainAsyncJobsTests PRIVATE HoroEngine::TerrainRuntime Threads::Threads)
+horo_register_catch_test(HoroTerrainAsyncJobsTests LABELS "unit;terrain;headless")
 
 add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/NetworkStreamingAuthorityTests.cpp
@@ -896,6 +948,11 @@ add_executable(HoroReleaseProfileTests
 )
 target_compile_features(HoroReleaseProfileTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseProfileTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleasePreflightTests
+        unit/application/ReleasePreflightTests.cpp
+)
+target_compile_features(HoroReleasePreflightTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleasePreflightTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
         unit/application/ProjectMigrationCatalogTests.cpp
@@ -1109,6 +1166,9 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::Gui
     )
     add_executable(HoroGlobalDockPanelRenderTests
+            unit/editor/GlobalDockBuildActiveRenderTests.cpp
+            unit/editor/GlobalDockBuildOutputPaneTests.cpp
+            unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
     )
 
@@ -1187,11 +1247,20 @@ target_include_directories(HoroFoundationResultTests PRIVATE "${PROJECT_SOURCE_D
 add_executable(HoroCliCommandRegistryTests
         unit/cli/CliCommandRegistryTests.cpp
         unit/cli/CliDispatcherTests.cpp
+        unit/cli/CliProgressLifecycleTests.cpp
         unit/cli/CliOptionParserTests.cpp
 )
 target_compile_features(HoroCliCommandRegistryTests PRIVATE cxx_std_20)
-target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost)
+target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost HoroEngine::Platform)
 horo_register_catch_test(HoroCliCommandRegistryTests LABELS "unit;cli;headless")
+
+add_executable(HoroMcpSessionTests
+        unit/mcp/McpSessionTests.cpp
+        unit/mcp/McpLocalTransportTests.cpp
+)
+target_compile_features(HoroMcpSessionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroMcpSessionTests PRIVATE HoroEngine::McpSession Threads::Threads)
+horo_register_catch_test(HoroMcpSessionTests LABELS "unit;mcp;headless")
 
 add_executable(HoroFoundationErrorCodeRegistryTests
         unit/foundation/ErrorCodeRegistryTests.cpp
@@ -1259,6 +1328,11 @@ add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
 )
 
+add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
+target_compile_features(HoroProcessTestChild PRIVATE cxx_std_20)
+add_dependencies(HoroPlatformTests HoroProcessTestChild)
+target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
+
 target_compile_features(HoroPlatformTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
 add_executable(HoroPlatformRequestTests
@@ -1287,6 +1361,7 @@ target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
 target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
 add_executable(HoroGameplayBuildServiceTests
+        unit/application/CompilerDiagnosticParserTests.cpp
         unit/application/GameplayBuildServiceTests.cpp
 )
 target_compile_features(HoroGameplayBuildServiceTests PRIVATE cxx_std_20)
@@ -2377,6 +2452,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroReleaseVersionTests
         HoroDistributionModelTests
         HoroReleaseProfileTests
+        HoroReleasePreflightTests
         HoroProjectMigrationTests
         HoroProjectMigrationTransactionTests
         HoroProjectOpenServiceTests

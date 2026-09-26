@@ -3,6 +3,7 @@
 #include "Horo/Network/TransportBackendComposition.h"
 #include "NetworkTestUtils.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -124,6 +125,38 @@ namespace Horo::Network {
             REQUIRE(unsupported.created == 0);
             REQUIRE(unconfigured.created == 0);
             REQUIRE(composition.Lifecycle() == TransportBackendCompositionState::Sealed);
+        }
+
+        TEST_CASE("Target host facts come from sealed composition without activating a provider",
+                  "[unit][network][transport-composition][target]") {
+            Counters counters{};
+            TransportBackendComposition composition;
+            const auto provider = NetworkTransportProviderId::Create(7).Value();
+            const auto missing = NetworkTransportProviderId::Create(8).Value();
+            const std::array bindings = {TransportTargetBinding{provider, {"null"}}, TransportTargetBinding{missing, {"gns"}}};
+            const auto revision = NetworkHostCapabilityRevision::Create(3).Value();
+            const auto roles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::Client;
+            const NetworkProjectProtocolPolicy protocol{ProtocolId::Create(1).Value(), {{1, 0}, {1, 1}}, 9};
+            RequireError(CaptureNetworkTargetHostFacts(composition, revision, NetworkTargetPlatform::Linux, roles, protocol, bindings),
+                         NetworkErrors::TransportBackendInvalid);
+            REQUIRE(composition.Register(Descriptor("null", counters)).HasValue());
+            REQUIRE(composition.Seal().HasValue());
+            const auto captured =
+                CaptureNetworkTargetHostFacts(composition, revision, NetworkTargetPlatform::Linux, roles, protocol, bindings);
+            REQUIRE(captured.HasValue());
+            REQUIRE(captured.Value().providerCount == 2);
+            REQUIRE(captured.Value().providers[0].installed);
+            REQUIRE(captured.Value().providers[0].hostSupported);
+            REQUIRE(captured.Value().providers[0].configured);
+            REQUIRE(captured.Value().providers[0].capabilities == Capabilities());
+            REQUIRE_FALSE(captured.Value().providers[1].installed);
+            REQUIRE(counters.created == 0);
+            const std::array duplicate = {TransportTargetBinding{provider, {"null"}}, TransportTargetBinding{provider, {"gns"}}};
+            RequireError(CaptureNetworkTargetHostFacts(composition, revision, NetworkTargetPlatform::Linux, roles, protocol, duplicate),
+                         NetworkErrors::TransportBackendConflict);
+            composition.BeginCancellation();
+            RequireError(CaptureNetworkTargetHostFacts(composition, revision, NetworkTargetPlatform::Linux, roles, protocol, bindings),
+                         NetworkErrors::TransportBackendCancelled);
         }
 
         TEST_CASE("Transport composition rejects malformed duplicate over-capacity and premature operations",

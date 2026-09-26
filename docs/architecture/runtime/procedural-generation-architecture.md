@@ -34,6 +34,25 @@ Offline bake, live preview and runtime generation evaluate the same validated co
 plan. Runtime never parses graph source, invokes a compiler, repairs a plan or chooses
 a cache entry as active content.
 
+`PCGPointCloudWorkspace` implements the operation-local point-column boundary.
+Admission takes the exact cooked plan and a maximum record count and immutable schema
+for every PointSet output pin. It derives last readers from canonical routes, proves
+the peak simultaneously live record count, and reserves typed contiguous column
+buffers and metadata within the tier scratch slice before evaluation. Outputs with
+no downstream route remain final until the operation ends. A caller replacing an
+operation supplies the still-charged old workspace bytes so old/new overlap is
+admitted before the new buffers are allocated.
+
+One owner thread advances nodes in cooked order. The current node writes only its
+own bounded columns through guarded value setters; sealing validates every value
+and revokes copied writers before downstream reads. An output buffer may be assigned to a later output
+only after its last routed reader has finished. Fan-out therefore retains one
+immutable source buffer through all consumers. Borrowed read/write views expire at
+their documented stage transitions; cancellation closes access, and destruction
+releases every slot. A new workspace is required for a new evaluation, source
+revision, or replacement. The cooked plan exposes its captured operational tier for
+this admission; its portable byte format and compiler version are unchanged.
+
 ### Graph Source Schema 1.1
 
 `PCGGraphAsset` is the implemented bounded semantic source value. It owns stable graph,
@@ -509,6 +528,36 @@ same typed unsupported result rather than fabricated empty success. `Close()` en
 publication and releases the live catalog while already issued snapshots retain their
 owned immutable data.
 
+## Async Operation And Invalidation Boundary
+
+`Horo/PCG/PCGAsyncOperation.h` is the PCG-1.6 owner-lane operation coordinator.
+It accepts only exact registered scene/cell/graph scopes and captures the durable
+`GraphGeneration` together with the digest of canonical source bytes. Its fence
+also carries a never-reused runtime generation and exact plan, input and authority
+publications. A matching graph revision with different source bytes is not current.
+The coordinator does not depend on a concrete cooked-plan type; a host attaching a
+plan checks its graph generation and source digest on the owner lane before
+admission and again at any later transaction boundary.
+
+Worker callbacks prepare owned immutable candidates and may spawn structured
+children. The parent cannot finish until every accepted child is joined. Only the
+creating owner lane advances completion and publishes an immutable PCG candidate or
+result after an exact-current fence check. This is not permission to commit Scene,
+Terrain/Foliage or another target: target preparation and aggregate commit remain
+external host/target-owner transactions that revalidate authority and revisions.
+Every accepted operation reaches one immutable success, failure, cancellation or
+stale terminal with typed cause and child/work accounting. Repeated completion and
+late cancellation cannot change it.
+
+Graph, cell, scene and host invalidation close matching admission/publication and
+request cancellation. The host retains exact inputs, plans, modules, candidate and
+target-owner leases until every worker, child and owner completion drains. Scope
+re-registration needs a strictly newer compatible fence after that drain; shutdown
+cannot fabricate completion, detach work or release an owner still reachable by it.
+An owner can sweep all completions without blocking, then forget terminal records and
+retire a closed graph scope to return its finite admission capacity. Scope retirement
+requires no retained operation record and never changes an issued terminal result.
+
 ## Pre-Compile Graph Validation Contract
 
 `Horo/PCG/PCGGraphValidation.h` is the PCG-2.3 boundary between canonical authored
@@ -524,7 +573,9 @@ grants, and one exact runtime handle for every node. Success owns a compact node
 in deterministic dependency-first order; stable node identity breaks ties between
 independent nodes. Every handle is fenced to the returned registry generation, so a
 compiler must retain the issuing snapshot and must not resolve the handle through a
-replacement generation.
+replacement generation. The result also captures a SHA-256 digest of canonical
+source bytes; compilation checks this against its source rather than trusting only
+the durable revision identifier.
 
 Malformed topology and unknown-node policy are rejected by `PCGGraphAsset::Create`
 before this boundary. Missing runtime evidence is accumulated in stable node order with
@@ -532,6 +583,24 @@ graph/revision/node provenance up to the admitted diagnostic ceiling. Capacity,
 cancellation and shutdown reject without partial validated output. Retained snapshots
 remain valid after replacement or registry shutdown, while new validation against a
 replacement snapshot requires the replacement graph revision and runtime contracts.
+
+## Canonical Cooked Graph Plan
+
+`Horo/PCG/PCGCookedPlan.h` is the PCG-2.4 lowering boundary. `CompilePCGGraph`
+requires the same canonical source and retained registry snapshot that produced a
+`PCGValidatedGraph`. It checks exact graph and provider-generation handles, then
+copies dependency-first nodes, pin schemas, semantic payloads, provider contract
+versions, capability requirements, plan-local pin routes, input constants and
+exposed-input defaults. The result owns its data and canonical network-order bytes;
+it retains no authoring, registry, backend or process-local handles. The byte
+contract records plan/compiler/source schemas, graph revision and provider semantic
+contract versions plus the SHA-256 digest of exact canonical source bytes captured
+by pre-compile validation; even same-revision altered source is rejected.
+Caller-lowered and tier plan-byte bounds reject output before publication. The
+plan is a cook result, not an editable source or a command to
+mutate Scene or another target owner. An exposed binding supplies that input's
+fallback and excludes its authored pin default from constants; a simultaneous
+incoming edge to the same input is rejected as ambiguous routing.
 
 ## Related Documents
 
