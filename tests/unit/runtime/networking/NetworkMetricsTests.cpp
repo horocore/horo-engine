@@ -245,23 +245,47 @@ namespace Horo::Network {
         auto handles = RegisterNetworkMetricHandles(Telemetry::MetricCollectionLevel::Core);
         REQUIRE(static_cast<bool>(handles.bytes[Sent][Wire]));
         REQUIRE(static_cast<bool>(handles.totalDrops));
+        REQUIRE(static_cast<bool>(handles.lost));
+        REQUIRE(Telemetry::Runtime::GetStatistics().invalidInstrumentRegistrations == 0);
         NetworkMetricPublisher publisher{13, std::move(handles)};
         NetworkMetrics metrics{13, true};
-        REQUIRE(metrics.RecordMessage(NetworkMetricDirection::Sent, NetworkMetricCategory::Transport, 17));
-        REQUIRE(metrics.RecordDrop(NetworkMetricDrop::Capacity));
-        REQUIRE(metrics.RecordLoss(2));
-        REQUIRE(metrics.SetActiveConnections(1));
-        REQUIRE(metrics.RecordRttMilliseconds(30));
-        REQUIRE(metrics.Publish());
-        REQUIRE(publisher.Publish(metrics.Snapshot()));
-        REQUIRE(Telemetry::Runtime::Flush());
+        const auto hasRequiredNames = [&sink] {
+            std::scoped_lock lock{sink->mutex};
+            for (const auto name : {"net.bytes_sent", "net.packets_lost", "net.packets_dropped", "net.active_connections", "net.rtt_ms"}) {
+                if (std::ranges::find(sink->names, name) == sink->names.end())
+                    return false;
+            }
+            return true;
+        };
+        // The runtime queue is intentionally best-effort under writer contention. Retry
+        // bounded safe-point samples instead of assuming every single enqueue survives.
+        std::size_t publications{};
+        for (; publications < 16 && !hasRequiredNames(); ++publications) {
+            REQUIRE(metrics.RecordMessage(NetworkMetricDirection::Sent, NetworkMetricCategory::Transport, 17));
+            REQUIRE(metrics.RecordDrop(NetworkMetricDrop::Capacity));
+            REQUIRE(metrics.RecordLoss(2));
+            REQUIRE(metrics.SetActiveConnections(1));
+            REQUIRE(metrics.RecordRttMilliseconds(30));
+            REQUIRE(metrics.Publish());
+            const auto snapshot = metrics.Snapshot();
+            REQUIRE(snapshot.revision == publications + 1);
+            REQUIRE(snapshot.messages[Sent][Wire] == publications + 1);
+            REQUIRE(snapshot.packetsLost == 2 * (publications + 1));
+            REQUIRE(publisher.Publish(snapshot));
+            REQUIRE(Telemetry::Runtime::Flush());
+        }
+        const auto statistics = Telemetry::Runtime::GetStatistics();
+        CAPTURE(publications, statistics.acceptedRecords, statistics.exportedRecords, statistics.droppedRecords, statistics.contentionDrops,
+                statistics.queueFullDrops, statistics.invalidInstrumentRegistrations);
+        std::vector<std::string> observedNames;
         {
             std::scoped_lock lock{sink->mutex};
-            REQUIRE(std::ranges::find(sink->names, "net.bytes_sent") != sink->names.end());
-            REQUIRE(std::ranges::find(sink->names, "net.packets_lost") != sink->names.end());
-            REQUIRE(std::ranges::find(sink->names, "net.packets_dropped") != sink->names.end());
-            REQUIRE(std::ranges::find(sink->names, "net.active_connections") != sink->names.end());
-            REQUIRE(std::ranges::find(sink->names, "net.rtt_ms") != sink->names.end());
+            observedNames = sink->names;
+        }
+        CAPTURE(observedNames);
+        REQUIRE(hasRequiredNames());
+        {
+            std::scoped_lock lock{sink->mutex};
             REQUIRE(sink->bounded);
         }
         REQUIRE(metrics.Close());
