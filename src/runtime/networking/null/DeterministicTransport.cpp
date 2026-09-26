@@ -1,6 +1,7 @@
 #include "Horo/Network/DeterministicTransport.h"
 
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetrics.h"
 
 #include <algorithm>
 #include <limits>
@@ -57,12 +58,13 @@ namespace Horo::Network {
 
     DeterministicTransport::DeterministicTransport(DeterministicTransportDescriptor descriptor, TransportBudgetController budget,
                                                    std::unique_ptr<ScheduledDelivery[]> deliveries,
-                                                   std::unique_ptr<std::byte[]> payloadStorage) noexcept
+                                                   std::unique_ptr<std::byte[]> payloadStorage, NetworkMetrics *metrics) noexcept
         : descriptor_(std::move(descriptor)), budget_(std::move(budget)), deliveries_(std::move(deliveries)),
-          payloadStorage_(std::move(payloadStorage)), randomState_(descriptor_.scenario.seed) {}
+          payloadStorage_(std::move(payloadStorage)), randomState_(descriptor_.scenario.seed), metrics_(metrics) {}
 
     /** @copydoc DeterministicTransport::Create */
-    Result<DeterministicTransport> DeterministicTransport::Create(const DeterministicTransportDescriptor &descriptor) {
+    Result<DeterministicTransport> DeterministicTransport::Create(const DeterministicTransportDescriptor &descriptor,
+                                                                  NetworkMetrics *metrics) {
         if (!ValidDescriptor(descriptor))
             return Fail<DeterministicTransport>(NetworkErrors::TransportBudgetInvalid);
         auto budget = TransportBudgetController::Create(descriptor.budgetCapacity, descriptor.budgetPolicy);
@@ -73,7 +75,7 @@ namespace Horo::Network {
             auto deliveries = std::make_unique<ScheduledDelivery[]>(deliveryCapacity);
             auto payloadStorage = std::make_unique<std::byte[]>(deliveryCapacity * descriptor.scenario.maximumFragmentBytes);
             return Result<DeterministicTransport>::Success(
-                DeterministicTransport{descriptor, std::move(budget).Value(), std::move(deliveries), std::move(payloadStorage)});
+                DeterministicTransport{descriptor, std::move(budget).Value(), std::move(deliveries), std::move(payloadStorage), metrics});
         } catch (const std::bad_alloc &) {
             return Fail<DeterministicTransport>(NetworkErrors::TransportBudgetCapacityExceeded);
         }
@@ -270,7 +272,18 @@ namespace Horo::Network {
             randomState_ = plan.Value().randomBeforeAdmission;
             return Result<DeterministicSendResult>::Failure(admitted.ErrorValue());
         }
-        return ScheduleAdmitted(connection, channel, replaceableKey, payload, plan.Value(), admitted.Value());
+        auto result = ScheduleAdmitted(connection, channel, replaceableKey, payload, plan.Value(), admitted.Value());
+        if (result.HasValue() && metrics_ && metrics_->IsCollecting()) {
+            using enum DeterministicSendOutcome;
+            const auto outcome = result.Value().outcome;
+            if (outcome == Scheduled || outcome == ScheduledWithDuplicate || outcome == Replaced || outcome == SimulatedLoss)
+                (void)metrics_->RecordMessage(NetworkMetricDirection::Sent, NetworkMetricCategory::Transport, payload.size());
+            if (outcome == SimulatedLoss)
+                (void)metrics_->RecordLoss();
+            if (outcome == DroppedReplaceable || outcome == ConnectionMustClose)
+                (void)metrics_->RecordDrop(NetworkMetricDrop::Capacity);
+        }
+        return result;
     }
 
     std::size_t DeterministicTransport::FindNextDue(const std::uint64_t tick) const noexcept {
@@ -306,6 +319,7 @@ namespace Horo::Network {
             return Result<std::size_t>::Failure(advanced.ErrorValue());
         tick_ = tick;
         std::size_t written{};
+        const bool observe = metrics_ && metrics_->IsCollecting();
         while (written < output.size()) {
             const auto index = FindNextDue(tick);
             if (index == DeliveryCapacity())
@@ -317,7 +331,15 @@ namespace Horo::Network {
                 delivery.fragmentIndex, delivery.fragmentCount,
                 delivery.sequence,
             };
+            if (observe && delivery.kind == DeterministicTransportEventKind::Packet)
+                (void)metrics_->RecordMessage(NetworkMetricDirection::Received, NetworkMetricCategory::Transport, delivery.bytes);
             ReleaseDelivery(index);
+        }
+        if (observe) {
+            const auto snapshot = budget_.Snapshot();
+            (void)metrics_->RecordLoss(0);
+            (void)metrics_->SetQueueDepth(NetworkMetricQueue::Outbound, snapshot.queuedMessages);
+            (void)metrics_->SetActiveConnections(snapshot.activeConnections);
         }
         return Result<std::size_t>::Success(written);
     }
@@ -336,6 +358,10 @@ namespace Horo::Network {
         }
         if (auto closed = budget_.CloseConnection(connection); closed.HasError())
             return Result<std::size_t>::Failure(closed.ErrorValue());
+        if (metrics_ && metrics_->IsCollecting()) {
+            (void)metrics_->RecordDrop(NetworkMetricDrop::Cancelled, discarded);
+            (void)metrics_->SetActiveConnections(budget_.Snapshot().activeConnections);
+        }
         auto &event = deliveries_[descriptor_.maximumScheduledDeliveries + connection.Slot()];
         if (event.connection == connection && event.kind == DeterministicTransportEventKind::Disconnected)
             return Result<std::size_t>::Success(discarded);
@@ -358,6 +384,11 @@ namespace Horo::Network {
             deliveries_[index].occupied = false;
         }
         static_cast<void>(budget_.Shutdown());
+        if (metrics_ && metrics_->IsCollecting()) {
+            (void)metrics_->RecordDrop(NetworkMetricDrop::Cancelled, discarded);
+            (void)metrics_->SetQueueDepth(NetworkMetricQueue::Outbound, 0);
+            (void)metrics_->SetActiveConnections(0);
+        }
         return discarded;
     }
 }  // namespace Horo::Network

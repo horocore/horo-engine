@@ -275,6 +275,9 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/NetworkFailure.cpp
         runtime/networking/api/NetworkIoService.cpp
         runtime/networking/api/NetworkLifecycle.cpp
+        runtime/networking/api/NetworkMetrics.cpp
+        runtime/networking/api/NetworkMetricTelemetry.cpp
+        runtime/networking/api/NetworkMetricTransport.cpp
         runtime/networking/api/NetworkObjectIdentity.cpp
         runtime/networking/api/NetworkProjectSettings.cpp
         runtime/networking/api/NetworkProjectSettingsSchema.cpp

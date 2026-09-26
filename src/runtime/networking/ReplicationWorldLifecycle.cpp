@@ -1,6 +1,7 @@
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetrics.h"
 
 #include <algorithm>
 #include <new>
@@ -111,15 +112,17 @@ namespace Horo::Network {
     }
 
     ReplicationWorldLifecycle::ReplicationWorldLifecycle(const ReplicationWorldLimits limits,
-                                                         std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired) noexcept
-        : limits_(limits), retired_(std::move(retired)) {}
+                                                         std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired,
+                                                         NetworkMetrics *metrics) noexcept
+        : limits_(limits), retired_(std::move(retired)), metrics_(metrics) {}
 
     /** @copydoc ReplicationWorldLifecycle::ReplicationWorldLifecycle(ReplicationWorldLifecycle&&) */
     ReplicationWorldLifecycle::ReplicationWorldLifecycle(ReplicationWorldLifecycle &&other) noexcept
         : limits_(other.limits_), staged_(std::move(other.staged_)), active_(std::move(other.active_)), retired_(std::move(other.retired_)),
-          state_(other.state_) {
+          state_(other.state_), metrics_(other.metrics_) {
         other.limits_ = {};
         other.state_ = ReplicationWorldLifecycleState::Closed;
+        other.metrics_ = nullptr;
     }
 
     /** @copydoc ReplicationWorldLifecycle::~ReplicationWorldLifecycle */
@@ -128,13 +131,13 @@ namespace Horo::Network {
     }
 
     /** @copydoc ReplicationWorldLifecycle::Create */
-    Result<ReplicationWorldLifecycle> ReplicationWorldLifecycle::Create(const ReplicationWorldLimits limits) {
+    Result<ReplicationWorldLifecycle> ReplicationWorldLifecycle::Create(const ReplicationWorldLimits limits, NetworkMetrics *metrics) {
         if (limits.maximumObjects == 0 || limits.maximumRetiredWorlds == 0 || limits.maximumRetiredWorlds > MaximumRetiredWorlds)
             return Failure<ReplicationWorldLifecycle>(NetworkErrors::ReplicationWorldInvalid);
         try {
             std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired;
             retired.reserve(limits.maximumRetiredWorlds);
-            return Result<ReplicationWorldLifecycle>::Success(ReplicationWorldLifecycle{limits, std::move(retired)});
+            return Result<ReplicationWorldLifecycle>::Success(ReplicationWorldLifecycle{limits, std::move(retired), metrics});
         } catch (const std::bad_alloc &) {
             return Failure<ReplicationWorldLifecycle>(NetworkErrors::ReplicationWorldCapacityExceeded);
         }
@@ -247,7 +250,10 @@ namespace Horo::Network {
         const Runtime::SceneRuntimeId scene, const NetworkSessionGeneration session, const NetworkObjectMappingEntry &entry) {
         if (const auto active = RequireActive(scene, session); active.HasError())
             return active;
-        return active_->mapping.Register(entry);
+        auto result = active_->mapping.Register(entry);
+        if (result.HasValue() && metrics_)
+            (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRegistered);
+        return result;
     }
 
     /** @copydoc ReplicationWorldLifecycle::RetireObject */
@@ -256,7 +262,10 @@ namespace Horo::Network {
         const Runtime::SceneRuntimeId scene, const NetworkSessionGeneration session, const NetworkObjectId object) {
         if (const auto active = RequireActive(scene, session); active.HasError())
             return active;
-        return active_->mapping.Retire(object);
+        auto result = active_->mapping.Retire(object);
+        if (result.HasValue() && metrics_)
+            (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRetired);
+        return result;
     }
 
     /** @copydoc ReplicationWorldLifecycle::Acquire */
