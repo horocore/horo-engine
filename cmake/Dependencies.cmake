@@ -9,6 +9,8 @@ if(HORO_BUILD_NETWORK_GNS)
     set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
     set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # The host's MSVC targets use the dynamic CRT; protobuf defaults to /MT.
+    set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
     set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
     set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(horo_protobuf
