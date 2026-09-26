@@ -118,6 +118,28 @@ namespace {
         bool fail_;
     };
 
+    void AssertCachedCookOutput(const BuildOutputSnapshot &first, const BuildOutputSnapshot &second,
+                                const std::filesystem::path &sourcePath) {
+        const auto cached = std::ranges::find_if(second.records, [](const BuildOutputRecord &record) {
+            return record.code.Value() == "asset.cook.cache_hit";
+        });
+        REQUIRE((cached != second.records.end()));
+        REQUIRE((cached->result == BuildOutputResult::Cached));
+        REQUIRE(cached->source.has_value());
+        REQUIRE(cached->source->absolutePath == sourcePath.string());
+        REQUIRE(cached->sessionId.has_value());
+        REQUIRE((cached->sessionId == second.records.back().sessionId));
+        REQUIRE((second.records.back().result == BuildOutputResult::Succeeded));
+
+        const auto cooked = std::ranges::find_if(first.records, [](const BuildOutputRecord &record) {
+            return record.code.Value() == "asset.cook.asset_cooked";
+        });
+        REQUIRE(cooked != first.records.end());
+        REQUIRE(cooked->result == BuildOutputResult::Succeeded);
+        REQUIRE(cooked->source.has_value());
+        REQUIRE(cooked->source->absolutePath == sourcePath.string());
+    }
+
 }  // namespace
 
 TEST_CASE("AssetCookService empty registry publishes empty generation", "[native]") {
@@ -305,23 +327,7 @@ TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[na
     REQUIRE(service.Cook(request, cancellation).HasValue());
     const auto secondSnapshot = buildOutput.SnapshotIfChanged(firstSnapshot->revision);
     REQUIRE(secondSnapshot.has_value());
-    const auto cached = std::ranges::find_if(secondSnapshot->records, [](const BuildOutputRecord &record) {
-        return record.code.Value() == "asset.cook.cache_hit";
-    });
-    REQUIRE((cached != secondSnapshot->records.end()));
-    REQUIRE((cached->result == BuildOutputResult::Cached));
-    REQUIRE(cached->source.has_value());
-    REQUIRE(cached->source->absolutePath == project.sourceFile.string());
-    REQUIRE(cached->sessionId.has_value());
-    REQUIRE((cached->sessionId == secondSnapshot->records.back().sessionId));
-    REQUIRE((secondSnapshot->records.back().result == BuildOutputResult::Succeeded));
-    const auto cooked = std::ranges::find_if(firstSnapshot->records, [](const BuildOutputRecord &record) {
-        return record.code.Value() == "asset.cook.asset_cooked";
-    });
-    REQUIRE(cooked != firstSnapshot->records.end());
-    REQUIRE(cooked->result == BuildOutputResult::Succeeded);
-    REQUIRE(cooked->source.has_value());
-    REQUIRE(cooked->source->absolutePath == project.sourceFile.string());
+    AssertCachedCookOutput(*firstSnapshot, *secondSnapshot, project.sourceFile);
 }
 
 TEST_CASE("AssetCookService reports source admission failures with navigable diagnostics", "[native]") {
