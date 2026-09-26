@@ -181,8 +181,7 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationPathPolicy::CurrentPath */
     const NavigationPath *NavigationPathPolicy::CurrentPath(const NavigationPathObservation &current) {
-        const auto observed = Observe(current);
-        if (observed.HasError() || observed.Value().IsStale() || !held_)
+        if (const auto observed = Observe(current); observed.HasError() || observed.Value().IsStale() || !held_)
             return nullptr;
         return &held_->path;
     }
