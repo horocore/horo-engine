@@ -149,17 +149,21 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             view.sizeX[dense] = state.baseSizeX[auxiliary] * sizeMultiplier;
             view.sizeY[dense] = state.baseSizeY[auxiliary] * sizeMultiplier;
             const float opacityMultiplier = EvaluateCurve(state.opacityOverLife, state.opacityOverLifeCount, normalizedAge, 1.0F);
-            Math::Vec4 color = EvaluateColorCurve(state.colorOverLife, state.colorOverLifeCount, normalizedAge, state.baseColor[auxiliary]);
-            color.w *= opacityMultiplier;
+            Math::Vec4 color = EvaluateColorCurve(state.colorOverLife, state.colorOverLifeCount, normalizedAge, {1.0F, 1.0F, 1.0F, 1.0F});
+            color.w *= state.baseColor[auxiliary].w * opacityMultiplier;
             view.packedColor[dense] = PackColor(color);
             for (std::uint32_t channelIndex = 0; channelIndex < state.payloadChannelCount; ++channelIndex) {
                 const auto &channel = state.payloadChannels[channelIndex];
-                if (channel.classification == CpuParticlePayloadClass::GameplayOutput) {
+                if (channel.classification == CpuParticlePayloadClass::GameplayOutput && !state.outputHasModule[channelIndex]) {
                     const float output = channel.minimum + ((channel.maximum - channel.minimum) * normalizedAge);
                     view.customFloats[channel.customFloatStream][dense] = output;
                 } else if (channel.classification == CpuParticlePayloadClass::GameplayInput) {
                     view.customFloats[channel.customFloatStream][dense] = state.inputValues[channelIndex];
                 }
+            }
+            for (std::uint32_t moduleIndex = 0; moduleIndex < state.payloadModuleCount; ++moduleIndex) {
+                const auto &module = state.payloadModules[moduleIndex];
+                view.customFloats[module.writeStream][dense] = (view.customFloats[module.readStream][dense] * module.scale) + module.bias;
             }
         }
 

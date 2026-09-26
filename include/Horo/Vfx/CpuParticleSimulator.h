@@ -82,14 +82,14 @@ namespace Horo::Vfx {
         std::uint8_t randomChannel{1};
     };
 
-    /** @brief One scalar over-life curve key in normalized age space. */
+    /** @brief One scalar over-life curve key in normalized age space. Keys must increase strictly. */
     struct CpuParticleCurveKey final {
         float normalizedAge{};
         float value{};
         constexpr auto operator<=>(const CpuParticleCurveKey &) const noexcept = default;
     };
 
-    /** @brief One color over-life curve key in normalized age space. */
+    /** @brief One unit-range color over-life curve key in normalized age space. */
     struct CpuParticleColorKey final {
         float normalizedAge{};
         Math::Vec4 color{1.0F, 1.0F, 1.0F, 1.0F};
@@ -173,6 +173,22 @@ namespace Horo::Vfx {
         float maximum{};
     };
 
+    /**
+     * @brief Compiled scalar gameplay payload writer with a recorded stage and channel boundary.
+     *
+     * Only Integrate may read a GameplayInput channel and write a distinct GameplayOutput channel.
+     * The writer evaluates `input * scale + bias` once per live particle after age integration.
+     * Invalid stage, class, duplicate-writer, and range contracts fail preparation with typed
+     * diagnostics; gameplay never receives mutable particle storage.
+     */
+    struct CpuParticlePayloadModule final {
+        CpuParticleStage stage{CpuParticleStage::Integrate};
+        std::uint16_t readChannel{};
+        std::uint16_t writeChannel{};
+        float scale{1.0F};
+        float bias{};
+    };
+
     /** @brief Immutable preparation inputs for one owner-thread CPU simulator. */
     struct CpuParticleSimulatorCreateInfo final {
         ParticleBufferId buffer{};
@@ -192,6 +208,7 @@ namespace Horo::Vfx {
         std::span<const CpuParticleCurveKey> opacityOverLife{};
         std::span<const CpuParticleColorKey> colorOverLife{};
         std::span<const CpuParticlePayloadChannel> payloadChannels{};
+        std::span<const CpuParticlePayloadModule> payloadModules{};
         CpuParticleStageObserver stageObserver{};
         void *stageObserverContext{};
     };
@@ -226,8 +243,9 @@ namespace Horo::Vfx {
         std::span<const std::uint32_t> packedColor;
         std::span<const float> age, maximumAge;
         std::span<const std::uint32_t> customFlags;
+        /** @brief Only declared RenderOnly streams are populated; other indices are empty. */
         std::array<std::span<const float>, CpuParticleBufferHardLimits::CustomFloatStreams> customFloats{};
-        std::uint32_t customFloatStreamCount{};
+        std::uint32_t customFloatStreamCount{}; /**< Allocated stream count; protected indices remain empty. */
     };
 
     /** @brief Allocation-free lifetime diagnostics for one CPU simulator. */

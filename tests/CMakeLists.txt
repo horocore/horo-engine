@@ -406,6 +406,7 @@ add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp
         unit/runtime/vfx/CpuParticleSimulatorTests.cpp
+        unit/runtime/vfx/CpuParticleOverLifePayloadTests.cpp
         unit/runtime/vfx/CpuParticleSpawnPipelineTests.cpp
         unit/runtime/vfx/ParticleSystemDescriptorTests.cpp
         unit/runtime/vfx/VfxFoundationQualificationTests.cpp

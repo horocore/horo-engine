@@ -31,6 +31,16 @@ namespace Horo::Vfx::Detail {
         std::uint32_t stableFeature{};
     };
 
+    struct CpuParticleCompiledPayloadModule final {
+        CpuParticleStage stage{CpuParticleStage::Integrate};
+        std::uint16_t readChannel{};
+        std::uint16_t writeChannel{};
+        std::uint32_t readStream{};
+        std::uint32_t writeStream{};
+        float scale{1.0F};
+        float bias{};
+    };
+
     struct CpuParticleSimulatorState final {
         CpuParticleSimulatorState(CpuParticleBuffer committedBuffer, CpuParticleBuffer candidateBuffer)
             : committed(std::move(committedBuffer)), candidate(std::move(candidateBuffer)) {}
@@ -64,6 +74,9 @@ namespace Horo::Vfx::Detail {
         std::array<CpuParticlePayloadChannel, CpuParticleSimulationHardLimits::PayloadChannels> payloadChannels{};
         std::array<float, CpuParticleSimulationHardLimits::PayloadChannels> inputValues{};
         std::uint32_t payloadChannelCount{};
+        std::array<CpuParticleCompiledPayloadModule, CpuParticleSimulationHardLimits::PayloadChannels> payloadModules{};
+        std::array<bool, CpuParticleSimulationHardLimits::PayloadChannels> outputHasModule{};
+        std::uint32_t payloadModuleCount{};
         CpuParticleStageObserver stageObserver{};
         void *stageObserverContext{};
 
@@ -91,6 +104,7 @@ namespace Horo::Vfx::Detail {
         std::uint64_t killed{};
         std::uint64_t collisions{};
         bool shutDown{};
+        bool advancing{};
     };
 }  // namespace Horo::Vfx::Detail
 
