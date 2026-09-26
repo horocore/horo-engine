@@ -409,6 +409,7 @@ add_executable(HoroAITests
         unit/runtime/ai/DecisionAssetValidationTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
+        unit/runtime/ai/PerceptionFilteringTests.cpp
         unit/runtime/ai/PerceptionMemoryTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)

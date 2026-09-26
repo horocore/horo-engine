@@ -147,6 +147,19 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
+    /** @copydoc AIPerceptionMemory::Forget */
+    Result<void> AIPerceptionMemory::Forget(const PerceptionMemoryKey &key) {
+        if (!ValidKey(key))
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
+        for (std::size_t index = 0; index < count_; ++index) {
+            if (entries_[index].key == key) {
+                Erase(index);
+                break;
+            }
+        }
+        return Result<void>::Success();
+    }
+
     /** @brief Removes stale weak references before exposing decision-visible memory. */
     void AIPerceptionMemory::PruneDead(const PerceptionSourceLiveness liveness) {
         for (std::size_t index = 0; index < count_;) {

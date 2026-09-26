@@ -845,6 +845,34 @@ services, select a backend, or touch ambient runtime state.
 Every built-in sense has an explicit authority, timing owner, and underlying
 query seam:
 
+`PerceptionFilteredMemory` is the Foundation-only admission boundary for an
+agent's perception. Gameplay supplies typed affiliation (friendly, neutral,
+hostile, or stable custom identity), non-zero team identities when team rules
+apply, listener/source layer membership and masks, and authoritative source
+visibility. A candidate is rejected when either layer/mask intersection is empty,
+when its affiliation or team is excluded, or when gameplay visibility is hidden
+or team-only without a matching team. Render visibility never enters this test.
+Every `PerceptionFilteredMemory` call, including `Evaluate` and snapshot queries,
+stays on the simulation owner; its mutable policy and memory are not synchronized.
+The owner checks payload-free candidate facts before dispatching expensive spatial
+or physics queries. Jobs carry copied facts and the captured policy revision, never
+a reference to the gate, and the owner rechecks completed observations against that
+revision before memory ingestion. Denied and stale decisions contain no stimulus
+payload. One bounded, live-source-checked snapshot is the intended publication
+source for future blackboard and debug consumers. There is no production
+`PerceptionSensePoll` or perception projection yet; #1329 owns batched delivery
+and blackboard projection and must consume this gate instead of raw sensing
+buffers or direct memory.
+
+Policy replacement is staged and validated on the simulation owner, then committed
+once at the future `PerceptionSensePoll` safe point. A changed policy returns one
+new revision and rechecks bounded admission facts, removing only memory it now
+denies before publication. An identical policy returns the current revision and
+preserves memory. Gameplay team, affiliation, layer, and visibility changes can
+recheck an exact remembered fact at a safe point without a new observation.
+Jobs captured under the prior revision are stale and cannot ingest or publish
+after the swap. Repeated or backward-tick commits leave the active policy unchanged.
+
 | Sense | Timing Owner / Model | Authority & Source | Query Seam | Purpose |
 |---|---|---|---|---|
 | **Sight** | Periodic time-sliced (`PerceptionManager` tick) | `PerceptionManager` + `PhysicsWorld` | `PhysicsWorld::Raycast` / `Sweep` for LOS occlusion; `SceneRuntime` spatial index for candidates | Visual detection within FOV cone, peripheral angle, and sight radius |
