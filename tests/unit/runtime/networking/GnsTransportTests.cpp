@@ -1,4 +1,5 @@
 #include "GnsTransportFactory.h"
+#include "GnsTransportInternal.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Network/NetworkErrors.h"
 
@@ -12,6 +13,13 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 namespace {
     using namespace Horo::Network;
@@ -24,6 +32,91 @@ namespace {
         }
 
         std::vector<NetworkTransportEvent> events;
+    };
+
+    class ReentrantCollector final : public INetworkTransportEventConsumer {
+    public:
+        explicit ReentrantCollector(INetworkTransport &transport) : transport_(transport) {}
+
+        void Consume(NetworkTransportEvent event) noexcept override {
+            // Calling public operations here proves delivery occurs outside the
+            // transport lock, including after a native callback was queued.
+            const auto stats = transport_.Stats();
+            deliveredOn = std::this_thread::get_id();
+            observedStats = stats.activeConnections;
+            if (event.kind == NetworkTransportEventKind::Connected) {
+                closed = transport_.Close(event.connection).HasValue();
+            }
+            events.push_back(std::move(event));
+        }
+
+        std::vector<NetworkTransportEvent> events;
+        std::uint32_t observedStats{};
+        std::thread::id deliveredOn{};
+        bool closed{};
+
+    private:
+        INetworkTransport &transport_;
+    };
+
+    class SilentDnsServer final {
+    public:
+        SilentDnsServer() {
+#ifdef _WIN32
+            WSADATA data{};
+            if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
+                return;
+            winsockStarted_ = true;
+#endif
+            socket_ = socket(AF_INET, SOCK_DGRAM, 0);
+            if (socket_ == InvalidSocket)
+                return;
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            address.sin_port = 0;
+            if (bind(socket_, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0)
+                return;
+#ifdef _WIN32
+            int length = sizeof(address);
+#else
+            socklen_t length = sizeof(address);
+#endif
+            if (getsockname(socket_, reinterpret_cast<sockaddr *>(&address), &length) == 0)
+                server_ = "127.0.0.1:" + std::to_string(ntohs(address.sin_port));
+        }
+
+        ~SilentDnsServer() {
+            if (socket_ != InvalidSocket) {
+#ifdef _WIN32
+                closesocket(socket_);
+#else
+                close(socket_);
+#endif
+            }
+#ifdef _WIN32
+            if (winsockStarted_)
+                WSACleanup();
+#endif
+        }
+
+        [[nodiscard]] const std::string &Server() const noexcept {
+            return server_;
+        }
+
+    private:
+#ifdef _WIN32
+        using Socket = SOCKET;
+        static constexpr Socket InvalidSocket = INVALID_SOCKET;
+#else
+        using Socket = int;
+        static constexpr Socket InvalidSocket = -1;
+#endif
+        Socket socket_{InvalidSocket};
+        std::string server_;
+#ifdef _WIN32
+        bool winsockStarted_{};
+#endif
     };
 
     [[nodiscard]] std::size_t Count(const Collector &collector, const NetworkTransportEventKind kind) {
@@ -300,4 +393,104 @@ TEST_CASE("GNS IPv6 loopback listens, connects, and closes when host IPv6 is ava
     REQUIRE(transport->Close(outgoing.Value()).HasValue());
     REQUIRE(transport->CloseListener(listener.Value()).HasValue());
     transport->Shutdown();
+}
+
+TEST_CASE("GNS cancels an in-flight DNS query once and rejects its stale handle", "[network][gns][dns]") {
+    SilentDnsServer dns;
+    REQUIRE_FALSE(dns.Server().empty());
+    GnsTransport delayed(dns.Server());
+    REQUIRE(delayed.Initialize({.maximumConnections = 2, .maximumEventsPerPoll = 8, .maximumMessageBytes = 1200}).HasValue());
+    const auto endpoint = NetworkAddress::Parse("pending.horo-1107.invalid:42499");
+    REQUIRE(endpoint.HasValue());
+    Horo::CancellationSource cancellation;
+    const auto first = delayed.Connect({.endpoint = endpoint.Value(), .timeout = 5s, .cancellation = cancellation.Token()});
+    REQUIRE(first.HasValue());
+    Collector collector;
+    REQUIRE(delayed.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.empty());
+    cancellation.RequestCancellation();
+    REQUIRE(delayed.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.size() == 1);
+    REQUIRE(collector.events.front().connection == first.Value());
+    REQUIRE(collector.events.front().failure->code.Value() == NetworkErrors::TransportOperationCancelled.code.Value());
+    const auto replacement = delayed.Connect({.endpoint = endpoint.Value(), .timeout = 5s});
+    REQUIRE(replacement.HasValue());
+    REQUIRE(replacement.Value().Slot() == first.Value().Slot());
+    REQUIRE(replacement.Value() != first.Value());
+    REQUIRE(delayed.Close(first.Value()).ErrorValue().code.Value() == NetworkErrors::TransportHandleInvalid.code.Value());
+    REQUIRE(delayed.Close(replacement.Value()).HasValue());
+    REQUIRE(delayed.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.size() == 2);
+    REQUIRE(collector.events.back().connection == replacement.Value());
+    delayed.Shutdown();
+}
+
+TEST_CASE("GNS times out and destroys pending DNS without delivering a late result", "[network][gns][dns]") {
+    SilentDnsServer dns;
+    REQUIRE_FALSE(dns.Server().empty());
+    GnsTransport transport(dns.Server());
+    REQUIRE(transport.Initialize({.maximumConnections = 2, .maximumEventsPerPoll = 8, .maximumMessageBytes = 1200}).HasValue());
+    const auto endpoint = NetworkAddress::Parse("pending.horo-1107.invalid:42499");
+    REQUIRE(endpoint.HasValue());
+    const auto first = transport.Connect({.endpoint = endpoint.Value(), .timeout = 20ms});
+    REQUIRE(first.HasValue());
+    Collector collector;
+    REQUIRE(transport.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.empty());
+    std::this_thread::sleep_for(25ms);
+    REQUIRE(transport.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.size() == 1);
+    REQUIRE(collector.events.front().failure->code.Value() == NetworkErrors::SessionTimedOut.code.Value());
+    const auto second = transport.Connect({.endpoint = endpoint.Value(), .timeout = 5s});
+    REQUIRE(second.HasValue());
+    REQUIRE(transport.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.size() == 1);
+    transport.Shutdown();
+    REQUIRE_FALSE(transport.PollEvents(collector).HasValue());
+    REQUIRE(collector.events.size() == 1);
+}
+
+TEST_CASE("GNS delivers native callbacks on the owner thread outside its state lock", "[network][gns]") {
+    const auto owner = std::this_thread::get_id();
+    auto created = CreateGnsTransport();
+    REQUIRE(created.HasValue());
+    auto transport = std::move(created).Value();
+    REQUIRE(transport->Initialize({.maximumConnections = 4, .maximumEventsPerPoll = 8, .maximumMessageBytes = 1200}).HasValue());
+    NetworkAddress address;
+    REQUIRE(ListenLoopback(*transport, address).HasValue());
+    REQUIRE(transport->Connect({.endpoint = address, .timeout = 5s}).HasValue());
+    ReentrantCollector collector(*transport);
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline && !collector.closed) {
+        REQUIRE(transport->PollEvents(collector).HasValue());
+        std::this_thread::sleep_for(10ms);
+    }
+    REQUIRE(collector.closed);
+    REQUIRE(collector.deliveredOn == owner);
+    REQUIRE(collector.observedStats >= 1);
+    Collector afterClose;
+    REQUIRE(transport->PollEvents(afterClose).HasValue());
+    transport->Shutdown();
+}
+
+TEST_CASE("GNS rejects malformed native packet metadata before payload copy", "[network][gns]") {
+    struct TestMessage final : SteamNetworkingMessage_t {
+        ~TestMessage() = default;
+    } message{};
+
+    std::byte payload{std::byte{1}};
+    REQUIRE_FALSE(ValidNativeMessage(nullptr, 1200));
+    message.m_cbSize = -1;
+    REQUIRE_FALSE(ValidNativeMessage(&message, 1200));
+    message.m_cbSize = 1201;
+    message.m_pData = &payload;
+    REQUIRE_FALSE(ValidNativeMessage(&message, 1200));
+    message.m_cbSize = 1;
+    message.m_pData = nullptr;
+    REQUIRE_FALSE(ValidNativeMessage(&message, 1200));
+    message.m_cbSize = 0;
+    REQUIRE(ValidNativeMessage(&message, 1200));
+    message.m_cbSize = 1;
+    message.m_pData = &payload;
+    REQUIRE(ValidNativeMessage(&message, 1200));
 }

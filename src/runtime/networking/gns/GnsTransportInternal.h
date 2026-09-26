@@ -3,15 +3,17 @@
 #include "GnsAddressResolution.h"
 #include "GnsTransportFactory.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace Horo::Network {
@@ -27,12 +29,17 @@ namespace Horo::Network {
         ConnectionPhase phase{ConnectionPhase::Terminal};
         CancellationToken cancellation{};
         std::chrono::steady_clock::time_point deadline{};
-        std::shared_ptr<GnsDetail::Resolution> resolution;
+        std::optional<NetworkAddress> pendingEndpoint;
+        std::unique_ptr<GnsDetail::Resolution> resolution;
         bool inbound{};
     };
 
+    [[nodiscard]] bool ValidNativeMessage(const SteamNetworkingMessage_t *message, std::uint32_t maximumBytes) noexcept;
+
     class GnsTransport final : public INetworkTransport {
     public:
+        explicit GnsTransport(std::string resolverServer = {}) : resolverServer_(std::move(resolverServer)) {}
+
         ~GnsTransport() override {
             Shutdown();
         }
@@ -58,13 +65,21 @@ namespace Horo::Network {
         [[nodiscard]] ConnectionSlot *Find(ConnectionHandle handle) noexcept;
         [[nodiscard]] ConnectionSlot *Find(HSteamNetConnection native) noexcept;
         void OnStatusOwned(const SteamNetConnectionStatusChangedCallback_t &status);
+        void DrainNativeCallbacks();
         void End(ConnectionSlot &slot, NetworkTransportEventKind kind, const ErrorCodeDescriptor *failure = nullptr);
         void Enqueue(NetworkTransportEvent event);
         void PollMessages();
-        [[nodiscard]] Result<void> StartResolution(ConnectionSlot &slot, const NetworkAddress &endpoint);
+        [[nodiscard]] bool PollMessage(ConnectionSlot &slot);
+        [[nodiscard]] const ErrorCodeDescriptor *StartResolution(ConnectionSlot &slot) const;
         void AdvancePending(std::chrono::steady_clock::time_point now);
+        void AdvancePendingSlot(ConnectionSlot &slot, std::chrono::steady_clock::time_point now);
 
-        mutable std::recursive_mutex mutex_;
+        // Public operations hold mutex_. Native callbacks never acquire it:
+        // they take host mutex -> callbackMutex_ and publish owned status data.
+        // PollEvents drains that queue under mutex_ after RunCallbacks returns.
+        mutable std::mutex mutex_;
+        std::mutex callbackMutex_;
+        std::deque<SteamNetConnectionStatusChangedCallback_t> callbacks_;
         ISteamNetworkingSockets *native_{};
         NetworkTransportConfig config_{};
         ListenerHandle listener_{};
@@ -73,10 +88,14 @@ namespace Horo::Network {
         std::deque<NetworkTransportEvent> events_;
         NetworkTransportStats stats_{};
         std::uint64_t capabilityRevision_{1};
-        std::shared_ptr<std::atomic<unsigned>> resolverTasks_;
         std::thread::id ownerThread_{};
         std::uint32_t listenerMaximumConnections_{};
+        // Empty in production. An internal test may route DNS to a silent local
+        // server to make in-flight cancellation and timeout deterministic.
+        std::string resolverServer_;
+        bool caresInitialized_{};
         bool overflow_{};
+        bool callbackOverflow_{};
         bool initialized_{};
         bool shutdown_{};
     };

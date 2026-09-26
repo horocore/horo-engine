@@ -3,20 +3,25 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Network/NetworkAddress.h"
 
+#include <ares.h>
+#include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <mutex>
 #include <optional>
 #include <steam/steamnetworkingtypes.h>
 #include <string>
 
 namespace Horo::Network::GnsDetail {
     struct Resolution final {
-        std::mutex mutex;
+        ~Resolution() noexcept;
+
+        ares_channel_t *channel{};
         std::optional<SteamNetworkingIPAddr> address;
+        std::size_t socketCursor{};
+        std::uint16_t port{};
         bool complete{};
     };
 
     [[nodiscard]] Result<SteamNetworkingIPAddr> NativeAddress(const NetworkAddress &address);
-    void ResolveHostname(const std::shared_ptr<Resolution> &state, const std::string &hostname, std::uint16_t port);
+    [[nodiscard]] bool StartResolution(Resolution &state, const std::string &hostname, std::uint16_t port, const std::string &server = {});
+    [[nodiscard]] bool PollResolution(Resolution &state);
 }  // namespace Horo::Network::GnsDetail

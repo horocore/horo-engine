@@ -33,11 +33,12 @@ namespace Horo::Network {
     }
 
     TransportCapabilities GnsTransport::Capabilities() const noexcept {
+        using enum TransportSupport;
         std::lock_guard lock(mutex_);
         TransportCapabilities capabilities{};
         capabilities.revision = capabilityRevision_;
-        capabilities.delivery.fill(TransportSupport::Unsupported);
-        const auto support = initialized_ && !shutdown_ ? TransportSupport::Available : TransportSupport::Unavailable;
+        capabilities.delivery.fill(Unsupported);
+        const auto support = initialized_ && !shutdown_ ? Available : Unavailable;
         capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] = support;
         capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = support;
         if (initialized_ && !shutdown_) {

@@ -3,8 +3,27 @@ include(FetchContent)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
 
 if(HORO_BUILD_NETWORK_GNS)
-    # Native transport and its protobuf compiler are both opt-in.  Neither source
-    # is downloaded, configured, or linked by network-disabled/headless-null hosts.
+    # The native transport and its DNS/protobuf dependencies are opt-in. None
+    # is downloaded, configured, or linked by disabled/headless-null hosts.
+    set(HORO_CARES_REVISION "c7a3138dcfe3bb0eaaf10c0c24c36dc66dc790ab") # v1.34.8
+    set(CARES_STATIC ON CACHE BOOL "" FORCE)
+    set(CARES_SHARED OFF CACHE BOOL "" FORCE)
+    set(CARES_INSTALL OFF CACHE BOOL "" FORCE)
+    set(CARES_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(CARES_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(horo_cares
+        GIT_REPOSITORY https://github.com/c-ares/c-ares.git
+        GIT_TAG "${HORO_CARES_REVISION}"
+        GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(horo_cares)
+    file(SHA256 "${horo_cares_SOURCE_DIR}/LICENSE.md" horo_cares_license_digest)
+    if(NOT horo_cares_license_digest STREQUAL "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807")
+        message(FATAL_ERROR "Pinned c-ares license differs from the reviewed MIT notice")
+    endif()
+    install(FILES "${horo_cares_SOURCE_DIR}/LICENSE.md"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses"
+            RENAME "c-ares.txt" COMPONENT Network)
+
     set(HORO_PROTOBUF_REVISION "f0dc78d7e6e331b8c6bb2d5283e06aa26883ca7c") # v3.21.12
     set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)

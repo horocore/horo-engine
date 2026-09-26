@@ -60,6 +60,7 @@ jobs:
           fi
           test ! -e build/network-disabled/_deps/horo_gns-src
           test ! -e build/network-disabled/_deps/horo_protobuf-src
+          test ! -e build/network-disabled/_deps/horo_cares-src
 
   focused:
     name: Network GNS · ${{ matrix.name }}

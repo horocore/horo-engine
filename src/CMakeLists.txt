@@ -313,7 +313,7 @@ if(HORO_BUILD_NETWORK_GNS)
     target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
     target_compile_definitions(HoroNetworkTransportGNS PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
     target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroNetworkTransportGNSFactoryInternal
-        PRIVATE GameNetworkingSockets::static)
+        PRIVATE GameNetworkingSockets::static c-ares::cares)
 endif()
 
 add_library(HoroRuntimeUi STATIC
