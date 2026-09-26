@@ -51,7 +51,8 @@ namespace Horo::Physics {
     struct PhysicsEventReadCompletion final {
         std::uint32_t recordCount{};
         bool truncated{};
-        std::uint64_t droppedRecordCount{};
+        std::uint32_t omittedRecordCount{}; /**< Published records omitted by this read's caller bound. */
+        std::uint64_t droppedRecordCount{}; /**< Records lost earlier by bounded event projection. */
     };
 
     /**
@@ -75,7 +76,7 @@ namespace Horo::Physics {
         /** @brief Copies records from exactly one completed tick into caller-owned storage.
          * @param command Exact issued access, latest tick and publication revision, with a non-zero result bound.
          * @param records Caller-owned output; at most maximumRecords entries are written.
-         * @return Copied count and explicit truncation/drop evidence, or a typed access/tick error.
+         * @return Copied count, caller-omitted count and projection-drop evidence, or a typed access/tick error.
          * @pre Physics owner thread, outside a fixed-tick callback. The caller may retain copied values indefinitely.
          */
         [[nodiscard]] Result<PhysicsEventReadCompletion> ReadEvents(const PhysicsEventReadCommand &command,

@@ -40,6 +40,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(HORO_BUILD_EDITOR_GUI "Build the graphical HoroEditor bootstrap" ON)
+option(HORO_BUILD_INPUT_SDL3 "Build the SDL3 input adapter independently of the editor GUI" ${HORO_BUILD_EDITOR_GUI})
 option(HORO_BUILD_RENDER_OPENGL "Build the OpenGL renderer backend" ${HORO_BUILD_EDITOR_GUI})
 set(_HORO_BUILD_RENDER_METAL_DEFAULT OFF)
 if(APPLE AND HORO_BUILD_EDITOR_GUI)
@@ -55,6 +56,7 @@ option(HORO_BUILD_EXAMPLES "Build SDK and extension examples" ${BUILD_TESTING})
 option(HORO_BUILD_PHYSICS_NATIVE "Build the private CanonicalV1 Physics solver" ON)
 option(HORO_BUILD_NAVIGATION_RECAST_DETOUR "Build the default grounded navigation query provider" ON)
 option(HORO_BUILD_AUDIO_SDL3 "Build the SDL3 portability/reference audio backend" ${HORO_BUILD_EDITOR_GUI})
+option(HORO_BUILD_NETWORK_GNS "Build the optional production GameNetworkingSockets transport" OFF)
 
 if(HORO_ENABLE_IMGUI_UI_TESTS AND NOT BUILD_TESTING)
     message(FATAL_ERROR "HORO_ENABLE_IMGUI_UI_TESTS requires BUILD_TESTING=ON")
@@ -62,6 +64,10 @@ endif()
 
 if(HORO_ENABLE_IMGUI_UI_TESTS AND NOT HORO_BUILD_EDITOR_GUI)
     message(FATAL_ERROR "HORO_ENABLE_IMGUI_UI_TESTS requires HORO_BUILD_EDITOR_GUI=ON")
+endif()
+
+if(HORO_BUILD_EDITOR_GUI AND NOT HORO_BUILD_INPUT_SDL3)
+    message(FATAL_ERROR "HORO_BUILD_EDITOR_GUI requires HORO_BUILD_INPUT_SDL3=ON")
 endif()
 
 if(HORO_BUILD_RENDER_METAL AND NOT APPLE)

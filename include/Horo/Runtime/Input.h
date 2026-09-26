@@ -172,6 +172,13 @@ namespace Horo::Input {
         bool active{false};
     };
 
+    /** @brief Text and pre-edit state delivered once to the explicitly focused text context. */
+    struct TextInputDelivery {
+        std::string committed;
+        TextCompositionState composition;
+        bool compositionChanged{false}; /**< Includes cancellation and completed composition. */
+    };
+
     /** @brief Slot plus session generation handle that rejects stale device access. */
     struct GamepadDeviceId {
         std::uint32_t slot{0};
@@ -203,6 +210,7 @@ namespace Horo::Input {
         std::vector<GamepadState> gamepads;
         std::string text;
         TextCompositionState composition{};
+        std::uint64_t compositionRevision{0}; /**< Advances on native pre-edit updates and cancellation. */
         ModifierState modifiers{};
         WindowInputState window{};
 
@@ -429,22 +437,33 @@ namespace Horo::Input {
     /** @brief Deterministic reason delivered when exclusive capture is cancelled. */
     enum class CaptureCancellationReason : std::uint8_t {
         Explicit,
+        Released,
         Escape,
         FocusLost,
         ModalOpened,
+        ContextPreempted,
         OwnerDestroyed,
         DeviceDisconnected,
         ContextRemoved,
     };
 
+    class InputRouter;
+
     /** @brief Narrow callback implemented by an interaction that owns capture. */
     class IInputCaptureOwner {
     public:
-        virtual ~IInputCaptureOwner() = default;
+        IInputCaptureOwner() = default;
+        virtual ~IInputCaptureOwner();
+        IInputCaptureOwner(const IInputCaptureOwner &) = delete;
+        IInputCaptureOwner &operator=(const IInputCaptureOwner &) = delete;
+        IInputCaptureOwner(IInputCaptureOwner &&) = delete;
+        IInputCaptureOwner &operator=(IInputCaptureOwner &&) = delete;
         virtual void OnInputCaptureCancelled(CaptureCancellationReason reason) noexcept = 0;
-    };
 
-    class InputRouter;
+    private:
+        friend class InputRouter;
+        InputRouter *capturingRouter_{nullptr};
+    };
 
     /** @brief Move-only RAII registration for one live routing context. */
     class InputContextToken {
@@ -498,6 +517,8 @@ namespace Horo::Input {
 
         /** @brief Installs the committed snapshot and clears per-frame consumption. */
         void BeginFrame(const RawInputSnapshot &snapshot);
+        /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
+        void EndFrame() noexcept;
         /** @brief Registers a context until the returned move-only token is destroyed. */
         [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind);
         /** @brief Acquires exclusive pointer capture for the currently eligible context. */
@@ -511,6 +532,22 @@ namespace Horo::Input {
         [[nodiscard]] bool HasHigherPriorityContext(InputContextKind kind) const noexcept;
         /** @brief Reports whether this token is the highest-priority, most-recent eligible context. */
         [[nodiscard]] bool IsContextActive(const InputContextToken &context) const noexcept;
+        /**
+         * @brief Grants text focus to one eligible GUI, modal, or native-dialog context.
+         * @param context Exact live context owning the focused text surface.
+         * @return False for inactive or non-text contexts; otherwise true. A focus transfer discards
+         *         already-collected text and pre-edit for the current frame.
+         */
+        [[nodiscard]] bool FocusText(const InputContextToken &context) noexcept;
+        /** @brief Releases text focus only if @p context still owns it. */
+        void BlurText(const InputContextToken &context) noexcept;
+        /**
+         * @brief Takes this frame's committed text and current pre-edit at most once for the focus owner.
+         * @param context Exact context previously passed to FocusText.
+         * @return No delivery for an inactive, unfocused, preempted, or already-served context.
+         *         Pre-edit from an earlier focus owner is never transferred.
+         */
+        [[nodiscard]] std::optional<TextInputDelivery> TakeText(const InputContextToken &context);
         /** @brief Returns the current committed snapshot, or an empty snapshot before the first frame. */
         [[nodiscard]] const RawInputSnapshot &Snapshot() const noexcept;
         /** @brief Atomically validates and replaces action descriptors and the active profile. */
@@ -536,10 +573,12 @@ namespace Horo::Input {
         [[nodiscard]] std::optional<PlayerId> PlayerForGamepad(GamepadDeviceId gamepad) const noexcept;
 
     private:
+        friend class IInputCaptureOwner;
         friend class InputContextToken;
         friend class PointerCaptureToken;
         void RemoveContext(std::uint64_t token) noexcept;
         void ReleaseCapture(std::uint64_t token) noexcept;
+        void OnCaptureOwnerDestroyed(const IInputCaptureOwner *owner) noexcept;
         [[nodiscard]] bool TokenActive(std::uint64_t token) const noexcept;
         [[nodiscard]] bool CaptureActive(std::uint64_t token) const noexcept;
         struct Impl;
@@ -568,24 +607,51 @@ namespace Horo::Input {
         float lookY{0.0F};
         bool jumpPressed{false};
         bool interactPressed{false};
+        bool moveDown{false};
+        bool movePressed{false};
+        bool moveReleased{false};
         [[nodiscard]] friend bool operator==(const GameplayInputFrame &, const GameplayInputFrame &) noexcept = default;
     };
 
-    /** @brief Projects resolved actions into deterministic fixed-tick gameplay frames. */
+    /** @brief Captures routed actions before fixed update and emits device-independent tick commands. */
     class GameplayInputFrameBuilder {
     public:
+        /** @brief Binds the semantic actions for one player; use a separate builder for each player. */
         GameplayInputFrameBuilder(ActionId move, ActionId look, ActionId jump, ActionId interact);
-        [[nodiscard]] GameplayInputFrame Consume(InputRouter &router, const InputContextToken &context, SimulationTick tick,
-                                                 std::optional<PlayerId> player = std::nullopt);
+        /**
+         * @brief Latches the ledger-filtered projection once after UI consumption and before fixed updates.
+         * @param router Router holding the committed presentation snapshot.
+         * @param context Gameplay context; inactive or unfocused input neutralizes held and pending commands.
+         * @param player Optional player assignment owned by this builder.
+         * @details Edges survive presentation frames with no fixed tick and fire on the next tick only.
+         *          Call once per committed snapshot after all higher-priority input consumers have run.
+         */
+        void Capture(InputRouter &router, const InputContextToken &context, std::optional<PlayerId> player = std::nullopt);
+        /**
+         * @brief Returns a value command for one fixed tick without accessing device or router state.
+         * @param tick Tick assigned by the fixed-step scheduler; successive calls must use successive ticks.
+         * @return Held axes and at most one pending edge per action, stamped with @p tick.
+         */
+        [[nodiscard]] GameplayInputFrame Consume(SimulationTick tick) noexcept;
+        /** @brief Clears pending and held commands at a session or ownership boundary. */
+        void Reset() noexcept;
 
     private:
         ActionId move_;
         ActionId look_;
         ActionId jump_;
         ActionId interact_;
-        FrameNumber edgeFrame_{0};
-        bool jumpConsumed_{false};
-        bool interactConsumed_{false};
+        FrameNumber capturedFrame_{0};
+        bool hasCapturedFrame_{false};
+        float moveX_{0.0F};
+        float moveY_{0.0F};
+        float lookX_{0.0F};
+        float lookY_{0.0F};
+        bool pendingJump_{false};
+        bool pendingInteract_{false};
+        bool moveDown_{false};
+        bool pendingMovePressed_{false};
+        bool pendingMoveReleased_{false};
     };
 
     /** @brief In-memory deterministic record/replay sequence of resolved gameplay frames. */

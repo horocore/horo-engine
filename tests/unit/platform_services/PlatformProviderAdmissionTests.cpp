@@ -411,8 +411,14 @@ namespace Horo::PlatformServices::Tests {
         REQUIRE(authority.HasValue());
         auto configuration = OptionalAchievementConfiguration();
         REQUIRE(configuration.HasValue());
-        auto started = PlatformProviderLifecycleHost::Start(configuration.Value(), admission, {"example.module", "example.provider", 1},
-                                                            authority.Value(), Version(1), "example.consumer", "consumer.module", 1);
+        auto started = PlatformProviderLifecycleHost::Start({configuration.Value(),
+                                                             admission,
+                                                             {"example.module", "example.provider", 1},
+                                                             authority.Value(),
+                                                             Version(1),
+                                                             "example.consumer",
+                                                             "consumer.module",
+                                                             1});
         REQUIRE(started.HasValue());
         auto host = std::move(started).Value();
         auto request = host->UnlockAchievement({1});

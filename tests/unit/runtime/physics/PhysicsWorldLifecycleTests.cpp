@@ -3,6 +3,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
 #include <thread>
 #include <utility>
 
@@ -23,6 +24,41 @@ namespace Horo::Physics {
                               .commandKind = PhysicsStructuralCommandKind::Destroy,
                               .source = PhysicsCommandSourceId::Create(1).Value(),
                               .sourceSequence = 1}};
+        }
+
+        /** @brief Owns the runtime before its active world and resident test body. */
+        struct MutationFixture final {
+            std::unique_ptr<PhysicsRuntime> runtime;
+            std::unique_ptr<PhysicsWorld> world;
+            ShapeHandle box;
+            BodyHandle body;
+        };
+
+        /** @brief Prepares a canonical world with one mutable static box body. */
+        [[nodiscard]] MutationFixture CreateMutationFixture(const std::uint64_t worldId) {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+            auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+            REQUIRE(world->Activate(PhysicsWorldId::Create(worldId).Value()).HasValue());
+            const ShapeHandle box = world->CreateSceneShape(PhysicsBoxShape{}).Value();
+            PhysicsBodyDescriptor initial;
+            initial.shape = box;
+            initial.mass = PhysicsNoMass{};
+            const BodyHandle body = world->CreateSceneBody({initial, false}).Value();
+            return {std::move(runtime), std::move(world), box, body};
+        }
+
+        /** @brief Names the exact body slot and world generation in a deferred change. */
+        [[nodiscard]] PhysicsStructuralCommand MakeMutationCommand(const BodyHandle body, const std::uint64_t tick,
+                                                                   const PhysicsBodyMutation &mutation) {
+            return {.order = {.simulationTick = tick,
+                              .worldGeneration = body.world.Value(),
+                              .sceneGeneration = 7,
+                              .targetKind = PhysicsCommandTargetKind::Body,
+                              .targetIdentity = static_cast<std::uint64_t>(body.slot.index) + 1,
+                              .commandKind = PhysicsStructuralCommandKind::Change,
+                              .source = PhysicsCommandSourceId::Create(1).Value(),
+                              .sourceSequence = 1},
+                    .bodyMutation = mutation};
         }
 
         /** @brief Confirms joint-state reads remain bound to the world's owner thread. */
@@ -99,6 +135,7 @@ namespace Horo::Physics {
         REQUIRE(world->CreateSceneCompoundShape(emptyInstances).ErrorValue().code.Value() ==
                 PhysicsErrors::CapabilityUnavailable.code.Value());
         REQUIRE(world->CreateSceneBody({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
+        REQUIRE(world->ReadSceneBodyPolicy({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
         REQUIRE(world->CreateSceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
         REQUIRE(world->DestroySceneConstraint({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
         REQUIRE(world->ReadSceneJointState({}).ErrorValue().code.Value() == PhysicsErrors::CapabilityUnavailable.code.Value());
@@ -363,5 +400,213 @@ namespace Horo::Physics {
         REQUIRE(constraintRejected);
         REQUIRE(constraintDestroyRejected);
     }
+
+    TEST_CASE("Canonical body mutation reconciles mode shape and properties only at the pre-step safe point",
+              "[physics][native][mutation]") {
+        auto fixture = CreateMutationFixture(865);
+        auto &world = fixture.world;
+        const BodyHandle body = fixture.body;
+        const ShapeHandle sphere = world->CreateSceneShape(PhysicsSphereShape{1.25F}).Value();
+        REQUIRE(world->ReadSceneBodyReconciliation(body).Value().observedMotion == PhysicsMotionType::Static);
+
+        PhysicsStructuralCommand command = MakeMutationCommand(body, 1,
+                                                               PhysicsBodyMutation{.body = body,
+                                                                                   .shape = sphere,
+                                                                                   .motion = PhysicsMotionType::Dynamic,
+                                                                                   .mass = PhysicsMass{2.0F}});
+        REQUIRE(world->QueueStructuralCommand(command).Value().status == PhysicsCommandAdmissionStatus::Deferred);
+        REQUIRE(world->ReadSceneBodyPolicy(body).Value().motion == PhysicsMotionType::Static);
+        REQUIRE(world->QueueStructuralCommand(command).ErrorValue().code.Value() == PhysicsErrors::CommandOrderInvalid.code.Value());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto applied = world->ReadSceneBodyPolicy(body).Value();
+        const auto native = world->ReadSceneBodyReconciliation(body).Value();
+        REQUIRE(applied.shape == sphere);
+        REQUIRE(applied.motion == PhysicsMotionType::Dynamic);
+        REQUIRE(std::get<PhysicsMass>(applied.mass).kilograms == 2.0F);
+        REQUIRE(native.observedShape == sphere);
+        REQUIRE(native.observedMotion == PhysicsMotionType::Dynamic);
+        REQUIRE(native.observedMassKilograms.has_value());
+        REQUIRE(*native.observedMassKilograms > 1.99F);
+        REQUIRE(*native.observedMassKilograms < 2.01F);
+        REQUIRE(native.observedBoundsExtent.x > 2.4F);
+        REQUIRE(native.state.activity == PhysicsBodyActivity::Awake);
+        REQUIRE(world->PublishedTick().appliedCommands == 1);
+    }
+
+    TEST_CASE("Canonical body mutation updates mass safety velocity and activity", "[physics][native][mutation]") {
+        auto fixture = CreateMutationFixture(869);
+        auto &world = fixture.world;
+        const BodyHandle body = fixture.body;
+        PhysicsStructuralCommand command =
+            MakeMutationCommand(body, 1,
+                                PhysicsBodyMutation{.body = body, .motion = PhysicsMotionType::Dynamic, .mass = PhysicsMass{2.0F}});
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+
+        command.order.simulationTick = 2;
+        PhysicsMotionSafety safety;
+        safety.linearDampingPerSecond = 1.5F;
+        safety.lockedAxes = PhysicsAxisLock::RotationX;
+        command.bodyMutation = PhysicsBodyMutation{.body = body,
+                                                   .mass = PhysicsMass{3.0F},
+                                                   .motionSafety = safety,
+                                                   .linearVelocity = Math::Vec3{1.0F, 0.0F, 0.0F}};
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto changed = world->ReadSceneBodyPolicy(body).Value();
+        REQUIRE(std::get<PhysicsMass>(changed.mass).kilograms == 3.0F);
+        REQUIRE(changed.motionSafety.linearDampingPerSecond == 1.5F);
+        REQUIRE(changed.linearVelocity.x == 1.0F);
+        const auto changedNative = world->ReadSceneBodyReconciliation(body).Value();
+        REQUIRE(changedNative.observedMassKilograms.has_value());
+        REQUIRE(*changedNative.observedMassKilograms > 2.99F);
+        REQUIRE(*changedNative.observedMassKilograms < 3.01F);
+        REQUIRE(changedNative.state.linearVelocity.x > 0.0F);
+
+        command.order.simulationTick = 3;
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .wake = PhysicsBodyWakePolicy::Wake};
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 3, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        REQUIRE(world->ReadSceneBodyReconciliation(body).Value().state.activity == PhysicsBodyActivity::Awake);
+
+        command.order.simulationTick = 4;
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .motion = PhysicsMotionType::Static};
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 4, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto stopped = world->ReadSceneBodyPolicy(body).Value();
+        REQUIRE(stopped.motion == PhysicsMotionType::Static);
+        REQUIRE(std::holds_alternative<PhysicsNoMass>(stopped.mass));
+        REQUIRE(world->ReadSceneBodyReconciliation(body).Value().observedMotion == PhysicsMotionType::Static);
+    }
+
+    TEST_CASE("Canonical body mutation clears kinematic velocity on newly locked translation and rotation axes",
+              "[physics][native][mutation]") {
+        auto fixture = CreateMutationFixture(874);
+        auto &world = fixture.world;
+        const BodyHandle body = fixture.body;
+        PhysicsStructuralCommand command = MakeMutationCommand(body, 1,
+                                                               PhysicsBodyMutation{.body = body,
+                                                                                   .motion = PhysicsMotionType::Kinematic,
+                                                                                   .linearVelocity = Math::Vec3{1.0F, 0.0F, 0.0F},
+                                                                                   .angularVelocity = Math::Vec3{0.0F, 1.0F, 0.0F}});
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto before = world->ReadSceneBodyReconciliation(body).Value();
+        REQUIRE(before.state.linearVelocity.x > 0.0F);
+        REQUIRE(before.state.angularVelocity.y > 0.0F);
+
+        command.order.simulationTick = 2;
+        PhysicsMotionSafety safety;
+        safety.lockedAxes = PhysicsAxisLock::TranslationX | PhysicsAxisLock::RotationY;
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .motionSafety = safety};
+        REQUIRE(world->QueueStructuralCommand(command).HasValue());
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto after = world->ReadSceneBodyReconciliation(body).Value();
+        REQUIRE(after.policy.motionSafety.lockedAxes == safety.lockedAxes);
+        REQUIRE(after.state.linearVelocity.x == 0.0F);
+        REQUIRE(after.state.angularVelocity.y == 0.0F);
+        REQUIRE(after.state.pose.translation.x == before.state.pose.translation.x);
+        REQUIRE(after.state.pose.rotation.x == before.state.pose.rotation.x);
+        REQUIRE(after.state.pose.rotation.y == before.state.pose.rotation.y);
+        REQUIRE(after.state.pose.rotation.z == before.state.pose.rotation.z);
+        REQUIRE(after.state.pose.rotation.w == before.state.pose.rotation.w);
+    }
+
+    TEST_CASE("Canonical body mutation rejects unsupported policies without publication", "[physics][native][mutation][lifecycle]") {
+        auto fixture = CreateMutationFixture(866);
+        auto &world = fixture.world;
+        const ShapeHandle box = fixture.box;
+        const BodyHandle body = fixture.body;
+        const ShapeHandle plane = world->CreateSceneShape(PhysicsStaticPlaneShape{}).Value();
+        PhysicsStructuralCommand command = MakeMutationCommand(body, 1,
+                                                               PhysicsBodyMutation{.body = body,
+                                                                                   .shape = plane,
+                                                                                   .motion = PhysicsMotionType::Dynamic,
+                                                                                   .mass = PhysicsMass{2.0F}});
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::ShapeMotionUnsupported);
+        REQUIRE(world->PublishedTick().publicationRevision == 0);
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .linearVelocity = Math::Vec3{1.0F, 0.0F, 0.0F}};
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::DescriptorInvalid);
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .wake = PhysicsBodyWakePolicy::Wake};
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::OperationUnsupported);
+        PhysicsMotionSafety lockedSafety;
+        lockedSafety.lockedAxes = PhysicsAxisLock::All;
+        command.bodyMutation = PhysicsBodyMutation{.body = body,
+                                                   .motion = PhysicsMotionType::Dynamic,
+                                                   .mass = PhysicsMass{2.0F},
+                                                   .motionSafety = lockedSafety};
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::DescriptorInvalid);
+        PhysicsMotionSafety unsupportedSafety;
+        unsupportedSafety.maximumDepenetrationSpeed = 10.0F;
+        command.bodyMutation = PhysicsBodyMutation{.body = body, .motionSafety = unsupportedSafety};
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::OperationUnsupported);
+    }
+
+    TEST_CASE("Canonical body mutation rejects foreign and stale identities or unreserved motion storage",
+              "[physics][native][mutation][lifecycle]") {
+        auto fixture = CreateMutationFixture(870);
+        auto &world = fixture.world;
+        const BodyHandle body = fixture.body;
+        const ShapeHandle box = fixture.box;
+        const ShapeHandle plane = world->CreateSceneShape(PhysicsStaticPlaneShape{}).Value();
+        PhysicsStructuralCommand command =
+            MakeMutationCommand(body, 1, PhysicsBodyMutation{.body = body, .motion = PhysicsMotionType::Kinematic});
+        command.bodyMutation =
+            PhysicsBodyMutation{.body = BodyHandle{PhysicsWorldId::Create(900).Value(), body.slot}, .motion = PhysicsMotionType::Kinematic};
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::HandleWorldMismatch);
+        const BodyHandle absent{world->Identity(), {body.slot.index + 1, 1}};
+        command.order.targetIdentity = static_cast<std::uint64_t>(absent.slot.index) + 1;
+        command.bodyMutation->body = absent;
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::HandleStale);
+        command.order.targetIdentity = static_cast<std::uint64_t>(body.slot.index) + 1;
+        command.bodyMutation->body = body;
+        PhysicsBodyDescriptor staticPlane;
+        staticPlane.shape = plane;
+        staticPlane.mass = PhysicsNoMass{};
+        const BodyHandle planeBody = world->CreateSceneBody({staticPlane, false}).Value();
+        command.order.targetIdentity = static_cast<std::uint64_t>(planeBody.slot.index) + 1;
+        command.bodyMutation =
+            PhysicsBodyMutation{.body = planeBody, .shape = box, .motion = PhysicsMotionType::Dynamic, .mass = PhysicsMass{2.0F}};
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::OperationUnsupported);
+    }
+
+    TEST_CASE("Canonical body mutation respects owner thread and world lifecycle", "[physics][native][mutation][lifecycle]") {
+        auto fixture = CreateMutationFixture(872);
+        auto &world = fixture.world;
+        const BodyHandle body = fixture.body;
+        PhysicsStructuralCommand command =
+            MakeMutationCommand(body, 1, PhysicsBodyMutation{.body = body, .motion = PhysicsMotionType::Kinematic});
+        bool foreignRejected = false;
+        bool foreignReadRejected = false;
+        std::thread foreign([&] {
+            foreignRejected =
+                world->QueueStructuralCommand(command).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            foreignReadRejected =
+                world->ReadSceneBodyReconciliation(body).ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+        });
+        foreign.join();
+        REQUIRE(foreignRejected);
+        REQUIRE(foreignReadRejected);
+        REQUIRE(world->Reset().HasValue());
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::InvalidState);
+        REQUIRE(world->Activate(PhysicsWorldId::Create(873).Value()).HasValue());
+        Test::RequireError(world->ReadSceneBodyPolicy(body), PhysicsErrors::HandleWorldMismatch);
+        fixture.runtime->Shutdown();
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::InvalidState);
+        Test::RequireError(world->ReadSceneBodyReconciliation(body), PhysicsErrors::InvalidState);
+        Test::RequireError(world->AdvanceFixedTick(
+                               {.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)}),
+                           PhysicsErrors::InvalidState);
+        REQUIRE(world->UnloadScene().HasValue());
+        Test::RequireError(world->QueueStructuralCommand(command), PhysicsErrors::InvalidState);
+    }
+
 #endif
 }  // namespace Horo::Physics

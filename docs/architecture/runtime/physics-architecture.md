@@ -155,6 +155,42 @@ materials and publishes complete body/shape/constraint bindings, but does not cl
 contact filtering support from the closed native filter. Immediate-query fixtures
 remain a separate narrow analytic path and do not replace scene activation.
 
+`BodyMutation` is available only for a live canonical solver world. A resident scene
+body can receive one owned `Change/Body` payload per exact future tick. The order
+key names its one-based Horo body slot; the payload retains the full generation-
+checked handle. Admission validates the current body, replacement shape and policy
+between fixed ticks without touching native state. The complete tick frame is
+revalidated before any mutation, then body changes apply in canonical order at
+`ApplyDeferredPreStep`. This catches a constraint admitted after the queued body
+change before any native setter runs.
+They retain the Horo handle and current solver pose. Shape changes update native
+broadphase bounds and invalidate the contact cache; shape or mode changes wake a
+moving body. Mass and velocity edits wake it; changes to locked axes or speed
+ceilings wake it too. A damping-only edit preserves activity unless the caller
+requests `Wake`. Static bodies never wake.
+Successful application updates the owner-thread body policy readback. The policy's
+pose and velocities are creation or last-command intent, not live solver output.
+The reconciliation readback also translates native motion, shape, mass, bounds,
+pose, velocity and activity without extending the body lifetime. Observed mass
+is absent when all translation axes are locked because the solver's inverse mass
+is then zero even for a dynamic body. The retained mass policy remains available.
+Mass preparation and native-body existence checks precede the first setter. The
+owner thread keeps the same native body ID through that safe point. An unexpected
+native lock loss fails the world terminally without publishing a partial tick and
+requires reset.
+
+The pinned solver reserves motion storage for static bodies with shapes that can
+move, allowing static-to-kinematic/dynamic transitions without changing native
+body identity. Static-only shapes, malformed mass/velocity, absent shapes, stale
+handles and duplicate same-body/tick requests reject before the safe point.
+Constrained body mutation and per-body depenetration-speed changes report
+`OperationUnsupported` until their native reconciliation paths are qualified.
+This path does not create/destroy bodies or perform runtime shape cooking.
+The initial closed collision filter prevents contact generation, so native shape
+bounds and activity are qualified here; contact-cache invalidation follows the
+pinned solver's `SetShape` operation and needs contact regression coverage when
+collision-profile filtering opens.
+
 `PrepareWorld` builds an isolated unpublished candidate from one captured settings
 snapshot. It owns scratch storage, serial job dispatch, filters and native system
 in dependency order. `Activate` binds a valid host-issued world generation without
@@ -609,17 +645,28 @@ immediate execution and returns the completed tick/revision with bounded hit
 metadata. Snapshot and asynchronous submission remain unsupported until a
 qualified snapshot provider exists. World reset, retirement or replacement makes
 retained capabilities stale; explicit revocation returns a distinct error.
-The query revision prevents an unnoticed fixed-tick publication change between
-capture and admission; the query still samples the current owner-thread
-broadphase, whose own generation is reported in `PhysicsQueryResult`.
+The query revision prevents an unnoticed fixed-tick publication or immediate body/fixture
+change between capture and admission. A successful structural edit advances the
+revision and invalidates the older event read until another tick completes. The query
+still samples the current owner-thread broadphase, whose own generation is reported
+in `PhysicsQueryResult`.
 
 The event reader accepts only the latest completed tick and revision, copying at
-most the caller's bound into caller-owned records and reporting truncation and
-the published dropped-record count. Earlier ticks are not readable through this
+most the caller's bound into caller-owned records and reporting the exact count
+omitted by caller storage separately from the published projection-drop count.
+Earlier ticks are not readable through this
 capability. It cannot run during stepping or from a solver/tick callback, and
 returns no borrowed projection span. Both paths validate capability and world identity on
 every access. They share Physics's owner-thread boundary; no client handle extends
 the world or solver lifetime.
+
+Capability callers caching a publication marker across fixture or body admission/removal
+must recapture it before submitting another query. Event consumers must wait for the
+next completed tick after that edit. `PhysicsEventReadCompletion::omittedRecordCount`
+adds an exact caller-bound count; existing `truncated` checks remain valid.
+When the 64-bit publication revision is exhausted, the next structural edit or
+fixed tick fails with `physics.generation.exhausted` before mutating the world or
+publishing another snapshot. Revision zero is never reused for an active world.
 
 Immediate queries execute on the physics owner thread outside a step. Parallel
 or asynchronous queries use a read-only broadphase snapshot with documented

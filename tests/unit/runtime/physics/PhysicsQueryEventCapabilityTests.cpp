@@ -3,6 +3,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -22,7 +23,7 @@ namespace Horo::Physics {
             PhysicsQueryDescriptor descriptor;
             descriptor.world = capability.Identity().world;
             descriptor.sceneGeneration = 7;
-            descriptor.geometry = PhysicsRayQuery{};
+            descriptor.geometry = PhysicsRayQuery{.maximumDistanceMeters = 10};
             descriptor.filter.channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value();
             return {.identity = capability.Identity(), .expectedPublicationRevision = tick.publicationRevision, .descriptor = descriptor};
         }
@@ -87,6 +88,8 @@ namespace Horo::Physics {
         REQUIRE(read.HasValue());
         REQUIRE(read.Value().recordCount == 0);
         REQUIRE_FALSE(read.Value().truncated);
+        REQUIRE(read.Value().omittedRecordCount == 0);
+        REQUIRE(read.Value().droppedRecordCount == 0);
         const auto query = capability.Submit(RayAt(capability, published), hits);
         REQUIRE(query.HasValue());
         REQUIRE(query.Value().completedTick == 1);
@@ -157,6 +160,78 @@ namespace Horo::Physics {
         std::array<PhysicsEventRecord, 1> events{};
         Test::RequireError(issued.back().ReadEvents(EventsAt(issued.back(), {}), events), PhysicsErrors::CapabilityStale);
         Test::RequireError(replacement.Value().ReadEvents(EventsAt(replacement.Value(), {}), events), PhysicsErrors::CapabilityStale);
+    }
+
+    TEST_CASE("Query/event access rejects foreign threads", "[physics][query-event-capability]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(55).Value()).HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto before = world->PublishedTick();
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
+
+        bool rejectedThread{};
+        std::thread reader([&] {
+            const auto read = capability.ReadEvents(EventsAt(capability, before), events);
+            rejectedThread = read.HasError() && read.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+        });
+        reader.join();
+        REQUIRE(rejectedThread);
+    }
+
+    TEST_CASE("Query/event access invalidates structural edits and unloaded fixtures", "[physics][query-event-capability]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        REQUIRE(world->Activate(PhysicsWorldId::Create(56).Value()).HasValue());
+        auto capability = world->IssueQueryEventCapability().Value();
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 1, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto before = world->PublishedTick();
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
+
+        const auto fixture =
+            world
+                ->CreateQueryFixture({.shape = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                      .pose = {.translation = {0, 0, -5}, .rotation = Math::Quaternion::Identity()},
+                                      .layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value(),
+                                      .profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value(),
+                                      .channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value()})
+                .Value();
+        const auto admitted = world->PublishedTick();
+        REQUIRE(admitted.publicationRevision > before.publicationRevision);
+        REQUIRE(admitted.eventTick == 0);
+        Test::RequireError(capability.Submit(RayAt(capability, before), hits), PhysicsErrors::QuerySnapshotStale);
+        Test::RequireError(capability.ReadEvents(EventsAt(capability, before), events), PhysicsErrors::QuerySnapshotStale);
+        const auto query = capability.Submit(RayAt(capability, admitted), hits);
+        REQUIRE(query.HasValue());
+        REQUIRE(query.Value().result.hitCount == 1);
+        REQUIRE(hits[0].body == fixture.body);
+
+        REQUIRE(world->DestroyQueryFixture(fixture).HasValue());
+        const auto removed = world->PublishedTick();
+        REQUIRE(removed.publicationRevision > admitted.publicationRevision);
+        Test::RequireError(capability.Submit(RayAt(capability, admitted), hits), PhysicsErrors::QuerySnapshotStale);
+        const auto empty = capability.Submit(RayAt(capability, removed), hits);
+        REQUIRE(empty.HasValue());
+        REQUIRE(empty.Value().result.hitCount == 0);
+        Test::RequireError(world->DestroyQueryFixture(fixture), PhysicsErrors::HandleStale);
+        REQUIRE(world->PublishedTick().publicationRevision == removed.publicationRevision);
+
+        REQUIRE(world->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 7, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+        const auto republished = world->PublishedTick();
+        REQUIRE(republished.eventTick == 2);
+        REQUIRE(republished.publicationRevision > removed.publicationRevision);
+        REQUIRE(capability.ReadEvents(EventsAt(capability, republished), events).HasValue());
+
+        REQUIRE(world->UnloadScene().HasValue());
+        world.reset();
+        Test::RequireError(capability.ReadEvents(EventsAt(capability, removed), events), PhysicsErrors::CapabilityStale);
+        Test::RequireError(capability.Submit(RayAt(capability, removed), hits), PhysicsErrors::CapabilityStale);
     }
 #endif
 

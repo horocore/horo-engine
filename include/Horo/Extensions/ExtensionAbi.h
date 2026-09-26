@@ -249,11 +249,14 @@ enum HoroPlatformProviderProfileBits {  // NOSONAR(cpp:S3642) Shared C11 ABI req
 
 /** @brief Create one opaque provider candidate; output ownership remains with this module. */
 typedef HoroExtensionStatus (*HoroPlatformProviderCreateFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
-    void *factoryContext, void **outCandidate);
+    void *factoryContext, void **outCandidate);                 // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
 /** @brief Close candidate admission, cancel work and report success only after callbacks have drained. */
-typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(
+    void *candidate);  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.  // NOSONAR(cpp:S5416) Shared C11 ABI requires
+                       // typedef.
 /** @brief Destroy a fully retired candidate on its required owner thread. */
-typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.  //
+                                                                   // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
 /** @brief One bounded, host-owned completion copied before this callback returns.
  * @details A zero resultCode is success; nonzero is normalized provider failure.
@@ -270,7 +273,8 @@ struct HoroPlatformProviderCompletion {
     const uint8_t *payload;
     uint32_t payloadSize;
 };
-typedef struct HoroPlatformProviderCompletion HoroPlatformProviderCompletion;
+typedef struct HoroPlatformProviderCompletion
+    HoroPlatformProviderCompletion;  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
 
 /** @brief Host sink valid until closeIngress and drain both succeed.
  * @details Session phases use Horo's NoSubject=0, Authenticating=1, Active=2,
@@ -282,9 +286,9 @@ struct HoroPlatformProviderSink {
     HoroExtensionStatus (*sessionChanged)(void *context, uint64_t revision, uint32_t phase);
     HoroExtensionStatus (*complete)(void *context, const HoroPlatformProviderCompletion *completion);
 };
-typedef struct HoroPlatformProviderSink HoroPlatformProviderSink;
+typedef struct HoroPlatformProviderSink HoroPlatformProviderSink;  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
 
-enum HoroPlatformProviderOperationCode {
+enum HoroPlatformProviderOperationCode {  // NOSONAR(cpp:S3642) Unscoped enumerator is part of the C ABI.
     /** @brief Achievement service, with one nonzero Horo AchievementId as little-endian uint64 payload. */
     HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK = 1,
 };
@@ -303,7 +307,8 @@ struct HoroPlatformProviderOperation {
     const uint8_t *payload;
     uint32_t payloadSize;
 };
-typedef struct HoroPlatformProviderOperation HoroPlatformProviderOperation;
+typedef struct HoroPlatformProviderOperation
+    HoroPlatformProviderOperation;  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
 
 /**
  * @brief Versioned operation and callback lifecycle; all calls are on the host owner lane except sink callbacks.

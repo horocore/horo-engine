@@ -7,6 +7,7 @@
 
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/PhysicsEvents.h"
+#include "Horo/Physics/PhysicsQueryEventCapability.h"
 #include "Horo/Physics/PhysicsWorldBudgets.h"
 
 #include <array>
@@ -69,6 +70,9 @@ namespace Horo::Physics::Detail {
         void Reset() noexcept;
         /** @brief Returns the most recently published immutable event records until the next publication boundary. */
         [[nodiscard]] std::span<const PhysicsEventRecord> PublishedEvents() const noexcept;
+        /** @brief Copies one bounded published batch and distinguishes caller omission from producer drops. */
+        [[nodiscard]] PhysicsEventReadCompletion CopyPublishedEvents(std::span<PhysicsEventRecord> records,
+                                                                     std::uint32_t maximumRecords) const noexcept;
         /** @brief Returns the tick owning PublishedEvents, or zero before first publication. */
         [[nodiscard]] std::uint64_t PublishedTick() const noexcept;
         /** @brief Returns dropped callback/output records for the currently open or just-completed tick. */

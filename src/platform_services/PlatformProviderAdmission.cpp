@@ -588,6 +588,11 @@ namespace Horo::PlatformServices {
             PlatformServiceKind service;
             std::uint32_t operation{};
             PlatformProviderRequestLease lease;
+
+            InFlight(PlatformRequestId requestId, PlatformRequestGeneration requestGeneration, std::uint64_t revision,
+                     PlatformServiceKind requestService, std::uint32_t requestOperation, PlatformProviderRequestLease requestLease)
+                : id(requestId), generation(requestGeneration), sessionRevision(revision), service(requestService),
+                  operation(requestOperation), lease(std::move(requestLease)) {}
         };
 
         explicit PlatformProviderLifecycleState(const PlatformRequestGeneration generation)
@@ -598,6 +603,19 @@ namespace Horo::PlatformServices {
             inFlight.reserve(MaximumRequests);
         }
 
+        struct LifecycleStages final {
+            bool servicesAttempted{};
+            bool sessionAttempted{};
+            bool ingressAttempted{};
+            bool admissionClosed{};
+            bool closing{};
+            bool ingressClosed{};
+            bool drained{};
+            bool sessionStopped{};
+            bool servicesStopped{};
+            bool closed{};
+        };
+
         std::mutex mutex;  // Protects callback ingress and session evidence; native calls run without this lock.
         std::array<Completion, MaximumRequests> completions{};
         std::size_t completionHead{};
@@ -606,26 +624,19 @@ namespace Horo::PlatformServices {
         bool callbackOpen{true};
         HoroPlatformProviderSink sink{};
         HoroPlatformProviderOperations operations{};
-        void *candidate{};
+        void *candidate{};  // NOSONAR(cpp:S5008) The versioned provider C ABI defines candidates as opaque void pointers.
         std::optional<PlatformProviderCandidateLease> lease;
         PlatformRequestStore requests;
         std::vector<InFlight> inFlight;
         std::uint32_t availableServices{};
-        bool servicesAttempted{};
-        bool sessionAttempted{};
-        bool ingressAttempted{};
-        bool admissionClosed{};
-        bool closing{};
-        bool ingressClosed{};
-        bool drained{};
-        bool sessionStopped{};
-        bool servicesStopped{};
-        bool closed{};
+        LifecycleStages stages;
         std::shared_ptr<PlatformProviderLifecycleState> quarantine;  // BUSY teardown retains the callback context and code.
     };
 
     namespace {
-        [[nodiscard]] HoroExtensionStatus ObserveSession(void *context, const std::uint64_t revision, const std::uint32_t phase) noexcept {
+        [[nodiscard]] HoroExtensionStatus ObserveSession(
+            void *context, const std::uint64_t revision,
+            const std::uint32_t phase) noexcept {  // NOSONAR(cpp:S5008) The callback context is opaque by C ABI contract.
             auto &state = *static_cast<PlatformProviderLifecycleState *>(context);
             std::scoped_lock lock{state.mutex};
             if (!state.callbackOpen || revision == 0 || revision <= state.session.revision || phase > 4)
@@ -634,7 +645,10 @@ namespace Horo::PlatformServices {
             return HORO_EXTENSION_SUCCESS;
         }
 
-        [[nodiscard]] HoroExtensionStatus ReceiveCompletion(void *context, const HoroPlatformProviderCompletion *completion) noexcept {
+        [[nodiscard]] HoroExtensionStatus ReceiveCompletion(
+            void *context,
+            const HoroPlatformProviderCompletion
+                *completion) noexcept {  // NOSONAR(cpp:S5008) The callback context is opaque by C ABI contract.
             if (completion == nullptr || completion->structSize != sizeof(HoroPlatformProviderCompletion) || completion->requestId == 0 ||
                 completion->requestGeneration == 0 || completion->sessionRevision == 0 ||
                 completion->service >= static_cast<std::uint32_t>(PlatformServiceKind::Count) ||
@@ -699,29 +713,30 @@ namespace Horo::PlatformServices {
                                                 const PlatformProviderContributionDescriptor &descriptor,
                                                 const PlatformProjectConfiguration &configuration,
                                                 const std::uint32_t requiredMask) noexcept {
-            state.servicesAttempted = true;
+            state.stages.servicesAttempted = true;
             std::uint32_t availableMask{};
             if (InvokeProvider(state.operations.initializeServices, state.candidate, requiredMask, &availableMask) !=
                     HORO_EXTENSION_SUCCESS ||
                 (availableMask & ~ClaimedMask(descriptor)) != 0 || (requiredMask & ~availableMask) != 0)
                 return false;
             state.availableServices = availableMask & EnabledMask(configuration);
-            state.sessionAttempted = true;
+            state.stages.sessionAttempted = true;
             if (InvokeProvider(state.operations.beginSession, state.candidate, &state.sink) != HORO_EXTENSION_SUCCESS)
                 return false;
-            state.ingressAttempted = true;
+            state.stages.ingressAttempted = true;
             return InvokeProvider(state.operations.openIngress, state.candidate, &state.sink) == HORO_EXTENSION_SUCCESS;
         }
 
         /** @brief Closes admission once and retains failed native teardown for an owner-thread retry. */
         [[nodiscard]] Result<void> CloseNativeAdmission(const std::shared_ptr<PlatformProviderLifecycleState> &state) {
-            if (state->admissionClosed)
+            if (state->stages.admissionClosed)
                 return Result<void>::Success();
-            if (state->servicesAttempted && InvokeProvider(state->operations.closeAdmission, state->candidate) != HORO_EXTENSION_SUCCESS) {
+            if (state->stages.servicesAttempted &&
+                InvokeProvider(state->operations.closeAdmission, state->candidate) != HORO_EXTENSION_SUCCESS) {
                 state->quarantine = state;
                 return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
             }
-            state->admissionClosed = true;
+            state->stages.admissionClosed = true;
             return Result<void>::Success();
         }
 
@@ -735,13 +750,13 @@ namespace Horo::PlatformServices {
 
         /** @brief Stops a begun provider session exactly once after requests have drained. */
         [[nodiscard]] Result<void> StopNativeSession(const std::shared_ptr<PlatformProviderLifecycleState> &state) {
-            if (state->sessionStopped || !state->sessionAttempted)
+            if (state->stages.sessionStopped || !state->stages.sessionAttempted)
                 return Result<void>::Success();
             if (InvokeProvider(state->operations.stopSession, state->candidate) != HORO_EXTENSION_SUCCESS) {
                 state->quarantine = state;
                 return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
             }
-            state->sessionStopped = true;
+            state->stages.sessionStopped = true;
             return Result<void>::Success();
         }
     }  // namespace
@@ -760,15 +775,18 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformProviderLifecycleHost::Start */
     Result<std::unique_ptr<PlatformProviderLifecycleHost>> PlatformProviderLifecycleHost::Start(
-        const PlatformProjectConfiguration &configuration, PlatformProviderAdmission &admission,
-        const Extensions::ApplicationCapabilityProviderIdentity &identity, const Extensions::ExtensionCapabilityHandle &authority,
-        const Extensions::ApplicationCapabilityVersionRange &versions, const std::string_view consumerExtensionId,
-        const std::string_view consumerModuleId, const std::uint64_t consumerGeneration) {
+        const PlatformProviderLifecycleStartContext &context) {
         using HostResult = Result<std::unique_ptr<PlatformProviderLifecycleHost>>;
+        const auto &configuration = context.configuration;
+        const auto &admission = context.admission;
+        const auto &identity = context.identity;
+        const auto &authority = context.authority;
+        const auto &versions = context.versions;
         if (configuration.UsesNullProvider() || !configuration.SelectedProvider() || !configuration.SelectedModule() ||
             identity.moduleId != configuration.SelectedModule()->value || identity.providerId != configuration.SelectedProviderKey())
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InvalidSelection));
-        auto created = admission.CreateExact(identity, authority, versions, consumerExtensionId, consumerModuleId, consumerGeneration);
+        auto created = admission.CreateExact(identity, authority, versions, context.consumerExtensionId, context.consumerModuleId,
+                                             context.consumerGeneration);
         if (created.HasError())
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InvalidSelection));
         auto candidate = std::move(created).Value();
@@ -789,6 +807,7 @@ namespace Horo::PlatformServices {
                        .context = state.get(),
                        .sessionChanged = ObserveSession,
                        .complete = ReceiveCompletion};
+        // NOSONAR(cpp:S5950) The private constructor is accessible here but not inside std::make_unique.
         auto host = std::unique_ptr<PlatformProviderLifecycleHost>(new PlatformProviderLifecycleHost(state));
         if (!StartNativeLifecycle(*state, descriptor, configuration, requiredMask)) {
             static_cast<void>(host->Close());
@@ -808,13 +827,13 @@ namespace Horo::PlatformServices {
     }
 
     /** @brief Sends one validated Horo operation through the selected native candidate. */
-    Result<PlatformProviderLifecycleHost::RequestHandle> PlatformProviderLifecycleHost::Submit(const PlatformServiceKind service,
-                                                                                               const std::uint32_t operation,
-                                                                                               const std::span<const std::byte> payload) {
+    Result<PlatformProviderLifecycleHost::RequestHandle> PlatformProviderLifecycleHost::Submit(
+        const PlatformServiceKind service, const std::uint32_t operation,
+        const std::span<const std::byte> payload) {  // NOSONAR(cpp:S5817) This operation intentionally mutates the shared request state.
         using SubmitResult = Result<RequestHandle>;
         auto &state = *state_;
         const auto serviceIndex = static_cast<std::uint32_t>(service);
-        if (state.closing || state.closed || !state.lease)
+        if (state.stages.closing || state.stages.closed || !state.lease)
             return SubmitResult::Failure(MakeError(FrontendErrors::Unavailable));
         std::uint64_t sessionRevision{};
         {
@@ -835,7 +854,7 @@ namespace Horo::PlatformServices {
         if (admitted.HasError())
             return SubmitResult::Failure(admitted.ErrorValue());
         auto handle = std::move(admitted).Value();
-        state.inFlight.push_back({handle.Id(), handle.Generation(), sessionRevision, service, operation, std::move(nativeLease).Value()});
+        state.inFlight.emplace_back(handle.Id(), handle.Generation(), sessionRevision, service, operation, std::move(nativeLease).Value());
         static_cast<void>(state.requests.MarkRunning(handle));
         const HoroPlatformProviderOperation input{.structSize = sizeof(HoroPlatformProviderOperation),
                                                   .requestId = handle.Id().value,
@@ -843,9 +862,10 @@ namespace Horo::PlatformServices {
                                                   .sessionRevision = sessionRevision,
                                                   .service = serviceIndex,
                                                   .operation = operation,
+                                                  // NOSONAR(cpp:S6022) The public C ABI explicitly requires a uint8_t byte span.
                                                   .payload = reinterpret_cast<const std::uint8_t *>(payload.data()),
                                                   .payloadSize = static_cast<std::uint32_t>(payload.size())};
-        if (InvokeProvider(state.operations.submit, state.candidate, &input) != HORO_EXTENSION_SUCCESS) {
+        if (const auto status = InvokeProvider(state.operations.submit, state.candidate, &input); status != HORO_EXTENSION_SUCCESS) {
             static_cast<void>(state.requests.CompleteFailure(handle, MakeError(BackendErrors::ServiceUnavailable)));
             // An adapter may have started native work before reporting failure; its lease retires on callback or drain.
         }
@@ -853,7 +873,8 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformProviderLifecycleHost::DispatchCompletions */
-    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(const std::size_t maximum) {
+    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(
+        const std::size_t maximum) {  // NOSONAR(cpp:S5817) Completion dispatch intentionally mutates shared lifecycle state.
         auto &state = *state_;
         std::size_t processed{};
         while (processed < maximum) {
@@ -866,11 +887,12 @@ namespace Horo::PlatformServices {
                 state.completionHead = (state.completionHead + 1) % state.completions.size();
                 --state.completionCount;
             }
-            const auto found = std::ranges::find_if(state.inFlight, [&](const auto &entry) {
+            if (const auto found = std::ranges::find_if(state.inFlight,
+                                                        [&](const auto &entry) {
                 return entry.id.value == completion.requestId && entry.generation.value == completion.requestGeneration &&
                        static_cast<std::uint32_t>(entry.service) == completion.service && entry.operation == completion.operation;
             });
-            if (found != state.inFlight.end()) {
+                found != state.inFlight.end()) {
                 RequestHandle handle{found->id, found->generation};
                 std::uint64_t currentSessionRevision{};
                 {
@@ -898,7 +920,8 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformProviderLifecycleHost::OnComplete */
     Result<PlatformRequestSubscription> PlatformProviderLifecycleHost::OnComplete(
-        const RequestHandle &request, std::function<void(const PlatformRequestSnapshot<void> &)> observer) {
+        const RequestHandle &request, std::function<void(const PlatformRequestSnapshot<void> &)>
+                                          observer) {  // NOSONAR(cpp:S5817) Subscription changes the request store owned by this host.
         return state_->requests.OnComplete(request, std::move(observer));
     }
 
@@ -909,49 +932,48 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformProviderLifecycleHost::Close */
-    Result<void> PlatformProviderLifecycleHost::Close() {
+    Result<void> PlatformProviderLifecycleHost::Close() {  // NOSONAR(cpp:S5817) Close is a lifecycle transition on the shared host state.
         auto &state = *state_;
-        if (state.closed)
+        if (state.stages.closed)
             return Result<void>::Success();
-        state.closing = true;
+        state.stages.closing = true;
         if (auto closed = CloseNativeAdmission(state_); closed.HasError())
             return closed;
-        if (!state.ingressClosed) {
+        if (!state.stages.ingressClosed) {
             {
                 std::scoped_lock lock{state.mutex};
                 state.callbackOpen = false;
                 state.completionCount = 0;
             }
-            if (state.ingressAttempted && InvokeProvider(state.operations.closeIngress, state.candidate) != HORO_EXTENSION_SUCCESS) {
+            if (state.stages.ingressAttempted && InvokeProvider(state.operations.closeIngress, state.candidate) != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
                 return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
             }
-            state.ingressClosed = true;
+            state.stages.ingressClosed = true;
         }
         CancelNativeInflight(state);
-        if (!state.drained && (state.sessionAttempted || state.ingressAttempted)) {
-            const auto status = InvokeProvider(state.operations.drain, state.candidate);
-            if (status != HORO_EXTENSION_SUCCESS) {
+        if (!state.stages.drained && (state.stages.sessionAttempted || state.stages.ingressAttempted)) {
+            if (const auto status = InvokeProvider(state.operations.drain, state.candidate); status != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
                 return Result<void>::Failure(MakeError(status == HORO_EXTENSION_ERROR_BUSY
                                                            ? PlatformProviderLifecycleErrors::DrainBusy
                                                            : PlatformProviderLifecycleErrors::ShutdownFailed));
             }
-            state.drained = true;
+            state.stages.drained = true;
         }
         state.inFlight.clear();
         state.requests.Shutdown();
         if (auto stopped = StopNativeSession(state_); stopped.HasError())
             return stopped;
-        if (!state.servicesStopped && state.servicesAttempted) {
+        if (!state.stages.servicesStopped && state.stages.servicesAttempted) {
             if (InvokeProvider(state.operations.shutdownServices, state.candidate) != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
                 return Result<void>::Failure(MakeError(PlatformProviderLifecycleErrors::ShutdownFailed));
             }
-            state.servicesStopped = true;
+            state.stages.servicesStopped = true;
         }
         state.lease.reset();
-        state.closed = true;
+        state.stages.closed = true;
         state.quarantine.reset();
         return Result<void>::Success();
     }
