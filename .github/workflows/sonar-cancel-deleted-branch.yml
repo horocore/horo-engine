@@ -1,0 +1,43 @@
+name: Cancel Sonar for Deleted Branch
+
+on:
+  delete:
+
+permissions:
+  actions: write
+
+jobs:
+  cancel-sonar-pr:
+    if: github.event.ref_type == 'branch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Cancel active Sonar PR runs for deleted branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELETED_BRANCH: ${{ github.event.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run_ids=$(
+            gh api --method GET \
+              -f branch="$DELETED_BRANCH" \
+              -f event=pull_request \
+              -f per_page=100 \
+              "repos/$REPOSITORY/actions/workflows/sonar.yml/runs" \
+              --paginate --slurp |
+              jq -r --arg branch "$DELETED_BRANCH" --arg repo "$REPOSITORY" \
+                '.[] .workflow_runs[] | select(.event == "pull_request" and .head_branch == $branch and .head_repository.full_name == $repo and .status != "completed") | .id'
+          )
+
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            echo "Cancel Sonar PR run $run_id for deleted branch $DELETED_BRANCH"
+            if ! gh api --method POST "repos/$REPOSITORY/actions/runs/$run_id/cancel" >/dev/null; then
+              # Completion between listing and cancellation is harmless.
+              status=$(gh api "repos/$REPOSITORY/actions/runs/$run_id" --jq .status)
+              if [ "$status" != completed ]; then
+                echo "::error::Could not cancel Sonar PR run $run_id (status: $status)"
+                exit 1
+              fi
+            fi
+          done <<< "$run_ids"
