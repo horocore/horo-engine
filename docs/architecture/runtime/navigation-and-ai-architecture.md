@@ -1823,6 +1823,26 @@ Deterministic simulations either compose a separately qualified provider, use th
 declared collision-safe no-avoidance policy or fail admission when avoidance is
 required.
 
+`NavigationCrowdAvoidance.h` is the additive provider-neutral solver contract.
+Hosts compose `CreateRecastDetourCrowdBackend` before activation; NavigationRuntime
+does not link the concrete provider. One request identifies a snapshot agent and
+finite preferred velocity, speed, acceleration, step and horizon limits. The
+provider privately samples the pinned Detour obstacle-avoidance kernel with
+snapshot-owned agent circles and conservative static segments, then checks the
+sampled desired velocity against the finite envelopes and conservative swept
+facts. A sample it cannot validate is an explicit zero-desired-velocity
+`CollisionSafeStop`, not a successful sample or a guarantee that moving Physics
+can brake instantly. Truncated facts, unsupported execution mode, native
+capacity contention and numerical failure also yield typed stop reasons. Invalid
+request values fail admission. The returned binding, dynamic revision and capture
+tick are publication evidence, not a currentness assertion; the NAV-006.4
+coordinator must check them again at `NavIntentCommit`. Native `dt*` types remain
+private to the optional provider. Existing snapshot and query callers need no
+migration; host composition opts in explicitly. The separate
+`HoroNavigationCrowdDetour` library depends on `NavigationRuntime`'s narrow
+public crowd contract, never the reverse. Path-only consumers of
+`HoroNavigationRecastDetour` do not link DetourCrowd.
+
 Scale (`CrowdSmall`, `CrowdMedium`, `CrowdLarge`, `CrowdDedicated`) and quality
 (`AvoidanceOff`, `AvoidanceConservative`, `AvoidanceBalanced`, `AvoidanceDense`)
 are independent project dimensions with exact finite capacity, fact, work, memory,

@@ -472,6 +472,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationBakeJobs.h
     Horo/Navigation/NavigationCrowdSnapshot.h
+    Horo/Navigation/NavigationCrowdAvoidance.h
     Horo/Navigation/NavigationDynamicRegistry.h
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationRuntimeQueues.h
@@ -506,6 +507,9 @@ horo_configure_target_header_boundary(HoroNavigationNull PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationRecastDetour PUBLIC_HEADERS
     Horo/Navigation/Backends/RecastDetourProvider.h
+)
+horo_configure_target_header_boundary(HoroNavigationCrowdDetour PUBLIC_HEADERS
+    Horo/Navigation/Backends/RecastDetourCrowdProvider.h
 )
 horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/NetworkStreamingAuthority.h

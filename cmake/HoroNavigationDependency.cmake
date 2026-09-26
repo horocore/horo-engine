@@ -3,8 +3,8 @@ include_guard(GLOBAL)
 set(HORO_RECAST_NAVIGATION_REVISION "9f4ce64458dfae86e1239c525ddc219c4e9e06f1")
 
 # Populate the reviewed Recast bake sources and Detour runtime sources directly.
-# The upstream top-level build also creates tile-cache, crowd, debug, demo, and
-# example targets, which remain outside the initial provider composition.
+# The upstream top-level build also creates tile-cache, debug, demo, and
+# example targets. Only the narrow obstacle-avoidance kernel is composed below.
 function(horo_add_navigation_runtime_dependency)
     FetchContent_Declare(horo_recast_navigation
         URL https://codeload.github.com/recastnavigation/recastnavigation/tar.gz/${HORO_RECAST_NAVIGATION_REVISION}
@@ -47,6 +47,16 @@ function(horo_add_navigation_runtime_dependency)
     target_compile_definitions(HoroThirdPartyDetour PRIVATE DT_POLYREF64 RC_DISABLE_ASSERTS)
     target_include_directories(HoroThirdPartyDetour PRIVATE ${horo_recast_navigation_SOURCE_DIR}/Detour/Include)
     set_target_properties(HoroThirdPartyDetour PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+    add_library(HoroThirdPartyDetourCrowd STATIC
+        ${horo_recast_navigation_SOURCE_DIR}/DetourCrowd/Source/DetourObstacleAvoidance.cpp
+    )
+    target_compile_definitions(HoroThirdPartyDetourCrowd PRIVATE DT_POLYREF64 RC_DISABLE_ASSERTS)
+    target_include_directories(HoroThirdPartyDetourCrowd PRIVATE
+        ${horo_recast_navigation_SOURCE_DIR}/DetourCrowd/Include
+        ${horo_recast_navigation_SOURCE_DIR}/Detour/Include)
+    target_link_libraries(HoroThirdPartyDetourCrowd PUBLIC HoroThirdPartyDetour)
+    set_target_properties(HoroThirdPartyDetourCrowd PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
     file(SHA256 "${horo_recast_navigation_SOURCE_DIR}/License.txt" horo_recast_navigation_license_digest)
     if(NOT horo_recast_navigation_license_digest STREQUAL "ffad87821cce7cfd3be00b63ffadd01b04e83a4c6a0bcc68f06362ffd42d705e")

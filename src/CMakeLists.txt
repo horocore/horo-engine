@@ -1002,6 +1002,28 @@ else()
     )
 endif()
 
+add_library(HoroNavigationCrowdDetour STATIC)
+add_library(HoroEngine::NavigationCrowdDetour ALIAS HoroNavigationCrowdDetour)
+target_compile_features(HoroNavigationCrowdDetour PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationCrowdDetour PUBLIC HoroEngine::NavigationRuntime)
+if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
+    target_sources(HoroNavigationCrowdDetour PRIVATE
+            runtime/navigation/backends/recast_detour/RecastDetourCrowdGeometry.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourCrowdGeometry.h
+            runtime/navigation/backends/recast_detour/RecastDetourCrowdProvider.cpp
+    )
+    target_compile_definitions(HoroNavigationCrowdDetour PRIVATE DT_POLYREF64 RC_DISABLE_ASSERTS)
+    target_include_directories(HoroNavigationCrowdDetour PRIVATE
+            ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/DetourCrowd/Include
+            ${HORO_RECAST_NAVIGATION_SOURCE_DIR}/Detour/Include
+    )
+    target_link_libraries(HoroNavigationCrowdDetour PRIVATE HoroThirdPartyDetourCrowd)
+else()
+    target_sources(HoroNavigationCrowdDetour PRIVATE
+            runtime/navigation/backends/recast_detour/RecastDetourCrowdOmitted.cpp
+    )
+endif()
+
 add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/NetworkStreamingAuthority.cpp
         runtime/world_streaming/OriginFrame.cpp
