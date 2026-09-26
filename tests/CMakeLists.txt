@@ -323,6 +323,12 @@ add_executable(HoroAudioBackendContractTests
 target_compile_features(HoroAudioBackendContractTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioBackendContractTests PRIVATE HoroAudioBackendContract)
 horo_register_catch_test(HoroAudioBackendContractTests LABELS "unit;audio;headless")
+add_executable(HoroAudioWatchdogTests
+        unit/runtime/audio/AudioCallbackWatchdogTests.cpp
+)
+target_compile_features(HoroAudioWatchdogTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioWatchdogTests PRIVATE HoroAudioWatchdog)
+horo_register_catch_test(HoroAudioWatchdogTests LABELS "unit;audio;headless")
 add_executable(HoroAudioNullTests
         unit/runtime/audio/NullAudioBackendTests.cpp
 )

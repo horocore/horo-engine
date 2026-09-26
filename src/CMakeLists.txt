@@ -632,6 +632,12 @@ target_include_directories(HoroAudioBackendContract INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/include>")
 target_link_libraries(HoroAudioBackendContract INTERFACE HoroEngine::AudioApi)
 
+add_library(HoroAudioWatchdog STATIC
+        audio/backend/AudioCallbackWatchdog.cpp
+)
+target_compile_features(HoroAudioWatchdog PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioWatchdog PUBLIC HoroAudioBackendContract)
+
 add_library(HoroAudioNull STATIC
         audio/backend/null/NullAudioBackend.cpp
 )
@@ -639,7 +645,7 @@ add_library(HoroEngine::AudioNull ALIAS HoroAudioNull)
 target_compile_features(HoroAudioNull PUBLIC cxx_std_20)
 target_include_directories(HoroAudioNull PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/null/include>")
-target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands)
+target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands PRIVATE HoroAudioWatchdog)
 
 if(HORO_BUILD_AUDIO_SDL3)
     add_library(HoroAudioSdl3 STATIC
@@ -651,7 +657,7 @@ if(HORO_BUILD_AUDIO_SDL3)
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/sdl3/include>")
     target_link_libraries(HoroAudioSdl3
             PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands
-            PRIVATE ${HORO_SDL3_TARGET})
+            PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
 endif()
 
 add_library(HoroAudioDsp STATIC

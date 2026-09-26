@@ -35,6 +35,7 @@ namespace Horo::Audio::Backend {
             AudioProcessingFormat expected;
             std::size_t count{};
             bool planesAligned{true};
+            bool emitSafetyHooks{};
         };
 
         RenderTrace Trace() {
@@ -51,6 +52,10 @@ namespace Horo::Audio::Backend {
             trace.frames[trace.count] = invocation.sampleFrame;
             trace.times[trace.count] = invocation.startedAt.nanoseconds;
             ++trace.count;
+            if (trace.emitSafetyHooks) {
+                AudioCallbackWatchdog::OnAllocationAttempt();
+                AudioCallbackWatchdog::OnLockAttempt();
+            }
             for (auto *plane : invocation.output.planes) {
                 void *storage = plane;
                 std::size_t space = 64;
@@ -112,6 +117,26 @@ namespace Horo::Audio::Backend {
             const auto started = Complete(backend, Start{Epoch(), {&trace, Render}});
             REQUIRE(std::holds_alternative<Started>(started.outcome));
             REQUIRE(backend.State() == NullAudioBackendState::Priming);
+        }
+
+        TEST_CASE("Null audio callback safety hooks drain only on control without reading wall time",
+                  "[unit][audio][null_backend][watchdog]") {
+            auto backend = Backend();
+            auto trace = Trace();
+            trace.emitSafetyHooks = true;
+            OpenAndStart(*backend, trace);
+            REQUIRE(backend->AdvanceCallback().HasValue());
+            std::array<AudioCallbackViolation, 4> records{};
+            const auto drained = backend->DrainSafetyViolations(records);
+#if !defined(NDEBUG)
+            REQUIRE(drained.count == 2);
+            CHECK(records[0].kind == AudioCallbackViolationKind::AllocationAttempt);
+            CHECK(records[1].kind == AudioCallbackViolationKind::LockAttempt);
+            CHECK(records[0].epoch == Epoch());
+#else
+            REQUIRE(drained.count == 0);
+#endif
+            CHECK(backend->DrainSafetyViolations(records).count == 0);
         }
 
         TEST_CASE("Null audio lifecycle and sample clock are deterministic without wall time or hardware", "[unit][audio][null_backend]") {

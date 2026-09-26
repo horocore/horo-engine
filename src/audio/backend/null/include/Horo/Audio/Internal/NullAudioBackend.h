@@ -6,6 +6,7 @@
 
 #include "Horo/Audio/AudioClock.h"
 #include "Horo/Audio/Internal/AudioBackend.h"
+#include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
 
 #include <array>
 #include <memory>
@@ -63,6 +64,8 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<void> AcknowledgeCompletion(const OperationId &operation) override;
         /** @copydoc AudioBackend::DrainEvents */
         [[nodiscard]] std::size_t DrainEvents(std::span<Event> output) noexcept override;
+        /** @copydoc AudioBackend::DrainSafetyViolations */
+        [[nodiscard]] AudioCallbackViolationDrain DrainSafetyViolations(std::span<AudioCallbackViolation> output) noexcept override;
 
         /**
          * @brief Complete one admitted control step without consulting wall time.
@@ -129,6 +132,7 @@ namespace Horo::Audio::Backend {
         std::uint32_t callbackFrames_{};
         std::size_t planeStrideSamples_{};
         RenderPort render_;
+        AudioCallbackWatchdog watchdog_;
         bool ready_{};
         std::uint64_t sampleFrame_{};
         std::uint64_t clockNanoseconds_{};

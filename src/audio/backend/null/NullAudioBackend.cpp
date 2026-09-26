@@ -191,6 +191,7 @@ namespace Horo::Audio::Backend {
             ApplyOpen(*open, operation);
         } else if (const auto *start = std::get_if<Start>(&request)) {
             render_ = start->render;
+            watchdog_.Configure(0, format_.sampleRate);
             state_ = NullAudioBackendState::Priming;
             ready_ = false;
             sampleFrame_ = 0;
@@ -375,7 +376,7 @@ namespace Horo::Audio::Backend {
                                                      .planes = planes_,
                                                      .validFrames = callbackFrames_,
                                                      .capacityFrames = callbackFrames_}};
-        const auto result = render_.process(render_.context, invocation);
+        const auto result = watchdog_.InvokeWithoutDeadline(render_, invocation);
         if (const auto validated = ValidateRenderResult(result); validated.HasError())
             return Result<AudioClockCorrelationSnapshot>::Failure(validated.ErrorValue());
         if (const auto advanced = AdvanceSampleClock(); advanced.HasError())
@@ -416,6 +417,11 @@ namespace Horo::Audio::Backend {
                   events_.begin());
         eventCount_ -= count;
         return count;
+    }
+
+    /** @copydoc AudioBackend::DrainSafetyViolations */
+    AudioCallbackViolationDrain NullAudioBackend::DrainSafetyViolations(const std::span<AudioCallbackViolation> output) noexcept {
+        return watchdog_.Drain(output);
     }
 
     /** @copydoc CreateNullAudioBackend */
