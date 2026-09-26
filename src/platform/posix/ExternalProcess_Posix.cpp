@@ -16,6 +16,7 @@
 #include <span>
 #include <spawn.h>
 #include <string_view>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -90,10 +91,16 @@ namespace Horo {
             return result;
         }
 
+        /** @brief Reads exactly one explicitly sized destination span from a pipe. */
+        [[nodiscard]] ssize_t ReadPipeChunk(const int descriptor, const std::span<char> destination) {
+            iovec buffer{destination.data(), destination.size()};
+            return readv(descriptor, &buffer, 1);
+        }
+
         void Drain(const int descriptor, bool &open, LineDecoder &decoder) {
             std::array<char, 4096> buffer{};
             for (std::size_t reads = 0; reads < 16; ++reads) {
-                const ssize_t count = read(descriptor, buffer.data(), buffer.size());
+                const ssize_t count = ReadPipeChunk(descriptor, buffer);
                 if (count > 0) {
                     decoder.Append(std::span<const char>{buffer.data(), static_cast<std::size_t>(count)});
                     continue;

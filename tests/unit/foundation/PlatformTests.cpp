@@ -376,6 +376,20 @@ namespace {
         }
     }
 
+    TEST_CASE("External process launch failure leaves the runner usable", "[unit][platform][process]") {
+        Horo::NativeExternalProcessRunner runner;
+        const auto missing = std::filesystem::temp_directory_path() /
+                             ("horo-missing-process-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const Horo::ExternalProcessRequest invalid{.executable = missing.string()};
+        REQUIRE(runner.Run(invalid, {}).HasError());
+
+        const Horo::ExternalProcessRequest valid{.executable = HORO_PROCESS_TEST_CHILD, .arguments = {"exit-failure"}};
+        const auto recovered = runner.Run(valid, {});
+        REQUIRE(recovered.HasValue());
+        REQUIRE(recovered.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(recovered.Value().exitCode == 17);
+    }
+
     TEST_CASE("External process cancellation and forced timeout keep their stop causes", "[unit][platform][process]") {
         Horo::NativeExternalProcessRunner runner;
         Horo::CancellationSource cancellation;
