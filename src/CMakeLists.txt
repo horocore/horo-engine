@@ -279,6 +279,9 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/NetworkProjectSettings.cpp
         runtime/networking/api/NetworkProjectSettingsSchema.cpp
         runtime/networking/api/NetworkProjectSettingsErrors.cpp
+        runtime/networking/api/NetworkTargetCapabilities.cpp
+        runtime/networking/api/NetworkTargetManifest.cpp
+        runtime/networking/api/NetworkTargetManifestErrors.cpp
         runtime/networking/api/PacketBuffer.cpp
         runtime/networking/api/PacketQueue.cpp
         runtime/networking/api/ProtocolIdentityRegistry.cpp
@@ -465,6 +468,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine:
 
 add_library(HoroNetworkRuntime STATIC
         runtime/networking/TransportBackendComposition.cpp
+        runtime/networking/TransportTargetComposition.cpp
         runtime/networking/AuthenticationSessionAdapter.cpp
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp

@@ -658,6 +658,36 @@ declare network roles and required transport capability evidence before packagin
 or activation. `PreflightNetworkProjectSettings` validates the selected role and
 exact transport evidence before an operation publishes state.
 
+`NetworkTargetCapabilities` is the product-target admission boundary. The
+packager/release plan supplies an immutable version-one manifest for a specific
+build and platform; final package verification supplies a separate inventory of
+the roles, runtime, provider artifacts/capabilities and protocol actually present. The host composition root supplies a fresh,
+provider-mapped snapshot of registered transports, host support, configuration,
+runtime presence and protocol support. The project/release supplies required
+roles and an optional exact provider; the invocation selects one role, provider
+and protocol version. The pure assessment exposes package, installed,
+host-supported, project-required and selected facts separately and rejects the
+first missing capability with a typed remediation. A declaration alone cannot
+prove that a runtime or provider was packaged. The host must not synthesize
+`NetworkTargetHostFacts` from the product manifest or a renderer/device tier.
+Native provider names, factories and credentials remain in host-private mappings.
+`CaptureNetworkTargetHostFacts` reads sealed `TransportBackendComposition`
+registrations through an explicit typed provider-to-backend mapping; it never
+calls a factory and preserves absent/unsupported/unconfigured distinctions.
+Only an admitted, build-identity/revision-fenced assessment may precede activation; it does not
+activate anything itself. Standalone requires no provider or protocol selection.
+
+The manifest codec accepts only bounded, closed version-one JSON with non-zero
+build/revision/profile IDs, a typed platform and role set, exact protocol/schema
+range, and at most eight provider capability descriptors. It rejects duplicate
+keys, unknown fields and future versions. Migrated version-one project settings
+still pass through the same package/host assessment after their documented
+version-two normalization; migration never manufactures packaged capabilities.
+Automation must use this same assessment and final inventory evidence rather
+than inferring server support from a build variant or headless mode. Producers
+must bump product, host or project revisions on replacement and re-assess before
+publication; cancellation and shutdown deny admission.
+
 ## Optional Composition and Product Configurations
 
 Horo Engine products declare only the modes and network targets they can realize:

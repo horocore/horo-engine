@@ -209,6 +209,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/NetworkHandles.h
     Horo/Network/NetworkObjectIdentity.h
     Horo/Network/NetworkProjectSettings.h
+    Horo/Network/NetworkTargetCapabilities.h
     Horo/Network/NetworkTransport.h
     Horo/Network/PacketBuffer.h
     Horo/Network/PacketQueue.h
