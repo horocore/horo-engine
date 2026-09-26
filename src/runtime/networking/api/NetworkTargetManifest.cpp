@@ -1,5 +1,6 @@
 #include "Horo/Network/NetworkTargetCapabilities.h"
 
+#include <algorithm>
 #include <functional>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -19,16 +20,13 @@ namespace Horo::Network {
         bool HasFields(const Json &value, const std::initializer_list<std::string_view> fields) {
             if (!value.is_object() || value.size() != fields.size())
                 return false;
-            for (const auto field : fields) {
-                if (!value.contains(field))
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(fields, [&value](const std::string_view field) {
+                return value.contains(field);
+            });
         }
 
         bool ReadUnsigned(const Json &object, const char *key, std::uint64_t &out, const std::uint64_t maximum) {
-            const auto &value = object.at(key);
-            if (value.is_number_unsigned()) {
+            if (const auto &value = object.at(key); value.is_number_unsigned()) {
                 out = value.get<std::uint64_t>();
             } else if (value.is_number_integer()) {
                 const auto signedValue = value.get<std::int64_t>();

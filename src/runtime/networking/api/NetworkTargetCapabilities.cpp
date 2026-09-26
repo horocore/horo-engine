@@ -5,6 +5,9 @@
 
 namespace Horo::Network {
     namespace {
+        using enum NetworkTargetCapabilityKind;
+        using enum NetworkTargetFailureReason;
+
         constexpr auto AllRoles = static_cast<std::uint32_t>(NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::Client |
                                                              NetworkProjectRoleSet::ListenServer | NetworkProjectRoleSet::DedicatedServer);
         constexpr auto AllPlatforms = (std::uint32_t{1} << static_cast<std::uint8_t>(NetworkTargetPlatform::Count)) - 1;
@@ -14,9 +17,9 @@ namespace Horo::Network {
         }
 
         bool HasNetworkRoles(const NetworkProjectRoleSet roles) {
-            return ContainsNetworkProjectRole(roles, NetworkProjectRole::Client) ||
-                   ContainsNetworkProjectRole(roles, NetworkProjectRole::ListenServer) ||
-                   ContainsNetworkProjectRole(roles, NetworkProjectRole::DedicatedServer);
+            using enum NetworkProjectRole;
+            return ContainsNetworkProjectRole(roles, Client) || ContainsNetworkProjectRole(roles, ListenServer) ||
+                   ContainsNetworkProjectRole(roles, DedicatedServer);
         }
 
         bool ValidProtocol(const NetworkProjectProtocolPolicy &protocol) {
@@ -110,12 +113,8 @@ namespace Horo::Network {
             return nullptr;
         }
 
-        NetworkTargetAssessment Reject(NetworkTargetAssessment assessment, const NetworkTargetCapabilityKind kind,
-                                       const NetworkTargetFailureReason reason, const NetworkTargetRemediation remediation,
-                                       const NetworkProjectRole role = NetworkProjectRole::Count,
-                                       const NetworkTransportProviderId provider = {}, const ProtocolId protocol = {},
-                                       const NetworkTargetPlatform platform = NetworkTargetPlatform::Count) {
-            assessment.diagnostic = {kind, reason, remediation, role, provider, protocol, platform};
+        NetworkTargetAssessment Reject(NetworkTargetAssessment assessment, const NetworkTargetDiagnostic diagnostic) {
+            assessment.diagnostic = diagnostic;
             return assessment;
         }
 
@@ -191,33 +190,30 @@ namespace Horo::Network {
 
         Rejection CheckPackageInventory(const NetworkTargetAssessment &assessment, const NetworkProductCapabilityManifest &product,
                                         const NetworkTargetPackageInventory &inventory) {
+            using enum NetworkTargetRemediation;
             if (inventory.build != product.build)
-                return Reject(assessment, NetworkTargetCapabilityKind::PackageInventory, NetworkTargetFailureReason::PackageMismatch,
-                              NetworkTargetRemediation::RebuildPackage);
+                return Reject(assessment, {PackageInventory, PackageMismatch, RebuildPackage});
             if (inventory.platform != product.platform)
-                return Reject(assessment, NetworkTargetCapabilityKind::Platform, NetworkTargetFailureReason::PackageMismatch,
-                              NetworkTargetRemediation::RebuildPackage, NetworkProjectRole::Count, {}, {}, product.platform);
+                return Reject(assessment, {Platform, PackageMismatch, RebuildPackage, NetworkProjectRole::Count, {}, {}, product.platform});
             for (const auto &role : assessment.matrix.roles) {
                 if (ContainsNetworkProjectRole(product.supportedRoles, role.role) != role.packaged)
-                    return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::PackageMismatch,
-                                  NetworkTargetRemediation::RebuildPackage, role.role);
+                    return Reject(assessment, {Role, PackageMismatch, RebuildPackage, role.role});
             }
             if (inventory.includesNetworkRuntime != product.includesNetworkRuntime)
-                return Reject(assessment, NetworkTargetCapabilityKind::NetworkRuntime, NetworkTargetFailureReason::PackageMismatch,
-                              NetworkTargetRemediation::RebuildPackage);
+                return Reject(assessment, {NetworkRuntime, PackageMismatch, RebuildPackage});
             if (inventory.protocol != product.protocol)
-                return Reject(assessment, NetworkTargetCapabilityKind::Protocol, NetworkTargetFailureReason::PackageMismatch,
-                              NetworkTargetRemediation::RebuildPackage, NetworkProjectRole::Count, {}, product.protocol.protocol);
+                return Reject(assessment,
+                              {Protocol, PackageMismatch, RebuildPackage, NetworkProjectRole::Count, {}, product.protocol.protocol});
             for (std::size_t index = 0; index < product.providerCount; ++index) {
                 const auto *actual = FindInventory(inventory, product.providers[index].id);
                 if (!actual || *actual != product.providers[index])
-                    return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::PackageMismatch,
-                                  NetworkTargetRemediation::RebuildPackage, NetworkProjectRole::Count, product.providers[index].id);
+                    return Reject(assessment,
+                                  {Provider, PackageMismatch, RebuildPackage, NetworkProjectRole::Count, product.providers[index].id});
             }
             for (std::size_t index = 0; index < inventory.providerCount; ++index) {
                 if (!FindProduct(product, inventory.providers[index].id))
-                    return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::PackageMismatch,
-                                  NetworkTargetRemediation::RebuildPackage, NetworkProjectRole::Count, inventory.providers[index].id);
+                    return Reject(assessment,
+                                  {Provider, PackageMismatch, RebuildPackage, NetworkProjectRole::Count, inventory.providers[index].id});
             }
             return std::nullopt;
         }
@@ -225,112 +221,100 @@ namespace Horo::Network {
         Rejection CheckPublication(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                    const NetworkProductCapabilityManifest &product, const NetworkTargetPackageInventory &inventory,
                                    const NetworkTargetHostFacts &host, const NetworkTargetSelection &selection) {
+            using enum NetworkTargetRemediation;
             if (selection.lifecycle != NetworkTargetLifecycle::Active)
-                return Reject(assessment, NetworkTargetCapabilityKind::Lifecycle,
-                              selection.lifecycle == NetworkTargetLifecycle::Cancelling ? NetworkTargetFailureReason::Cancelled
-                                                                                        : NetworkTargetFailureReason::ShuttingDown,
-                              NetworkTargetRemediation::WaitForRestart);
+                return Reject(assessment, {Lifecycle, selection.lifecycle == NetworkTargetLifecycle::Cancelling ? Cancelled : ShuttingDown,
+                                           WaitForRestart});
             if (selection.expectedBuild != product.build || selection.expectedProductRevision != product.revision ||
                 selection.expectedHostRevision != host.revision || selection.expectedProjectRevision != project.Revision())
-                return Reject(assessment, NetworkTargetCapabilityKind::Lifecycle, NetworkTargetFailureReason::Stale,
-                              NetworkTargetRemediation::RefreshSnapshot);
+                return Reject(assessment, {Lifecycle, Stale, RefreshSnapshot});
             if (const auto failed = CheckPackageInventory(assessment, product, inventory))
                 return failed;
             if (host.platform != product.platform)
-                return Reject(assessment, NetworkTargetCapabilityKind::Platform, NetworkTargetFailureReason::HostUnsupported,
-                              NetworkTargetRemediation::ChooseSupportedHost, NetworkProjectRole::Count, {}, {}, product.platform);
+                return Reject(assessment,
+                              {Platform, HostUnsupported, ChooseSupportedHost, NetworkProjectRole::Count, {}, {}, product.platform});
             if (project.Profile().id != product.profile || project.Profile().revision != product.profileRevision)
-                return Reject(assessment, NetworkTargetCapabilityKind::ProjectProfile, NetworkTargetFailureReason::Stale,
-                              NetworkTargetRemediation::RebuildPackage);
+                return Reject(assessment, {ProjectProfile, Stale, RebuildPackage});
             return std::nullopt;
         }
 
         Rejection CheckRequirements(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                     const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                     const NetworkTargetRequirements &requirements) {
+            using enum NetworkTargetRemediation;
             for (const auto &role : assessment.matrix.roles) {
                 if (!role.projectRequired)
                     continue;
                 if (!ContainsNetworkProjectRole(project.SupportedRoles(), role.role))
-                    return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::ProjectUnavailable,
-                                  NetworkTargetRemediation::ConfigureProject, role.role);
+                    return Reject(assessment, {Role, ProjectUnavailable, ConfigureProject, role.role});
                 if (!role.packaged)
-                    return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::NotPackaged,
-                                  NetworkTargetRemediation::RebuildPackage, role.role);
+                    return Reject(assessment, {Role, NotPackaged, RebuildPackage, role.role});
                 if (!role.hostSupported)
-                    return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::HostUnsupported,
-                                  NetworkTargetRemediation::ChooseSupportedHost, role.role);
+                    return Reject(assessment, {Role, HostUnsupported, ChooseSupportedHost, role.role});
             }
             if (!requirements.requiredProvider.IsValid())
                 return std::nullopt;
             if (!FindProduct(product, requirements.requiredProvider))
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::NotPackaged,
-                              NetworkTargetRemediation::RebuildPackage, NetworkProjectRole::Count, requirements.requiredProvider);
+                return Reject(assessment,
+                              {Provider, NotPackaged, RebuildPackage, NetworkProjectRole::Count, requirements.requiredProvider});
             const auto *requiredHost = FindHost(host, requirements.requiredProvider);
             if (!requiredHost || !requiredHost->installed)
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::NotInstalled,
-                              NetworkTargetRemediation::InstallTarget, NetworkProjectRole::Count, requirements.requiredProvider);
+                return Reject(assessment,
+                              {Provider, NotInstalled, InstallTarget, NetworkProjectRole::Count, requirements.requiredProvider});
             if (!requiredHost->hostSupported)
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::HostUnsupported,
-                              NetworkTargetRemediation::ChooseSupportedHost, NetworkProjectRole::Count, requirements.requiredProvider);
+                return Reject(assessment,
+                              {Provider, HostUnsupported, ChooseSupportedHost, NetworkProjectRole::Count, requirements.requiredProvider});
             return std::nullopt;
         }
 
         Rejection CheckSelectedRole(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                     const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                     const NetworkTargetSelection &selection) {
+            using enum NetworkTargetRemediation;
             const auto role = selection.role;
             if (!ContainsNetworkProjectRole(project.SupportedRoles(), role))
-                return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::ProjectUnavailable,
-                              NetworkTargetRemediation::ConfigureProject, role);
+                return Reject(assessment, {Role, ProjectUnavailable, ConfigureProject, role});
             if (!ContainsNetworkProjectRole(product.supportedRoles, role))
-                return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::NotPackaged,
-                              NetworkTargetRemediation::RebuildPackage, role);
+                return Reject(assessment, {Role, NotPackaged, RebuildPackage, role});
             if (!ContainsNetworkProjectRole(host.supportedRoles, role))
-                return Reject(assessment, NetworkTargetCapabilityKind::Role, NetworkTargetFailureReason::HostUnsupported,
-                              NetworkTargetRemediation::ChooseSupportedHost, role);
+                return Reject(assessment, {Role, HostUnsupported, ChooseSupportedHost, role});
             return std::nullopt;
         }
 
         Rejection CheckSelectedTransport(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                          const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                          const NetworkTargetSelection &selection) {
+            using enum NetworkTargetRemediation;
             const auto role = selection.role;
             const auto *packaged = FindProduct(product, selection.provider);
             if (!packaged)
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::NotPackaged,
-                              NetworkTargetRemediation::RebuildPackage, role, selection.provider);
+                return Reject(assessment, {Provider, NotPackaged, RebuildPackage, role, selection.provider});
             if (!ContainsNetworkTargetPlatform(packaged->allowedPlatforms, product.platform))
-                return Reject(assessment, NetworkTargetCapabilityKind::Platform, NetworkTargetFailureReason::HostUnsupported,
-                              NetworkTargetRemediation::ChooseSupportedHost, role, selection.provider, {}, product.platform);
+                return Reject(assessment, {Platform, HostUnsupported, ChooseSupportedHost, role, selection.provider, {}, product.platform});
             const auto *installed = FindHost(host, selection.provider);
             if (!installed || !installed->installed)
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::NotInstalled,
-                              NetworkTargetRemediation::InstallTarget, role, selection.provider);
+                return Reject(assessment, {Provider, NotInstalled, InstallTarget, role, selection.provider});
             if (!installed->hostSupported)
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::HostUnsupported,
-                              NetworkTargetRemediation::ChooseSupportedHost, role, selection.provider);
+                return Reject(assessment, {Provider, HostUnsupported, ChooseSupportedHost, role, selection.provider});
             if (!installed->configured)
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::ProjectUnavailable,
-                              NetworkTargetRemediation::ConfigureProject, role, selection.provider);
+                return Reject(assessment, {Provider, ProjectUnavailable, ConfigureProject, role, selection.provider});
             if (!TransportMeetsProject(packaged->capabilities, project))
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::Incompatible,
-                              NetworkTargetRemediation::RebuildPackage, role, selection.provider);
+                return Reject(assessment, {Provider, Incompatible, RebuildPackage, role, selection.provider});
             if (!TransportMeetsProject(installed->capabilities, project))
-                return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::Incompatible,
-                              NetworkTargetRemediation::SelectAvailableCapability, role, selection.provider);
+                return Reject(assessment, {Provider, Incompatible, SelectAvailableCapability, role, selection.provider});
             return std::nullopt;
         }
 
         Rejection CheckSelectedProtocol(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                         const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                         const NetworkTargetSelection &selection) {
+            using enum NetworkTargetRemediation;
             if (!SameProtocol(project.Protocol(), product.protocol, selection.protocolVersion))
-                return Reject(assessment, NetworkTargetCapabilityKind::Protocol, NetworkTargetFailureReason::Incompatible,
-                              NetworkTargetRemediation::RebuildPackage, selection.role, selection.provider, project.Protocol().protocol);
+                return Reject(assessment,
+                              {Protocol, Incompatible, RebuildPackage, selection.role, selection.provider, project.Protocol().protocol});
             if (!SameProtocol(project.Protocol(), host.protocol, selection.protocolVersion))
-                return Reject(assessment, NetworkTargetCapabilityKind::Protocol, NetworkTargetFailureReason::Incompatible,
-                              NetworkTargetRemediation::UpgradeProtocol, selection.role, selection.provider, project.Protocol().protocol);
+                return Reject(assessment,
+                              {Protocol, Incompatible, UpgradeProtocol, selection.role, selection.provider, project.Protocol().protocol});
             return std::nullopt;
         }
     }  // namespace
@@ -345,11 +329,11 @@ namespace Horo::Network {
     NetworkTargetAssessment AssessNetworkTarget(const NetworkProjectSettings &project, const NetworkProductCapabilityManifest &product,
                                                 const NetworkTargetPackageInventory &inventory, const NetworkTargetHostFacts &host,
                                                 const NetworkTargetRequirements &requirements, const NetworkTargetSelection &selection) {
+        using enum NetworkTargetRemediation;
         NetworkTargetAssessment assessment{};
         if (!ValidManifest(product) || !ValidInventory(inventory) || !ValidHost(host) || !ValidRoles(requirements.requiredRoles) ||
             selection.role >= NetworkProjectRole::Count || selection.lifecycle >= NetworkTargetLifecycle::Count)
-            return Reject(assessment, NetworkTargetCapabilityKind::Input, NetworkTargetFailureReason::Invalid,
-                          NetworkTargetRemediation::CorrectInput);
+            return Reject(assessment, {Input, Invalid, CorrectInput});
 
         assessment.matrix = MakeMatrix(project, product, inventory, host, requirements, selection);
         if (const auto failed = CheckPublication(assessment, project, product, inventory, host, selection))
@@ -360,23 +344,18 @@ namespace Horo::Network {
             return *failed;
         if (selection.role == NetworkProjectRole::Standalone) {
             if (selection.provider.IsValid() || selection.protocolVersion.IsValid())
-                return Reject(assessment, NetworkTargetCapabilityKind::Input, NetworkTargetFailureReason::Invalid,
-                              NetworkTargetRemediation::CorrectInput);
+                return Reject(assessment, {Input, Invalid, CorrectInput});
             assessment.diagnostic.reason = NetworkTargetFailureReason::None;
             return assessment;
         }
         if (!inventory.includesNetworkRuntime)
-            return Reject(assessment, NetworkTargetCapabilityKind::NetworkRuntime, NetworkTargetFailureReason::NotPackaged,
-                          NetworkTargetRemediation::RebuildPackage);
+            return Reject(assessment, {NetworkRuntime, NotPackaged, RebuildPackage});
         if (!host.networkRuntimeInstalled)
-            return Reject(assessment, NetworkTargetCapabilityKind::NetworkRuntime, NetworkTargetFailureReason::NotInstalled,
-                          NetworkTargetRemediation::InstallTarget);
+            return Reject(assessment, {NetworkRuntime, NotInstalled, InstallTarget});
         if (!selection.provider.IsValid() || !selection.protocolVersion.IsValid())
-            return Reject(assessment, NetworkTargetCapabilityKind::Input, NetworkTargetFailureReason::Invalid,
-                          NetworkTargetRemediation::CorrectInput);
+            return Reject(assessment, {Input, Invalid, CorrectInput});
         if (requirements.requiredProvider.IsValid() && requirements.requiredProvider != selection.provider)
-            return Reject(assessment, NetworkTargetCapabilityKind::Provider, NetworkTargetFailureReason::NotSelected,
-                          NetworkTargetRemediation::SelectAvailableCapability, selection.role, requirements.requiredProvider);
+            return Reject(assessment, {Provider, NotSelected, SelectAvailableCapability, selection.role, requirements.requiredProvider});
         if (const auto failed = CheckSelectedTransport(assessment, project, product, host, selection))
             return *failed;
         if (const auto failed = CheckSelectedProtocol(assessment, project, product, host, selection))
