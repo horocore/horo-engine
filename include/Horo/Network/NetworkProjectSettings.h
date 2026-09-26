@@ -265,7 +265,7 @@ namespace Horo::Network {
     /**
      * @brief Constructs documented bounded standalone project defaults for a new identity.
      * @param settings Non-zero project-settings identity chosen by the project owner.
-     * @return Complete version-one input or an identity error.
+     * @return Complete current-version input or an identity error.
      */
     [[nodiscard]] Result<NetworkProjectSettingsInput> DefaultNetworkProjectSettings(NetworkProjectSettingsId settings);
 

@@ -119,10 +119,13 @@ namespace Horo::Network {
             hash.AddInteger(input.transport.capabilities.requiredMaximumMessageBytes);
             hash.AddInteger(static_cast<std::uint8_t>(input.transport.capabilities.deadline));
             hash.AddInteger(input.transport.capabilities.requiredMaximumDeadlineMilliseconds);
-            const auto endpointDiagnostic = input.defaultEndpoint.Diagnostic();
-            const auto endpoint = input.defaultEndpoint.IsValid() ? endpointDiagnostic.View() : std::string_view{};
-            hash.AddInteger(static_cast<std::uint16_t>(endpoint.size()));
-            for (const char character : endpoint)
+            hash.AddInteger(static_cast<std::uint8_t>(input.defaultEndpoint.Kind()));
+            hash.AddInteger(input.defaultEndpoint.Port());
+            for (const std::uint8_t byte : input.defaultEndpoint.AddressBytes())
+                hash.AddByte(byte);
+            const auto hostname = input.defaultEndpoint.Hostname();
+            hash.AddInteger(static_cast<std::uint16_t>(hostname.size()));
+            for (const char character : hostname)
                 hash.AddByte(static_cast<std::uint8_t>(character));
             hash.AddInteger(input.credentialRequirementId);
             const auto value = hash.Value() == 0 ? 1 : hash.Value();

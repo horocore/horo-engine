@@ -131,6 +131,44 @@ namespace Horo::Network {
                     {"saturationGraceTicks", p.saturationGraceTicks.value}};
         }
 
+        /** @brief Formats typed endpoint identity without using diagnostic projections. */
+        std::string WriteEndpoint(const NetworkAddress &endpoint) {
+            if (!endpoint.IsValid())
+                return {};
+            std::string result;
+            if (endpoint.Kind() == NetworkAddressKind::DnsHostname) {
+                result.assign(endpoint.Hostname());
+            } else if (endpoint.Kind() == NetworkAddressKind::Ipv4) {
+                const auto bytes = endpoint.AddressBytes();
+                for (std::size_t index = 0; index < bytes.size(); ++index) {
+                    if (index != 0)
+                        result.push_back('.');
+                    result += std::to_string(bytes[index]);
+                }
+            } else {
+                constexpr char Digits[] = "0123456789abcdef";
+                const auto bytes = endpoint.AddressBytes();
+                result.push_back('[');
+                for (std::size_t index = 0; index < bytes.size(); index += 2) {
+                    if (index != 0)
+                        result.push_back(':');
+                    const auto group = static_cast<std::uint16_t>((static_cast<std::uint16_t>(bytes[index]) << 8U) | bytes[index + 1]);
+                    bool started = false;
+                    for (int shift = 12; shift >= 0; shift -= 4) {
+                        const auto digit = Digits[(group >> shift) & 0xFU];
+                        if (digit != '0' || started || shift == 0) {
+                            result.push_back(digit);
+                            started = true;
+                        }
+                    }
+                }
+                result.push_back(']');
+            }
+            result.push_back(':');
+            result += std::to_string(endpoint.Port());
+            return result;
+        }
+
         /** @brief Rejects duplicate keys and excessive nesting during parsing. */
         struct ParseGuard final {
             std::vector<std::set<std::string>> keys;
@@ -154,6 +192,76 @@ namespace Horo::Network {
                 return !rejected;
             }
         };
+
+        /** @brief Decodes the exact protocol identity and version interval. */
+        bool ReadProtocol(const Json &protocol, NetworkProjectProtocolPolicy &output) {
+            if (!HasFields(protocol, {"protocol", "minimumMajor", "minimumMinor", "maximumMajor", "maximumMinor", "schemaFingerprint"}))
+                return false;
+            std::uint64_t number{};
+            if (!ReadUnsigned(protocol, "protocol", number, std::numeric_limits<std::uint16_t>::max()) || number == 0)
+                return false;
+            output.protocol = ProtocolId::Create(static_cast<std::uint16_t>(number)).Value();
+#define READ_VERSION(field, member)                                                                                                        \
+    if (!ReadUnsigned(protocol, field, number, std::numeric_limits<std::uint16_t>::max()))                                                 \
+        return false;                                                                                                                      \
+    output.supportedVersions.member = static_cast<std::uint16_t>(number);
+            READ_VERSION("minimumMajor", minimum.major)
+            READ_VERSION("minimumMinor", minimum.minor)
+            READ_VERSION("maximumMajor", maximum.major)
+            READ_VERSION("maximumMinor", maximum.minor)
+#undef READ_VERSION
+            return ReadUnsigned(protocol, "schemaFingerprint", output.schemaFingerprint, std::numeric_limits<std::uint64_t>::max());
+        }
+
+        /** @brief Decodes exact required delivery and finite transport limits. */
+        bool ReadTransport(const Json &transport, NetworkProjectTransportPolicy &output) {
+            if (!HasFields(transport, {"requirement", "requiredDelivery", "requiredChannels", "requiredMaximumMessageBytes", "deadline",
+                                       "requiredMaximumDeadlineMilliseconds"}))
+                return false;
+            std::uint64_t number{};
+            if (!ReadUnsigned(transport, "requirement", number, std::numeric_limits<std::uint8_t>::max()))
+                return false;
+            output.requirement = static_cast<NetworkProjectTransportRequirement>(number);
+            const auto &delivery = transport.at("requiredDelivery");
+            if (!delivery.is_array() || delivery.size() != output.capabilities.requiredDelivery.size())
+                return false;
+            for (std::size_t index = 0; index < delivery.size(); ++index) {
+                if (!delivery[index].is_boolean())
+                    return false;
+                output.capabilities.requiredDelivery[index] = delivery[index].get<bool>();
+            }
+            if (!ReadUnsigned(transport, "requiredChannels", number, std::numeric_limits<std::uint32_t>::max()))
+                return false;
+            output.capabilities.requiredChannels = static_cast<std::uint32_t>(number);
+            if (!ReadUnsigned(transport, "requiredMaximumMessageBytes", output.capabilities.requiredMaximumMessageBytes,
+                              std::numeric_limits<std::uint64_t>::max()))
+                return false;
+            if (!ReadUnsigned(transport, "deadline", number, std::numeric_limits<std::uint8_t>::max()))
+                return false;
+            output.capabilities.deadline = static_cast<DeadlineRequirement>(number);
+            if (!ReadUnsigned(transport, "requiredMaximumDeadlineMilliseconds", number, std::numeric_limits<std::uint32_t>::max()))
+                return false;
+            output.capabilities.requiredMaximumDeadlineMilliseconds = static_cast<std::uint32_t>(number);
+            return true;
+        }
+
+        /** @brief Decodes fields introduced in version two; version one keeps safe absent defaults. */
+        bool ReadVersionTwo(const Json &root, NetworkProjectSettingsInput &input) {
+            if (!root.at("defaultEndpoint").is_string())
+                return false;
+            const auto endpoint = root.at("defaultEndpoint").get<std::string>();
+            if (!endpoint.empty()) {
+                const auto parsed = NetworkAddress::Parse(endpoint);
+                if (parsed.HasError())
+                    return false;
+                input.defaultEndpoint = parsed.Value();
+            }
+            std::uint64_t number{};
+            if (!ReadUnsigned(root, "credentialRequirementId", number, std::numeric_limits<std::uint32_t>::max()))
+                return false;
+            input.credentialRequirementId = static_cast<std::uint32_t>(number);
+            return true;
+        }
 
         /** @brief Decodes the strictly closed portable representation. */
         bool Decode(const Json &root, NetworkProjectSettingsInput &input) {
@@ -181,67 +289,8 @@ namespace Horo::Network {
             if (!ReadUnsigned(root, "defaultRole", number, std::numeric_limits<std::uint8_t>::max()))
                 return false;
             input.defaultRole = static_cast<NetworkProjectRole>(number);
-            if (!ReadProfile(root.at("profile"), input.profile))
-                return false;
-            const auto &protocol = root.at("protocol");
-            if (!HasFields(protocol, {"protocol", "minimumMajor", "minimumMinor", "maximumMajor", "maximumMinor", "schemaFingerprint"}))
-                return false;
-            if (!ReadUnsigned(protocol, "protocol", number, std::numeric_limits<std::uint16_t>::max()) || number == 0)
-                return false;
-            input.protocol.protocol = ProtocolId::Create(static_cast<std::uint16_t>(number)).Value();
-#define READ_VERSION(field, member)                                                                                                        \
-    if (!ReadUnsigned(protocol, field, number, std::numeric_limits<std::uint16_t>::max()))                                                 \
-        return false;                                                                                                                      \
-    input.protocol.supportedVersions.member = static_cast<std::uint16_t>(number);
-            READ_VERSION("minimumMajor", minimum.major)
-            READ_VERSION("minimumMinor", minimum.minor)
-            READ_VERSION("maximumMajor", maximum.major)
-            READ_VERSION("maximumMinor", maximum.minor)
-#undef READ_VERSION
-            if (!ReadUnsigned(protocol, "schemaFingerprint", input.protocol.schemaFingerprint, std::numeric_limits<std::uint64_t>::max()))
-                return false;
-            const auto &transport = root.at("transport");
-            if (!HasFields(transport, {"requirement", "requiredDelivery", "requiredChannels", "requiredMaximumMessageBytes", "deadline",
-                                       "requiredMaximumDeadlineMilliseconds"}))
-                return false;
-            if (!ReadUnsigned(transport, "requirement", number, std::numeric_limits<std::uint8_t>::max()))
-                return false;
-            input.transport.requirement = static_cast<NetworkProjectTransportRequirement>(number);
-            const auto &delivery = transport.at("requiredDelivery");
-            if (!delivery.is_array() || delivery.size() != input.transport.capabilities.requiredDelivery.size())
-                return false;
-            for (std::size_t index = 0; index < delivery.size(); ++index) {
-                if (!delivery[index].is_boolean())
-                    return false;
-                input.transport.capabilities.requiredDelivery[index] = delivery[index].get<bool>();
-            }
-            if (!ReadUnsigned(transport, "requiredChannels", number, std::numeric_limits<std::uint32_t>::max()))
-                return false;
-            input.transport.capabilities.requiredChannels = static_cast<std::uint32_t>(number);
-            if (!ReadUnsigned(transport, "requiredMaximumMessageBytes", input.transport.capabilities.requiredMaximumMessageBytes,
-                              std::numeric_limits<std::uint64_t>::max()))
-                return false;
-            if (!ReadUnsigned(transport, "deadline", number, std::numeric_limits<std::uint8_t>::max()))
-                return false;
-            input.transport.capabilities.deadline = static_cast<DeadlineRequirement>(number);
-            if (!ReadUnsigned(transport, "requiredMaximumDeadlineMilliseconds", number, std::numeric_limits<std::uint32_t>::max()))
-                return false;
-            input.transport.capabilities.requiredMaximumDeadlineMilliseconds = static_cast<std::uint32_t>(number);
-            if (!legacy) {
-                if (!root.at("defaultEndpoint").is_string())
-                    return false;
-                const auto endpoint = root.at("defaultEndpoint").get<std::string>();
-                if (!endpoint.empty()) {
-                    const auto parsed = NetworkAddress::Parse(endpoint);
-                    if (parsed.HasError())
-                        return false;
-                    input.defaultEndpoint = parsed.Value();
-                }
-                if (!ReadUnsigned(root, "credentialRequirementId", number, std::numeric_limits<std::uint32_t>::max()))
-                    return false;
-                input.credentialRequirementId = static_cast<std::uint32_t>(number);
-            }
-            return true;
+            return ReadProfile(root.at("profile"), input.profile) && ReadProtocol(root.at("protocol"), input.protocol) &&
+                   ReadTransport(root.at("transport"), input.transport) && (legacy || ReadVersionTwo(root, input));
         }
     }  // namespace
 
@@ -290,7 +339,6 @@ namespace Horo::Network {
     std::string SerializeNetworkProjectSettings(const NetworkProjectSettings &settings) {
         const auto &protocol = settings.Protocol();
         const auto &transport = settings.Transport();
-        const auto endpoint = settings.DefaultEndpoint().Diagnostic();
         const Json document = {{"contractVersion", settings.ContractVersion()},
                                {"settings", settings.Settings().Value()},
                                {"revision", settings.Revision().Value()},
@@ -311,7 +359,7 @@ namespace Horo::Network {
                                  {"requiredMaximumMessageBytes", transport.capabilities.requiredMaximumMessageBytes},
                                  {"deadline", static_cast<std::uint8_t>(transport.capabilities.deadline)},
                                  {"requiredMaximumDeadlineMilliseconds", transport.capabilities.requiredMaximumDeadlineMilliseconds}}},
-                               {"defaultEndpoint", settings.DefaultEndpoint().IsValid() ? std::string(endpoint.View()) : std::string{}},
+                               {"defaultEndpoint", WriteEndpoint(settings.DefaultEndpoint())},
                                {"credentialRequirementId", settings.CredentialRequirementId()}};
         return document.dump();
     }

@@ -143,6 +143,15 @@ namespace {
         REQUIRE(roundTrip.HasValue());
         REQUIRE(SerializeNetworkProjectSettings(roundTrip.Value()) == encoded);
         REQUIRE(roundTrip.Value().Fingerprint() == original.Value().Fingerprint());
+        for (const auto endpointText : {"192.0.2.1:31337", "[2001:db8::1]:31337"}) {
+            auto alternate = input;
+            alternate.defaultEndpoint = NetworkAddress::Parse(endpointText).Value();
+            const auto candidate = NetworkProjectSettings::Create(alternate);
+            REQUIRE(candidate.HasValue());
+            const auto parsed = ParseNetworkProjectSettings(SerializeNetworkProjectSettings(candidate.Value()));
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value().defaultEndpoint == alternate.defaultEndpoint);
+        }
 
         auto legacy = nlohmann::json::parse(encoded);
         legacy["contractVersion"] = 1;
