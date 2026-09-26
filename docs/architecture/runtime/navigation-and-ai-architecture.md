@@ -852,8 +852,11 @@ apply, listener/source layer membership and masks, and authoritative source
 visibility. A candidate is rejected when either layer/mask intersection is empty,
 when its affiliation or team is excluded, or when gameplay visibility is hidden
 or team-only without a matching team. Render visibility never enters this test.
-The simulation owner checks payload-free candidate facts before expensive spatial
-or physics queries and rechecks completed observations against the captured policy
+Every `PerceptionFilteredMemory` call, including `Evaluate` and snapshot queries,
+stays on the simulation owner; its mutable policy and memory are not synchronized.
+The owner checks payload-free candidate facts before dispatching expensive spatial
+or physics queries. Jobs carry copied facts and the captured policy revision, never
+a reference to the gate, and the owner rechecks completed observations against that
 revision before memory ingestion. Denied and stale decisions contain no stimulus
 payload. One bounded, live-source-checked snapshot is the intended publication
 source for future blackboard and debug consumers. There is no production

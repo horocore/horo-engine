@@ -150,7 +150,7 @@ namespace Horo::AI {
          * @param key Exact fact identity to remove.
          * @return Success even when absent, or a typed invalid/foreign key failure.
          */
-        [[nodiscard]] Result<void> Forget(PerceptionMemoryKey key);
+        [[nodiscard]] Result<void> Forget(const PerceptionMemoryKey &key);
 
         /**
          * @brief Returns an exact stimulus only after aging and checking source residency.

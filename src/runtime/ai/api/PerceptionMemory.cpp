@@ -149,7 +149,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AIPerceptionMemory::Forget */
-    Result<void> AIPerceptionMemory::Forget(const PerceptionMemoryKey key) {
+    Result<void> AIPerceptionMemory::Forget(const PerceptionMemoryKey &key) {
         if (!ValidKey(key))
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
         for (std::size_t index = 0; index < count_; ++index) {

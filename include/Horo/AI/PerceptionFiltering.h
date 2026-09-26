@@ -116,10 +116,11 @@ namespace Horo::AI {
 
     /**
      * @brief Scene-owned gate for observations and future perception publication.
-     * @details The simulation owner alone stages and commits policy at a safe point. Sensing jobs may borrow the immutable
-     * policy revision and payload-free facts, then submit their completed observation on the owner thread. A stale job
-     * cannot publish. Bounded admission facts permit selective revalidation when policy changes; denied facts are
-     * removed before publication while unrelated memory is retained. An unchanged policy preserves memory and revision.
+     * @details Every call on this gate, including const queries, is simulation-owner-thread-only. Its mutable policy and
+     * memory are not synchronized; sensing jobs must not retain or call the gate. The owner evaluates payload-free facts
+     * before dispatch, and jobs carry copied facts and a revision token back for owner-thread recheck of completed work.
+     * A stale job cannot publish. Bounded admission facts permit selective revalidation when policy changes; denied facts
+     * are removed before publication while unrelated memory is retained. An unchanged policy preserves memory and revision.
      */
     class PerceptionFilteredMemory final {
     public:
@@ -133,14 +134,15 @@ namespace Horo::AI {
          * @return Gate or typed invalid policy/memory failure.
          */
         [[nodiscard]] static Result<PerceptionFilteredMemory> Create(std::uint64_t sceneIncarnation, AgentHandle agent,
-                                                                     PerceptionMemoryPolicy memoryPolicy = {},
-                                                                     PerceptionFilterPolicy filterPolicy = {},
+                                                                     const PerceptionMemoryPolicy &memoryPolicy = {},
+                                                                     const PerceptionFilterPolicy &filterPolicy = {},
                                                                      std::uint64_t initialSimulationTick = 0);
 
         /**
          * @brief Filters payload-free facts before costly spatial or physics work.
+         * @details Call on the simulation owner before dispatch; never concurrently with policy commit or from a sensing job.
          * @param facts Gameplay truth captured for the candidate.
-         * @param expectedRevision Revision captured by the sensing job.
+         * @param expectedRevision Committed revision captured for the pending sensing work.
          * @return A payload-free, revisioned decision or invalid-facts failure.
          */
         [[nodiscard]] Result<PerceptionFilterDecision> Evaluate(const PerceptionFilterFacts &facts, std::uint64_t expectedRevision) const;
@@ -186,6 +188,7 @@ namespace Horo::AI {
 
         /**
          * @brief Copies only admitted, live memory for future blackboard and debug publication.
+         * @details Call on the simulation owner after admission and safe-point policy updates, never from a sensing job.
          * @param simulationTick Current monotonic committed fixed simulation tick.
          * @param liveness Exact-generation scene residency check.
          * @return Bounded value snapshot or typed memory failure.
@@ -199,7 +202,7 @@ namespace Horo::AI {
     private:
         PerceptionFilteredMemory(AIPerceptionMemory memory, PerceptionFilterPolicy policy, std::uint64_t sceneIncarnation) noexcept;
         [[nodiscard]] Result<void> RememberFacts(const PerceptionFilterFacts &facts, std::uint64_t simulationTick);
-        void EraseFacts(PerceptionMemoryKey key) noexcept;
+        void EraseFacts(const PerceptionMemoryKey &key) noexcept;
         AIPerceptionMemory memory_;
         PerceptionFilterPolicy policy_;
         PerceptionFilterPolicy pendingPolicy_;

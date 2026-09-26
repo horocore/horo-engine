@@ -39,31 +39,33 @@ namespace Horo::AI {
         /** @brief Evaluates only canonical typed metadata, without touching observation payloads. */
         [[nodiscard]] PerceptionFilterOutcome PolicyOutcome(const PerceptionFilterPolicy &policy,
                                                             const PerceptionFilterFacts &facts) noexcept {
+            using enum PerceptionFilterOutcome;
             if (!policy.affiliations.Contains(facts.affiliation))
-                return PerceptionFilterOutcome::AffiliationDenied;
+                return AffiliationDenied;
             if (facts.affiliation == PerceptionAffiliation::Custom && policy.customAffiliationCount != 0) {
                 bool found = false;
                 for (std::size_t index = 0; index < policy.customAffiliationCount; ++index)
                     found |= policy.customAffiliations[index] == facts.customAffiliation;
                 if (!found)
-                    return PerceptionFilterOutcome::AffiliationDenied;
+                    return AffiliationDenied;
             }
             const bool sameTeam = SameTeam(facts);
             if (policy.teamRule == PerceptionTeamRule::SameTeam && !sameTeam)
-                return PerceptionFilterOutcome::TeamDenied;
+                return TeamDenied;
             if (policy.teamRule == PerceptionTeamRule::DifferentTeam &&
                 (!facts.listenerTeam.IsValid() || !facts.sourceTeam.IsValid() || sameTeam))
-                return PerceptionFilterOutcome::TeamDenied;
+                return TeamDenied;
             if ((facts.sourceLayers & facts.listenerMask) == 0 || (facts.listenerLayers & facts.sourceMask) == 0)
-                return PerceptionFilterOutcome::LayerDenied;
+                return LayerDenied;
             if (facts.visibility == GameplayPerceptionVisibility::Hidden ||
                 (facts.visibility == GameplayPerceptionVisibility::TeamOnly && !sameTeam))
-                return PerceptionFilterOutcome::VisibilityDenied;
-            return PerceptionFilterOutcome::Allowed;
+                return VisibilityDenied;
+            return Allowed;
         }
 
-        /** @brief Keeps memory snapshot creation independent of a concrete RuntimeScene. */
-        [[nodiscard]] bool AssumeAliveForAdmission(void *, const PerceptionSourceRef &) noexcept {
+        /** @brief Keeps bounded admission bookkeeping independent of RuntimeScene; the callback ABI requires type-erased context. */
+        [[nodiscard]] bool AssumeAliveForAdmission(void *,  // NOSONAR: S5008 is required by PerceptionSourceLiveness::isAlive.
+                                                   const PerceptionSourceRef &) noexcept {
             return true;
         }
     }  // namespace
@@ -74,8 +76,8 @@ namespace Horo::AI {
 
     /** @copydoc PerceptionFilteredMemory::Create */
     Result<PerceptionFilteredMemory> PerceptionFilteredMemory::Create(const std::uint64_t sceneIncarnation, const AgentHandle agent,
-                                                                      const PerceptionMemoryPolicy memoryPolicy,
-                                                                      const PerceptionFilterPolicy filterPolicy,
+                                                                      const PerceptionMemoryPolicy &memoryPolicy,
+                                                                      const PerceptionFilterPolicy &filterPolicy,
                                                                       const std::uint64_t initialSimulationTick) {
         if (!ValidPolicy(filterPolicy))
             return Result<PerceptionFilteredMemory>::Failure(MakeError(AIErrors::PerceptionFilterInvalid));
@@ -96,7 +98,7 @@ namespace Horo::AI {
     }
 
     /** @brief Drops one retained admission fact after its exact memory fact is denied or evicted. */
-    void PerceptionFilteredMemory::EraseFacts(const PerceptionMemoryKey key) noexcept {
+    void PerceptionFilteredMemory::EraseFacts(const PerceptionMemoryKey &key) noexcept {
         for (std::size_t index = 0; index < admittedFactCount_; ++index) {
             if (admittedFacts_[index].key != key)
                 continue;
