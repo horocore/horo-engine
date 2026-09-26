@@ -66,6 +66,29 @@ namespace Horo::Terrain {
             });
             return found == records.end() ? nullptr : found->get();
         }
+
+        /** @brief Runs one prepared candidate's owner callback and records its exact terminal result. */
+        void Publish(Record &record) {
+            record.snapshot.state = TerrainAsyncWorkState::Prepared;
+            publishing = true;
+            try {
+                const Result<void> published = record.publish(record.cancellation.Token());
+                if (published.HasError()) {
+                    record.snapshot.state =
+                        IsJobCancelled(published.ErrorValue()) ? TerrainAsyncWorkState::Cancelled : TerrainAsyncWorkState::Failed;
+                    record.snapshot.error = published.ErrorValue();
+                } else {
+                    record.snapshot.state = TerrainAsyncWorkState::Succeeded;
+                }
+            } catch (const std::exception &) {
+                record.snapshot.state = TerrainAsyncWorkState::Failed;
+                record.snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
+            } catch (...) {  // NOSONAR(cpp:S1181) Contain foreign callback exceptions at the owner boundary.
+                record.snapshot.state = TerrainAsyncWorkState::Failed;
+                record.snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
+            }
+            publishing = false;
+        }
     };
 
     TerrainAsyncJobs::TerrainAsyncJobs(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -178,25 +201,7 @@ namespace Horo::Terrain {
                                          ? CancelledWithCause(MakeError(TerrainErrors::RevisionStale))
                                          : JobCancelled().ErrorValue();
         } else {
-            record->snapshot.state = TerrainAsyncWorkState::Prepared;
-            impl_->publishing = true;
-            try {
-                const Result<void> published = record->publish(record->cancellation.Token());
-                if (published.HasError()) {
-                    record->snapshot.state =
-                        IsJobCancelled(published.ErrorValue()) ? TerrainAsyncWorkState::Cancelled : TerrainAsyncWorkState::Failed;
-                    record->snapshot.error = published.ErrorValue();
-                } else {
-                    record->snapshot.state = TerrainAsyncWorkState::Succeeded;
-                }
-            } catch (const std::exception &) {
-                record->snapshot.state = TerrainAsyncWorkState::Failed;
-                record->snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
-            } catch (...) {  // NOSONAR(cpp:S1181) Contain foreign callback exceptions at the owner boundary.
-                record->snapshot.state = TerrainAsyncWorkState::Failed;
-                record->snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
-            }
-            impl_->publishing = false;
+            impl_->Publish(*record);
         }
         record->publish = {};
         return Result<TerrainAsyncWorkSnapshot>::Success(record->snapshot);
