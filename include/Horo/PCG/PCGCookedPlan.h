@@ -103,20 +103,21 @@ namespace Horo::PCG {
         [[nodiscard]] std::span<const std::uint8_t> CanonicalBytes() const noexcept;
 
     private:
-        PCGCookedPlan(GraphGeneration generation, PCGGraphSchemaVersion sourceSchema, Sha256Digest sourceDigest,
-                      PCGCapabilitySet requiredCapabilities, std::vector<PCGCookedNode> nodes, std::vector<PCGCookedRoute> routes,
-                      std::vector<PCGCookedConstant> constants, std::vector<PCGCookedExposedInput> exposedInputs,
-                      std::vector<std::uint8_t> bytes) noexcept;
+        struct Data final {
+            GraphGeneration generation{};
+            PCGGraphSchemaVersion sourceSchema{};
+            Sha256Digest sourceDigest{};
+            PCGCapabilitySet requiredCapabilities{};
+            std::vector<PCGCookedNode> nodes;
+            std::vector<PCGCookedRoute> routes;
+            std::vector<PCGCookedConstant> constants;
+            std::vector<PCGCookedExposedInput> exposedInputs;
+            std::vector<std::uint8_t> bytes;
+        };
 
-        GraphGeneration generation_{};
-        PCGGraphSchemaVersion sourceSchema_{};
-        Sha256Digest sourceDigest_{};
-        PCGCapabilitySet requiredCapabilities_{};
-        std::vector<PCGCookedNode> nodes_;
-        std::vector<PCGCookedRoute> routes_;
-        std::vector<PCGCookedConstant> constants_;
-        std::vector<PCGCookedExposedInput> exposedInputs_;
-        std::vector<std::uint8_t> bytes_;
+        explicit PCGCookedPlan(Data data) noexcept;
+
+        Data data_;
 
         friend Result<PCGCookedPlan> CompilePCGGraph(const PCGGraphAsset &, const PCGValidatedGraph &, const PCGRegistrySnapshot &,
                                                      PCGCapabilitySet, std::size_t);
