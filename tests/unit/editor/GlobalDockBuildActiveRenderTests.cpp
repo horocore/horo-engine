@@ -8,8 +8,11 @@
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
+#include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.h"
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -60,18 +63,42 @@ namespace {
         bool running_{};
     };
 
-    void DrawBuildPane(Horo::Editor::GlobalDockBuildOutputPane &pane, const Horo::Editor::EditorGuiContext &context, const float width) {
+    [[nodiscard]] ImVec2 DrawBuildPane(Horo::Editor::GlobalDockBuildOutputPane &pane, const Horo::Editor::EditorGuiContext &context,
+                                       const float width) {
+        using namespace Horo::Editor;
         ImGui::SetNextWindowPos({0.0F, 0.0F});
         ImGui::SetNextWindowSize({width + 24.0F, 360.0F});
         ImGui::Begin("Active build", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
+        const GlobalDockToolbarChipProps cancel{.id = "BuildCancelActive",
+                                                .label = context.localization.Get("editor", "workspace.global_dock.build_output.cancel"),
+                                                .tone = GlobalDockTone::Warning};
+        const float buttonWidth = MeasureGlobalDockToolbarChip(cancel, context.theme.fonts);
+        const ImVec2 cancelCenter{origin.x + width - metrics.contentPadding - buttonWidth * 0.5F, origin.y + metrics.toolbarHeight * 1.5F};
         Horo::Editor::EditorWorkspaceViewCommandData command;
-        pane.Draw(ImGui::GetCursorScreenPos(), width, command, context);
+        pane.Draw(origin, width, command, context);
         ImGui::End();
+        return cancelCenter;
+    }
+
+    void ClickCancelButton(Horo::Editor::GlobalDockBuildOutputPane &pane, const Horo::Editor::EditorGuiContext &context, ImGuiIO &io,
+                           const ImVec2 center) {
+        io.AddMousePosEvent(center.x, center.y);
+        io.AddMouseButtonEvent(0, true);
+        ImGui::NewFrame();
+        static_cast<void>(DrawBuildPane(pane, context, 900.0F));
+        ImGui::Render();
+        io.AddMouseButtonEvent(0, false);
+        ImGui::NewFrame();
+        static_cast<void>(DrawBuildPane(pane, context, 900.0F));
+        ImGui::Render();
     }
 
     [[nodiscard]] bool RenderActiveAndCancellingFrames(Horo::Application::GameplayBuildService &builds, Horo::BuildOutputStore &output,
                                                        const std::filesystem::path &project,
-                                                       const Horo::Application::GameplayBuildSessionId sessionId) {
+                                                       const Horo::Application::GameplayBuildSessionId sessionId,
+                                                       std::atomic_bool &releaseWorker, WaitingBuildProcess &processes) {
         using namespace Horo::Editor;
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -95,13 +122,23 @@ namespace {
         pane.Attach(&output, &builds, project.generic_string());
 
         ImGui::NewFrame();
-        DrawBuildPane(pane, context, 900.0F);
+        static_cast<void>(DrawBuildPane(pane, context, 900.0F));
         ImGui::Render();
         CHECK(ImGui::GetDrawData()->CmdListsCount > 0);
+        releaseWorker.store(true);
+        const bool running = processes.WaitUntilRunning();
+        CHECK(running);
 
-        const bool requested = builds.RequestCancel(sessionId);
         ImGui::NewFrame();
-        DrawBuildPane(pane, context, 260.0F);
+        const ImVec2 cancelCenter = DrawBuildPane(pane, context, 900.0F);
+        ImGui::Render();
+
+        ClickCancelButton(pane, context, io, cancelCenter);
+        const auto cancelled = builds.Query(sessionId);
+        const bool requested = cancelled.has_value() && cancelled->cancellationRequested;
+
+        ImGui::NewFrame();
+        static_cast<void>(DrawBuildPane(pane, context, 260.0F));
         ImGui::Render();
         CHECK(ImGui::GetDrawData()->CmdListsCount > 0);
         pane.Detach();
@@ -120,16 +157,29 @@ TEST_CASE("Build Output renders a live build at wide and narrow widths and survi
 
     WaitingBuildProcess processes;
     JobSystem jobs{{1U, 4U}};
+    std::atomic_bool workerOccupied{false};
+    std::atomic_bool releaseWorker{false};
+    auto blocker = jobs.Submit({}, [&](const CancellationToken &cancellation) {
+        workerOccupied.store(true);
+        while (!releaseWorker.load() && !cancellation.IsCancellationRequested())
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    });
+    REQUIRE(blocker.HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+    while (!workerOccupied.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    REQUIRE(workerOccupied.load());
     NativeDurableFileSystem files;
     BuildOutputStore output{16};
     Application::GameplayBuildService builds{processes, jobs, files, &output};
     Application::GameplayBuildRequest request{.projectRoot = project, .environment = {.gameplaySdkPackage = project}};
     const auto started = builds.Start(request);
     REQUIRE(started.HasValue());
-    REQUIRE(processes.WaitUntilRunning());
-    REQUIRE(builds.QueryActiveProject(project).has_value());
+    const auto queued = builds.QueryActiveProject(project);
+    REQUIRE(queued.has_value());
+    CHECK(queued->state == Application::GameplayBuildState::Queued);
 
-    CHECK(RenderActiveAndCancellingFrames(builds, output, project, started.Value()));
+    CHECK(RenderActiveAndCancellingFrames(builds, output, project, started.Value(), releaseWorker, processes));
 
     builds.Shutdown();
     REQUIRE_FALSE(builds.QueryActiveProject(project).has_value());
