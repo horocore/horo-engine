@@ -1033,6 +1033,28 @@ namespace. Records include address, category, bounded presentation metadata, cur
 generation/content/state identities and lifecycle state. UI retains addresses and
 expected catalog revisions; it never loads/deletes by label, timestamp or row index.
 
+`SaveManagerProjection` is the read-only presentation boundary over a published
+`SaveSlotIndex`, the active namespace binding, host-provided opaque profile summaries,
+generation-specific compatibility/integrity assessments, operation progress, and
+typed diagnostic categories. The producer deep-copies bounded values into a shared
+const publication before an editor, runtime UI, CLI, or test adapter can retain it.
+It never retains archive bytes, storage providers, account handles, live operation
+handles, mutable index objects, paths, or raw terminal error text. Profile display
+metadata and account authority remain with the profile owner; this projection exposes
+only typed namespace IDs and availability. A host increments the publication revision
+for any changed row, assessment, operation or diagnostic, even when the catalog itself
+does not change.
+
+Queries use stable slot-identity order, bounded exact-byte filters and pages. A
+continuation cursor binds the exact namespace/binding/catalog/publication revisions
+and filter; a changed publication requires a fresh query. Load/delete intents carry
+those same revisions plus the selected slot's exact generation. The latest view
+revalidates them before dispatch, and the owning service **also** revalidates under
+its mutation lease; a view check alone is never commit authority. The public header
+is owned by `HoroRuntime` in the header-ownership registry. Existing catalog/storage
+callers need no migration; presentation adapters should replace retained catalog or
+storage objects with this immutable view and command preconditions.
+
 ### Physical mapping and safety
 
 Platform Abstraction resolves a product state root for the validated
