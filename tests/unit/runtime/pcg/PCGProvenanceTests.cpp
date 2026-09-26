@@ -128,6 +128,12 @@ namespace Horo::PCG {
         invalid.numericPolicyVersion = 0;
         CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceInvalid);
         invalid = Candidate();
+        invalid.inputs[0].determinism = static_cast<PCGInputDeterminism>(255);
+        CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceInvalid);
+        invalid = Candidate();
+        invalid.providers[0].determinism = static_cast<PCGInputDeterminism>(255);
+        CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceInvalid);
+        invalid = Candidate();
         invalid.inputs[0].id = invalid.inputs[1].id;
         CheckError(CapturePCGProvenance(invalid), PCGErrors::ProvenanceDuplicate);
         invalid = Candidate();

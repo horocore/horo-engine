@@ -8,7 +8,7 @@
 
 namespace Horo::PCG {
     struct PCGProvenance::State final {
-        State(PCGProvenanceCandidate candidate, const Sha256Digest digest) : data(std::move(candidate)), key(digest) {}
+        State(PCGProvenanceCandidate candidate, const Sha256Digest &digest) : data(std::move(candidate)), key(digest) {}
 
         PCGProvenanceCandidate data;
         Sha256Digest key;
@@ -85,14 +85,15 @@ namespace Horo::PCG {
 
         /** @brief Validates the closed class-to-numeric mapping and certified profile evidence. */
         [[nodiscard]] bool ValidTier(const PCGProvenanceCandidate &candidate) noexcept {
+            using enum PCGDeterminismClass;
             switch (candidate.determinism) {
-                case PCGDeterminismClass::PortableDeterministic:
+                case PortableDeterministic:
                     return candidate.numeric == PCGNumericSupport::PortableInteger && !HasContent(candidate.profile);
-                case PCGDeterminismClass::ProfileDeterministic:
+                case ProfileDeterministic:
                     return candidate.numeric == PCGNumericSupport::CertifiedProfileFloat && HasContent(candidate.profile);
-                case PCGDeterminismClass::BestEffortPreview:
+                case BestEffortPreview:
                     return candidate.numeric == PCGNumericSupport::PreviewOnly && !HasContent(candidate.profile);
-                case PCGDeterminismClass::Count:
+                case Count:
                     return false;
             }
             return false;
@@ -102,6 +103,20 @@ namespace Horo::PCG {
         [[nodiscard]] bool IsDeterministic(const PCGProvenanceCandidate &candidate) noexcept {
             return candidate.determinism == PCGDeterminismClass::PortableDeterministic ||
                    candidate.determinism == PCGDeterminismClass::ProfileDeterministic;
+        }
+
+        /** @brief Checks the required evidence and closed determinism value of one typed input. */
+        [[nodiscard]] bool ValidInputStamp(const PCGInputStamp &input) noexcept {
+            return input.id.IsValid() && input.revision != 0 && HasContent(input.content) &&
+                   (input.determinism == PCGInputDeterminism::Deterministic || input.determinism == PCGInputDeterminism::NonDeterministic);
+        }
+
+        /** @brief Checks the required evidence and closed determinism value of one provider. */
+        [[nodiscard]] bool ValidProviderStamp(const PCGProviderStamp &provider) noexcept {
+            return provider.provider.IsValid() && provider.source.IsValid() && provider.snapshot.IsValid() && provider.revision.IsValid() &&
+                   provider.originEpoch != 0 && HasContent(provider.content) &&
+                   (provider.determinism == PCGInputDeterminism::Deterministic ||
+                    provider.determinism == PCGInputDeterminism::NonDeterministic);
         }
     }  // namespace
 
@@ -148,7 +163,7 @@ namespace Horo::PCG {
         std::ranges::sort(candidate.inputs, {}, &PCGInputStamp::id);
         for (std::size_t index = 0; index < candidate.inputs.size(); ++index) {
             const auto &input = candidate.inputs[index];
-            if (!input.id.IsValid() || input.revision == 0 || !HasContent(input.content) || input.determinism == PCGInputDeterminism::Count)
+            if (!ValidInputStamp(input))
                 return Failure<PCGProvenance>(PCGErrors::ProvenanceInvalid);
             if (index != 0 && candidate.inputs[index - 1].id == input.id)
                 return Failure<PCGProvenance>(PCGErrors::ProvenanceDuplicate);
@@ -161,9 +176,7 @@ namespace Horo::PCG {
         });
         for (std::size_t index = 0; index < candidate.providers.size(); ++index) {
             const auto &provider = candidate.providers[index];
-            if (!provider.provider.IsValid() || !provider.source.IsValid() || !provider.snapshot.IsValid() ||
-                !provider.revision.IsValid() || provider.originEpoch == 0 || !HasContent(provider.content) ||
-                provider.determinism == PCGInputDeterminism::Count)
+            if (!ValidProviderStamp(provider))
                 return Failure<PCGProvenance>(PCGErrors::ProvenanceInvalid);
             if (index != 0 && candidate.providers[index - 1].provider == provider.provider &&
                 candidate.providers[index - 1].source == provider.source)
