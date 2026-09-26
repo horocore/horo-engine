@@ -148,7 +148,7 @@ namespace Horo::Editor {
         void DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                         std::size_t errorCount, std::size_t warningCount);
         void DrawActiveBuild(const Application::GameplayBuildSnapshot &snapshot, const GlobalDockPaneRegions &regions,
-                             const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float height);
+                             const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float height) const;
 
         const IBuildOutputQuery *m_buildOutputQuery{nullptr};
         const Application::GameplayBuildService *m_gameplayBuilds{nullptr};
