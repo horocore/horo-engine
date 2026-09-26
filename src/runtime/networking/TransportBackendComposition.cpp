@@ -129,6 +129,22 @@ namespace Horo::Network {
             {true, found->hostSupported, found->configured, selected, selected && state_ == Active});
     }
 
+    /** @copydoc TransportBackendComposition::Evidence */
+    Result<TransportBackendEvidence> TransportBackendComposition::Evidence(const TransportBackendId &id) const {
+        const auto status = Status(id);
+        if (status.HasError())
+            return Result<TransportBackendEvidence>::Failure(status.ErrorValue());
+        TransportBackendEvidence evidence{};
+        evidence.status = status.Value();
+        if (evidence.status.installed) {
+            const auto found = std::ranges::find_if(descriptors_, [&id](const auto &entry) {
+                return entry.id == id;
+            });
+            evidence.capabilities = found->capabilities;
+        }
+        return Result<TransportBackendEvidence>::Success(evidence);
+    }
+
     /** @copydoc TransportBackendComposition::InstalledIds */
     std::vector<TransportBackendId> TransportBackendComposition::InstalledIds() const {
         std::vector<TransportBackendId> ids;

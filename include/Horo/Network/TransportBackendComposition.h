@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Network/NetworkTargetCapabilities.h"
 #include "Horo/Network/TransportBackendInstance.h"
 #include "Horo/Network/TransportCapabilities.h"
 
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +44,18 @@ namespace Horo::Network {
         bool configured{};    /**< Host has supplied a complete backend configuration. */
         bool selected{};      /**< This exact backend was selected without fallback. */
         bool active{};        /**< Its factory succeeded and the registry uniquely owns the instance. */
+    };
+
+    /** @brief Inert registration evidence; no factory or native handle escapes. */
+    struct TransportBackendEvidence final {
+        TransportBackendStatus status{};
+        TransportCapabilities capabilities{};
+    };
+
+    /** @brief Host-private binding between a Horo provider ID and an installed backend registration. */
+    struct TransportTargetBinding final {
+        NetworkTransportProviderId provider{};
+        TransportBackendId backend{};
     };
 
     /** @brief Host-supplied factory; only Activate may invoke it. */
@@ -84,6 +98,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Activate();
         /** @brief Observe exact installed/support/configuration/selection/activation facts. @return Typed malformed-ID failure. */
         [[nodiscard]] Result<TransportBackendStatus> Status(const TransportBackendId &id) const;
+        /** @brief Read inert status and capability evidence without activating the backend. @return Empty status for absent IDs. */
+        [[nodiscard]] Result<TransportBackendEvidence> Evidence(const TransportBackendId &id) const;
         /** @brief Request cooperative cancellation and close new activation admission. Idempotent. */
         void BeginCancellation() noexcept;
         /** @brief Shut down and release the active instance, then close the composition. Idempotent. */
@@ -103,4 +119,18 @@ namespace Horo::Network {
         TransportBackendInstance active_;
         TransportBackendCompositionState state_{TransportBackendCompositionState::Configuring};
     };
+
+    /**
+     * @brief Capture actual registered backend facts for target assessment after sealing composition.
+     * @param composition Explicit host-owned composition; no factory is invoked.
+     * @param revision Host-published revision bumped after any replacement.
+     * @param platform Exact host platform, not a renderer or device tier.
+     * @param supportedRoles Roles independently admitted by this host.
+     * @param protocol Host-owned protocol/schema support.
+     * @param bindings Explicit unique provider-to-backend mappings.
+     * @return Bounded target host facts or a typed invalid, capacity or lifecycle error.
+     */
+    [[nodiscard]] Result<NetworkTargetHostFacts> CaptureNetworkTargetHostFacts(
+        const TransportBackendComposition &composition, NetworkHostCapabilityRevision revision, NetworkTargetPlatform platform,
+        NetworkProjectRoleSet supportedRoles, NetworkProjectProtocolPolicy protocol, std::span<const TransportTargetBinding> bindings);
 }  // namespace Horo::Network

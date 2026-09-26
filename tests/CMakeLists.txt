@@ -200,6 +200,7 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/NetworkIoServiceTests.cpp
         unit/runtime/networking/NetworkLifecycleTests.cpp
         unit/runtime/networking/NetworkProjectSettingsTests.cpp
+        unit/runtime/networking/NetworkTargetCapabilitiesTests.cpp
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
