@@ -5,6 +5,7 @@
 #include "RecastDetourCrowdGeometry.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <mutex>
@@ -13,6 +14,8 @@
 
 namespace Horo::Navigation {
     namespace {
+        using enum NavigationAvoidanceStopReason;
+
         [[nodiscard]] bool Finite(const Math::Vec3 &value) noexcept {
             return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
         }
@@ -63,38 +66,43 @@ namespace Horo::Navigation {
                 if (!Finite(agent.position) || !Finite(agent.velocity) || agent.radiusMeters <= 0.0F || !std::isfinite(agent.radiusMeters))
                     return Result<NavigationAvoidanceOutcome>::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
                 if (agent.radiusMeters > 1'000.0F || SpeedSquared(agent.velocity) > 10'000.0F)
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::NumericalFailure));
+                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NumericalFailure));
                 if (snapshot.Mode() != AvoidanceExecutionMode::BestEffortBounded || agent.truncatedNeighbors != 0 ||
                     agent.truncatedBoundaries != 0 || agent.neighborCount > limits_.maximumNeighbors ||
                     agent.boundaryCount > limits_.maximumBoundarySegments)
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::SnapshotIncomplete));
-                std::unique_lock lock(mutex_, std::try_to_lock);
-                if (!lock.owns_lock())
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::CapacityBusy));
+                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, SnapshotIncomplete));
+                // The if-init lock must enclose the entire native query, not only the admission decision.
+                if (std::unique_lock lock(mutex_, std::try_to_lock); lock.owns_lock())
+                    return SolveAdmitted(snapshot, agent, request);
+                return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, CapacityBusy));
+            }
 
+        private:
+            [[nodiscard]] Result<NavigationAvoidanceOutcome> SolveAdmitted(const NavigationCrowdSnapshot &snapshot,
+                                                                           const NavigationCrowdAgentFact &agent,
+                                                                           const NavigationAvoidanceRequest &request) {
                 query_.reset();
                 if (!LoadNeighbors(snapshot, agent) || !LoadBoundaries(snapshot, agent))
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::NumericalFailure));
+                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NumericalFailure));
                 const auto sampled = Sample(agent, request);
                 if (!sampled)
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::NumericalFailure));
+                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NumericalFailure));
                 const auto candidate = Constrain(*sampled, agent.velocity, request);
                 if (!candidate)
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::NumericalFailure));
-                const float speedSquared = SpeedSquared(*candidate);
-                if (!std::isfinite(speedSquared) ||
+                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NumericalFailure));
+                if (const float speedSquared = SpeedSquared(*candidate);
+                    !std::isfinite(speedSquared) ||
                     speedSquared > request.maximumSpeedMetersPerSecond * request.maximumSpeedMetersPerSecond + 1.0e-4F ||
                     !Detail::IsAvoidanceCandidateClear(snapshot, agent, *candidate, request.horizonSeconds))
-                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NavigationAvoidanceStopReason::NoFeasibleSample));
+                    return Result<NavigationAvoidanceOutcome>::Success(Stop(snapshot, NoFeasibleSample));
                 return Result<NavigationAvoidanceOutcome>::Success({.desiredVelocity = *candidate,
                                                                     .disposition = NavigationAvoidanceDisposition::Sampled,
-                                                                    .stopReason = NavigationAvoidanceStopReason::None,
+                                                                    .stopReason = None,
                                                                     .binding = snapshot.Binding(),
                                                                     .dynamicRevision = snapshot.DynamicRevision(),
                                                                     .captureTick = snapshot.CaptureTick()});
             }
 
-        private:
             [[nodiscard]] bool LoadNeighbors(const NavigationCrowdSnapshot &snapshot, const NavigationCrowdAgentFact &agent) noexcept {
                 for (std::uint32_t offset = 0; offset < agent.neighborCount; ++offset) {
                     const auto &neighbor = snapshot.Agents()[snapshot.NeighborIndices()[agent.firstNeighbor + offset]];
@@ -105,9 +113,9 @@ namespace Horo::Navigation {
                     const double z = static_cast<double>(neighbor.position.z) - agent.position.z;
                     if (!NativeRange(x) || !NativeRange(z))
                         return false;
-                    const float position[]{static_cast<float>(x), 0.0F, static_cast<float>(z)};
-                    const float velocity[]{neighbor.velocity.x, 0.0F, neighbor.velocity.z};
-                    query_.addCircle(position, neighbor.radiusMeters, velocity, velocity);
+                    const std::array position{static_cast<float>(x), 0.0F, static_cast<float>(z)};
+                    const std::array velocity{neighbor.velocity.x, 0.0F, neighbor.velocity.z};
+                    query_.addCircle(position.data(), neighbor.radiusMeters, velocity.data(), velocity.data());
                 }
                 return true;
             }
@@ -123,24 +131,24 @@ namespace Horo::Navigation {
                     const double secondZ = static_cast<double>(boundary.second.z) - agent.position.z;
                     if (!NativeRange(firstX) || !NativeRange(firstZ) || !NativeRange(secondX) || !NativeRange(secondZ))
                         return false;
-                    const float first[]{static_cast<float>(firstX), 0.0F, static_cast<float>(firstZ)};
-                    const float second[]{static_cast<float>(secondX), 0.0F, static_cast<float>(secondZ)};
-                    query_.addSegment(first, second);
+                    const std::array first{static_cast<float>(firstX), 0.0F, static_cast<float>(firstZ)};
+                    const std::array second{static_cast<float>(secondX), 0.0F, static_cast<float>(secondZ)};
+                    query_.addSegment(first.data(), second.data());
                 }
                 return true;
             }
 
             [[nodiscard]] std::optional<Math::Vec3> Sample(const NavigationCrowdAgentFact &agent,
                                                            const NavigationAvoidanceRequest &request) noexcept {
-                const float position[]{0.0F, 0.0F, 0.0F};
-                const float current[]{agent.velocity.x, 0.0F, agent.velocity.z};
+                const std::array position{0.0F, 0.0F, 0.0F};
+                const std::array current{agent.velocity.x, 0.0F, agent.velocity.z};
                 const double preferredLength =
                     std::hypot(static_cast<double>(request.preferredVelocity.x), static_cast<double>(request.preferredVelocity.z));
                 const double preferredFactor =
                     preferredLength > request.maximumSpeedMetersPerSecond ? request.maximumSpeedMetersPerSecond / preferredLength : 1.0;
-                const float preferred[]{static_cast<float>(request.preferredVelocity.x * preferredFactor), 0.0F,
-                                        static_cast<float>(request.preferredVelocity.z * preferredFactor)};
-                float sampled[3]{};
+                const std::array preferred{static_cast<float>(request.preferredVelocity.x * preferredFactor), 0.0F,
+                                           static_cast<float>(request.preferredVelocity.z * preferredFactor)};
+                std::array<float, 3> sampled{};
                 dtObstacleAvoidanceParams params{};
                 params.velBias = 0.4F;
                 params.weightDesVel = 2.0F;
@@ -149,8 +157,8 @@ namespace Horo::Navigation {
                 params.weightToi = 2.5F;
                 params.horizTime = request.horizonSeconds;
                 params.gridSize = 11;
-                if (query_.sampleVelocityGrid(position, agent.radiusMeters, request.maximumSpeedMetersPerSecond, current, preferred,
-                                              sampled, &params) <= 0 ||
+                if (query_.sampleVelocityGrid(position.data(), agent.radiusMeters, request.maximumSpeedMetersPerSecond, current.data(),
+                                              preferred.data(), sampled.data(), &params) <= 0 ||
                     !std::isfinite(sampled[0]) || !std::isfinite(sampled[2]))
                     return std::nullopt;
                 return Math::Vec3{sampled[0], 0.0F, sampled[2]};
