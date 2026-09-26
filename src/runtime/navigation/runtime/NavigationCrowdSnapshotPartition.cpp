@@ -30,10 +30,10 @@ namespace Horo::Navigation::Detail {
 
         /** @brief Projects supported source shapes to a conservative axis-aligned footprint. */
         [[nodiscard]] std::optional<RectangleFootprint> FootprintFor(const NavigationDynamicShape &shape) {
-            return std::visit([](const auto &value) -> std::optional<RectangleFootprint> {
+            return std::visit([]<typename Shape>(const Shape &value) -> std::optional<RectangleFootprint> {
                 if (!value.IsValid())
                     return std::nullopt;
-                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, NavigationDynamicBoxShape>)
+                if constexpr (std::is_same_v<Shape, NavigationDynamicBoxShape>)
                     return RectangleFootprint{value.center, value.halfExtents.x, value.halfExtents.y, value.halfExtents.z};
                 else
                     return RectangleFootprint{value.center, value.radius, value.halfHeight, value.radius};
