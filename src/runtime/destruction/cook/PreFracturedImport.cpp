@@ -120,6 +120,80 @@ namespace Horo::Destruction {
             std::size_t firstTriangle{};
         };
 
+        using EdgeMap = std::map<std::pair<std::uint32_t, std::uint32_t>, EdgeIncidence>;
+
+        [[nodiscard]] std::size_t TriangleRoot(const std::vector<std::size_t> &parents, std::size_t triangle) {
+            while (parents[triangle] != triangle)
+                triangle = parents[triangle];
+            return triangle;
+        }
+
+        [[nodiscard]] Result<void> ValidateTriangle(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
+                                                    const std::size_t triangle) {
+            const auto a = node.triangleIndices[triangle];
+            const auto b = node.triangleIndices[triangle + 1U];
+            const auto c = node.triangleIndices[triangle + 2U];
+            if (a >= node.positions.size() || b >= node.positions.size() || c >= node.positions.size() || a == b || b == c || c == a)
+                return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
+                                                         "Triangle references an invalid or repeated vertex."));
+            const auto &pa = node.positions[a];
+            const auto &pb = node.positions[b];
+            const auto &pc = node.positions[c];
+            const double ux = static_cast<double>(pb[0]) - pa[0];
+            const double uy = static_cast<double>(pb[1]) - pa[1];
+            const double uz = static_cast<double>(pb[2]) - pa[2];
+            const double vx = static_cast<double>(pc[0]) - pa[0];
+            const double vy = static_cast<double>(pc[1]) - pa[1];
+            const double vz = static_cast<double>(pc[2]) - pa[2];
+            const double cx = uy * vz - uz * vy;
+            const double cy = uz * vx - ux * vz;
+            const double cz = ux * vy - uy * vx;
+            if (!std::isfinite(cx * cx + cy * cy + cz * cz) || cx * cx + cy * cy + cz * cz <= 1.0e-24)
+                return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
+                                                         "Chunk contains a zero-area or invalid triangle."));
+            if (node.triangleMaterials[triangle / 3U].empty())
+                return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidMaterial, source, node.sourcePath,
+                                                         "Chunk triangle has no named material."));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> RecordTriangleEdges(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
+                                                       const std::size_t triangle, EdgeMap &edges, std::vector<std::size_t> &parents) {
+            const auto a = node.triangleIndices[triangle];
+            const auto b = node.triangleIndices[triangle + 1U];
+            const auto c = node.triangleIndices[triangle + 2U];
+            for (const auto [from, to] : {std::pair{a, b}, std::pair{b, c}, std::pair{c, a}}) {
+                auto &edge = edges[std::minmax(from, to)];
+                ++edge.count;
+                edge.orientation += from < to ? 1 : -1;
+                if (edge.count == 1)
+                    edge.firstTriangle = triangle / 3U;
+                else if (edge.count == 2)
+                    parents[TriangleRoot(parents, triangle / 3U)] = TriangleRoot(parents, edge.firstTriangle);
+                if (edge.count > 2)
+                    return Result<void>::Failure(
+                        ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath, "Chunk has a non-manifold edge."));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> CheckClosedSurface(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
+                                                      const EdgeMap &edges, const std::vector<std::size_t> &parents) {
+            for (const auto &[edge, incidence] : edges) {
+                (void)edge;
+                if (incidence.count != 2 || incidence.orientation != 0)
+                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
+                                                             "Chunk has an open or inconsistently wound edge."));
+            }
+            const auto firstRoot = TriangleRoot(parents, 0);
+            for (std::size_t triangle = 1; triangle < parents.size(); ++triangle) {
+                if (TriangleRoot(parents, triangle) != firstRoot)
+                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
+                                                             "Chunk has disconnected closed surface components."));
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateTopology(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
                                                     const CancellationToken &cancellation) {
             if (node.positions.size() < 4 || node.triangleIndices.empty() || node.triangleIndices.size() % 3 != 0)
@@ -128,67 +202,105 @@ namespace Horo::Destruction {
             if (node.triangleMaterials.size() != node.triangleIndices.size() / 3U)
                 return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidMaterial, source, node.sourcePath,
                                                          "Triangle and material counts differ."));
-            std::map<std::pair<std::uint32_t, std::uint32_t>, EdgeIncidence> edges;
+            EdgeMap edges;
             std::vector<std::size_t> parents(node.triangleIndices.size() / 3U);
             std::iota(parents.begin(), parents.end(), 0U);
-            const auto root = [&parents](std::size_t triangle) {
-                while (parents[triangle] != triangle)
-                    triangle = parents[triangle];
-                return triangle;
-            };
             for (std::size_t triangle = 0; triangle < node.triangleIndices.size(); triangle += 3U) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(ImportError(PreFracturedImportErrors::Cancelled, source, node.sourcePath,
                                                              "Pre-fractured preparation was cancelled."));
-                const auto a = node.triangleIndices[triangle];
-                const auto b = node.triangleIndices[triangle + 1U];
-                const auto c = node.triangleIndices[triangle + 2U];
-                if (a >= node.positions.size() || b >= node.positions.size() || c >= node.positions.size() || a == b || b == c || c == a)
-                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
-                                                             "Triangle references an invalid or repeated vertex."));
-                const auto &pa = node.positions[a];
-                const auto &pb = node.positions[b];
-                const auto &pc = node.positions[c];
-                const double ux = static_cast<double>(pb[0]) - pa[0];
-                const double uy = static_cast<double>(pb[1]) - pa[1];
-                const double uz = static_cast<double>(pb[2]) - pa[2];
-                const double vx = static_cast<double>(pc[0]) - pa[0];
-                const double vy = static_cast<double>(pc[1]) - pa[1];
-                const double vz = static_cast<double>(pc[2]) - pa[2];
-                const double cx = uy * vz - uz * vy;
-                const double cy = uz * vx - ux * vz;
-                const double cz = ux * vy - uy * vx;
-                if (!std::isfinite(cx * cx + cy * cy + cz * cz) || cx * cx + cy * cy + cz * cz <= 1.0e-24)
-                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
-                                                             "Chunk contains a zero-area or invalid triangle."));
-                if (node.triangleMaterials[triangle / 3U].empty())
-                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidMaterial, source, node.sourcePath,
-                                                             "Chunk triangle has no named material."));
-                for (const auto [from, to] : {std::pair{a, b}, std::pair{b, c}, std::pair{c, a}}) {
-                    auto &edge = edges[std::minmax(from, to)];
-                    ++edge.count;
-                    edge.orientation += from < to ? 1 : -1;
-                    if (edge.count == 1)
-                        edge.firstTriangle = triangle / 3U;
-                    else if (edge.count == 2)
-                        parents[root(triangle / 3U)] = root(edge.firstTriangle);
-                    if (edge.count > 2)
-                        return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
-                                                                 "Chunk has a non-manifold edge."));
-                }
+                if (auto valid = ValidateTriangle(source, node, triangle); valid.HasError())
+                    return valid;
+                if (auto recorded = RecordTriangleEdges(source, node, triangle, edges, parents); recorded.HasError())
+                    return recorded;
             }
-            for (const auto &[edge, incidence] : edges) {
-                (void)edge;
-                if (incidence.count != 2 || incidence.orientation != 0)
-                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
-                                                             "Chunk has an open or inconsistently wound edge."));
+            return CheckClosedSurface(source, node, edges, parents);
+        }
+
+        [[nodiscard]] Result<std::vector<DestructionChunkId>> CollectChunkIds(const Assets::PreFracturedSource &source,
+                                                                              const CancellationToken &cancellation) {
+            std::vector<DestructionChunkId> identities;
+            identities.reserve(source.nodes.size());
+            std::map<std::uint64_t, std::string> seen;
+            for (const auto &node : source.nodes) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<std::vector<DestructionChunkId>>::Failure(
+                        ImportError(PreFracturedImportErrors::Cancelled, source, node.sourcePath, "Preparation was cancelled."));
+                const auto id = ParseChunkId(node.name);
+                if (id.HasError())
+                    return Result<std::vector<DestructionChunkId>>::Failure(
+                        ImportError(PreFracturedImportErrors::MissingChunk, source, node.sourcePath,
+                                    "Mesh node '" + node.name + "' lacks a canonical HoroChunk_<id> token."));
+                if (const auto [it, inserted] = seen.emplace(id.Value().Value(), node.sourcePath); !inserted)
+                    return Result<std::vector<DestructionChunkId>>::Failure(
+                        ImportError(PreFracturedImportErrors::DuplicateChunk, source, node.sourcePath,
+                                    "Duplicate chunk ID also appears at " + it->second + '.'));
+                identities.push_back(id.Value());
             }
-            const auto firstRoot = root(0);
-            for (std::size_t triangle = 1; triangle < parents.size(); ++triangle) {
-                if (root(triangle) != firstRoot)
-                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
-                                                             "Chunk has disconnected closed surface components."));
+            return Result<std::vector<DestructionChunkId>>::Success(std::move(identities));
+        }
+
+        [[nodiscard]] Result<void> ValidateNodeFrame(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
+                                                     const DestructionLimits &limits) {
+            if (!FiniteTransform(node.geometryToWorld))
+                return Result<void>::Failure(ImportError(PreFracturedImportErrors::NonFinite, source, node.sourcePath,
+                                                         "Chunk transform is non-finite or singular."));
+            for (const auto &position : node.positions) {
+                if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]))
+                    return Result<void>::Failure(
+                        ImportError(PreFracturedImportErrors::NonFinite, source, node.sourcePath, "Chunk has a non-finite position."));
             }
+            std::uint32_t depth = 1;
+            std::optional<std::uint32_t> ancestor = node.parent;
+            while (ancestor) {
+                if (*ancestor >= source.nodes.size() || ++depth > limits.maximumHierarchyDepth)
+                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidHierarchy, source, node.sourcePath,
+                                                             "Chunk parent chain is invalid or too deep."));
+                ancestor = source.nodes[*ancestor].parent;
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ChargeNodeBudget(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
+                                                    const DestructionLimits &limits, std::uint64_t &workItems,
+                                                    std::uint64_t &estimatedBytes) {
+            const std::uint64_t nodeWork = static_cast<std::uint64_t>(node.positions.size()) + node.triangleIndices.size();
+            if (nodeWork > limits.maximumWorkItemsPerTransition - workItems)
+                return Result<void>::Failure(
+                    ImportError(PreFracturedImportErrors::LimitExceeded, source, node.sourcePath, "Chunk geometry exceeds work budget."));
+            workItems += nodeWork;
+            std::uint64_t bytes = sizeof(PreFracturedChunk) + node.sourcePath.size() +
+                                  node.positions.size() * sizeof(std::array<float, 3>) +
+                                  node.triangleIndices.size() * sizeof(std::uint32_t) + node.triangleMaterials.size() * sizeof(std::string);
+            for (const auto &material : node.triangleMaterials)
+                bytes += material.size();
+            if (bytes > limits.maximumArtifactBytes - estimatedBytes || bytes > limits.maximumTransitionBytes - estimatedBytes)
+                return Result<void>::Failure(
+                    ImportError(PreFracturedImportErrors::LimitExceeded, source, node.sourcePath, "Candidate exceeds byte budget."));
+            estimatedBytes += bytes;
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateSurface(const Assets::PreFracturedSource &source, const Assets::PreFracturedSourceNode &node,
+                                                   const DestructionLimits &limits, const CancellationToken &cancellation,
+                                                   std::uint64_t &workItems) {
+            if (auto topology = ValidateTopology(source, node, cancellation); topology.HasError())
+                return topology;
+            std::uint64_t remainingWork = limits.maximumWorkItemsPerTransition - workItems;
+            switch (Detail::CheckSelfIntersection(node, remainingWork, cancellation)) {
+                case Detail::IntersectionCheck::Intersecting:
+                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
+                                                             "Chunk surface intersects itself."));
+                case Detail::IntersectionCheck::TooMuchWork:
+                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::LimitExceeded, source, node.sourcePath,
+                                                             "Topology check exceeds work budget."));
+                case Detail::IntersectionCheck::Cancelled:
+                    return Result<void>::Failure(
+                        ImportError(PreFracturedImportErrors::Cancelled, source, node.sourcePath, "Preparation was cancelled."));
+                case Detail::IntersectionCheck::Clear:
+                    break;
+            }
+            workItems = limits.maximumWorkItemsPerTransition - remainingWork;
             return Result<void>::Success();
         }
     }  // namespace
@@ -213,77 +325,20 @@ namespace Horo::Destruction {
             return Result<PreFracturedCandidate>::Failure(
                 ImportError(PreFracturedImportErrors::LimitExceeded, source, {}, "Candidate source label exceeds byte budget."));
         candidate.chunks_.reserve(source.nodes.size());
-        std::vector<DestructionChunkId> identities;
-        identities.reserve(source.nodes.size());
-        std::map<std::uint64_t, std::string> seen;
-        for (const auto &node : source.nodes) {
-            if (cancellation.IsCancellationRequested())
-                return Result<PreFracturedCandidate>::Failure(
-                    ImportError(PreFracturedImportErrors::Cancelled, source, node.sourcePath, "Preparation was cancelled."));
-            const auto id = ParseChunkId(node.name);
-            if (id.HasError())
-                return Result<PreFracturedCandidate>::Failure(
-                    ImportError(PreFracturedImportErrors::MissingChunk, source, node.sourcePath,
-                                "Mesh node '" + node.name + "' lacks a canonical HoroChunk_<id> token."));
-            if (const auto [it, inserted] = seen.emplace(id.Value().Value(), node.sourcePath); !inserted)
-                return Result<PreFracturedCandidate>::Failure(ImportError(PreFracturedImportErrors::DuplicateChunk, source, node.sourcePath,
-                                                                          "Duplicate chunk ID also appears at " + it->second + '.'));
-            identities.push_back(id.Value());
-        }
+        auto identities = CollectChunkIds(source, cancellation);
+        if (identities.HasError())
+            return Result<PreFracturedCandidate>::Failure(identities.ErrorValue());
         std::uint64_t workItems{};
         for (std::size_t index = 0; index < source.nodes.size(); ++index) {
             const auto &node = source.nodes[index];
-            if (!FiniteTransform(node.geometryToWorld))
-                return Result<PreFracturedCandidate>::Failure(ImportError(PreFracturedImportErrors::NonFinite, source, node.sourcePath,
-                                                                          "Chunk transform is non-finite or singular."));
-            for (const auto &position : node.positions) {
-                if (!std::isfinite(position[0]) || !std::isfinite(position[1]) || !std::isfinite(position[2]))
-                    return Result<PreFracturedCandidate>::Failure(
-                        ImportError(PreFracturedImportErrors::NonFinite, source, node.sourcePath, "Chunk has a non-finite position."));
-            }
-            std::uint32_t depth = 1;
-            std::optional<std::uint32_t> ancestor = node.parent;
-            while (ancestor) {
-                if (*ancestor >= source.nodes.size() || ++depth > limits.maximumHierarchyDepth)
-                    return Result<PreFracturedCandidate>::Failure(ImportError(PreFracturedImportErrors::InvalidHierarchy, source,
-                                                                              node.sourcePath,
-                                                                              "Chunk parent chain is invalid or too deep."));
-                ancestor = source.nodes[*ancestor].parent;
-            }
-            const std::uint64_t nodeWork = static_cast<std::uint64_t>(node.positions.size()) + node.triangleIndices.size();
-            if (nodeWork > limits.maximumWorkItemsPerTransition - workItems)
-                return Result<PreFracturedCandidate>::Failure(
-                    ImportError(PreFracturedImportErrors::LimitExceeded, source, node.sourcePath, "Chunk geometry exceeds work budget."));
-            workItems += nodeWork;
-            std::uint64_t bytes = sizeof(PreFracturedChunk) + node.sourcePath.size() +
-                                  node.positions.size() * sizeof(std::array<float, 3>) +
-                                  node.triangleIndices.size() * sizeof(std::uint32_t) + node.triangleMaterials.size() * sizeof(std::string);
-            for (const auto &material : node.triangleMaterials)
-                bytes += material.size();
-            if (bytes > limits.maximumArtifactBytes - candidate.estimatedBytes_ ||
-                bytes > limits.maximumTransitionBytes - candidate.estimatedBytes_)
-                return Result<PreFracturedCandidate>::Failure(
-                    ImportError(PreFracturedImportErrors::LimitExceeded, source, node.sourcePath, "Candidate exceeds byte budget."));
-            candidate.estimatedBytes_ += bytes;
-            if (auto topology = ValidateTopology(source, node, cancellation); topology.HasError())
-                return Result<PreFracturedCandidate>::Failure(topology.ErrorValue());
-            std::uint64_t remainingWork = limits.maximumWorkItemsPerTransition - workItems;
-            switch (Detail::CheckSelfIntersection(node, remainingWork, cancellation)) {
-                case Detail::IntersectionCheck::Intersecting:
-                    return Result<PreFracturedCandidate>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source,
-                                                                              node.sourcePath, "Chunk surface intersects itself."));
-                case Detail::IntersectionCheck::TooMuchWork:
-                    return Result<PreFracturedCandidate>::Failure(ImportError(PreFracturedImportErrors::LimitExceeded, source,
-                                                                              node.sourcePath, "Topology check exceeds work budget."));
-                case Detail::IntersectionCheck::Cancelled:
-                    return Result<PreFracturedCandidate>::Failure(
-                        ImportError(PreFracturedImportErrors::Cancelled, source, node.sourcePath, "Preparation was cancelled."));
-                case Detail::IntersectionCheck::Clear:
-                    break;
-            }
-            workItems = limits.maximumWorkItemsPerTransition - remainingWork;
-            PreFracturedChunk chunk{.id = identities[index],
-                                    .parent = node.parent ? identities[*node.parent] : DestructionChunkId{},
+            if (auto frame = ValidateNodeFrame(source, node, limits); frame.HasError())
+                return Result<PreFracturedCandidate>::Failure(frame.ErrorValue());
+            if (auto budget = ChargeNodeBudget(source, node, limits, workItems, candidate.estimatedBytes_); budget.HasError())
+                return Result<PreFracturedCandidate>::Failure(budget.ErrorValue());
+            if (auto surface = ValidateSurface(source, node, limits, cancellation, workItems); surface.HasError())
+                return Result<PreFracturedCandidate>::Failure(surface.ErrorValue());
+            PreFracturedChunk chunk{.id = identities.Value()[index],
+                                    .parent = node.parent ? identities.Value()[*node.parent] : DestructionChunkId{},
                                     .sourcePath = node.sourcePath,
                                     .geometryToWorld = node.geometryToWorld,
                                     .positions = node.positions,
