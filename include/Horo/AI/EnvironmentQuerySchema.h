@@ -314,7 +314,7 @@ namespace Horo::AI {
         [[nodiscard]] std::span<const QueryPlanStage> Stages() const noexcept;
 
     private:
-        EnvironmentQueryPlan(QueryId id, QueryResultSchema result, std::vector<QueryPlanStage> stages) noexcept;
+        EnvironmentQueryPlan(QueryId id, const QueryResultSchema &result, std::vector<QueryPlanStage> stages) noexcept;
         QueryId id_;
         QueryResultSchema result_;
         std::vector<QueryPlanStage> stages_;

@@ -9,19 +9,20 @@ namespace Horo::AI {
     namespace {
         /** @brief Converts the active variant arm to its exact typed property contract. */
         [[nodiscard]] QueryPropertyKind PropertyKind(const QueryPropertyData &value) noexcept {
+            using enum QueryPropertyKind;
             switch (value.index()) {
                 case 0:
-                    return QueryPropertyKind::Boolean;
+                    return Boolean;
                 case 1:
-                    return QueryPropertyKind::Signed64;
+                    return Signed64;
                 case 2:
-                    return QueryPropertyKind::Unsigned64;
+                    return Unsigned64;
                 case 3:
-                    return QueryPropertyKind::Float64;
+                    return Float64;
                 case 4:
-                    return QueryPropertyKind::CanonicalBytes;
+                    return CanonicalBytes;
                 default:
-                    return QueryPropertyKind::Count;
+                    return Count;
             }
         }
 
@@ -39,17 +40,18 @@ namespace Horo::AI {
 
         /** @brief Validates bounded stage representation while retaining future unknown bytes. */
         [[nodiscard]] Result<void> ValidateStage(const QueryAssetStage &stage) {
-            if (!stage.id.IsValid() || !stage.descriptorVersion.IsValid() || stage.kind >= QueryStageKind::Count)
+            using enum QueryStageKind;
+            if (!stage.id.IsValid() || !stage.descriptorVersion.IsValid() || stage.kind >= Count)
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
             if (stage.displayName.size() > EnvironmentQuerySchemaLimits::DisplayNameBytes ||
                 stage.properties.size() > EnvironmentQuerySchemaLimits::PropertiesPerStage ||
                 stage.opaquePayload.size() > EnvironmentQuerySchemaLimits::UnknownStageBytes)
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
-            if ((stage.kind == QueryStageKind::Generator &&
+            if ((stage.kind == Generator &&
                  (!stage.generator.IsValid() || stage.test.IsValid() || stage.unknownTypeId != 0 || !stage.opaquePayload.empty())) ||
-                (stage.kind == QueryStageKind::Test &&
+                (stage.kind == Test &&
                  (!stage.test.IsValid() || stage.generator.IsValid() || stage.unknownTypeId != 0 || !stage.opaquePayload.empty())) ||
-                (stage.kind == QueryStageKind::Unknown && (stage.unknownTypeId == 0 || stage.generator.IsValid() || stage.test.IsValid())))
+                (stage.kind == Unknown && (stage.unknownTypeId == 0 || stage.generator.IsValid() || stage.test.IsValid())))
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
             for (std::size_t index = 0; index < stage.properties.size(); ++index) {
                 if (const auto result = ValidateValue(stage.properties[index]); result.HasError())
@@ -164,7 +166,7 @@ namespace Horo::AI {
         return source_.displayName;
     }
 
-    EnvironmentQueryPlan::EnvironmentQueryPlan(const QueryId id, const QueryResultSchema result,
+    EnvironmentQueryPlan::EnvironmentQueryPlan(const QueryId id, const QueryResultSchema &result,
                                                std::vector<QueryPlanStage> stages) noexcept
         : id_(id), result_(result), stages_(std::move(stages)) {}
 

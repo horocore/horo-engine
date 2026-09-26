@@ -2,6 +2,7 @@
 #include "Horo/AI/EnvironmentQuerySchema.h"
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 namespace Horo::AI {
@@ -82,6 +83,53 @@ namespace Horo::AI {
                 return Result<void>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
             return ResolveContexts(registry, test.contexts);
         }
+
+        /** @brief Validates bounded item payload contracts before any dependency resolution. */
+        [[nodiscard]] Result<void> ValidateItems(const std::vector<QueryItemTypeDescriptor> &items) {
+            for (const auto &item : items)
+                if (!item.id.IsValid() || !ValidOrigin(item.origin) || item.kind >= QueryItemKind::Count ||
+                    (item.kind == QueryItemKind::Custom
+                         ? item.maximumPayloadBytes == 0 || item.maximumPayloadBytes > EnvironmentQuerySchemaLimits::CanonicalBytes
+                         : item.maximumPayloadBytes != 0))
+                    return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates bounded context payload contracts before any dependency resolution. */
+        [[nodiscard]] Result<void> ValidateContextDescriptors(const std::vector<QueryContextDescriptor> &contexts) {
+            for (const auto &context : contexts)
+                if (!context.id.IsValid() || !ValidOrigin(context.origin) || context.maximumPayloadBytes == 0 ||
+                    context.maximumPayloadBytes > EnvironmentQuerySchemaLimits::CanonicalBytes)
+                    return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates generator identity and its bounded typed property/context declarations. */
+        [[nodiscard]] Result<void> ValidateGeneratorDescriptors(const std::vector<QueryGeneratorDescriptor> &generators) {
+            for (const auto &generator : generators) {
+                if (!generator.id.IsValid() || !ValidOrigin(generator.origin) || !generator.outputItemType.IsValid() ||
+                    !generator.outputItemVersion.IsValid())
+                    return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+                if (const auto properties = ValidateProperties(generator.properties); properties.HasError())
+                    return properties;
+                if (const auto contexts = ValidateContexts(generator.contexts); contexts.HasError())
+                    return contexts;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates test identity and its bounded typed property/context declarations. */
+        [[nodiscard]] Result<void> ValidateTestDescriptors(const std::vector<QueryTestDescriptor> &tests) {
+            for (const auto &test : tests) {
+                if (!test.id.IsValid() || !ValidOrigin(test.origin) || !test.inputItemType.IsValid() || !test.inputItemVersion.IsValid())
+                    return Result<void>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+                if (const auto properties = ValidateProperties(test.properties); properties.HasError())
+                    return properties;
+                if (const auto contexts = ValidateContexts(test.contexts); contexts.HasError())
+                    return contexts;
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc QuerySchemaRegistry::Capture */
@@ -98,33 +146,14 @@ namespace Horo::AI {
         registry.generators_.assign(contributions.generators.begin(), contributions.generators.end());
         registry.tests_.assign(contributions.tests.begin(), contributions.tests.end());
 
-        for (const auto &item : registry.items_)
-            if (!item.id.IsValid() || !ValidOrigin(item.origin) || item.kind >= QueryItemKind::Count ||
-                (item.kind == QueryItemKind::Custom
-                     ? item.maximumPayloadBytes == 0 || item.maximumPayloadBytes > EnvironmentQuerySchemaLimits::CanonicalBytes
-                     : item.maximumPayloadBytes != 0))
-                return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        for (const auto &context : registry.contexts_)
-            if (!context.id.IsValid() || !ValidOrigin(context.origin) || context.maximumPayloadBytes == 0 ||
-                context.maximumPayloadBytes > EnvironmentQuerySchemaLimits::CanonicalBytes)
-                return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        for (const auto &generator : registry.generators_) {
-            if (!generator.id.IsValid() || !ValidOrigin(generator.origin) || !generator.outputItemType.IsValid() ||
-                !generator.outputItemVersion.IsValid())
-                return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            if (const auto properties = ValidateProperties(generator.properties); properties.HasError())
-                return Result<QuerySchemaRegistry>::Failure(properties.ErrorValue());
-            if (const auto contexts = ValidateContexts(generator.contexts); contexts.HasError())
-                return Result<QuerySchemaRegistry>::Failure(contexts.ErrorValue());
-        }
-        for (const auto &test : registry.tests_) {
-            if (!test.id.IsValid() || !ValidOrigin(test.origin) || !test.inputItemType.IsValid() || !test.inputItemVersion.IsValid())
-                return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            if (const auto properties = ValidateProperties(test.properties); properties.HasError())
-                return Result<QuerySchemaRegistry>::Failure(properties.ErrorValue());
-            if (const auto contexts = ValidateContexts(test.contexts); contexts.HasError())
-                return Result<QuerySchemaRegistry>::Failure(contexts.ErrorValue());
-        }
+        if (const auto items = ValidateItems(registry.items_); items.HasError())
+            return Result<QuerySchemaRegistry>::Failure(items.ErrorValue());
+        if (const auto contexts = ValidateContextDescriptors(registry.contexts_); contexts.HasError())
+            return Result<QuerySchemaRegistry>::Failure(contexts.ErrorValue());
+        if (const auto generators = ValidateGeneratorDescriptors(registry.generators_); generators.HasError())
+            return Result<QuerySchemaRegistry>::Failure(generators.ErrorValue());
+        if (const auto tests = ValidateTestDescriptors(registry.tests_); tests.HasError())
+            return Result<QuerySchemaRegistry>::Failure(tests.ErrorValue());
         if (HasDuplicateIds(registry.items_) || HasDuplicateIds(registry.contexts_) || HasDuplicateIds(registry.generators_) ||
             HasDuplicateIds(registry.tests_))
             return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQueryIdentityConflict));
@@ -144,7 +173,7 @@ namespace Horo::AI {
         const auto found = std::ranges::find_if(items_, [id](const auto &entry) {
             return entry.id == id;
         });
-        return found == items_.end() ? nullptr : &*found;
+        return found == items_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc QuerySchemaRegistry::Find */
@@ -152,7 +181,7 @@ namespace Horo::AI {
         const auto found = std::ranges::find_if(contexts_, [id](const auto &entry) {
             return entry.id == id;
         });
-        return found == contexts_.end() ? nullptr : &*found;
+        return found == contexts_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc QuerySchemaRegistry::Find */
@@ -160,7 +189,7 @@ namespace Horo::AI {
         const auto found = std::ranges::find_if(generators_, [id](const auto &entry) {
             return entry.id == id;
         });
-        return found == generators_.end() ? nullptr : &*found;
+        return found == generators_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc QuerySchemaRegistry::Find */
@@ -168,6 +197,6 @@ namespace Horo::AI {
         const auto found = std::ranges::find_if(tests_, [id](const auto &entry) {
             return entry.id == id;
         });
-        return found == tests_.end() ? nullptr : &*found;
+        return found == tests_.end() ? nullptr : std::to_address(found);
     }
 }  // namespace Horo::AI
