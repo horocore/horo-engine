@@ -304,4 +304,18 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
     /** @brief Diagnostic correlation does not match the expected active save generations. */
     extern const ErrorCodeDescriptor DiagnosticCorrelationStale;
+    /** @brief A protection descriptor is malformed or exceeds finite bounds. */
+    extern const ErrorCodeDescriptor ProtectionInvalid;
+    /** @brief Trusted policy forbids plaintext or a protection downgrade. */
+    extern const ErrorCodeDescriptor ProtectionRequired;
+    /** @brief The selected provider or algorithm is unsupported. */
+    extern const ErrorCodeDescriptor ProtectionUnsupported;
+    /** @brief The selected protection provider is unavailable. */
+    extern const ErrorCodeDescriptor ProtectionUnavailable;
+    /** @brief The selected key was rotated and cannot open this generation. */
+    extern const ErrorCodeDescriptor ProtectionKeyRotated;
+    /** @brief The selected key was revoked. */
+    extern const ErrorCodeDescriptor ProtectionKeyRevoked;
+    /** @brief Authentication failed without exposing plaintext. */
+    extern const ErrorCodeDescriptor ProtectionAuthenticationFailed;
 }  // namespace Horo::Runtime::SaveErrors

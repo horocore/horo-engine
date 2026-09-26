@@ -147,6 +147,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveArchiveFraming.h
     Horo/Runtime/Save/SaveArchiveFinalization.h
     Horo/Runtime/Save/SaveArchiveReader.h
+    Horo/Runtime/Save/SaveArchiveProtection.h
     Horo/Runtime/Save/SaveMigration.h
     Horo/Runtime/Save/SaveCanonicalCodec.h
     Horo/Runtime/Save/SaveReference.h

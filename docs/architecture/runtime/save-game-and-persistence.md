@@ -547,6 +547,26 @@ anti-rollback require separately trusted generation/anti-replay state, not a
 timestamp inside the attacker-controlled file. The archive is not encrypted by this
 protocol.
 
+### Optional Authenticated-Encryption Provider Boundary
+
+`SaveArchiveProtection.h` defines a host-composed seam outside the v1 archive
+format. `UnencryptedLocal` is an explicit local policy; `RequireAuthenticatedEncryption`
+rejects plaintext without a fallback. The host selects an opaque provider ID and
+non-secret key reference, supplies bounded associated data binding the namespace,
+slot, generation and protection format, and composes a provider that mints a fresh
+nonce and authenticates the complete sealed bytes before returning plaintext.
+The protected admission function checks finite lengths, provider identity and
+capabilities before invoking that provider; only its successful authenticated
+plaintext reaches the bounded v1 reader. It does not treat `ArchiveContentHash`
+as authentication. Provider error text and key material cannot enter the returned
+diagnostic; stable unavailable, rotated, revoked, unsupported and authentication
+failures remain distinguishable.
+
+This seam is not a `.horosave` encryption format, key store, production crypto
+backend or encrypted storage integration. A separately reviewed envelope and
+vetted platform/credential provider are required before shipping encrypted saves;
+the existing v1 writer and reader remain unencrypted and unchanged.
+
 ### Untrusted Input And Threat Policy
 
 Every archive begins as untrusted bytes, including a file already present in the
