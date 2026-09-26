@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -344,6 +345,118 @@ namespace {
         const auto timedOut = runner.Run(timeout, {});
         REQUIRE((timedOut.HasValue()));
         REQUIRE((timedOut.Value().reason == Horo::ProcessTerminationReason::TimedOut));
+    }
+#endif
+
+    TEST_CASE("External process outcomes and bounded pipes are portable", "[unit][platform][process]") {
+        Horo::NativeExternalProcessRunner runner;
+        Horo::ExternalProcessRequest failure{.executable = HORO_PROCESS_TEST_CHILD, .arguments = {"exit-failure"}};
+        const auto failed = runner.Run(failure, {});
+        REQUIRE(failed.HasValue());
+        REQUIRE(failed.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(failed.Value().exitCode == 17);
+
+        std::vector<Horo::ProcessOutputLine> output;
+        Horo::ExternalProcessRequest flood{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"flood"},
+            .maximumLineBytes = 64,
+            .onOutput =
+                [&output](Horo::ProcessOutputLine line) {
+            output.push_back(std::move(line));
+        },
+            .maximumOutputBytes = 128,
+        };
+        const auto drained = runner.Run(flood, {});
+        REQUIRE(drained.HasValue());
+        REQUIRE(drained.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(output.size() == 2);
+        for (const auto &line : output) {
+            REQUIRE(line.text.size() == 64);
+            REQUIRE(line.truncated);
+        }
+    }
+
+    TEST_CASE("External process cancellation and forced timeout keep their stop causes", "[unit][platform][process]") {
+        Horo::NativeExternalProcessRunner runner;
+        Horo::CancellationSource cancellation;
+        Horo::ExternalProcessRequest sleeping{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"sleep"},
+            .gracefulTermination = std::chrono::milliseconds{50},
+        };
+        std::thread cancelSoon{[&cancellation] {
+            std::this_thread::sleep_for(std::chrono::milliseconds{30});
+            cancellation.RequestCancellation();
+        }};
+        const auto cancelled = runner.Run(sleeping, cancellation.Token());
+        cancelSoon.join();
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(cancelled.Value().stopCause == Horo::ProcessStopCause::Cancellation);
+        REQUIRE((cancelled.Value().reason == Horo::ProcessTerminationReason::Cancelled ||
+                 cancelled.Value().reason == Horo::ProcessTerminationReason::Forced));
+#if !defined(_WIN32)
+        REQUIRE(cancelled.Value().reason == Horo::ProcessTerminationReason::Cancelled);
+#endif
+
+        Horo::CancellationSource force;
+        Horo::ExternalProcessRequest interrupted{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"stubborn"},
+            .timeout = std::chrono::seconds{5},
+            .gracefulTermination = std::chrono::seconds{2},
+            .forceCancellation = force.Token(),
+        };
+        std::thread forceSoon{[&force] {
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
+            force.RequestCancellation();
+        }};
+        const auto forceResult = runner.Run(interrupted, {});
+        forceSoon.join();
+        REQUIRE(forceResult.HasValue());
+        REQUIRE(forceResult.Value().reason == Horo::ProcessTerminationReason::Forced);
+        REQUIRE(forceResult.Value().stopCause == Horo::ProcessStopCause::Cancellation);
+
+        Horo::ExternalProcessRequest stubborn{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"stubborn"},
+            .timeout = std::chrono::milliseconds{500},
+            .gracefulTermination = std::chrono::milliseconds{100},
+            .maximumDrainDuration = std::chrono::milliseconds{100},
+        };
+        const auto forced = runner.Run(stubborn, {});
+        REQUIRE(forced.HasValue());
+        REQUIRE(forced.Value().reason == Horo::ProcessTerminationReason::Forced);
+        REQUIRE(forced.Value().stopCause == Horo::ProcessStopCause::Timeout);
+    }
+
+    TEST_CASE("External process termination does not leave an owned descendant running", "[unit][platform][process]") {
+        const auto marker = std::filesystem::temp_directory_path() /
+                            ("horo-process-tree-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        Horo::NativeExternalProcessRunner runner;
+        Horo::ExternalProcessRequest tree{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"tree", marker.string()},
+            .timeout = std::chrono::seconds{1},
+            .gracefulTermination = std::chrono::milliseconds{100},
+            .maximumDrainDuration = std::chrono::milliseconds{100},
+        };
+        const auto result = runner.Run(tree, {});
+        REQUIRE(result.HasValue());
+        REQUIRE(std::filesystem::exists(marker));
+        const auto before = std::filesystem::file_size(marker);
+        std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        REQUIRE(std::filesystem::file_size(marker) == before);
+        std::error_code ignored;
+        std::filesystem::remove(marker, ignored);
+    }
+#if !defined(_WIN32)
+    TEST_CASE("External process preserves spontaneous POSIX signal outcome", "[unit][platform][process]") {
+        Horo::NativeExternalProcessRunner runner;
+        Horo::ExternalProcessRequest request{.executable = HORO_PROCESS_TEST_CHILD, .arguments = {"signalled"}};
+        const auto result = runner.Run(request, {});
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().reason == Horo::ProcessTerminationReason::Signalled);
     }
 #endif
 }  // namespace

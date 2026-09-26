@@ -212,8 +212,9 @@ namespace Horo::Cli {
     CliExecutionContext::CliExecutionContext(const CliInvocationContext &invocation, const std::span<const CliCapabilityId> capabilities,
                                              const CliExecutionLimits &limits,
                                              const std::optional<std::chrono::steady_clock::time_point> deadline) noexcept
-        : configuration_(invocation.configuration), cancellation_(invocation.cancellation), progress_(invocation.progress),
-          capabilities_(capabilities), limits_(&limits), deadline_(deadline), correlation_(InitialCorrelation(invocation)) {
+        : configuration_(invocation.configuration), cancellation_(invocation.cancellation),
+          forceCancellation_(invocation.forceCancellation), progress_(invocation.progress), capabilities_(capabilities), limits_(&limits),
+          deadline_(deadline), correlation_(InitialCorrelation(invocation)) {
         correlation_.project = invocation.project;
     }
 
@@ -225,6 +226,20 @@ namespace Horo::Cli {
     /** @copydoc CliExecutionContext::Cancellation */
     const CancellationToken &CliExecutionContext::Cancellation() const noexcept {
         return cancellation_;
+    }
+
+    /** @copydoc CliExecutionContext::ForceCancellation */
+    const CancellationToken &CliExecutionContext::ForceCancellation() const noexcept {
+        return forceCancellation_;
+    }
+
+    /** @copydoc CliExecutionContext::RemainingTimeout */
+    std::optional<std::chrono::milliseconds> CliExecutionContext::RemainingTimeout() const noexcept {
+        if (!deadline_.has_value())
+            return std::nullopt;
+        const auto remaining = *deadline_ - std::chrono::steady_clock::now();
+        return remaining <= std::chrono::steady_clock::duration::zero() ? std::chrono::milliseconds::zero()
+                                                                        : std::chrono::ceil<std::chrono::milliseconds>(remaining);
     }
 
     /** @copydoc CliExecutionContext::GrantedCapabilities */
@@ -352,7 +367,11 @@ namespace Horo::Cli {
         initial.project = invocation.project;
 
         if (invocation.cancellation.IsCancellationRequested())
-            return CliTerminalResult::Failure(std::move(initial), MakeError(CliErrors::ExecutionCancelled));
+            return CliTerminalResult::Failure(std::move(initial),
+                                              MakeError(invocation.stopControl != nullptr &&
+                                                                invocation.stopControl->Reason() == CliStopReason::TimedOut
+                                                            ? CliErrors::ExecutionTimedOut
+                                                            : CliErrors::ExecutionCancelled));
 
         Result<std::optional<std::chrono::steady_clock::time_point>> admittedDeadline =
             ResolveDeadline(descriptor->timeout, invocation.timeoutMilliseconds);
@@ -375,12 +394,17 @@ namespace Horo::Cli {
             return CliTerminalResult::Failure(std::move(correlation), MakeError(CliErrors::ExecutionContextInvalid));
         if (context.progressRejected_)
             return CliTerminalResult::Failure(std::move(correlation), MakeError(CliErrors::ExecutionCapacityExceeded));
-        if (invocation.cancellation.IsCancellationRequested())
-            return CliTerminalResult::Failure(std::move(correlation), MakeError(CliErrors::ExecutionCancelled));
-        if (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline)
-            return CliTerminalResult::Failure(std::move(correlation), MakeError(CliErrors::ExecutionTimedOut));
-        if (result.HasError())
-            return CliTerminalResult::Failure(std::move(correlation), result.ErrorValue());
+        if (result.HasError()) {
+            const Error &error = result.ErrorValue();
+            const bool acknowledgedCancellation = error.domain.Value() == CliErrors::ExecutionCancelled.domain.Value() &&
+                                                  error.code.Value() == CliErrors::ExecutionCancelled.code.Value();
+            const bool timedOut = invocation.stopControl != nullptr
+                                      ? invocation.stopControl->Reason() == CliStopReason::TimedOut
+                                      : (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline);
+            if (acknowledgedCancellation && timedOut)
+                return CliTerminalResult::Failure(std::move(correlation), MakeError(CliErrors::ExecutionTimedOut));
+            return CliTerminalResult::Failure(std::move(correlation), error);
+        }
         if (const std::optional<Error> invalid = ValidateResult(result.Value(), policy_.limits); invalid.has_value())
             return CliTerminalResult::Failure(std::move(correlation), *invalid);
         return CliTerminalResult::Success(std::move(correlation), std::move(result).Value());

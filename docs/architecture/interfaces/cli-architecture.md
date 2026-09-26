@@ -513,6 +513,15 @@ rate-limited phase updates. Structured streaming mode emits declared progress
 records only when requested.
 
 Progress is bounded and never delays the operation because a consumer is slow.
+The host polls `CliProgressProjection` for one correlated operation or job and
+coalesces pending updates in `CliProgressMailbox`. A presentation loop drains the
+mailbox at its own pace and applies `CliProgressCadence` for human TTY or non-TTY
+output. `CliProgressPresenter` writes those coalesced updates on the presentation
+thread: human updates go to stderr, JSON mode suppresses them, and JSONL updates
+are encoded as progress records on stdout. Adapters may report bounded events
+through the mailbox; they do not write to the output streams.
+`CliProgressProjection` reads the authoritative operation
+record first and uses the job record only before that operation is observed.
 
 ## Cancellation And Signals
 
@@ -546,6 +555,17 @@ Cancellation:
 - returns the cancellation exit category
 
 The CLI does not leave background jobs running after process exit.
+The host creates one `CliInvocationStopController` per invocation, forwarding
+platform interrupt events and host shutdown to it. Its first interrupt cancels
+cooperatively; a repeated interrupt supplies a separate forced-termination token.
+The dispatcher passes both tokens and the remaining descriptor deadline into
+`CliExecutionContext`. A process-capable adapter receives `IExternalProcessRunner`
+at the application composition boundary, caps its request timeout to
+`RemainingTimeout()`, and passes `Cancellation()` and `ForceCancellation()` to
+the runner. The platform runner owns termination and pipe draining. An adapter's
+successful result or unrelated failure remains authoritative if cancellation
+arrives late;
+only an acknowledged cancellation is mapped to timeout when the deadline fired.
 
 ## Input Sources
 

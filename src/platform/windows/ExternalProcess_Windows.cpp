@@ -44,11 +44,17 @@ namespace Horo {
 
         class LineDecoder final {
         public:
-            LineDecoder(const ProcessOutputStream stream, const std::size_t maximum, const std::function<void(ProcessOutputLine)> &callback)
-                : stream_(stream), maximum_(std::max<std::size_t>(maximum, 1U)), callback_(&callback) {}
+            LineDecoder(const ProcessOutputStream stream, const std::size_t maximum, const std::size_t outputBudget,
+                        const std::function<void(ProcessOutputLine)> &callback)
+                : stream_(stream), maximum_(std::max<std::size_t>(maximum, 1U)), outputBudget_(outputBudget), callback_(&callback) {}
 
             void Append(const std::span<const char> bytes) {
                 for (const char value : bytes) {
+                    if (received_ >= outputBudget_) {
+                        truncated_ = true;
+                        continue;
+                    }
+                    ++received_;
                     if (value == '\n')
                         Emit();
                     else if (value != '\r') {
@@ -75,6 +81,8 @@ namespace Horo {
 
             ProcessOutputStream stream_;
             std::size_t maximum_;
+            std::size_t outputBudget_;
+            std::size_t received_{};
             const std::function<void(ProcessOutputLine)> *callback_;
             std::string pending_;
             bool truncated_{false};
@@ -163,7 +171,7 @@ namespace Horo {
 
         void DrainAvailable(const HANDLE pipe, bool &open, LineDecoder &decoder) {
             std::array<char, 4096> buffer{};
-            for (;;) {
+            for (std::size_t reads = 0; reads < 16; ++reads) {
                 DWORD available = 0;
                 if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
                     open = false;
@@ -181,6 +189,12 @@ namespace Horo {
                 }
                 decoder.Append(std::span{buffer.data(), static_cast<std::size_t>(read)});
             }
+        }
+
+        [[nodiscard]] bool JobHasActiveProcesses(const HANDLE job) noexcept {
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
+            return !QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr) ||
+                   accounting.ActiveProcesses != 0;
         }
     }  // namespace
 
@@ -226,7 +240,7 @@ namespace Horo {
         startup.hStdOutput = stdoutWrite.value;
         startup.hStdError = stderrWrite.value;
         PROCESS_INFORMATION process{};
-        if (const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED | CREATE_NO_WINDOW;
+        if (const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
             !CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE, flags, environmentBlock.data(),
                             workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup, &process))
             return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
@@ -245,29 +259,41 @@ namespace Horo {
         }
         ResumeThread(threadHandle.value);
 
-        LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.onOutput};
-        LineDecoder standardError{ProcessOutputStream::StandardError, request.maximumLineBytes, request.onOutput};
+        LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.maximumOutputBytes,
+                                   request.onOutput};
+        LineDecoder standardError{ProcessOutputStream::StandardError, request.maximumLineBytes, request.maximumOutputBytes,
+                                  request.onOutput};
         bool stdoutOpen = true;
         bool stderrOpen = true;
         bool terminationRequested = false;
         bool forceTerminated = false;
-        bool timedOut = false;
+        ProcessStopCause stopCause{ProcessStopCause::None};
         const auto started = std::chrono::steady_clock::now();
         auto terminationStarted = started;
+        auto forcedAt = started;
         for (;;) {
             DrainAvailable(stdoutRead.value, stdoutOpen, standardOutput);
             DrainAvailable(stderrRead.value, stderrOpen, standardError);
             const DWORD wait = WaitForSingleObject(processHandle.value, 10);
             const auto now = std::chrono::steady_clock::now();
-            if (const bool cancelled = cancellation.IsCancellationRequested();
-                !terminationRequested && (cancelled || now - started >= request.timeout)) {
+            const bool jobActive = JobHasActiveProcesses(job.value);
+            if (request.forceCancellation.IsCancellationRequested() && !forceTerminated) {
+                stopCause = stopCause == ProcessStopCause::None ? ProcessStopCause::Cancellation : stopCause;
                 terminationRequested = true;
-                timedOut = !cancelled;
-                terminationStarted = now;
-                static_cast<void>(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process.dwProcessId));
-            } else if (terminationRequested && wait != WAIT_OBJECT_0 && now - terminationStarted >= request.gracefulTermination) {
                 TerminateJobObject(job.value, 1);
                 forceTerminated = true;
+                forcedAt = now;
+            } else if (const bool cancelled = cancellation.IsCancellationRequested();
+                       !terminationRequested && (cancelled || now - started >= request.timeout || (wait == WAIT_OBJECT_0 && jobActive))) {
+                terminationRequested = true;
+                stopCause = cancelled ? ProcessStopCause::Cancellation
+                                      : (wait == WAIT_OBJECT_0 ? ProcessStopCause::DescendantCleanup : ProcessStopCause::Timeout);
+                terminationStarted = now;
+                static_cast<void>(GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process.dwProcessId));
+            } else if (terminationRequested && !forceTerminated && now - terminationStarted >= request.gracefulTermination) {
+                TerminateJobObject(job.value, 1);
+                forceTerminated = true;
+                forcedAt = now;
             }
             if (wait == WAIT_OBJECT_0) {
                 DrainAvailable(stdoutRead.value, stdoutOpen, standardOutput);
@@ -278,7 +304,7 @@ namespace Horo {
                     !PeekNamedPipe(stdoutRead.value, nullptr, 0, nullptr, &stdoutAvailable, nullptr) || stdoutAvailable == 0;
                 const bool stderrEmpty =
                     !PeekNamedPipe(stderrRead.value, nullptr, 0, nullptr, &stderrAvailable, nullptr) || stderrAvailable == 0;
-                if ((!stdoutOpen && !stderrOpen) || (stdoutEmpty && stderrEmpty)) {
+                if (!JobHasActiveProcesses(job.value) && ((!stdoutOpen && !stderrOpen) || (stdoutEmpty && stderrEmpty))) {
                     if (stdoutEmpty && stderrEmpty) {
                         standardOutput.Finish();
                         standardError.Finish();
@@ -286,20 +312,37 @@ namespace Horo {
                     break;
                 }
             }
+            if (forceTerminated && now - forcedAt >= request.maximumDrainDuration)
+                break;
         }
+        standardOutput.Finish();
+        standardError.Finish();
+        if (JobHasActiveProcesses(job.value)) {
+            if (!TerminateJobObject(job.value, 1))
+                return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+            const auto stopWaiting = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+            while (JobHasActiveProcesses(job.value) && std::chrono::steady_clock::now() < stopWaiting)
+                std::this_thread::sleep_for(std::chrono::milliseconds{10});
+            if (JobHasActiveProcesses(job.value))
+                return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+        }
+        if (WaitForSingleObject(processHandle.value, 0) != WAIT_OBJECT_0)
+            return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
         DWORD exitCode = 0;
-        GetExitCodeProcess(processHandle.value, &exitCode);
+        if (!GetExitCodeProcess(processHandle.value, &exitCode))
+            return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
         ExternalProcessResult result;
-        if (timedOut) {
+        if (forceTerminated) {
+            result.reason = ProcessTerminationReason::Forced;
+        } else if (stopCause == ProcessStopCause::Timeout) {
             result.reason = ProcessTerminationReason::TimedOut;
         } else if (terminationRequested) {
             result.reason = ProcessTerminationReason::Cancelled;
-        } else if (forceTerminated) {
-            result.reason = ProcessTerminationReason::Signalled;
         } else {
             result.reason = ProcessTerminationReason::Exited;
         }
         result.exitCode = static_cast<int>(exitCode);
+        result.stopCause = stopCause;
         return Result<ExternalProcessResult>::Success(result);
     }
 }  // namespace Horo
