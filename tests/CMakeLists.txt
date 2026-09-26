@@ -544,6 +544,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
+        unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
         unit/runtime/navigation/NavigationRuntimeQueuesTests.cpp
         unit/runtime/navigation/NavigationWorldLifecycleTests.cpp
