@@ -235,12 +235,15 @@ namespace Horo::Assets {
         Result<void> CookUncachedSlots(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
                                        std::span<CookSlot> slots, const CancellationToken &cancellation, CookOperationScope &operation) {
             TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
+            std::optional<Error> admissionError;
             for (CookSlot &slot : slots) {
                 if (slot.cacheHit)
                     continue;
                 const JobFunction work = [&slot, &catalog, &request](const CancellationToken &jobCancellation) {
-                    if (jobCancellation.IsCancellationRequested())
-                        return JobCancelled(MakeError(CookErrors::Cancelled));
+                    if (jobCancellation.IsCancellationRequested()) {
+                        slot.cookError = MakeError(CookErrors::Cancelled);
+                        return JobCancelled(*slot.cookError);
+                    }
                     Result<void> cooked = CookAndEncodeSlot(catalog, slot, request.target, jobCancellation);
                     if (cooked.HasError())
                         slot.cookError = cooked.ErrorValue();
@@ -249,11 +252,19 @@ namespace Horo::Assets {
                         return JobCancelled(cooked.ErrorValue());
                     return cooked;
                 };
-                if (auto spawned = group.Spawn({}, work); spawned.HasError())
-                    return Result<void>::Failure(spawned.ErrorValue());
+                if (auto spawned = group.Spawn({}, work); spawned.HasError()) {
+                    slot.cookError = IsJobCancelled(spawned.ErrorValue()) ? MakeError(CookErrors::Cancelled) : spawned.ErrorValue();
+                    admissionError = spawned.ErrorValue();
+                    group.RequestCancel();
+                    break;
+                }
             }
             Result<void> joined = group.Join();
-            for (const CookSlot &slot : slots) {
+            if (admissionError.has_value() && (!joined.HasError() || IsJobCancelled(joined.ErrorValue())))
+                joined = Result<void>::Failure(*admissionError);
+            for (CookSlot &slot : slots) {
+                if (!slot.cacheHit && joined.HasError() && !slot.cookError.has_value() && slot.cookedArtifact.empty())
+                    slot.cookError = MakeError(CookErrors::Cancelled);
                 if (!slot.cookError.has_value())
                     continue;
                 const bool cancelled = slot.cookError->code.Value() == CookErrors::Cancelled.code.Value();
