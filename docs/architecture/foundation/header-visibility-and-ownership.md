@@ -653,6 +653,16 @@ Invalid recompilation is rejected by `DecisionAssetPlanStore` without replacing 
 last valid plan, so existing runtime callers require no migration until a concrete
 decision-graph asset family adopts the adapter seam.
 
+`Horo/AI/EnvironmentQuerySchema.h` is owned by the same Foundation-only AI target.
+It defines bounded, versioned EQS authoring metadata and inert native/script/package
+descriptor snapshots. Stable query, result, item, context, generator, test, stage,
+and property IDs are independent of editor labels and source-vector order; explicit
+stage execution order is part of semantic meaning. Authoring capture retains unknown
+stages and missing contributions for degraded editing, while plan admission rejects
+every unavailable, incompatible, or unsupported stage before execution. AssetRegistry
+binding, cooking, scheduling, and provider execution remain in their owning later
+composition boundaries; this header adds no backend or scene dependency.
+
 ## PCG Identity Boundary
 
 HoroEngine::PCG owns Horo/PCG/PCGIdentity.h and Horo/PCG/PCGErrors.h.

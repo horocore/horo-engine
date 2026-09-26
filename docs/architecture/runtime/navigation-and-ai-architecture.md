@@ -1051,6 +1051,15 @@ snapshot and implement its own pathfinder, step physics or mutate sensory memory
 
 ### EQS Asset, Context And Extension Contracts
 
+`Horo/AI/EnvironmentQuerySchema.h` implements the Foundation-only authoring schema
+slice: stable typed identities, explicit stage order, bounded typed properties,
+versioned inert provider descriptors, and a read-only admitted plan. Authoring capture
+preserves unavailable/unknown contributions for editor round-trip. Compilation of an
+executable plan fails with typed errors if any required contribution, version, or
+stage kind is unavailable; it never skips a stage. This is schema admission, not the
+AssetRegistry mapping, cooker artifact, provider implementation, or runtime executor
+described below. Host composition supplies descriptor contributions explicitly.
+
 EnvironmentQueryTemplate is an authoring asset with stable AssetId metadata in
 AssetRegistry. Its immutable cooked EnvironmentQueryPlan contains stable StageIds,
 ordered stages, typed context/parameter schemas, provider dependencies, scoring and
