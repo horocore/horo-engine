@@ -68,6 +68,10 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionCapabilityUnavailable;
     /** @brief Storage for an immutable perception descriptor snapshot is unavailable. */
     extern const ErrorCodeDescriptor PerceptionRegistryStorageUnavailable;
+    /** @brief A perception-memory policy, typed observation, scene source, or liveness adapter is invalid. */
+    extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
+    /** @brief Perception memory received a backward committed simulation tick. */
+    extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
     /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
     extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
     /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */

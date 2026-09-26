@@ -1023,6 +1023,23 @@ struct AIPerceptionMemory {
      stale handles and discard the record immediately, preventing use-after-free
      and stale target locking.
 
+The implemented per-agent `AIPerceptionMemory` contract in `HoroEngine::AI` stores
+at most the host-profile cap in fixed storage, with an additional cap for each
+listener identity (both at most 32). `Observe`, `MarkLost`, and `AdvanceTo`
+receive the committed simulation tick and exact fixed quantum from the fixed-step
+owner; no wall-clock or variable frame delta enters aging. Repeating the same tick
+during pause leaves age and confidence unchanged. Replay rewind explicitly resets
+memory to the restored tick before deterministic re-ingestion; backward ticks
+without reset are rejected. A record retains its
+first sensed time until forgetting, refreshes its last sensed time and last-known
+facts on reacquisition, and expires at the configured age even if a sense omitted
+an explicit loss notification. A lost record decays from its last sensed time and
+is removed at the configured confidence threshold. Memory queries require the
+`HoroAISceneIntegration` live-source adapter, which reacquires the current scene
+view and rejects destroyed or recycled generations; destruction may also eagerly
+call `ForgetSource`. This memory component does not publish to a blackboard or
+choose sense scheduling policy; those remain separate phase owners.
+
 ## Environment Query System (EQS)
 
 ### EQS Ownership And Provider Execution

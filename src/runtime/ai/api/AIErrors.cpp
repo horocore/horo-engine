@@ -270,6 +270,24 @@ namespace Horo::AI::AIErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor PerceptionMemoryInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.memory_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A perception memory policy, observation, source, or liveness adapter is invalid.",
+        .remediationHint = "Supply bounded policy and typed sources from the active scene incarnation.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor PerceptionMemoryTimeInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.memory_time_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Perception memory received a backward committed simulation tick.",
+        .remediationHint = "Use the active fixed-tick simulation clock or reset memory before replay rewind.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor BehaviorTreeSchemaInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.behavior_tree.schema_invalid"},

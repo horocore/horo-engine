@@ -633,6 +633,15 @@ Invalid recompilation is rejected by `DecisionAssetPlanStore` without replacing 
 last valid plan, so existing runtime callers require no migration until a concrete
 decision-graph asset family adopts the adapter seam.
 
+`[GAI-002.7]` adds `Horo/AI/PerceptionMemory.h` to the Foundation-only `HoroAI`
+public boundary. It owns fixed-capacity, per-agent, scene-incarnation-scoped stimulus facts,
+not `RuntimeScene` objects or raw entity pointers. `HoroAISceneIntegration` owns the
+separate `Horo/AI/AIScenePerceptionSource.h` conversion and live-generation query
+adapter. Both headers are registered to their actual targets and exercised by the
+generated public-header consumers. This is a new contract with no production caller
+migration; future sense producers and scene activation must compose these APIs
+instead of adding a reverse RuntimeScene dependency to HoroAI.
+
 ## PCG Identity Boundary
 
 HoroEngine::PCG owns Horo/PCG/PCGIdentity.h and Horo/PCG/PCGErrors.h.
