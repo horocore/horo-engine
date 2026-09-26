@@ -79,13 +79,15 @@ namespace Horo::Terrain {
                 condition.notify_all();
             }
 
-            Result<void> Prepare(const JobExecutionContext &context) {
+            Result<void> Prepare(const JobExecutionContext &context, const bool failAfterRelease = false) {
                 std::unique_lock lock{mutex};
                 entered = true;
                 condition.notify_all();
                 condition.wait(lock, [this] {
                     return released;
                 });
+                if (failAfterRelease)
+                    return Result<void>::Failure(MakeError(TerrainErrors::DescriptorInvalid));
                 return context.Cancellation().IsCancellationRequested() ? JobCancelled() : Result<void>::Success();
             }
 
@@ -331,6 +333,31 @@ namespace Horo::Terrain {
             REQUIRE(AdvanceUntilTerminal(*jobs, current.Value()).state == TerrainAsyncWorkState::Succeeded);
             REQUIRE(jobs->Snapshot(current.Value()).Value().kind == TerrainAsyncWorkKind::EditPreview);
             REQUIRE(publication == 2);
+        }
+
+        TEST_CASE("Terrain running cancellation dominates a late preparation failure", "[unit][terrain][jobs]") {
+            JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
+            auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
+            WorkerGate gate;
+            int publications{};
+            auto submitted = jobs->SubmitCook(Request([&](const JobExecutionContext &context) {
+                return gate.Prepare(context, true);
+            }, [&](const CancellationToken &) {
+                ++publications;
+                return Result<void>::Success();
+            }));
+            REQUIRE(submitted.HasValue());
+            gate.WaitUntilEntered();
+            REQUIRE(jobs->RequestCancel(submitted.Value()).HasValue());
+            gate.Release();
+            const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
+            REQUIRE(terminal.state == TerrainAsyncWorkState::Cancelled);
+            REQUIRE(terminal.error.has_value());
+            REQUIRE(IsJobCancelled(*terminal.error));
+            REQUIRE(terminal.error->cause.Get() != nullptr);
+            REQUIRE(terminal.error->cause.Get()->code.Value() == TerrainErrors::DescriptorInvalid.code.Value());
+            REQUIRE(jobs->Advance(submitted.Value()).Value().state == TerrainAsyncWorkState::Cancelled);
+            REQUIRE(publications == 0);
         }
 
         TEST_CASE("Terrain fence replacement rejects revision rollback and unversioned capability drift", "[unit][terrain][jobs]") {

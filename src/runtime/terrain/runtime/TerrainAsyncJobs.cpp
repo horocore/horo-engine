@@ -155,8 +155,14 @@ namespace Horo::Terrain {
             if (context.Cancellation().IsCancellationRequested())
                 return JobCancelled();
             Result<void> result = prepare(context);
-            if (result.HasValue() && context.Cancellation().IsCancellationRequested())
+            if (context.Cancellation().IsCancellationRequested()) {
+                if (result.HasError()) {
+                    if (IsJobCancelled(result.ErrorValue()))
+                        return result;
+                    return JobCancelled(result.ErrorValue());
+                }
                 return JobCancelled();
+            }
             return result;
         });
         if (submitted.HasError())
