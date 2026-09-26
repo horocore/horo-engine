@@ -806,8 +806,9 @@ namespace Horo::PlatformServices {
                        .context = state.get(),
                        .sessionChanged = ObserveSession,
                        .complete = ReceiveCompletion};
-        auto host = std::unique_ptr<PlatformProviderLifecycleHost>(
-            new PlatformProviderLifecycleHost(state));  // NOSONAR(cpp:S5950) The private constructor is inaccessible to make_unique.
+        // The private constructor is inaccessible to make_unique.
+        auto host = std::unique_ptr<PlatformProviderLifecycleHost>(  // NOSONAR(cpp:S5950)
+            new PlatformProviderLifecycleHost(state));
         if (!StartNativeLifecycle(*state, descriptor, configuration, requiredMask)) {
             static_cast<void>(host->Close());
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InitializationFailed));
@@ -861,8 +862,9 @@ namespace Horo::PlatformServices {
                                                   .sessionRevision = sessionRevision,
                                                   .service = serviceIndex,
                                                   .operation = operation,
-                                                  .payload = reinterpret_cast<const std::uint8_t *>(
-                                                      payload.data()),  // NOSONAR(cpp:S6022) C ABI requires uint8_t.
+                                                  // The public C ABI requires a uint8_t byte span.
+                                                  .payload = reinterpret_cast<const std::uint8_t *>(  // NOSONAR(cpp:S6022)
+                                                      payload.data()),
                                                   .payloadSize = static_cast<std::uint32_t>(payload.size())};
         if (const auto status = InvokeProvider(state.operations.submit, state.candidate, &input); status != HORO_EXTENSION_SUCCESS) {
             static_cast<void>(state.requests.CompleteFailure(handle, MakeError(BackendErrors::ServiceUnavailable)));
