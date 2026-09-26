@@ -59,4 +59,6 @@ namespace Horo::Assets::ImportErrors {
     extern const ErrorCodeDescriptor FbxMalformed;
     extern const ErrorCodeDescriptor ImportCancelled;
     extern const ErrorCodeDescriptor ObjParseWarning;
+    extern const ErrorCodeDescriptor PreFracturedSourceInvalid;
+    extern const ErrorCodeDescriptor PreFracturedSourceLimit;
 }  // namespace Horo::Assets::ImportErrors

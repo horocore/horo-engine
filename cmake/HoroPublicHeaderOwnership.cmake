@@ -293,6 +293,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetReimport.h
     Horo/Assets/CookCatalog.h
     Horo/Assets/MeshEditorPayload.h
+    Horo/Assets/PreFracturedSource.h
 )
 horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioAssetSchema.h
@@ -432,6 +433,9 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructionIdentity.h
     Horo/Destruction/DestructionRegistry.h
     Horo/Destruction/DestructionStateMachine.h
+)
+horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
+    Horo/Destruction/PreFracturedImport.h
 )
 horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h

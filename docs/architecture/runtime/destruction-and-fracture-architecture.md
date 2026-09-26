@@ -382,6 +382,19 @@ Fracture authoring tools:
 - Chunk connectivity visualization
 - Damage threshold and behavior configuration
 
+The DFR-002.2 importer reads an FBX mesh occurrence named
+`HoroChunk_<nonzero decimal ID>` with an optional `__display_label` suffix.
+The numeric token is an explicit authored semantic chunk ID; the display label,
+FBX element position and source path are not identities. The token must be
+canonical decimal without leading zeroes and unique within the source. Mesh
+ancestors define the imported chunk hierarchy. Assets copies normalized
+world-space geometry, transform evidence and material assignment into a bounded
+detached source under normalization schema 1. Destruction Cook schema 1 validates
+the complete closed triangle topology,
+IDs, hierarchy, finite transforms, material coverage and profile limits before
+returning a sorted detached candidate. Import does not infer absent IDs, weld
+surfaces, invent materials, publish an artifact, or activate a runtime world.
+
 Each asset opens as one persistent `FractureAssetDocument` rooted at stable asset and
 accepted source revision. The document owns working recipe/source/graph intent, typed
 operation execution, history, dirty/saved state and derived candidate/preview status.

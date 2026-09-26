@@ -148,4 +148,10 @@ namespace Horo::Assets::ImportErrors {
                                               "The import operation was cancelled.", "Retry if the owning operation is still active."};
     const ErrorCodeDescriptor ObjParseWarning{kImportDomain, ErrorCode{"asset.import.obj.warning"}, ErrorSeverity::Warning,
                                               "OBJ parse warning.", "Review the import diagnostics."};
+    const ErrorCodeDescriptor PreFracturedSourceInvalid{kImportDomain, ErrorCode{"asset.import.prefractured.invalid"}, kImportError,
+                                                        "Pre-fractured FBX source geometry is invalid.",
+                                                        "Repair the named source node and re-import."};
+    const ErrorCodeDescriptor PreFracturedSourceLimit{kImportDomain, ErrorCode{"asset.import.prefractured.limit"}, kImportError,
+                                                      "Pre-fractured FBX exceeds a finite import limit.",
+                                                      "Reduce source complexity before import."};
 }  // namespace Horo::Assets::ImportErrors

@@ -20,6 +20,23 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## DFR-002.2 Import Boundary
+
+`HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX
+normalization contract. `HoroEngine::DestructionCook` owns the additive
+`Horo/Destruction/PreFracturedImport.h` semantic validation and detached
+candidate contract, linking `HoroEngine::DestructionApi` and Assets. Existing
+`core.mesh` FBX import callers do not migrate: that flattened preview path remains
+unchanged. Fracture authoring callers use the new cook target, capture the import
+owner revision before preparation, and explicitly accept only the completed
+candidate. The generated Assets and DestructionCook public-header consumers
+enforce both boundaries. Neither header publishes ufbx, native Physics, or Render
+types.
+The authoring owner must call `Invalidate()` on source changes to cancel older
+preparations before accepting any later candidate; acceptance itself also rotates
+the revision and cancellation token. Shutdown closes acceptance but retains the
+last immutable snapshot for existing readers.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
