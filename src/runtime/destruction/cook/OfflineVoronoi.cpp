@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <ranges>
 #include <utility>
 
 namespace Horo::Destruction::OfflineVoronoiErrors {
@@ -54,12 +55,12 @@ namespace Horo::Destruction {
             if (!ValidLimits(recipe))
                 return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
             std::vector<DestructionChunkId> sortedIds = recipe.siteIds;
-            std::sort(sortedIds.begin(), sortedIds.end());
-            if (std::any_of(sortedIds.begin(), sortedIds.end(),
-                            [](const DestructionChunkId id) {
+            std::ranges::sort(sortedIds);
+            if (std::ranges::any_of(sortedIds,
+                                    [](const DestructionChunkId id) {
                 return !id.IsValid();
             }) ||
-                std::adjacent_find(sortedIds.begin(), sortedIds.end()) != sortedIds.end())
+                std::ranges::adjacent_find(sortedIds) != sortedIds.end())
                 return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
             if (source.positions.size() > recipe.maximumVertices || source.indices.size() / 3 > recipe.maximumTriangles ||
                 source.positions.size() > recipe.limits.maximumArtifactBytes / sizeof(std::array<float, 3>) ||
@@ -90,8 +91,9 @@ namespace Horo::Destruction {
                 for (std::uint32_t other = 0; other < sites.size(); ++other) {
                     if (other == index)
                         continue;
-                    auto clipped = Clip(faces, sites[index], sites[other], other + 1U, recipe.interiorMaterialSlot, budget, cancellation);
-                    if (clipped.HasError())
+                    if (auto clipped =
+                            Clip(faces, sites[index], sites[other], other + 1U, recipe.interiorMaterialSlot, budget, cancellation);
+                        clipped.HasError())
                         return Result<OfflineVoronoiChunk>::Failure(clipped.ErrorValue());
                     if (faces.empty())
                         break;
@@ -101,24 +103,24 @@ namespace Horo::Destruction {
                 auto chunk = MakeChunk(faces, sites[index], recipe.siteIds, index, budget);
                 if (chunk.HasError())
                     return chunk;
-                MergeChunk(aggregate, std::move(chunk.Value()));
+                MergeChunk(aggregate, chunk.Value());
             }
             if (!(aggregate.volume > 0.0))
                 return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::InvalidSites));
             if (auto exterior = AppendExterior(aggregate, sourceFaces, sites, index, budget, cancellation); exterior.HasError())
                 return Result<OfflineVoronoiChunk>::Failure(exterior.ErrorValue());
-            std::sort(aggregate.neighbors.begin(), aggregate.neighbors.end());
-            aggregate.neighbors.erase(std::unique(aggregate.neighbors.begin(), aggregate.neighbors.end()), aggregate.neighbors.end());
+            std::ranges::sort(aggregate.neighbors);
+            aggregate.neighbors.erase(std::ranges::unique(aggregate.neighbors).begin(), aggregate.neighbors.end());
             return Result<OfflineVoronoiChunk>::Success(std::move(aggregate));
         }
 
         [[nodiscard]] Result<void> ValidateNeighbors(const std::vector<OfflineVoronoiChunk> &chunks) {
             for (const auto &chunk : chunks) {
                 for (const auto neighbor : chunk.neighbors) {
-                    const auto other = std::find_if(chunks.begin(), chunks.end(), [&](const auto &candidateChunk) {
+                    const auto other = std::ranges::find_if(chunks, [&](const auto &candidateChunk) {
                         return candidateChunk.id == neighbor;
                     });
-                    if (other == chunks.end() || !std::binary_search(other->neighbors.begin(), other->neighbors.end(), chunk.id))
+                    if (other == chunks.end() || !std::ranges::binary_search(other->neighbors, chunk.id))
                         return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
                 }
             }
@@ -154,7 +156,7 @@ namespace Horo::Destruction {
             auto decomposed = ConvexRegions(source, sourceFaces.Value(), recipe, budget, cancellation);
             if (decomposed.HasError())
                 return Result<OfflineVoronoiCandidate>::Failure(decomposed.ErrorValue());
-            regions = std::move(decomposed.Value());
+            regions = decomposed.Value();
         }
         OfflineVoronoiCandidate candidate;
         candidate.sourceAsset = source.asset;
@@ -169,7 +171,7 @@ namespace Horo::Destruction {
             auto chunk = GenerateSiteChunk(index, sites.Value(), regions, sourceFaces.Value(), recipe, budget, cancellation);
             if (chunk.HasError())
                 return Result<OfflineVoronoiCandidate>::Failure(chunk.ErrorValue());
-            candidate.chunks.push_back(std::move(chunk.Value()));
+            candidate.chunks.push_back(chunk.Value());
         }
         if (auto neighbors = ValidateNeighbors(candidate.chunks); neighbors.HasError())
             return Result<OfflineVoronoiCandidate>::Failure(neighbors.ErrorValue());

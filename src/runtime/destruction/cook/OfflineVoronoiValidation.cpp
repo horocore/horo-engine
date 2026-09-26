@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <map>
 #include <numbers>
+#include <ranges>
 #include <utility>
 
 namespace Horo::Destruction::VoronoiDetail {
@@ -44,13 +45,12 @@ namespace Horo::Destruction::VoronoiDetail {
             const Point pa = Position(source.positions[a]);
             const Point pb = Position(source.positions[b]);
             const Point pc = Position(source.positions[c]);
-            const Point normal = Cross(Sub(pb, pa), Sub(pc, pa));
-            if (Length(normal) <= tolerance * tolerance)
+            if (const Point normal = Cross(Sub(pb, pa), Sub(pc, pa)); Length(normal) <= tolerance * tolerance)
                 return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
             for (const auto [from, to] : {std::pair{a, b}, std::pair{b, c}, std::pair{c, a}}) {
-                auto &edge = edges[std::minmax(from, to)];
-                ++edge.first;
-                edge.second += from < to ? 1 : -1;
+                auto &[count, winding] = edges[std::minmax(from, to)];
+                ++count;
+                winding += from < to ? 1 : -1;
             }
             faces.push_back(Face{{pa, pb, pc}, source.materialSlots[offset / 3], 0, true});
         }
@@ -119,15 +119,15 @@ namespace Horo::Destruction::VoronoiDetail {
     }
 
     [[nodiscard]] bool PointOnTriangle(const Point &point, const Face &face, const double tolerance) {
-        const Point a = face.vertices[0];
-        const Point b = face.vertices[1];
-        const Point c = face.vertices[2];
-        const Point normal = Cross(Sub(b, a), Sub(c, a));
-        if (std::abs(Dot(normal, Sub(point, a))) > Length(normal) * tolerance)
+        const Point origin = face.vertices[0];
+        const Point edgeB = face.vertices[1];
+        const Point edgeC = face.vertices[2];
+        const Point normal = Cross(Sub(edgeB, origin), Sub(edgeC, origin));
+        if (std::abs(Dot(normal, Sub(point, origin))) > Length(normal) * tolerance)
             return false;
         const double squared = Dot(normal, normal);
-        const double u = Dot(Cross(Sub(b, point), Sub(c, point)), normal) / squared;
-        const double v = Dot(Cross(Sub(c, point), Sub(a, point)), normal) / squared;
+        const double u = Dot(Cross(Sub(edgeB, point), Sub(edgeC, point)), normal) / squared;
+        const double v = Dot(Cross(Sub(edgeC, point), Sub(origin, point)), normal) / squared;
         const double w = 1.0 - u - v;
         return u >= -tolerance && v >= -tolerance && w >= -tolerance;
     }
@@ -192,10 +192,11 @@ namespace Horo::Destruction::VoronoiDetail {
             } else {
                 candidate = recipe.sites[sites.size()];
             }
-            const bool unique = std::none_of(sites.begin(), sites.end(), [&](const Point &site) {
+            if (const bool unique = std::ranges::none_of(sites,
+                                                         [&](const Point &site) {
                 return Near(site, candidate, tolerance);
             });
-            if (Finite(candidate) && unique && InsideSource(candidate, faces, tolerance)) {
+                Finite(candidate) && unique && InsideSource(candidate, faces, tolerance)) {
                 sites.push_back(candidate);
             } else if (!recipe.sites.empty()) {
                 return Result<std::vector<Point>>::Failure(MakeError(OfflineVoronoiErrors::InvalidSites));

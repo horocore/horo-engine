@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 
 namespace Horo::Destruction::VoronoiDetail {
     void RemoveAdjacentDuplicates(std::vector<Point> &vertices, const double tolerance) {
@@ -23,17 +24,17 @@ namespace Horo::Destruction::VoronoiDetail {
         for (std::size_t index = 0; index < face.vertices.size(); ++index) {
             if (!budget.ChargeWork())
                 return Result<Face>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-            const Point &a = face.vertices[index];
-            const Point &b = face.vertices[(index + 1) % face.vertices.size()];
-            const double da = Dot(normal, a) - planeOffset;
-            const double db = Dot(normal, b) - planeOffset;
+            const Point &start = face.vertices[index];
+            const Point &end = face.vertices[(index + 1) % face.vertices.size()];
+            const double da = Dot(normal, start) - planeOffset;
+            const double db = Dot(normal, end) - planeOffset;
             const bool insideA = da <= tolerance;
             const bool insideB = db <= tolerance;
             if (insideA)
-                next.vertices.push_back(a);
+                next.vertices.push_back(start);
             if (insideA != insideB) {
                 const double fraction = std::clamp(da / (da - db), 0.0, 1.0);
-                const Point crossing = Add(a, Scale(Sub(b, a), fraction));
+                const Point crossing = Add(start, Scale(Sub(end, start), fraction));
                 next.vertices.push_back(crossing);
                 cap.push_back(crossing);
             }
@@ -44,11 +45,11 @@ namespace Horo::Destruction::VoronoiDetail {
 
     void AppendClipCap(std::vector<Face> &clipped, std::vector<Point> cap, const Point &normal, const double normalLength,
                        const double tolerance, const std::uint32_t interiorMaterial, const std::uint32_t otherIndex) {
-        std::sort(cap.begin(), cap.end());
-        cap.erase(std::unique(cap.begin(), cap.end(),
-                              [&](const Point &a, const Point &b) {
+        std::ranges::sort(cap);
+        cap.erase(std::ranges::unique(cap,
+                                      [&](const Point &a, const Point &b) {
             return Near(a, b, tolerance);
-        }),
+        }).begin(),
                   cap.end());
         if (cap.size() < 3)
             return;
@@ -59,14 +60,14 @@ namespace Horo::Destruction::VoronoiDetail {
         const Point axis = std::abs(normal[0]) < std::abs(normal[1]) ? Point{1, 0, 0} : Point{0, 1, 0};
         const Point u = Scale(Cross(axis, normal), 1.0 / Length(Cross(axis, normal)));
         const Point v = Scale(Cross(normal, u), 1.0 / normalLength);
-        std::sort(cap.begin(), cap.end(), [&](const Point &a, const Point &b) {
+        std::ranges::sort(cap, [&](const Point &a, const Point &b) {
             const Point aa = Sub(a, center);
             const Point bb = Sub(b, center);
             const double angleA = std::atan2(Dot(aa, v), Dot(aa, u));
             const double angleB = std::atan2(Dot(bb, v), Dot(bb, u));
             return angleA == angleB ? a < b : angleA < angleB;
         });
-        clipped.push_back(Face{std::move(cap), interiorMaterial, otherIndex, otherIndex != 0});
+        clipped.emplace_back(std::move(cap), interiorMaterial, otherIndex, otherIndex != 0);
     }
 
     [[nodiscard]] Result<void> ValidateClippedVolume(std::vector<Face> &clipped, Budget &budget) {
@@ -111,14 +112,14 @@ namespace Horo::Destruction::VoronoiDetail {
             auto next = ClipFace(face, normal, planeOffset, tolerance, cap, budget);
             if (next.HasError())
                 return Result<void>::Failure(next.ErrorValue());
-            Face clippedFace = std::move(next.Value());
+            Face clippedFace = next.Value();
             if (clippedFace.vertices.size() < 3)
                 continue;
-            const bool bisectorFace =
-                otherIndex != 0 && std::all_of(clippedFace.vertices.begin(), clippedFace.vertices.end(), [&](const Point &point) {
+            if (const bool bisectorFace = otherIndex != 0 && std::ranges::all_of(clippedFace.vertices,
+                                                                                 [&](const Point &point) {
                 return std::abs(Dot(normal, point) - planeOffset) <= tolerance;
             });
-            if (bisectorFace) {
+                bisectorFace) {
                 clippedFace.material = interiorMaterial;
                 clippedFace.neighbor = otherIndex;
                 clippedFace.visible = true;
@@ -136,6 +137,14 @@ namespace Horo::Destruction::VoronoiDetail {
         Point normal{};
         double offset{};
     };
+
+    [[nodiscard]] std::size_t PrimaryAxis(const Point &normal) {
+        if (std::abs(normal[0]) > 1.0e-12)
+            return 0;
+        if (std::abs(normal[1]) > 1.0e-12)
+            return 1;
+        return 2;
+    }
 
     [[nodiscard]] std::vector<Face> BoundingBox(const OfflineVoronoiSource &source) {
         Point lower = Position(source.positions.front());
@@ -165,18 +174,17 @@ namespace Horo::Destruction::VoronoiDetail {
         for (const auto &face : faces) {
             Point normal = Cross(Sub(face.vertices[1], face.vertices[0]), Sub(face.vertices[2], face.vertices[0]));
             normal = Scale(normal, 1.0 / Length(normal));
-            const std::size_t primary = std::abs(normal[0]) > 1.0e-12 ? 0 : (std::abs(normal[1]) > 1.0e-12 ? 1 : 2);
-            if (normal[primary] < 0.0)
+            if (const auto primary = PrimaryAxis(normal); normal[primary] < 0.0)
                 normal = Scale(normal, -1.0);
-            planes.push_back({normal, Dot(normal, face.vertices[0])});
+            planes.emplace_back(normal, Dot(normal, face.vertices[0]));
         }
-        std::sort(planes.begin(), planes.end(), [](const Plane &a, const Plane &b) {
+        std::ranges::sort(planes, [](const Plane &a, const Plane &b) {
             return a.normal == b.normal ? a.offset < b.offset : a.normal < b.normal;
         });
-        planes.erase(std::unique(planes.begin(), planes.end(),
-                                 [](const Plane &a, const Plane &b) {
+        planes.erase(std::ranges::unique(planes,
+                                         [](const Plane &a, const Plane &b) {
             return Near(a.normal, b.normal, 1.0e-9) && std::abs(a.offset - b.offset) <= 1.0e-8;
-        }),
+        }).begin(),
                      planes.end());
         return planes;
     }
@@ -188,6 +196,41 @@ namespace Horo::Destruction::VoronoiDetail {
         return Clip(faces, Sub(center, Scale(normal, 0.5)), Add(center, Scale(normal, 0.5)), 0, 0, budget, cancellation);
     }
 
+    [[nodiscard]] Result<std::pair<bool, bool>> RegionSides(const std::vector<Face> &region, const Plane &plane, Budget &budget) {
+        bool negative = false;
+        bool positive = false;
+        for (const auto &face : region) {
+            for (const auto &point : face.vertices) {
+                if (!budget.ChargeWork())
+                    return Result<std::pair<bool, bool>>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                const double side = Dot(plane.normal, point) - plane.offset;
+                negative |= side < -1.0e-8;
+                positive |= side > 1.0e-8;
+            }
+        }
+        return Result<std::pair<bool, bool>>::Success({negative, positive});
+    }
+
+    [[nodiscard]] Result<void> SplitRegion(const std::vector<Face> &region, const Plane &plane, std::vector<std::vector<Face>> &next,
+                                           Budget &budget, const CancellationToken &cancellation) {
+        auto sides = RegionSides(region, plane, budget);
+        if (sides.HasError())
+            return Result<void>::Failure(sides.ErrorValue());
+        if (!sides.Value().first || !sides.Value().second) {
+            next.push_back(region);
+            return Result<void>::Success();
+        }
+        auto left = region;
+        auto right = region;
+        if (auto clipped = ClipPlane(left, plane, false, budget, cancellation); clipped.HasError())
+            return clipped;
+        if (auto clipped = ClipPlane(right, plane, true, budget, cancellation); clipped.HasError())
+            return clipped;
+        next.push_back(std::move(left));
+        next.push_back(std::move(right));
+        return Result<void>::Success();
+    }
+
     [[nodiscard]] Result<void> SplitRegions(std::vector<std::vector<Face>> &regions, const std::vector<Plane> &planes,
                                             const std::uint32_t maximumRegions, Budget &budget, const CancellationToken &cancellation) {
         for (const auto &plane : planes) {
@@ -195,29 +238,8 @@ namespace Horo::Destruction::VoronoiDetail {
                 return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
             std::vector<std::vector<Face>> next;
             for (const auto &region : regions) {
-                bool negative = false;
-                bool positive = false;
-                for (const auto &face : region) {
-                    for (const auto &point : face.vertices) {
-                        if (!budget.ChargeWork())
-                            return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                        const double side = Dot(plane.normal, point) - plane.offset;
-                        negative |= side < -1.0e-8;
-                        positive |= side > 1.0e-8;
-                    }
-                }
-                if (!negative || !positive) {
-                    next.push_back(region);
-                } else {
-                    auto left = region;
-                    auto right = region;
-                    if (auto clipped = ClipPlane(left, plane, false, budget, cancellation); clipped.HasError())
-                        return clipped;
-                    if (auto clipped = ClipPlane(right, plane, true, budget, cancellation); clipped.HasError())
-                        return clipped;
-                    next.push_back(std::move(left));
-                    next.push_back(std::move(right));
-                }
+                if (auto split = SplitRegion(region, plane, next, budget, cancellation); split.HasError())
+                    return split;
                 if (next.size() > maximumRegions)
                     return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
             }
@@ -229,7 +251,7 @@ namespace Horo::Destruction::VoronoiDetail {
     [[nodiscard]] Result<std::vector<std::vector<Face>>> ConvexRegions(const OfflineVoronoiSource &source, const std::vector<Face> &surface,
                                                                        const OfflineVoronoiRecipe &recipe, Budget &budget,
                                                                        const CancellationToken &cancellation) {
-        std::vector<std::vector<Face>> regions{BoundingBox(source)};
+        std::vector regions(1, BoundingBox(source));
         if (auto split = SplitRegions(regions, SourcePlanes(surface), recipe.maximumConvexRegions, budget, cancellation); split.HasError())
             return Result<std::vector<std::vector<Face>>>::Failure(split.ErrorValue());
         std::vector<std::vector<Face>> inside;

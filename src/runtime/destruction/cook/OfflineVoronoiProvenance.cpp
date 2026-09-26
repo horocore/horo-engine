@@ -23,6 +23,58 @@ namespace Horo::Destruction {
             for (const double value : point)
                 AppendU64(bytes, std::bit_cast<std::uint64_t>(value));
         }
+
+        struct OutputHasher final {
+            std::uint64_t value{14695981039346656037ULL};
+
+            void Mix(const std::uint64_t input) {
+                for (unsigned shift = 0; shift < 64; shift += 8) {
+                    value ^= static_cast<std::uint8_t>(input >> shift);
+                    value *= 1099511628211ULL;
+                }
+            }
+        };
+
+        void HashPositions(OutputHasher &hash, const std::vector<std::array<float, 3>> &positions) {
+            hash.Mix(positions.size());
+            for (const auto &position : positions) {
+                for (const float coordinate : position)
+                    hash.Mix(std::bit_cast<std::uint32_t>(coordinate));
+            }
+        }
+
+        void HashCollisionPiece(OutputHasher &hash, const OfflineVoronoiCollisionPiece &piece) {
+            HashPositions(hash, piece.positions);
+            hash.Mix(piece.triangles.size());
+            for (const auto &triangle : piece.triangles) {
+                for (const auto index : triangle)
+                    hash.Mix(index);
+            }
+            hash.Mix(std::bit_cast<std::uint64_t>(piece.volume));
+        }
+
+        void HashChunk(OutputHasher &hash, const OfflineVoronoiChunk &chunk) {
+            hash.Mix(chunk.id.Value());
+            for (const double coordinate : chunk.site)
+                hash.Mix(std::bit_cast<std::uint64_t>(coordinate));
+            HashPositions(hash, chunk.positions);
+            hash.Mix(chunk.triangles.size());
+            for (const auto &triangle : chunk.triangles) {
+                for (const auto index : triangle.indices)
+                    hash.Mix(index);
+                hash.Mix(triangle.materialSlot);
+                hash.Mix(triangle.interior ? 1U : 0U);
+            }
+            hash.Mix(chunk.collisionPieces.size());
+            for (const auto &piece : chunk.collisionPieces)
+                HashCollisionPiece(hash, piece);
+            hash.Mix(chunk.neighbors.size());
+            for (const auto neighbor : chunk.neighbors)
+                hash.Mix(neighbor.Value());
+            hash.Mix(std::bit_cast<std::uint64_t>(chunk.volume));
+            for (const double coordinate : chunk.centerOfMass)
+                hash.Mix(std::bit_cast<std::uint64_t>(coordinate));
+        }
     }  // namespace
 
     namespace Detail {
@@ -60,54 +112,13 @@ namespace Horo::Destruction {
         }
 
         std::uint64_t VoronoiOutputChecksum(const OfflineVoronoiCandidate &candidate) {
-            std::uint64_t hash = 14695981039346656037ULL;
-            const auto mix = [&](const std::uint64_t value) {
-                for (unsigned shift = 0; shift < 64; shift += 8) {
-                    hash ^= static_cast<std::uint8_t>(value >> shift);
-                    hash *= 1099511628211ULL;
-                }
-            };
-            mix(candidate.estimatedBytes);
-            mix(candidate.workItems);
-            mix(candidate.chunks.size());
-            for (const auto &chunk : candidate.chunks) {
-                mix(chunk.id.Value());
-                for (const double coordinate : chunk.site)
-                    mix(std::bit_cast<std::uint64_t>(coordinate));
-                mix(chunk.positions.size());
-                for (const auto &position : chunk.positions) {
-                    for (const float coordinate : position)
-                        mix(std::bit_cast<std::uint32_t>(coordinate));
-                }
-                mix(chunk.triangles.size());
-                for (const auto &triangle : chunk.triangles) {
-                    for (const auto index : triangle.indices)
-                        mix(index);
-                    mix(triangle.materialSlot);
-                    mix(triangle.interior ? 1U : 0U);
-                }
-                mix(chunk.collisionPieces.size());
-                for (const auto &piece : chunk.collisionPieces) {
-                    mix(piece.positions.size());
-                    for (const auto &position : piece.positions) {
-                        for (const float coordinate : position)
-                            mix(std::bit_cast<std::uint32_t>(coordinate));
-                    }
-                    mix(piece.triangles.size());
-                    for (const auto &triangle : piece.triangles) {
-                        for (const auto index : triangle)
-                            mix(index);
-                    }
-                    mix(std::bit_cast<std::uint64_t>(piece.volume));
-                }
-                mix(chunk.neighbors.size());
-                for (const auto neighbor : chunk.neighbors)
-                    mix(neighbor.Value());
-                mix(std::bit_cast<std::uint64_t>(chunk.volume));
-                for (const double coordinate : chunk.centerOfMass)
-                    mix(std::bit_cast<std::uint64_t>(coordinate));
-            }
-            return hash;
+            OutputHasher hash;
+            hash.Mix(candidate.estimatedBytes);
+            hash.Mix(candidate.workItems);
+            hash.Mix(candidate.chunks.size());
+            for (const auto &chunk : candidate.chunks)
+                HashChunk(hash, chunk);
+            return hash.value;
         }
     }  // namespace Detail
 

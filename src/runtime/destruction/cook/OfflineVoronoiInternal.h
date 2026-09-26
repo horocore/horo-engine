@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 
 namespace Horo::Destruction::VoronoiDetail {
     using Point = std::array<double, 3>;
@@ -44,13 +45,13 @@ namespace Horo::Destruction::VoronoiDetail {
     }
 
     [[nodiscard]] inline bool NonzeroDigest(const Sha256Digest &digest) {
-        return std::any_of(digest.bytes.begin(), digest.bytes.end(), [](const std::uint8_t value) {
+        return std::ranges::any_of(digest.bytes, [](const std::uint8_t value) {
             return value != 0;
         });
     }
 
     [[nodiscard]] inline bool Finite(const Point &point) {
-        return std::all_of(point.begin(), point.end(), [](const double value) {
+        return std::ranges::all_of(point, [](const double value) {
             return std::isfinite(value);
         });
     }
