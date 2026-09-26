@@ -35,6 +35,8 @@ namespace Horo::Editor {
         void Reset() noexcept;
 
         [[nodiscard]] bool IsActive() const noexcept;
+        /** @brief Emits a pending cancellation without processing pointer input. */
+        [[nodiscard]] bool ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept;
 
         /**
          * @brief Draws the current gizmo and advances its pointer interaction.

@@ -219,15 +219,17 @@ command handlers during the frame that `WantTextInput` is set, because
 
 `CapturePointer()` grants exclusive pointer delivery for a specific
 `PointerButton` to one context. The capture is cancelled automatically under
-seven conditions:
+nine conditions:
 
 | `CaptureCancellationReason` | Triggering condition | Error code |
 |---|---|---|
 | `Explicit` | Caller calls `InputRouter::CancelCapture(Explicit)` | — |
+| `Released` | `EndFrame()` observes an unhandled initiating-button release after gesture handlers run | — |
 | `Escape` | Escape key is pressed while capture is active | — |
 | `FocusLost` | `WindowInputState::focused` becomes `false` | — |
-| `ModalOpened` | A `ModalRoot` or `ModalChild` context is pushed while capture is active | `CaptureInactiveContext` on next attempt |
-| `OwnerDestroyed` | `IInputCaptureOwner` is destroyed (or `CancelCapture(OwnerDestroyed)` is called) | — |
+| `ModalOpened` | A `ModalRoot`, `ModalChild`, or `NativeDialog` context is pushed while capture is active | `CaptureInactiveContext` on next attempt |
+| `ContextPreempted` | A newer same-priority or higher-priority non-modal context takes the capture owner's place | `CaptureInactiveContext` on next attempt |
+| `OwnerDestroyed` | The owner explicitly calls `CancelCapture(OwnerDestroyed)` during detach | — |
 | `DeviceDisconnected` | `WindowInputState::pointerDeviceAvailable` becomes `false` | — |
 | `ContextRemoved` | The owning `InputContextToken` is destroyed or reset | — |
 
@@ -243,6 +245,23 @@ that are not currently active.
 `IInputCaptureOwner::OnInputCaptureCancelled()` is called exactly once per
 capture, synchronously on the thread that triggers the cancellation condition.
 The owner must not call `CapturePointer()` again inside this callback.
+An owner's destructor invalidates a still-live capture without invoking its
+already-destructing virtual callback; the stale `PointerCaptureToken` then
+reports inactive. An owner can hold at most one capture, including across
+routers. Normal token release is not a cancellation callback.
+
+The router retains a same-frame modal barrier after the last modal context
+closes, so its opening/closing transition cannot reach workspace, viewport or
+gameplay. A synchronous `NativeDialog` token also blocks the first committed
+snapshot after the dialog returns; the preceding RAII stack then resumes.
+The barrier excludes every context below `ModalRoot`, including held-state
+reads, not just pressed edges. A live highest-eligible context is the sole
+keyboard focus routing owner. Runtime UI focus remains per audience and
+presentation scope as specified by ADR-078, not process-global.
+The host calls `InputRouter::EndFrame()` after interactive presentation. Gesture
+owners may commit and release normally when they see the release edge; the
+router cancels only a capture still held at that boundary. Cancellation on
+focus, device, modal, Escape, or context loss remains immediate.
 
 ## Frame-Order Invariant
 
@@ -460,7 +479,7 @@ preserve them:
 - modal blocking: `EditorWorkspace` actions are not readable while a
   `ModalRoot` context is active
 - `FocusedGuiWidget` outranks `EditorWorkspace` actions during text focus
-- all seven `CaptureCancellationReason`s trigger correctly and call
+- all nine `CaptureCancellationReason`s trigger correctly and call
   `OnInputCaptureCancelled()` exactly once
 - `CaptureBusy` returned when capture already held
 - `CaptureInactiveContext` returned by `CapturePointer()` when the supplied

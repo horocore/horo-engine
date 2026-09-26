@@ -27,6 +27,7 @@ namespace {
         int enters = 0;
         int leaves = 0;
         int destructions = 0;
+        int menuInvocations = 0;
     };
 
     class RecordingScreen final : public GuiScreen {
@@ -49,6 +50,11 @@ namespace {
         void OnUpdate(float) override {}
 
         void Draw(const GuiContentRegion &) override {}
+
+        bool HandleMenuInvocation(const EditorMenuInvocation &) override {
+            ++stats_.menuInvocations;
+            return true;
+        }
 
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
             return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
@@ -98,6 +104,19 @@ namespace {
         REQUIRE((host.Start(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasValue()));
         REQUIRE((stats.enters == 1));
         REQUIRE((!host.Services().Empty()));
+
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        auto modalContext = input.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        modalContext.Reset();
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        const Input::RawInputSnapshot nextFrame;
+        input.BeginFrame(nextFrame);
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 2);
 
         const Result<void> invalidRoute = host.Navigate(GuiRoute{GuiRouteKind::Welcome, ProjectCreationRouteParameters{}});
         REQUIRE((invalidRoute.HasError()));

@@ -47,6 +47,8 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
         viewportRenderer_ = context.viewportRenderer;
+        inputRouter_ = context.inputRouter;
+        workspaceInputContext_ = context.workspaceInputContext;
         if (context.inputRouter != nullptr && context.workspaceInputContext != nullptr)
             interaction_.Attach(*context.inputRouter, *context.workspaceInputContext);
     }
@@ -54,6 +56,8 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
         interaction_.Detach();
+        inputRouter_ = nullptr;
+        workspaceInputContext_ = nullptr;
         viewportRenderer_ = nullptr;
     }
 
@@ -102,7 +106,9 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
 
-        DrawProjectionControl(origin, viewModel, command, context);
+        DrawProjectionControl(origin, viewModel, command, context,
+                              inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
+                                  inputRouter_->IsContextActive(*workspaceInputContext_));
         DrawObjectCount(origin, viewModel, context);
         if (!hasRenderedViewport)
             DrawMissingRendererMessage(centerX, origin.y, height, context);
@@ -170,6 +176,10 @@ namespace Horo::Editor {
         const ImVec2 pointer = ImGui::GetMousePos();
         const bool pointerOverProjection = pointer.x >= projectionMinimum.x && pointer.x <= projectionMaximum.x &&
                                            pointer.y >= projectionMinimum.y && pointer.y <= projectionMaximum.y;
+        const bool inputEligible =
+            inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
+            (inputRouter_->IsContextActive(*workspaceInputContext_) ||
+             (interaction_.IsActive() && !inputRouter_->HasHigherPriorityContext(Input::InputContextKind::EditorToolCapture)));
         const bool surfaceInteractive = !pointerOverProjection || interaction_.IsActive();
         bool surfaceHovered = false;
         if (surfaceInteractive) {
@@ -177,9 +187,10 @@ namespace Horo::Editor {
             ImGui::InvisibleButton("##ViewportSurface", {layout.width, layout.height},
                                    ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
                                        ImGuiButtonFlags_MouseButtonMiddle);
-            surfaceHovered = ImGui::IsItemHovered();
+            surfaceHovered = inputEligible && ImGui::IsItemHovered();
         }
-        const bool assetDragActive = surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, depthRange);
+        const bool assetDragActive =
+            inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, depthRange);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
@@ -189,7 +200,10 @@ namespace Horo::Editor {
                                       .depthRange = depthRange,
                                       .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive},
                                      viewModel.viewportLights, viewModel.primarySelection);
-        if (ResolveLightMarkerInteraction(clickedLight, lightMarkerFailureReported_, command) && surfaceInteractive && !assetDragActive) {
+        if (!inputEligible)
+            static_cast<void>(interaction_.ConsumePendingCancellation(command));
+        if (ResolveLightMarkerInteraction(clickedLight, lightMarkerFailureReported_, command) && inputEligible && surfaceInteractive &&
+            !assetDragActive) {
             interaction_.Draw({.drawList = drawList,
                                .origin = layout.origin,
                                .width = layout.width,
@@ -255,7 +269,8 @@ namespace Horo::Editor {
     }
 
     void ViewportPanel::DrawProjectionControl(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel,
-                                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+                                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                                              const bool inputEligible) {
         using enum Runtime::CameraProjection;
         ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.0F, origin.y + 8.0F));
         const std::array<const char *, 2> projectionItems{
@@ -264,7 +279,8 @@ namespace Horo::Editor {
         };
         int projectionIndex = viewModel.viewportCamera.projection == Perspective ? 0 : 1;
         ImGui::PushItemWidth(190.0F);
-        if (Ui::ComboControl("viewport_projection", &projectionIndex, projectionItems.data(), 2, context.theme.fonts)) {
+        if (const bool changed = Ui::ComboControl("viewport_projection", &projectionIndex, projectionItems.data(), 2, context.theme.fonts);
+            changed && inputEligible) {
             command.command = EditorWorkspaceViewCommand::ChangeViewportProjection;
             command.viewportProjectionPayload = projectionIndex == 0 ? Perspective : Orthographic;
         }

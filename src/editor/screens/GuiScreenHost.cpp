@@ -86,8 +86,8 @@ namespace Horo::Editor {
                                  Extensions::ExtensionInventory *extensionInventory,
                                  Extensions::ExtensionMarketplaceService *extensionMarketplace)
 
-        : context_(&context), modalHost_(&modalHost), settingsService_(&settingsService), localization_(&localization),
-          engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
+        : context_(&context), modalHost_(&modalHost), inputRouter_(&inputRouter), settingsService_(&settingsService),
+          localization_(&localization), engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
           extensionMarketplace_(extensionMarketplace), screenRegistry_(std::move(screenRegistry)),
           workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
         services_.Register(*this);
@@ -457,7 +457,9 @@ namespace Horo::Editor {
 
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
+            ImGui::BeginDisabled(inputRouter_->HasHigherPriorityContext(Input::InputContextKind::FocusedGuiWidget));
             activeScreen_->Draw(contentRegion);
+            ImGui::EndDisabled();
             isScreenCallbackActive_ = false;
         }
 
@@ -485,6 +487,9 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         using enum EditorMenuAction;
+        if (invocation.action != ExitApplication && invocation.action != None &&
+            inputRouter_->HasHigherPriorityContext(Input::InputContextKind::FocusedGuiWidget))
+            return;
         switch (invocation.action) {
             case NewProject:
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::ProjectCreation, ProjectCreationRouteParameters{}}));
@@ -529,7 +534,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::HandleDropFiles(const std::vector<std::filesystem::path> &files) {
-        if (files.empty() || !modalHost_)
+        if (files.empty() || !modalHost_ ||
+            (inputRouter_->HasHigherPriorityContext(Input::InputContextKind::FocusedGuiWidget) && !modalHost_->HasOpenModal()))
             return;
 
         // Auto-open import modal if not already open

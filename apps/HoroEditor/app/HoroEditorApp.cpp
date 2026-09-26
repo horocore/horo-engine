@@ -799,6 +799,7 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
+                        p_->inputRouter.EndFrame();
                         if (context.frameNumber % 60U == 1U) {
                             p_->telemetry.frameNumber.Set(static_cast<double>(context.frameNumber));
                             p_->telemetry.frameDuration.Set(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);

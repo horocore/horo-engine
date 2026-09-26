@@ -24,13 +24,18 @@ namespace Horo::Editor {
         return drag_.has_value();
     }
 
+    bool TransformGizmoController::ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept {
+        if (!cancelPreviewOnNextDraw_)
+            return false;
+        cancelPreviewOnNextDraw_ = false;
+        command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
+        return true;
+    }
+
     bool TransformGizmoController::Draw(ImDrawList &drawList, const TransformGizmoDrawContext &context,
                                         ViewportInteractionCapture &capture) {
-        if (cancelPreviewOnNextDraw_) {
-            cancelPreviewOnNextDraw_ = false;
-            context.command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
+        if (ConsumePendingCancellation(context.command))
             return true;
-        }
 
         const EditorWorkspaceViewModel &viewModel = context.viewModel;
         const auto selectedObject = viewModel.primarySelection.has_value()

@@ -17,6 +17,10 @@ namespace Horo::Editor {
         return navigation_.IsActive() || gizmo_.IsActive();
     }
 
+    bool ViewportInteractionController::ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept {
+        return gizmo_.ConsumePendingCancellation(command);
+    }
+
     void ViewportInteractionController::Draw(const ViewportInteractionDrawContext &context) {
         const Input::InputRouter *router = capture_.Router();
         if (router == nullptr || capture_.WorkspaceContext() == nullptr)
