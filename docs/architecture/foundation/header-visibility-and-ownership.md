@@ -642,6 +642,24 @@ generated public-header consumers. This is a new contract with no production cal
 migration; future sense producers and scene activation must compose these APIs
 instead of adding a reverse RuntimeScene dependency to HoroAI.
 
+`[GAI-002.8]` adds `Horo/AI/PerceptionFiltering.h` to the same Foundation-only
+`HoroAI` boundary. The simulation owner composes typed gameplay facts and a
+revisioned policy with bounded memory before sensing work and publication. The
+gate emits payload-free decisions and exposes one filtered publication snapshot.
+A changed policy rechecks bounded admission facts and removes only entries denied
+by the new policy; unrelated memory retains its age and last-known facts. An
+identical policy preserves memory and revision. Authoritative team, affiliation,
+layer, or visibility changes can recheck an exact remembered fact at a safe point.
+`AIPerceptionMemory::Forget` adds exact-key removal for this gate, preserving
+other listener and source facts; existing memory callers need no migration for
+that additive API.
+This is a contract-only seam:
+the current tree has no production `PerceptionSensePoll` publisher or perception
+blackboard/debug projection. Existing direct `AIPerceptionMemory` consumers must
+migrate to `PerceptionFilteredMemory` before publishing perception facts. #1329
+owns batched perception delivery and blackboard projection. The header is
+registered to `HoroAI` and exercised by generated public-header consumers.
+
 ## PCG Identity Boundary
 
 HoroEngine::PCG owns Horo/PCG/PCGIdentity.h and Horo/PCG/PCGErrors.h.

@@ -86,4 +86,22 @@ namespace Horo::AI::AIErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PerceptionFilterInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.filter_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A perception filter policy or gameplay candidate fact is invalid.",
+        .remediationHint = "Provide typed affiliation, team, layer, and gameplay visibility facts from the active simulation.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor PerceptionFilterRevisionInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.filter_revision_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A perception policy change is stale, duplicated, missing, or revision-exhausted.",
+        .remediationHint = "Stage one change against the current revision and commit it once at the sensing safe point.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::AI::AIErrors

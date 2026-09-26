@@ -72,6 +72,10 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
     /** @brief Perception memory received a backward committed simulation tick. */
     extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
+    /** @brief A perception filter policy or authoritative candidate fact is malformed. */
+    extern const ErrorCodeDescriptor PerceptionFilterInvalid;
+    /** @brief A perception policy change is stale, duplicated, missing, or cannot advance its revision. */
+    extern const ErrorCodeDescriptor PerceptionFilterRevisionInvalid;
     /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
     extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
     /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */
