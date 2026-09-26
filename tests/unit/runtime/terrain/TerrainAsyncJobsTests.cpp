@@ -321,6 +321,8 @@ namespace Horo::Terrain {
             REQUIRE(cancelled.kind == TerrainAsyncWorkKind::EditPreview);
             REQUIRE(cancelled.error.has_value());
             REQUIRE(IsJobCancelled(*cancelled.error));
+            REQUIRE(cancelled.error->cause.Get() != nullptr);
+            REQUIRE(cancelled.error->cause.Get()->code.Value() == TerrainErrors::RevisionStale.code.Value());
             REQUIRE(publication == 0);
 
             auto current = jobs->SubmitEditPreview(Request([](const JobExecutionContext &) {

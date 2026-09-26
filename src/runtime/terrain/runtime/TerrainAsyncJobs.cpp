@@ -194,18 +194,18 @@ namespace Horo::Terrain {
         }
 
         const auto &terminal = *job->terminalResult;
-        if (terminal.state == JobState::Cancelled) {
+        if (record->snapshot.fence != impl_->currentFence) {
+            record->snapshot.state = TerrainAsyncWorkState::Cancelled;
+            record->snapshot.error = CancelledWithCause(MakeError(TerrainErrors::RevisionStale));
+        } else if (terminal.state == JobState::Cancelled) {
             record->snapshot.state = TerrainAsyncWorkState::Cancelled;
             record->snapshot.error = terminal.error.value_or(JobCancelled().ErrorValue());
         } else if (terminal.state == JobState::Failed) {
             record->snapshot.state = TerrainAsyncWorkState::Failed;
             record->snapshot.error = terminal.error;
-        } else if (!impl_->accepting || record->cancellation.Token().IsCancellationRequested() ||
-                   record->snapshot.fence != impl_->currentFence) {
+        } else if (!impl_->accepting || record->cancellation.Token().IsCancellationRequested()) {
             record->snapshot.state = TerrainAsyncWorkState::Cancelled;
-            record->snapshot.error = record->snapshot.fence != impl_->currentFence
-                                         ? CancelledWithCause(MakeError(TerrainErrors::RevisionStale))
-                                         : JobCancelled().ErrorValue();
+            record->snapshot.error = JobCancelled().ErrorValue();
         } else {
             impl_->Publish(*record);
         }
