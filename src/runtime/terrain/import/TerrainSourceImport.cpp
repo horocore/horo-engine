@@ -1,5 +1,7 @@
 #include "Horo/Terrain/TerrainSourceImport.h"
 
+#include "TerrainPngDecoder.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -10,131 +12,11 @@
 #include <string_view>
 #include <utility>
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#define STBI_NO_STDIO
-#include "stb_image.h"
-
 namespace Horo::Terrain {
-    namespace TerrainSourceErrors {
-        namespace {
-            const ErrorDomainId Domain{"horo.terrain.import"};
-        }
-
-        const ErrorCodeDescriptor UnsupportedFormat{.domain = Domain,
-                                                    .code = ErrorCode{"terrain.import.unsupported_format"},
-                                                    .defaultSeverity = ErrorSeverity::Error,
-                                                    .summary = "The terrain raster format is unsupported for this channel.",
-                                                    .remediationHint = "Convert height to explicit RAW U16/F32, weights to RAW U8/U16, and "
-                                                                       "holes to binary RAW U8; supply byte and row order.",
-                                                    .retryable = false,
-                                                    .userActionable = true,
-                                                    .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor
-            InvalidDimensions{.domain = Domain,
-                              .code = ErrorCode{"terrain.import.invalid_dimensions"},
-                              .defaultSeverity = ErrorSeverity::Error,
-                              .summary = "Terrain source dimensions are empty, mismatched, or exceed the grid ceiling.",
-                              .remediationHint =
-                                  "Use one equal-sized grid of at least two samples per axis within captured project limits.",
-                              .retryable = false,
-                              .userActionable = true,
-                              .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor
-            InvalidBytes{.domain = Domain,
-                         .code = ErrorCode{"terrain.import.invalid_bytes"},
-                         .defaultSeverity = ErrorSeverity::Error,
-                         .summary = "Terrain raster byte length does not match its declared shape and scalar encoding.",
-                         .remediationHint =
-                             "Provide exact tightly packed single-channel bytes without a header, padding, or trailing data.",
-                         .retryable = false,
-                         .userActionable = true,
-                         .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor InvalidCoordinates{.domain = Domain,
-                                                     .code = ErrorCode{"terrain.import.invalid_coordinates"},
-                                                     .defaultSeverity = ErrorSeverity::Error,
-                                                     .summary =
-                                                         "Terrain coordinate metadata is incomplete, non-finite, or requires reprojection.",
-                                                     .remediationHint =
-                                                         "Provide finite meter coordinates and positive spacing/scale; project geographic "
-                                                         "degrees upstream and name a projected EPSG CRS.",
-                                                     .retryable = false,
-                                                     .userActionable = true,
-                                                     .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor
-            PrecisionLost{.domain = Domain,
-                          .code = ErrorCode{"terrain.import.precision_lost"},
-                          .defaultSeverity = ErrorSeverity::Error,
-                          .summary = "Canonical float32 meters exceed the requested precision error.",
-                          .remediationHint = "Adjust source units/offset or explicitly allow a larger finite meter error before import.",
-                          .retryable = false,
-                          .userActionable = true,
-                          .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor InvalidSample{.domain = Domain,
-                                                .code = ErrorCode{"terrain.import.invalid_sample"},
-                                                .defaultSeverity = ErrorSeverity::Error,
-                                                .summary =
-                                                    "Terrain raster contains a non-finite height, empty weight pixel, or non-binary hole.",
-                                                .remediationHint = "Replace no-data/NaN/inf heights, supply positive weight at each pixel, "
-                                                                   "and encode holes as exact zero or one.",
-                                                .retryable = false,
-                                                .userActionable = true,
-                                                .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor
-            LimitExceeded{.domain = Domain,
-                          .code = ErrorCode{"terrain.import.limit_exceeded"},
-                          .defaultSeverity = ErrorSeverity::Error,
-                          .summary = "Terrain source samples, bytes, layers, or decode work exceed captured limits.",
-                          .remediationHint = "Split or reduce the source, or select a compatible larger project import budget explicitly.",
-                          .retryable = false,
-                          .userActionable = true,
-                          .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor Cancelled{.domain = Domain,
-                                            .code = ErrorCode{"terrain.import.cancelled"},
-                                            .defaultSeverity = ErrorSeverity::Warning,
-                                            .summary = "Terrain source normalization was cancelled before publication.",
-                                            .remediationHint = "Start a new import operation when the source is still needed.",
-                                            .retryable = true,
-                                            .userActionable = false,
-                                            .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor DecoderFailed{.domain = Domain,
-                                                .code = ErrorCode{"terrain.import.decoder_failed"},
-                                                .defaultSeverity = ErrorSeverity::Error,
-                                                .summary = "An optional terrain raster decoder failed outside its typed result contract.",
-                                                .remediationHint =
-                                                    "Disable or repair the exact importer contribution and retry with a supported source.",
-                                                .retryable = false,
-                                                .userActionable = true,
-                                                .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor
-            RevisionStale{.domain = Domain,
-                          .code = ErrorCode{"terrain.import.revision_stale"},
-                          .defaultSeverity = ErrorSeverity::Warning,
-                          .summary = "Terrain source changed since import began or the candidate revision is not newer.",
-                          .remediationHint =
-                              "Reimport against the current authoring revision; do not overwrite intervening sculpt or paint edits.",
-                          .retryable = true,
-                          .userActionable = true,
-                          .deprecatedBy = std::nullopt};
-        const ErrorCodeDescriptor Closed{.domain = Domain,
-                                         .code = ErrorCode{"terrain.import.closed"},
-                                         .defaultSeverity = ErrorSeverity::Warning,
-                                         .summary = "The terrain authoring document is closed to publication.",
-                                         .remediationHint = "Open a new document owner before importing.",
-                                         .retryable = false,
-                                         .userActionable = false,
-                                         .deprecatedBy = std::nullopt};
-    }  // namespace TerrainSourceErrors
-
     namespace {
         template <typename T> [[nodiscard]] Result<T> Failed(const ErrorCodeDescriptor &code, const std::string_view detail = {}) {
             return Result<T>::Failure(MakeError(code, std::string(detail)));
         }
-
-        struct DecodedPngRaster final {
-            TerrainRasterFormat format{TerrainRasterFormat::Count};
-            std::vector<std::byte> bytes;
-        };
 
         [[nodiscard]] std::uint32_t ReadBits(const TerrainRasterInput &raster, const std::uint64_t sourceIndex,
                                              const std::uint32_t bytesPerSample) noexcept {
@@ -148,86 +30,6 @@ namespace Horo::Terrain {
                     bits = (bits << 8U) | std::to_integer<std::uint8_t>(raster.bytes[offset + i]);
             }
             return bits;
-        }
-
-        [[nodiscard]] std::uint32_t ReadBig32(const std::span<const std::byte> bytes, const std::size_t offset) noexcept {
-            return (std::to_integer<std::uint32_t>(bytes[offset]) << 24U) | (std::to_integer<std::uint32_t>(bytes[offset + 1]) << 16U) |
-                   (std::to_integer<std::uint32_t>(bytes[offset + 2]) << 8U) | std::to_integer<std::uint32_t>(bytes[offset + 3]);
-        }
-
-        /** @brief Verifies the PNG envelope and exact grayscale shape before stb can allocate pixels. */
-        [[nodiscard]] Result<std::uint8_t> ValidatePngHeader(const TerrainRasterInput &source, const std::uint64_t maximumDecodedBytes) {
-            static constexpr std::array<std::uint8_t, 8> signature{137, 80, 78, 71, 13, 10, 26, 10};
-            if (source.bytes.size() < 33 || source.bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
-            for (std::size_t i = 0; i < signature.size(); ++i) {
-                if (std::to_integer<std::uint8_t>(source.bytes[i]) != signature[i])
-                    return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
-            }
-            if (ReadBig32(source.bytes, 8) != 13 || source.bytes[12] != std::byte{'I'} || source.bytes[13] != std::byte{'H'} ||
-                source.bytes[14] != std::byte{'D'} || source.bytes[15] != std::byte{'R'})
-                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
-            const std::uint32_t width = ReadBig32(source.bytes, 16);
-            const std::uint32_t height = ReadBig32(source.bytes, 20);
-            const std::uint8_t bitDepth = std::to_integer<std::uint8_t>(source.bytes[24]);
-            const std::uint8_t colorType = std::to_integer<std::uint8_t>(source.bytes[25]);
-            if (colorType != 0 || (bitDepth != 8 && bitDepth != 16) || source.bytes[26] != std::byte{0} ||
-                source.bytes[27] != std::byte{0} || source.bytes[28] != std::byte{0})
-                return Failed<std::uint8_t>(TerrainSourceErrors::UnsupportedFormat,
-                                            "Only non-interlaced grayscale PNG with 8 or 16-bit samples is supported.");
-            if (width != source.width || height != source.height)
-                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidDimensions);
-            const std::uint64_t decodedBytes = static_cast<std::uint64_t>(width) * height * (bitDepth / 8U);
-            if (decodedBytes > maximumDecodedBytes)
-                return Failed<std::uint8_t>(TerrainSourceErrors::LimitExceeded);
-            return Result<std::uint8_t>::Success(bitDepth);
-        }
-
-        /** @brief Copies decoded byte grayscale pixels into operation-owned canonical bytes. */
-        [[nodiscard]] bool DecodePng8(const TerrainRasterInput &source, DecodedPngRaster &result, int &width, int &height,
-                                      int &components) {
-            const auto *input = reinterpret_cast<const stbi_uc *>(source.bytes.data());
-            stbi_uc *pixels = stbi_load_from_memory(input, static_cast<int>(source.bytes.size()), &width, &height, &components, 1);
-            if (pixels == nullptr)
-                return false;
-            std::copy_n(reinterpret_cast<const std::byte *>(pixels), result.bytes.size(), result.bytes.begin());
-            stbi_image_free(pixels);
-            return true;
-        }
-
-        /** @brief Converts decoded host-order 16-bit PNG samples to canonical little-endian bytes. */
-        [[nodiscard]] bool DecodePng16(const TerrainRasterInput &source, DecodedPngRaster &result, int &width, int &height,
-                                       int &components) {
-            const auto *input = reinterpret_cast<const stbi_uc *>(source.bytes.data());
-            stbi_us *pixels = stbi_load_16_from_memory(input, static_cast<int>(source.bytes.size()), &width, &height, &components, 1);
-            if (pixels == nullptr)
-                return false;
-            for (std::size_t i = 0; i < result.bytes.size() / 2; ++i) {
-                result.bytes[2 * i] = static_cast<std::byte>(pixels[i] & 0xFFU);
-                result.bytes[2 * i + 1] = static_cast<std::byte>(pixels[i] >> 8U);
-            }
-            stbi_image_free(pixels);
-            return true;
-        }
-
-        /** @brief Decodes only a preflighted grayscale PNG into detached raw scalar bytes. */
-        [[nodiscard]] Result<DecodedPngRaster> DecodePngGray(const TerrainRasterInput &source, const std::uint64_t maximumDecodedBytes) {
-            auto bitDepth = ValidatePngHeader(source, maximumDecodedBytes);
-            if (bitDepth.HasError())
-                return Result<DecodedPngRaster>::Failure(bitDepth.ErrorValue());
-            DecodedPngRaster result;
-            result.format = bitDepth.Value() == 8 ? TerrainRasterFormat::RawU8 : TerrainRasterFormat::RawU16;
-            result.bytes.resize(
-                static_cast<std::size_t>(static_cast<std::uint64_t>(source.width) * source.height * (bitDepth.Value() / 8U)));
-            int decodedWidth = 0;
-            int decodedHeight = 0;
-            int components = 0;
-            const bool decoded = bitDepth.Value() == 8 ? DecodePng8(source, result, decodedWidth, decodedHeight, components)
-                                                       : DecodePng16(source, result, decodedWidth, decodedHeight, components);
-            if (!decoded || decodedWidth != static_cast<int>(source.width) || decodedHeight != static_cast<int>(source.height) ||
-                components != 1)
-                return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
-            return Result<DecodedPngRaster>::Success(std::move(result));
         }
 
         [[nodiscard]] std::uint64_t SourceIndex(const TerrainRasterInput &raster, const std::uint32_t x, const std::uint32_t z) noexcept {
@@ -392,10 +194,10 @@ namespace Horo::Terrain {
                 std::min<std::uint64_t>(raster.format == TerrainRasterFormat::PngGray ? decodeBudget / 2U : decodeBudget,
                                         samples * sizeof(float));
             if (raster.format == TerrainRasterFormat::PngGray) {
-                auto decoded = DecodePngGray(raster, maximumDecoded);
+                auto decoded = ImportDetail::DecodePngGray(raster, maximumDecoded);
                 if (decoded.HasError())
                     return Result<void>::Failure(decoded.ErrorValue());
-                DecodedPngRaster value = std::move(decoded).Value();
+                ImportDetail::DecodedPngRaster value = std::move(decoded).Value();
                 raster.format = value.format;
                 raster.byteOrder = TerrainByteOrder::Little;
                 storage.push_back(std::move(value.bytes));
