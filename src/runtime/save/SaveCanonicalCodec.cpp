@@ -179,17 +179,17 @@ namespace Horo::Runtime {
     }
 
     Result<void> CanonicalValueReader::Charge(const std::size_t bytes) const {
-        std::size_t used = state_->decodedBytes.load(std::memory_order_relaxed);
+        std::size_t used = state_->decodedBytes.load();
         while (true) {
             if (used > limits_.maximumDecodedBytes || bytes > limits_.maximumDecodedBytes - used)
                 return Result<void>::Failure(ErrorAt(SaveErrors::CanonicalCodecLimitExceeded));
-            if (state_->decodedBytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
+            if (state_->decodedBytes.compare_exchange_weak(used, used + bytes))
                 return Result<void>::Success();
         }
     }
 
     Result<void> CanonicalValueReader::ChargeReadWork(const std::size_t bytes) const {
-        std::size_t used = state_->readWorkBytes.load(std::memory_order_relaxed);
+        std::size_t used = state_->readWorkBytes.load();
         while (true) {
             if (used > limits_.maximumReadWorkBytes || bytes > limits_.maximumReadWorkBytes - used) {
                 Error error = ErrorAt(SaveErrors::CanonicalCodecLimitExceeded);
@@ -197,7 +197,7 @@ namespace Horo::Runtime {
                 error.diagnostics.front().message = "Canonical read work budget exceeded.";
                 return Result<void>::Failure(std::move(error));
             }
-            if (state_->readWorkBytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
+            if (state_->readWorkBytes.compare_exchange_weak(used, used + bytes))
                 return Result<void>::Success();
         }
     }

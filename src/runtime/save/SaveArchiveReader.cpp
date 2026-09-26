@@ -521,8 +521,8 @@ namespace Horo::Runtime {
 
     Result<std::optional<std::span<const std::byte>>> ValidatedSaveArchive::SelectChunk(const SaveRecordId record) const {
         const auto entries = directory_.Entries();
-        const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
-        if (found != entries.end() && found->record == record) {
+        if (const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
+            found != entries.end() && found->record == record) {
             std::uint64_t remaining = remainingReadWork_->load(std::memory_order_relaxed);
             while (true) {
                 if (found->storedByteLength > remaining)
