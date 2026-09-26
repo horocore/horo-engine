@@ -114,8 +114,16 @@ namespace Horo::PlatformServices {
                 return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
             }
 
-            Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest) override {
-                return Admit<void>(PlatformServiceKind::Cloud);
+            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest) override {
+                return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest) override {
+                return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle) override {
+                return Admit<CloudQuotaObservation>(PlatformServiceKind::Cloud);
             }
 
             Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest) override {
