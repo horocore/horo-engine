@@ -11,10 +11,10 @@ permissions:
 
 concurrency:
   group: sonar-${{ github.workflow }}-${{ github.ref }}
-  # A newer main commit supersedes an older push analysis just like a newer PR
-  # commit supersedes its previous analysis. Avoid running stale Sonar scans in
-  # parallel when several PRs are merged in quick succession.
-  cancel-in-progress: true
+  # Let the active main scan finish and refresh SonarCloud's branch cache.
+  # GitHub replaces a pending main run with the latest merge, so a burst needs
+  # at most the active scan and one follow-up. Supersede stale PR scans.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sonar:
