@@ -46,8 +46,15 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] bool ValidForce(const CpuParticleForceModule &force) noexcept {
-            return force.kind < CpuParticleForceKind::Count && Finite(force.vector) && Finite(force.center) && Finite(force.strength) &&
-                   Finite(force.falloff) && Finite(force.frequency) && force.falloff >= 0.0F && force.frequency >= 0.0F;
+            using enum CpuParticleForceKind;
+            if (force.kind >= Count || !Finite(force.vector) || !Finite(force.center) || !Finite(force.strength) ||
+                !Finite(force.falloff) || !Finite(force.frequency) || force.falloff < 0.0F || force.frequency < 0.0F)
+                return false;
+            if (force.kind == Noise)
+                return force.randomChannel >= 10 && Finite(force.strength * force.frequency);
+            if (force.kind == Gravity || force.kind == Wind)
+                return Finite(force.vector * force.strength);
+            return true;
         }
 
         [[nodiscard]] Result<void> ValidateBasic(const ParticleSystemDescriptorData &data, const CpuParticleSimulatorCreateInfo &info) {
@@ -66,9 +73,15 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] Result<void> ValidateForces(const std::span<const CpuParticleForceModule> forces) {
+            std::array<bool, 256> noiseChannelSeen{};
             for (const auto &force : forces) {
                 if (!ValidForce(force))
                     return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                if (force.kind == CpuParticleForceKind::Noise) {
+                    if (noiseChannelSeen[force.randomChannel])
+                        return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                    noiseChannelSeen[force.randomChannel] = true;
+                }
             }
             return Result<void>::Success();
         }
