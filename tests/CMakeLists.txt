@@ -211,6 +211,7 @@ add_executable(HoroNetworkApiTests
 )
 target_compile_features(HoroNetworkApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkApiTests PRIVATE HoroEngine::NetworkApi)
+target_include_directories(HoroNetworkApiTests PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
 horo_register_catch_test(HoroNetworkApiTests LABELS "unit;network;headless")
 add_executable(HoroNetworkTransportNullTests
         unit/runtime/networking/DeterministicTransportTests.cpp
