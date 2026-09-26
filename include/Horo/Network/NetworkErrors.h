@@ -18,6 +18,24 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor TransportHandleInvalid;
     /** @brief A reclaimed handle slot cannot advance its generation without wrapping. */
     extern const ErrorCodeDescriptor TransportGenerationExhausted;
+    /** @brief Backend composition identity, descriptor, or operation is malformed. */
+    extern const ErrorCodeDescriptor TransportBackendInvalid;
+    /** @brief The exact requested backend is not installed in this host composition. */
+    extern const ErrorCodeDescriptor TransportBackendUnavailable;
+    /** @brief An installed backend is not supported on this host. */
+    extern const ErrorCodeDescriptor TransportBackendUnsupported;
+    /** @brief An installed backend has no admitted complete configuration. */
+    extern const ErrorCodeDescriptor TransportBackendNotConfigured;
+    /** @brief A backend identity was already registered or another backend selected. */
+    extern const ErrorCodeDescriptor TransportBackendConflict;
+    /** @brief The host's finite backend registration capacity is exhausted. */
+    extern const ErrorCodeDescriptor TransportBackendCapacityExceeded;
+    /** @brief A factory returned no instance or threw before activation. */
+    extern const ErrorCodeDescriptor TransportBackendFactoryFailed;
+    /** @brief Backend selection or activation was cancelled by the composition owner. */
+    extern const ErrorCodeDescriptor TransportBackendCancelled;
+    /** @brief Backend composition has entered terminal shutdown. */
+    extern const ErrorCodeDescriptor TransportBackendShuttingDown;
     /** @brief A replicated authority epoch or object slot/generation is malformed. */
     extern const ErrorCodeDescriptor NetworkObjectIdentityInvalid;
     /** @brief A retired replicated-object slot cannot advance without generation wrap. */

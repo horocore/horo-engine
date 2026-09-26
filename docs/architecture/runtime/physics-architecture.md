@@ -155,6 +155,42 @@ materials and publishes complete body/shape/constraint bindings, but does not cl
 contact filtering support from the closed native filter. Immediate-query fixtures
 remain a separate narrow analytic path and do not replace scene activation.
 
+`BodyMutation` is available only for a live canonical solver world. A resident scene
+body can receive one owned `Change/Body` payload per exact future tick. The order
+key names its one-based Horo body slot; the payload retains the full generation-
+checked handle. Admission validates the current body, replacement shape and policy
+between fixed ticks without touching native state. The complete tick frame is
+revalidated before any mutation, then body changes apply in canonical order at
+`ApplyDeferredPreStep`. This catches a constraint admitted after the queued body
+change before any native setter runs.
+They retain the Horo handle and current solver pose. Shape changes update native
+broadphase bounds and invalidate the contact cache; shape or mode changes wake a
+moving body. Mass and velocity edits wake it; changes to locked axes or speed
+ceilings wake it too. A damping-only edit preserves activity unless the caller
+requests `Wake`. Static bodies never wake.
+Successful application updates the owner-thread body policy readback. The policy's
+pose and velocities are creation or last-command intent, not live solver output.
+The reconciliation readback also translates native motion, shape, mass, bounds,
+pose, velocity and activity without extending the body lifetime. Observed mass
+is absent when all translation axes are locked because the solver's inverse mass
+is then zero even for a dynamic body. The retained mass policy remains available.
+Mass preparation and native-body existence checks precede the first setter. The
+owner thread keeps the same native body ID through that safe point. An unexpected
+native lock loss fails the world terminally without publishing a partial tick and
+requires reset.
+
+The pinned solver reserves motion storage for static bodies with shapes that can
+move, allowing static-to-kinematic/dynamic transitions without changing native
+body identity. Static-only shapes, malformed mass/velocity, absent shapes, stale
+handles and duplicate same-body/tick requests reject before the safe point.
+Constrained body mutation and per-body depenetration-speed changes report
+`OperationUnsupported` until their native reconciliation paths are qualified.
+This path does not create/destroy bodies or perform runtime shape cooking.
+The initial closed collision filter prevents contact generation, so native shape
+bounds and activity are qualified here; contact-cache invalidation follows the
+pinned solver's `SetShape` operation and needs contact regression coverage when
+collision-profile filtering opens.
+
 `PrepareWorld` builds an isolated unpublished candidate from one captured settings
 snapshot. It owns scratch storage, serial job dispatch, filters and native system
 in dependency order. `Activate` binds a valid host-issued world generation without

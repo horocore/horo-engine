@@ -146,13 +146,6 @@ namespace Horo::PlatformServices {
         CloudObjectId object;
     };
 
-    /** @brief Owned cloud object write intent suitable for asynchronous retention. */
-    struct CloudWriteRequest final {
-        PlatformSubjectHandle subject;
-        CloudObjectId object;
-        std::vector<std::byte> bytes;
-    };
-
     /** @brief Bounded presence publication intent. */
     struct PresenceUpdateRequest final {
         PlatformSubjectHandle subject;
@@ -281,8 +274,6 @@ namespace Horo::PlatformServices {
         virtual ~ICloudService() = default;
         /** @brief Reads one opaque object. @param request Typed object address. @return Admitted typed request or failure. */
         [[nodiscard]] virtual Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) = 0;
-        /** @brief Writes one complete opaque object. @param request Owned bytes and address. @return Admitted request or failure. */
-        [[nodiscard]] virtual Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) = 0;
 
         /**
          * @brief Lists bounded opaque object metadata in the captured authenticated session partition.
@@ -302,6 +293,41 @@ namespace Horo::PlatformServices {
          */
         [[nodiscard]] virtual Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest) {
             return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
+        }
+
+        /**
+         * @brief Executes one conditional atomic write at the selected provider's commit point.
+         * @param request Complete exact intent retained through provider-operation retirement.
+         * @return Admitted mutation or UnsupportedCapability.
+         * @pre Admission requires advertised ConditionalAtomicObject and durable mutation-ID deduplication.
+         * @post The provider compares absence or exact revision and publishes all bytes at one indivisible commit point. A competing
+         *       writer receives AlreadyExists or PreconditionFailed without changing the visible object. Native multipart staging is
+         *       never visible at the public key. An exact mutation-ID replay returns the original semantic outcome and commit evidence
+         *       without another commit; changed intent or operation with that ID returns IdempotencyConflict. These guarantees must be
+         *       implemented by the provider's native conditional and durable deduplication facilities, never a frontend read or mutex.
+         *       ValidateCloudWriteCompletion must pass before a success enters the request store. Cancel, timeout, and shutdown after
+         *       commit may have begun retain an unknown remote outcome for coordinator reconciliation, never a fabricated success.
+         */
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest) {
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
+        }
+
+        /**
+         * @brief Executes one atomic revision-matched delete at the selected provider's commit point.
+         * @param request Exact key, revision and durable mutation identity.
+         * @return Admitted mutation or UnsupportedCapability.
+         * @post A stale revision returns PreconditionFailed without deleting a newer object. Exact replay returns the original outcome
+         *       and evidence without a second commit; cross-operation ID reuse returns IdempotencyConflict. ValidateCloudDeleteCompletion
+         *       must pass before success publication. Cancellation and shutdown preserve ambiguous remote outcomes for reconciliation.
+         */
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest) {
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
+        }
+
+        /** @brief Requests advisory quota usage for one authenticated session. @param subject Current subject capability.
+         * @return Admitted observation or UnsupportedCapability. */
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle) {
+            return Result<PlatformRequestHandle<CloudQuotaObservation>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
         }
     };
 

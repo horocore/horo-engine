@@ -137,6 +137,25 @@ To maintain portability, compile speed, and memory safety, public headers under 
 
 The host composition root selects and instantiates the backend. `NetworkRuntime` never links `NetworkTransportNull` or `NetworkTransportGNS`.
 
+The implemented `TransportBackendComposition` is the bounded, host-owned
+registration and selection seam for this decision. The host registers inert
+`TransportBackendDescriptor` values and factories only for backends its target
+actually links. A status reports installed, host-supported, configured,
+selected, and active independently. Exact selection fails with a typed result
+when an ID is absent, unsupported, or unconfigured; it never substitutes Null.
+Only activation invokes the selected factory. Cancellation closes activation
+and asks an active backend to stop; shutdown releases it before the host unloads
+factory code. Dynamic extension factories need an external code lease through
+the approved application-capability/provider boundary before registration.
+
+The `DISABLED` and `HEADLESS_NULL` target profiles have configure-time
+transitive-link checks against production transport libraries. The Null profile
+can explicitly create a bounded `DeterministicTransport` lifetime without a
+production backend. The GNS profile fails configuration until the separate
+GNS implementation target is installed. This composition lifetime is not yet
+the future packet-level `INetworkTransport`/`NetworkRuntimeCoordinator` handoff;
+adding that handoff must preserve the exact-selection and optional-link rules.
+
 ```cpp
 auto transport = CreateGnsTransport(config); // or CreateNullTransport(config)
 NetworkRuntime runtime({
@@ -627,6 +646,17 @@ revision. Migration is versioned and cannot infer network values from renderer
 tiers. Runtime mode/provider/exposure changes require ADR-102 host recomposition;
 existing sessions keep their negotiated generations until bounded replacement or
 shutdown.
+
+The portable `NetworkProjectSettings` codec accepts a closed, bounded JSON object.
+Version 2 adds a canonical optional default endpoint and a public numeric credential
+requirement ID. Version 1 documents omit those two fields; pure migration supplies
+an absent endpoint and no credential requirement before complete validation. Unknown
+fields, duplicate keys, malformed integers, and future versions fail. The codec
+never stores a private credential binding or secret. Default construction creates
+a standalone-only policy with finite scheduling limits; projects must explicitly
+declare network roles and required transport capability evidence before packaging
+or activation. `PreflightNetworkProjectSettings` validates the selected role and
+exact transport evidence before an operation publishes state.
 
 ## Optional Composition and Product Configurations
 

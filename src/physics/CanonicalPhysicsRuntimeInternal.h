@@ -118,6 +118,8 @@ namespace Horo::Physics::Detail {
         BodyHandle handle;
         JPH::BodyID nativeBody;
         PhysicsPose pose;
+        PhysicsBodyDescriptor policy;
+        bool motionStorageReserved{};
     };
 
     struct CanonicalConstraintBodies final {
@@ -128,6 +130,8 @@ namespace Horo::Physics::Detail {
     struct CanonicalSceneConstraintRecord final {
         ConstraintHandle handle;
         JPH::Ref<JPH::Constraint> constraint;
+        BodyHandle first;
+        BodyHandle second;
         JPH::BodyID firstBody;
         JPH::BodyID secondBody;
         PhysicsJointCollisionPolicy collisionPolicy{};

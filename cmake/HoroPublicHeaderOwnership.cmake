@@ -138,6 +138,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveDiagnostics.h
     Horo/Runtime/Save/SaveIdentity.h
     Horo/Runtime/Save/SaveRootResolver.h
+    Horo/Runtime/Save/SaveFilesystemStorage.h
     Horo/Runtime/Save/SaveNamespace.h
     Horo/Runtime/Save/SaveParticipantRegistry.h
     Horo/Runtime/Save/SaveParticipation.h
@@ -152,6 +153,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveReference.h
     Horo/Runtime/Save/SaveSlotMetadata.h
     Horo/Runtime/Save/SaveSlotIndex.h
+    Horo/Runtime/Save/SaveManagerProjection.h
     Horo/Runtime/Save/SaveStorageAdapter.h
     Horo/Runtime/Save/SaveSlotCommitTransaction.h
     Horo/Runtime/Save/SaveSlotRecovery.h
@@ -218,8 +220,10 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/RpcDescriptorRegistry.h
     Horo/Network/TransportCapabilities.h
     Horo/Network/TransportBudget.h
+    Horo/Network/TransportBackendInstance.h
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
+    Horo/Network/TransportBackendComposition.h
     Horo/Network/AuthenticationSessionAdapter.h
     Horo/Network/HandshakeNegotiation.h
     Horo/Network/NetworkObjectMapping.h

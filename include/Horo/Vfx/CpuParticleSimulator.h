@@ -70,7 +70,9 @@ namespace Horo::Vfx {
      * @brief Immutable force parameters captured during simulation preparation.
      *
      * Gravity and Wind use `vector * strength`. Attraction points at `center`; `falloff` is
-     * the distance attenuation coefficient. Noise uses the versioned per-particle counter stream.
+     * the distance attenuation coefficient. Noise uses the versioned per-particle counter stream;
+     * `strength * frequency` scales its acceleration. Noise channels 1-9 are reserved for
+     * initialization, and each noise module in a stack requires a distinct channel.
      */
     struct CpuParticleForceModule final {
         CpuParticleForceKind kind{CpuParticleForceKind::Gravity};
@@ -79,17 +81,17 @@ namespace Horo::Vfx {
         float strength{1.0F};
         float falloff{};
         float frequency{1.0F};
-        std::uint8_t randomChannel{1};
+        std::uint8_t randomChannel{16};
     };
 
-    /** @brief One scalar over-life curve key in normalized age space. */
+    /** @brief One scalar over-life curve key in normalized age space. Keys must increase strictly. */
     struct CpuParticleCurveKey final {
         float normalizedAge{};
         float value{};
         constexpr auto operator<=>(const CpuParticleCurveKey &) const noexcept = default;
     };
 
-    /** @brief One color over-life curve key in normalized age space. */
+    /** @brief One unit-range color over-life curve key in normalized age space. */
     struct CpuParticleColorKey final {
         float normalizedAge{};
         Math::Vec4 color{1.0F, 1.0F, 1.0F, 1.0F};
@@ -173,6 +175,33 @@ namespace Horo::Vfx {
         float maximum{};
     };
 
+    /** @brief Supported bounded CPU payload transforms selected by the gameplay descriptor. */
+    enum class CpuParticlePayloadOperation : std::uint8_t {
+        Affine,    /**< Output is input * scale + bias. */
+        Threshold, /**< Output selects belowValue or atOrAboveValue. */
+        Count,
+    };
+
+    /**
+     * @brief Scalar gameplay payload writer with a recorded operation, stage, and channel boundary.
+     *
+     * Only Integrate may read a GameplayInput channel and write a distinct GameplayOutput channel.
+     * The selected operation runs once per live particle after age integration. Invalid operation,
+     * stage, class, duplicate-writer, and range contracts fail preparation with typed diagnostics;
+     * gameplay never receives mutable particle storage.
+     */
+    struct CpuParticlePayloadModule final {
+        CpuParticleStage stage{CpuParticleStage::Integrate};
+        CpuParticlePayloadOperation operation{CpuParticlePayloadOperation::Affine};
+        std::uint16_t readChannel{};
+        std::uint16_t writeChannel{};
+        float scale{1.0F};
+        float bias{};
+        float threshold{0.5F};
+        float belowValue{};
+        float atOrAboveValue{1.0F};
+    };
+
     /** @brief Immutable preparation inputs for one owner-thread CPU simulator. */
     struct CpuParticleSimulatorCreateInfo final {
         ParticleBufferId buffer{};
@@ -192,6 +221,7 @@ namespace Horo::Vfx {
         std::span<const CpuParticleCurveKey> opacityOverLife{};
         std::span<const CpuParticleColorKey> colorOverLife{};
         std::span<const CpuParticlePayloadChannel> payloadChannels{};
+        std::span<const CpuParticlePayloadModule> payloadModules{};
         CpuParticleStageObserver stageObserver{};
         void *stageObserverContext{};
     };
@@ -226,8 +256,9 @@ namespace Horo::Vfx {
         std::span<const std::uint32_t> packedColor;
         std::span<const float> age, maximumAge;
         std::span<const std::uint32_t> customFlags;
+        /** @brief Only declared RenderOnly streams are populated; other indices are empty. */
         std::array<std::span<const float>, CpuParticleBufferHardLimits::CustomFloatStreams> customFloats{};
-        std::uint32_t customFloatStreamCount{};
+        std::uint32_t customFloatStreamCount{}; /**< Allocated stream count; protected indices remain empty. */
     };
 
     /** @brief Allocation-free lifetime diagnostics for one CPU simulator. */

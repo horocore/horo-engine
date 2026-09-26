@@ -149,53 +149,37 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             view.sizeX[dense] = state.baseSizeX[auxiliary] * sizeMultiplier;
             view.sizeY[dense] = state.baseSizeY[auxiliary] * sizeMultiplier;
             const float opacityMultiplier = EvaluateCurve(state.opacityOverLife, state.opacityOverLifeCount, normalizedAge, 1.0F);
-            Math::Vec4 color = EvaluateColorCurve(state.colorOverLife, state.colorOverLifeCount, normalizedAge, state.baseColor[auxiliary]);
-            color.w *= opacityMultiplier;
+            Math::Vec4 color = EvaluateColorCurve(state.colorOverLife, state.colorOverLifeCount, normalizedAge, {1.0F, 1.0F, 1.0F, 1.0F});
+            color.w *= state.baseColor[auxiliary].w * opacityMultiplier;
             view.packedColor[dense] = PackColor(color);
             for (std::uint32_t channelIndex = 0; channelIndex < state.payloadChannelCount; ++channelIndex) {
                 const auto &channel = state.payloadChannels[channelIndex];
-                if (channel.classification == CpuParticlePayloadClass::GameplayOutput) {
+                if (channel.classification == CpuParticlePayloadClass::GameplayOutput && !state.outputHasModule[channelIndex]) {
                     const float output = channel.minimum + ((channel.maximum - channel.minimum) * normalizedAge);
                     view.customFloats[channel.customFloatStream][dense] = output;
                 } else if (channel.classification == CpuParticlePayloadClass::GameplayInput) {
                     view.customFloats[channel.customFloatStream][dense] = state.inputValues[channelIndex];
                 }
             }
+            for (std::uint32_t moduleIndex = 0; moduleIndex < state.payloadModuleCount; ++moduleIndex) {
+                const auto &payload = state.payloadModules[moduleIndex];
+                const float input = view.customFloats[payload.readStream][dense];
+                float output = (input * payload.scale) + payload.bias;
+                if (payload.operation == CpuParticlePayloadOperation::Threshold)
+                    output = input < payload.threshold ? payload.belowValue : payload.atOrAboveValue;
+                view.customFloats[payload.writeStream][dense] = output;
+            }
         }
 
-        void ApplyForces(const Detail::CpuParticleSimulatorState &state, const CpuParticleSoAView &view, const std::uint32_t dense,
-                         const std::uint64_t tick, const ParticleSimulationId particle, Math::Vec3 &acceleration) noexcept {
-            acceleration = {};
-            const Math::Vec3 position{view.positionX[dense], view.positionY[dense], view.positionZ[dense]};
-            for (std::uint32_t forceIndex = 0; forceIndex < state.forceCount; ++forceIndex) {
-                const auto &force = state.forces[forceIndex];
-                switch (force.kind) {
-                    case CpuParticleForceKind::Gravity:
-                    case CpuParticleForceKind::Wind:
-                        acceleration += force.vector * force.strength;
-                        break;
-                    case CpuParticleForceKind::Attraction: {
-                        const Math::Vec3 delta = force.center - position;
-                        const float lengthSquared = Math::LengthSquared(delta);
-                        if (lengthSquared <= std::numeric_limits<float>::epsilon())
-                            break;
-                        const float length = std::sqrt(lengthSquared);
-                        const float attenuation = 1.0F / (1.0F + (std::max(0.0F, force.falloff) * length));
-                        acceleration += (delta / length) * (force.strength * attenuation);
-                        break;
-                    }
-                    case CpuParticleForceKind::Noise: {
-                        const std::uint32_t channel = force.randomChannel == 0 ? 1U : force.randomChannel;
-                        const float x = (UnitFloat(state, particle, channel, 0, tick) * 2.0F) - 1.0F;
-                        const float y = (UnitFloat(state, particle, channel, 1, tick) * 2.0F) - 1.0F;
-                        const float z = (UnitFloat(state, particle, channel, 2, tick) * 2.0F) - 1.0F;
-                        acceleration += Math::Vec3{x, y, z} * (force.strength * force.frequency);
-                        break;
-                    }
-                    case CpuParticleForceKind::Count:
-                        break;
-                }
-            }
+        /** @brief Returns zero at the attraction center and otherwise applies radial attenuation. */
+        [[nodiscard]] Math::Vec3 AttractionContribution(const CpuParticleForceModule &force, const Math::Vec3 position) noexcept {
+            const Math::Vec3 delta = force.center - position;
+            const float lengthSquared = Math::LengthSquared(delta);
+            if (lengthSquared <= std::numeric_limits<float>::epsilon())
+                return {};
+            const float length = std::sqrt(lengthSquared);
+            const float attenuation = 1.0F / (1.0F + (force.falloff * length));
+            return (delta / length) * (force.strength * attenuation);
         }
 
         [[nodiscard]] Result<CpuParticleCollisionSelection> QueryPlanes(const Detail::CpuParticleSimulatorState &state,
@@ -361,8 +345,38 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         if (viewResult.HasError())
             return Result<void>::Failure(viewResult.ErrorValue());
         const auto view = viewResult.Value();
-        for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense)
-            ApplyForces(state, view, dense, step.tick, state.handles[state.candidateOffset + dense].particle, state.acceleration[dense]);
+        std::fill_n(state.acceleration.begin(), view.positionX.size(), Math::Vec3{});
+        // Descriptor order is observable for floating-point accumulation. Dispatch once per
+        // module; every particle sees the same ordered stack without a per-particle kind test.
+        for (std::uint32_t forceIndex = 0; forceIndex < state.forceCount; ++forceIndex) {
+            const auto &force = state.forces[forceIndex];
+            switch (force.kind) {
+                case CpuParticleForceKind::Gravity:
+                case CpuParticleForceKind::Wind: {
+                    const Math::Vec3 contribution = force.vector * force.strength;
+                    for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense)
+                        state.acceleration[dense] += contribution;
+                    break;
+                }
+                case CpuParticleForceKind::Attraction:
+                    for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense) {
+                        const Math::Vec3 position{view.positionX[dense], view.positionY[dense], view.positionZ[dense]};
+                        state.acceleration[dense] += AttractionContribution(force, position);
+                    }
+                    break;
+                case CpuParticleForceKind::Noise:
+                    for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense) {
+                        const auto particle = state.handles[state.candidateOffset + dense].particle;
+                        const float x = (UnitFloat(state, particle, force.randomChannel, 0, step.tick) * 2.0F) - 1.0F;
+                        const float y = (UnitFloat(state, particle, force.randomChannel, 1, step.tick) * 2.0F) - 1.0F;
+                        const float z = (UnitFloat(state, particle, force.randomChannel, 2, step.tick) * 2.0F) - 1.0F;
+                        state.acceleration[dense] += Math::Vec3{x, y, z} * (force.strength * force.frequency);
+                    }
+                    break;
+                case CpuParticleForceKind::Count:
+                    break;
+            }
+        }
         return Result<void>::Success();
     }
 

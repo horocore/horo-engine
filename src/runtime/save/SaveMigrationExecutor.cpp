@@ -6,6 +6,26 @@ namespace Horo::Runtime {
     namespace {
         using namespace SaveMigrationDetail;
 
+        [[nodiscard]] Result<void> ChargeWork(std::uint64_t &used, const std::uint64_t amount, const SaveMigrationLimits &limits) {
+            if (used > limits.maximumCumulativeWorkBytes || amount > limits.maximumCumulativeWorkBytes - used) {
+                Error error = MigrationError(SaveErrors::MigrationLimitExceeded, "Migration cumulative work budget exceeded.");
+                error.diagnostics.push_back({DiagnosticCode{"save.migration.limit.cumulative_work"},
+                                             DiagnosticSeverity::Error,
+                                             "Migration cumulative work budget exceeded.",
+                                             {"migration", 0, 0}});
+                return Result<void>::Failure(std::move(error));
+            }
+            used += amount;
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] std::uint64_t CandidateBytes(const SaveMigrationState &state) {
+            std::uint64_t bytes = state.archiveBytes.size();
+            for (const auto &participant : state.participants)
+                bytes += participant.payload.size();
+            return bytes;
+        }
+
         struct ParticipantBaseline final {
             SaveParticipantId participant;
             ParticipantSchemaVersion schemaVersion;
@@ -110,10 +130,8 @@ namespace Horo::Runtime {
             return ValidateUnrelatedParticipants(before, after, *step.participant, step);
         }
 
-        [[nodiscard]] Result<void> ValidateStepOutput(const StepBaseline &before, const SaveMigrationCandidate &after, const StepView &step,
-                                                      const SaveMigrationLimits &limits) {
-            if (const auto validation = ValidateState(after, limits); validation.HasError())
-                return validation;
+        [[nodiscard]] Result<void> ValidateStepOutput(const StepBaseline &before, const SaveMigrationCandidate &after,
+                                                      const StepView &step) {
             switch (step.axis) {
                 case SaveMigrationAxis::ArchiveFormat:
                     return ValidateArchiveStepOutput(before, after, step);
@@ -150,8 +168,16 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<SaveMigrationCandidate> InvokeMigration(SaveMigrationCandidate candidate, const StepView &step) {
-            const SaveMigrationStepContext context{.id = step.id, .axis = step.axis, .kind = step.kind, .participant = step.participant};
+        [[nodiscard]] Result<SaveMigrationCandidate> InvokeMigration(SaveMigrationCandidate candidate, const StepView &step,
+                                                                     const SaveMigrationLimits &limits, const std::uint64_t workUsed) {
+            const SaveMigrationStepContext context{.id = step.id,
+                                                   .axis = step.axis,
+                                                   .kind = step.kind,
+                                                   .participant = step.participant,
+                                                   .remainingWorkBytes = limits.maximumCumulativeWorkBytes - workUsed,
+                                                   .maximumArchiveBytes = limits.maximumArchiveBytes,
+                                                   .maximumParticipantPayloadBytes = limits.maximumParticipantPayloadBytes,
+                                                   .maximumTotalPayloadBytes = limits.maximumTotalPayloadBytes};
             try {
                 return (*step.migrate)(std::move(candidate), context);
             } catch (const std::bad_alloc &) {
@@ -164,7 +190,7 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<SaveMigrationCandidate> ExecuteStep(SaveMigrationCandidate candidate,
                                                                  const SaveMigrationDefinition &definition,
-                                                                 const SaveMigrationLimits &limits) {
+                                                                 const SaveMigrationLimits &limits, std::uint64_t &workUsed) {
             const StepView step = View(definition);
             if (const auto definitionValidation = ValidateDefinition(definition, limits); definitionValidation.HasError())
                 return Result<SaveMigrationCandidate>::Failure(
@@ -172,16 +198,24 @@ namespace Horo::Runtime {
                                    std::format("Plan contains invalid migration definition '{}'.", step.id.value)));
             if (const auto inputValidation = ValidateStepInput(candidate, step); inputValidation.HasError())
                 return Result<SaveMigrationCandidate>::Failure(inputValidation.ErrorValue());
+            if (auto charged = ChargeWork(workUsed, CandidateBytes(candidate), limits); charged.HasError())
+                return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
+            if (auto charged = ChargeWork(workUsed, step.estimatedWork, limits); charged.HasError())
+                return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
             const auto baseline = CaptureStepBaseline(candidate, step.axis);
             if (baseline.HasError())
                 return Result<SaveMigrationCandidate>::Failure(baseline.ErrorValue());
-            auto transformed = InvokeMigration(std::move(candidate), step);
+            auto transformed = InvokeMigration(std::move(candidate), step, limits, workUsed);
             if (transformed.HasError()) {
                 Error wrapped = MigrationError(SaveErrors::MigrationStepFailed, StepFailureContext(step));
                 return Result<SaveMigrationCandidate>::Failure(WithCause(std::move(wrapped), transformed.ErrorValue()));
             }
             SaveMigrationCandidate output = std::move(transformed).Value();
-            if (const auto outputValidation = ValidateStepOutput(baseline.Value(), output, step, limits); outputValidation.HasError())
+            if (const auto bounds = ValidateState(output, limits); bounds.HasError())
+                return Result<SaveMigrationCandidate>::Failure(bounds.ErrorValue());
+            if (auto charged = ChargeWork(workUsed, CandidateBytes(output), limits); charged.HasError())
+                return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
+            if (const auto outputValidation = ValidateStepOutput(baseline.Value(), output, step); outputValidation.HasError())
                 return Result<SaveMigrationCandidate>::Failure(outputValidation.ErrorValue());
             return Result<SaveMigrationCandidate>::Success(std::move(output));
         }
@@ -224,9 +258,12 @@ namespace Horo::Runtime {
         try {
             if (const auto binding = ValidatePlanBinding(source, plan, limits); binding.HasError())
                 return Result<SaveMigrationCandidate>::Failure(binding.ErrorValue());
+            std::uint64_t workUsed = 0;
+            if (auto charged = ChargeWork(workUsed, CandidateBytes(source), limits); charged.HasError())
+                return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
             SaveMigrationCandidate current = source;
             for (const SaveMigrationDefinition &definition : plan.definitions) {
-                auto transformed = ExecuteStep(std::move(current), definition, limits);
+                auto transformed = ExecuteStep(std::move(current), definition, limits, workUsed);
                 if (transformed.HasError())
                     return Result<SaveMigrationCandidate>::Failure(transformed.ErrorValue());
                 current = std::move(transformed).Value();
