@@ -103,10 +103,10 @@ namespace Horo::Physics {
     /** @brief Atomically replaced publication marker for transforms, queries and events from one completed tick. */
     struct PhysicsPublishedTick final {
         std::uint64_t completedTick{};       /**< Last successfully completed simulation tick. */
-        std::uint64_t publicationRevision{}; /**< Monotonic all-domain publication revision. */
+        std::uint64_t publicationRevision{}; /**< Monotonic revision; structural edits also invalidate captured query/event reads. */
         std::uint64_t transformTick{};       /**< Tick owning the visible transform snapshot. */
         std::uint64_t queryTick{};           /**< Tick owning the visible query snapshot. */
-        std::uint64_t eventTick{};           /**< Tick owning the visible event batch. */
+        std::uint64_t eventTick{};           /**< Tick owning the visible event batch; zero after a structural edit. */
         std::uint32_t appliedCommands{};     /**< Eligible commands processed at this tick's safe points. */
         std::uint32_t eventCount{};          /**< Number of immutable contact/trigger records in the event batch. */
         std::uint64_t droppedEventCount{};   /**< Records omitted while capturing or publishing this tick. */

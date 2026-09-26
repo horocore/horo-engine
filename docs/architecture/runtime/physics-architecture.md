@@ -609,17 +609,28 @@ immediate execution and returns the completed tick/revision with bounded hit
 metadata. Snapshot and asynchronous submission remain unsupported until a
 qualified snapshot provider exists. World reset, retirement or replacement makes
 retained capabilities stale; explicit revocation returns a distinct error.
-The query revision prevents an unnoticed fixed-tick publication change between
-capture and admission; the query still samples the current owner-thread
-broadphase, whose own generation is reported in `PhysicsQueryResult`.
+The query revision prevents an unnoticed fixed-tick publication or immediate body/fixture
+change between capture and admission. A successful structural edit advances the
+revision and invalidates the older event read until another tick completes. The query
+still samples the current owner-thread broadphase, whose own generation is reported
+in `PhysicsQueryResult`.
 
 The event reader accepts only the latest completed tick and revision, copying at
-most the caller's bound into caller-owned records and reporting truncation and
-the published dropped-record count. Earlier ticks are not readable through this
+most the caller's bound into caller-owned records and reporting the exact count
+omitted by caller storage separately from the published projection-drop count.
+Earlier ticks are not readable through this
 capability. It cannot run during stepping or from a solver/tick callback, and
 returns no borrowed projection span. Both paths validate capability and world identity on
 every access. They share Physics's owner-thread boundary; no client handle extends
 the world or solver lifetime.
+
+Capability callers caching a publication marker across fixture or body admission/removal
+must recapture it before submitting another query. Event consumers must wait for the
+next completed tick after that edit. `PhysicsEventReadCompletion::omittedRecordCount`
+adds an exact caller-bound count; existing `truncated` checks remain valid.
+When the 64-bit publication revision is exhausted, the next structural edit or
+fixed tick fails with `physics.generation.exhausted` before mutating the world or
+publishing another snapshot. Revision zero is never reused for an active world.
 
 Immediate queries execute on the physics owner thread outside a step. Parallel
 or asynchronous queries use a read-only broadphase snapshot with documented

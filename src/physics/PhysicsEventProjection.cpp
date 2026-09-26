@@ -183,6 +183,16 @@ namespace Horo::Physics::Detail {
         return eventBuffers_[publishedBuffer_];
     }
 
+    /** @copydoc PhysicsEventProjection::CopyPublishedEvents */
+    PhysicsEventReadCompletion PhysicsEventProjection::CopyPublishedEvents(const std::span<PhysicsEventRecord> records,
+                                                                           const std::uint32_t maximumRecords) const noexcept {
+        const auto source = PublishedEvents();
+        const auto count = std::min({source.size(), records.size(), static_cast<std::size_t>(maximumRecords)});
+        std::copy_n(source.begin(), count, records.begin());
+        return {static_cast<std::uint32_t>(count), count < source.size(), static_cast<std::uint32_t>(source.size() - count),
+                droppedDuringTick_};
+    }
+
     /** @copydoc PhysicsEventProjection::PublishedTick */
     std::uint64_t PhysicsEventProjection::PublishedTick() const noexcept {
         return publishedTick_;

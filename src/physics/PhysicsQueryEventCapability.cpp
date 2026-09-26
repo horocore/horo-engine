@@ -125,10 +125,6 @@ namespace Horo::Physics {
         if (command.completedTick != published.eventTick || command.publicationRevision != published.publicationRevision ||
             impl.queryEvents.events.PublishedTick() != published.eventTick)
             return Result<PhysicsEventReadCompletion>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
-        const auto source = impl.queryEvents.events.PublishedEvents();
-        const auto count = std::min({source.size(), records.size(), static_cast<std::size_t>(command.maximumRecords)});
-        std::copy_n(source.begin(), count, records.begin());
-        return Result<PhysicsEventReadCompletion>::Success(
-            {static_cast<std::uint32_t>(count), count < source.size(), published.droppedEventCount});
+        return Result<PhysicsEventReadCompletion>::Success(impl.queryEvents.events.CopyPublishedEvents(records, command.maximumRecords));
     }
 }  // namespace Horo::Physics

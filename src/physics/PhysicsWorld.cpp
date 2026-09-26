@@ -269,7 +269,12 @@ namespace Horo::Physics {
             return Result<PhysicsQueryFixture>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (const Result<void> valid = ValidatePhysicsQueryFixtureDescriptor(fixture, impl_->identity); valid.HasError())
             return Result<PhysicsQueryFixture>::Failure(valid.ErrorValue());
-        return Detail::CreateCanonicalQueryFixture(impl_->native, impl_->identity, fixture);
+        if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
+            return Result<PhysicsQueryFixture>::Failure(capacity.ErrorValue());
+        auto created = Detail::CreateCanonicalQueryFixture(impl_->native, impl_->identity, fixture);
+        if (created.HasValue())
+            impl_->InvalidateQueryEventPublication();
+        return created;
     }
 
     /** @copydoc PhysicsWorld::DestroyQueryFixture */
@@ -284,7 +289,12 @@ namespace Horo::Physics {
             return body;
         if (const auto shape = ValidatePhysicsHandleOwner(fixture.shape, impl_->identity); shape.HasError())
             return shape;
-        return Detail::DestroyCanonicalQueryFixture(impl_->native, fixture);
+        if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
+            return capacity;
+        auto destroyed = Detail::DestroyCanonicalQueryFixture(impl_->native, fixture);
+        if (destroyed.HasValue())
+            impl_->InvalidateQueryEventPublication();
+        return destroyed;
     }
 
     /** @copydoc PhysicsWorld::Query */
@@ -308,6 +318,8 @@ namespace Horo::Physics {
         using enum PhysicsTickPhase;
         if (const Result<void> ready = Detail::CheckReadyForTick(*impl_); ready.HasError())
             return ready;
+        if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
+            return capacity;
         if (const Result<void> validInput = Detail::ValidateTickInput(*impl_, input); validInput.HasError())
             return validInput;
         if (const Result<void> jobs = Detail::ValidateSolverJobs(impl_->runtime->solverJobs, input.solverJobs); jobs.HasError())
