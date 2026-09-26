@@ -8,9 +8,12 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Save/SaveArchiveFraming.h"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -51,12 +54,14 @@ namespace Horo::Runtime {
 
     /** @brief Finite budgets applied to every untrusted archive admission path. */
     struct SaveArchiveReaderLimits final {
-        std::size_t maximumArchiveBytes{4ULL << 30U};
-        std::uint64_t maximumStoredPayloadBytes{4ULL << 30U};
+        std::size_t maximumArchiveBytes{
+            static_cast<std::size_t>(std::min<std::uint64_t>(4ULL << 30U, std::numeric_limits<std::size_t>::max()))};
+        std::uint64_t maximumStoredPayloadBytes{std::min<std::uint64_t>(4ULL << 30U, std::numeric_limits<std::size_t>::max())};
         std::uint64_t maximumDecodedBytes{64ULL << 20U};
         std::size_t maximumEntries{16'384};
         std::size_t maximumNestingDepth{8};
         std::uint64_t maximumExpansionRatio{64};
+        std::uint64_t maximumReadWorkBytes{16ULL << 30U}; /**< Aggregate archive validation work admission. */
         SaveArchiveMetadataLimits metadata{};
         SaveChunkDirectoryLimits chunks{};
     };
@@ -105,6 +110,7 @@ namespace Horo::Runtime {
             SaveArchiveHeader header;
             SaveGameManifest manifest;
             ValidatedSaveChunkDirectory directory;
+            std::shared_ptr<std::atomic<std::uint64_t>> remainingReadWork;
         };
 
         friend class SaveArchiveReader;
@@ -120,6 +126,7 @@ namespace Horo::Runtime {
         SaveGameManifest manifest_;
         ValidatedSaveChunkDirectory directory_;
         std::span<const std::byte> payload_;
+        std::shared_ptr<std::atomic<std::uint64_t>> remainingReadWork_;
     };
 
     /** @brief Headless typed archive reader; it owns no filesystem, renderer, or gameplay callback. */
