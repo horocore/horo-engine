@@ -63,6 +63,19 @@ namespace Horo::Mcp {
             CancellationSource cancellation;
             std::map<std::pair<std::uint64_t, std::string>, CancellationSource> inFlight;
         };
+
+        /** @brief Isolates controller execution, bounded result validation, and exception translation. */
+        [[nodiscard]] Result<nlohmann::json> InvokeController(IMcpRequestController &controller, const McpRequest &request,
+                                                              const McpRequestContext &context, const McpSessionLimits &limits) {
+            try {
+                auto result = controller.Dispatch(request, context);
+                if (result.HasValue() && !JsonWithinBounds(result.Value(), limits, limits.maximumResultBytes))
+                    return Result<nlohmann::json>::Failure(MakeError(McpErrors::ResultCapacityExceeded));
+                return result;
+            } catch (...) {
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed));
+            }
+        }
     }  // namespace
 
     struct McpSessionManager::State {
@@ -149,16 +162,7 @@ namespace Horo::Mcp {
         }
 
         const auto controller = state_->controller;
-        auto outcome = [&]() -> Result<nlohmann::json> {
-            try {
-                auto result = controller->Dispatch(request, context);
-                if (result.HasValue() && !JsonWithinBounds(result.Value(), state_->limits, state_->limits.maximumResultBytes))
-                    return Result<nlohmann::json>::Failure(MakeError(McpErrors::ResultCapacityExceeded));
-                return result;
-            } catch (...) {
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed));
-            }
-        }();
+        const auto outcome = InvokeController(*controller, request, context, state_->limits);
 
         {
             std::lock_guard lock{state_->mutex};
