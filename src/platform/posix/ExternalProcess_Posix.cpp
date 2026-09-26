@@ -157,6 +157,30 @@ namespace Horo {
             return Result<pid_t>::Success(process);
         }
 
+        [[nodiscard]] Result<pid_t> SpawnCapturedProcess(const ExternalProcessRequest &request, std::array<int, 2> &stdoutPipe,
+                                                         std::array<int, 2> &stderrPipe) {
+            if (pipe(stdoutPipe.data()) != 0 || pipe(stderrPipe.data()) != 0) {
+                const int failure = errno;
+                for (const int descriptor : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]})
+                    if (descriptor >= 0)
+                        close(descriptor);
+                return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(failure)));
+            }
+
+            auto spawned = SpawnProcess(request, stdoutPipe, stderrPipe);
+            close(stdoutPipe[1]);
+            close(stderrPipe[1]);
+            if (spawned.HasError()) {
+                close(stdoutPipe[0]);
+                close(stderrPipe[0]);
+                return spawned;
+            }
+
+            static_cast<void>(fcntl(stdoutPipe[0], F_SETFL, fcntl(stdoutPipe[0], F_GETFL) | O_NONBLOCK));
+            static_cast<void>(fcntl(stderrPipe[0], F_SETFL, fcntl(stderrPipe[0], F_GETFL) | O_NONBLOCK));
+            return spawned;
+        }
+
         struct ProcessMonitorState {
             std::chrono::steady_clock::time_point started;
             std::chrono::steady_clock::time_point terminationStarted;
@@ -223,25 +247,11 @@ namespace Horo {
 
         std::array<int, 2> stdoutPipe{-1, -1};
         std::array<int, 2> stderrPipe{-1, -1};
-        if (pipe(stdoutPipe.data()) != 0 || pipe(stderrPipe.data()) != 0) {
-            for (const int descriptor : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]})
-                if (descriptor >= 0)
-                    close(descriptor);
-            return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(errno)));
-        }
-
-        auto spawnedResult = SpawnProcess(request, stdoutPipe, stderrPipe);
-        close(stdoutPipe[1]);
-        close(stderrPipe[1]);
+        auto spawnedResult = SpawnCapturedProcess(request, stdoutPipe, stderrPipe);
         if (spawnedResult.HasError()) {
-            close(stdoutPipe[0]);
-            close(stderrPipe[0]);
             return Result<ExternalProcessResult>::Failure(spawnedResult.ErrorValue());
         }
         const pid_t process = spawnedResult.Value();
-
-        static_cast<void>(fcntl(stdoutPipe[0], F_SETFL, fcntl(stdoutPipe[0], F_GETFL) | O_NONBLOCK));
-        static_cast<void>(fcntl(stderrPipe[0], F_SETFL, fcntl(stderrPipe[0], F_GETFL) | O_NONBLOCK));
 
         LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.maximumOutputBytes,
                                    request.onOutput};
