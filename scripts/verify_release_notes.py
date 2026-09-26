@@ -3,9 +3,12 @@
 
 import argparse
 import json
+import os
 import re
-import subprocess
 import sys
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 from pathlib import Path
 
 from parse_changelog import NotesError, MAX_SNAPSHOT_BYTES, version_parts
@@ -34,6 +37,30 @@ def verify(snapshot_bytes: bytes, tag: str, cmake_text: str, release_body: str) 
         raise NotesError("GitHub Release body must equal the reviewed snapshot Markdown")
 
 
+def release_body(tag: str) -> str:
+    if not tag.startswith("v"):
+        raise NotesError("release tag must use v<exact-semver>")
+    version_parts(tag[1:])
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    token = os.environ.get("GH_TOKEN", "")
+    parts = repository.split("/")
+    if (len(parts) != 2 or not all(part and all(char.isascii() and
+        (char.isalnum() or char in "._-") for char in part) for part in parts) or not token):
+        raise NotesError("GITHUB_REPOSITORY and GH_TOKEN are required for release verification")
+    address = f"https://api.github.com/repos/{repository}/releases/tags/{quote(tag, safe='')}"
+    request = Request(address, headers={"Accept": "application/vnd.github+json",
+                                        "Authorization": f"Bearer {token}",
+                                        "User-Agent": "horo-release-notes-verifier"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            data = json.load(response)
+    except (HTTPError, URLError, ValueError) as error:
+        raise NotesError(f"cannot read GitHub Release for {tag}: {error}") from error
+    if not isinstance(data, dict) or not isinstance(data.get("body"), str):
+        raise NotesError(f"GitHub Release for {tag} has no reviewed body")
+    return data["body"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", type=Path, required=True)
@@ -41,12 +68,8 @@ def main() -> int:
     parser.add_argument("--tag", required=True)
     args = parser.parse_args()
     try:
-        body = subprocess.run(
-            ["gh", "release", "view", args.tag, "--json", "body", "--jq", ".body"],
-            check=True, capture_output=True, text=True, timeout=30
-        ).stdout
-        verify(args.snapshot.read_bytes(), args.tag, args.cmake.read_text(encoding="utf-8"), body)
-    except (OSError, subprocess.SubprocessError, NotesError) as error:
+        verify(args.snapshot.read_bytes(), args.tag, args.cmake.read_text(encoding="utf-8"), release_body(args.tag))
+    except (OSError, NotesError) as error:
         print(f"[release-notes] {error}", file=sys.stderr)
         return 1
     return 0

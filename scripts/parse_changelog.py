@@ -15,29 +15,107 @@ MAX_ITEM_BYTES = 2048
 MAX_ITEMS = 64
 CATEGORIES = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
 HEADER = re.compile(r"^## \[([^\]]+)\](?: [—-] (\d{4}-\d{2}-\d{2}))?$", re.MULTILINE)
-SEMVER = re.compile(
-    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
-    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?\Z"
-)
 
 
 class NotesError(ValueError):
     """Actionable release-notes validation failure."""
 
 
-def version_parts(text: str) -> tuple:
-    match = SEMVER.fullmatch(text)
-    if not match or len(text) > 128:
+def parse_version_core(core: str, text: str) -> tuple[int, int, int]:
+    components = core.split(".")
+    if len(components) != 3:
         raise NotesError(f"invalid semantic version '{text}'")
-    if any(int(part) > 0xffffffff for part in match.group(1, 2, 3)):
+    for part in components:
+        if not part.isascii() or not part.isdecimal() or (len(part) > 1 and part[0] == "0"):
+            raise NotesError(f"invalid semantic version '{text}'")
+    values = tuple(map(int, components))
+    if any(value > 0xffffffff for value in values):
         raise NotesError(f"semantic version core overflows 32 bits: '{text}'")
-    if match.group(4) and any(
-        len(part) > 1 and part[0] == "0"
-        for part in match.group(4).split(".") if part.isdigit()
-    ):
-        raise NotesError(f"noncanonical prerelease version '{text}'")
-    return tuple(map(int, match.group(1, 2, 3))) + (match.group(4) or "", match.group(5) or "")
+    return values
+
+
+def validate_identifiers(identifiers: str, numeric_leading_zero: bool, text: str) -> None:
+    for part in identifiers.split("."):
+        if not part or not part.isascii() or not all(char.isalnum() or char == "-" for char in part):
+            raise NotesError(f"invalid semantic version '{text}'")
+        if numeric_leading_zero and part.isdecimal() and len(part) > 1 and part[0] == "0":
+            raise NotesError(f"noncanonical prerelease version '{text}'")
+
+
+def version_parts(text: str) -> tuple:
+    if not text or len(text) > 128:
+        raise NotesError(f"invalid semantic version '{text[:128]}'")
+    core_and_prerelease, separator, build = text.partition("+")
+    core, prerelease_separator, prerelease = core_and_prerelease.partition("-")
+    if (separator and not build) or (prerelease_separator and not prerelease):
+        raise NotesError(f"invalid semantic version '{text}'")
+    values = parse_version_core(core, text)
+    if prerelease_separator:
+        validate_identifiers(prerelease, True, text)
+    if separator:
+        validate_identifiers(build, False, text)
+    return values + (prerelease, build)
+
+
+def unsafe_markdown(item: str) -> bool:
+    return (any(ord(char) < 32 or ord(char) == 127 for char in item)
+            or "<" in item or ">" in item or re.search(r"!\[|\]\((?!https://)", item) is not None
+            or item.count("`") % 2 != 0 or item.count("[") != item.count("]")
+            or item.count("(") != item.count(")"))
+
+
+def validate_item(item: str, version: str) -> str:
+    if not item or len(item.encode("utf-8")) > MAX_ITEM_BYTES:
+        raise NotesError(f"{version}: missing or oversized note item")
+    if unsafe_markdown(item):
+        raise NotesError(f"{version}: unsafe or malformed Markdown item")
+    return item
+
+
+def validate_date(version: str, date: str | None) -> None:
+    try:
+        if not date:
+            raise ValueError()
+        datetime.date.fromisoformat(date)
+    except ValueError as error:
+        raise NotesError(f"{version}: missing or invalid ISO release date") from error
+
+
+def start_category(line: str, version: str, sections: list[dict]) -> dict:
+    category = line[4:]
+    if category not in CATEGORIES or any(part["category"] == category for part in sections):
+        raise NotesError(f"{version}: unknown or repeated category '{category}'")
+    section = {"category": category, "items": []}
+    sections.append(section)
+    return section
+
+
+def parse_sections(version: str, lines: str) -> list[dict]:
+    sections = []
+    current = None
+    count = 0
+    for raw in lines.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            current = start_category(line, version, sections)
+        elif line.startswith("- ") and current is not None:
+            count += 1
+            if count > MAX_ITEMS:
+                raise NotesError(f"{version}: too many note items")
+            current["items"].append(validate_item(line[2:].strip(), version))
+        else:
+            raise NotesError(f"{version}: expected category heading or bullet near '{line[:64]}'")
+    if not sections or any(not part["items"] for part in sections):
+        raise NotesError(f"{version}: every category must have bullets")
+    return sections
+
+
+def parse_entry(version: str, date: str | None, lines: str) -> dict:
+    version_parts(version)
+    validate_date(version, date)
+    return {"version": version, "date": date, "sections": parse_sections(version, lines)}
 
 
 def parse_changelog(text: str) -> list[dict]:
@@ -55,49 +133,11 @@ def parse_changelog(text: str) -> list[dict]:
             if date:
                 raise NotesError("[Unreleased] must not have a date")
             continue
-        version_parts(version)
         if version in seen:
             raise NotesError(f"duplicate release notes for {version}")
         seen.add(version)
-        try:
-            if not date:
-                raise ValueError()
-            datetime.date.fromisoformat(date)
-        except ValueError as error:
-            raise NotesError(f"{version}: missing or invalid ISO release date") from error
         end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
-        sections = []
-        current = None
-        count = 0
-        for raw in text[heading.end():end].splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith("### "):
-                category = line[4:]
-                if category not in CATEGORIES or any(part["category"] == category for part in sections):
-                    raise NotesError(f"{version}: unknown or repeated category '{category}'")
-                if len(sections) == len(CATEGORIES):
-                    raise NotesError(f"{version}: too many categories")
-                current = {"category": category, "items": []}
-                sections.append(current)
-            elif line.startswith("- ") and current is not None:
-                item = line[2:].strip()
-                count += 1
-                if count > MAX_ITEMS or not item or len(item.encode("utf-8")) > MAX_ITEM_BYTES:
-                    raise NotesError(f"{version}: missing or oversized note item")
-                if (any(ord(char) < 32 or ord(char) == 127 for char in item)
-                    or "<" in item or ">" in item
-                    or re.search(r"!\[|\]\((?!https://)", item)
-                    or item.count("`") % 2 or item.count("[") != item.count("]")
-                    or item.count("(") != item.count(")")):
-                    raise NotesError(f"{version}: unsafe or malformed Markdown item")
-                current["items"].append(item)
-            else:
-                raise NotesError(f"{version}: expected category heading or bullet near '{line[:64]}'")
-        if not sections or any(not part["items"] for part in sections):
-            raise NotesError(f"{version}: every category must have bullets")
-        entries.append({"version": version, "date": date, "sections": sections})
+        entries.append(parse_entry(version, date, text[heading.end():end]))
     return entries
 
 

@@ -48,8 +48,9 @@ snapshot; HoroEditor reads only compiled literals at runtime. Distribution
 packages carry the same snapshot as `release-notes.json`, which update and
 installation surfaces may read from the installed artifact, not from the
 repository. Release Binaries validates tag, CMake version, snapshot identity,
-and the published GitHub Release body before building or packaging. The
-published body must equal the snapshot's reviewed Markdown.
+and the published GitHub Release body before building or packaging, then
+verifies that each produced archive contains the exact snapshot bytes before
+upload. The published body must equal the snapshot's reviewed Markdown.
 
 There is no silent fallback when Python or candidate notes are unavailable:
 configuration fails with an actionable diagnostic. Maintainers update the

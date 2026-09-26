@@ -1,14 +1,20 @@
 """Release-notes source, selection, snapshot, and Welcome projection contracts."""
 
 import json
+import io
 import sys
+import tarfile
+import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from parse_changelog import (NotesError, make_snapshot, parse_changelog, render_header,
-                             select_range, select_version, snapshot_bytes)
-from verify_release_notes import verify
+                             select_range, select_version, snapshot_bytes, version_parts)
+from verify_release_notes import release_body, verify
+from verify_release_archive import verify_archive
 
 
 SOURCE = """# Changelog
@@ -79,6 +85,54 @@ class ReleaseNotesTests(unittest.TestCase):
                 parse_changelog(source)
         with self.assertRaises(NotesError):
             select_version(parse_changelog(SOURCE), "0.3.0")
+        for invalid in ("1." + "9" * 100000 + ".0", "1.0.0-01", "1.0.0+", "1.0.0-rc..1"):
+            with self.subTest(version=invalid[:30]), self.assertRaises(NotesError):
+                version_parts(invalid)
+
+    def test_archive_contains_exact_snapshot(self):
+        snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tar_path = root / "release.tar.gz"
+            zip_path = root / "release.zip"
+            with tarfile.open(tar_path, "w:gz") as package:
+                member = tarfile.TarInfo("HoroEngine/release-notes.json")
+                member.size = len(snapshot)
+                package.addfile(member, io.BytesIO(snapshot))
+            with zipfile.ZipFile(zip_path, "w") as package:
+                package.writestr("release-notes.json", snapshot)
+            verify_archive(snapshot, tar_path)
+            verify_archive(snapshot, zip_path)
+            for archive in (tar_path, zip_path):
+                with self.subTest(archive=archive.name), self.assertRaises(NotesError):
+                    verify_archive(b"different reviewed bytes", archive)
+            missing = root / "missing.zip"
+            with zipfile.ZipFile(missing, "w") as package:
+                package.writestr("HoroEditor.exe", b"binary fixture")
+            with self.assertRaisesRegex(NotesError, "exactly one"):
+                verify_archive(snapshot, missing)
+            duplicate = root / "duplicate.zip"
+            with zipfile.ZipFile(duplicate, "w") as package:
+                package.writestr("one/release-notes.json", snapshot)
+                package.writestr("two/release-notes.json", snapshot)
+            with self.assertRaisesRegex(NotesError, "exactly one"):
+                verify_archive(snapshot, duplicate)
+
+    def test_release_body_fetch_uses_bounded_authenticated_api_request(self):
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                self.close()
+
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": "test-token"}):
+            with patch("verify_release_notes.urlopen", return_value=Response(b'{"body":"Reviewed"}')) as fetch:
+                self.assertEqual(release_body("v0.2.0"), "Reviewed")
+                request = fetch.call_args.args[0]
+                self.assertEqual(request.full_url,
+                                 "https://api.github.com/repos/horocore/horo-engine/releases/tags/v0.2.0")
+                self.assertEqual(fetch.call_args.kwargs["timeout"], 30)
 
 
 if __name__ == "__main__":

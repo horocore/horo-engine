@@ -91,6 +91,9 @@ jobs:
           install -m 0644 build/release/generated/ReleaseNotesSnapshot.json HoroEngine-linux-x86_64/release-notes.json
           tar -czf HoroEngine-linux-x86_64.tar.gz HoroEngine-linux-x86_64
 
+      - name: Verify packaged release notes
+        run: python3 scripts/verify_release_archive.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-linux-x86_64.tar.gz
+
       - name: Verify package
         run: |
           DIST="HoroEngine-linux-x86_64"
@@ -186,6 +189,9 @@ jobs:
           cp build/release/sbom.spdx.json "$DIST/" 2>/dev/null || true
           tar -czf "${DIST}.tar.gz" "$DIST"
 
+      - name: Verify packaged release notes
+        run: python3 scripts/verify_release_archive.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-macos-arm64.tar.gz
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -265,6 +271,10 @@ jobs:
             Copy-Item "build\release-msvc\sbom.spdx.json" $dist
           }
           Compress-Archive -Path "$dist\*" -DestinationPath "${dist}.zip"
+
+      - name: Verify packaged release notes
+        shell: pwsh
+        run: python3 scripts/verify_release_archive.py --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --archive HoroEngine-windows-x64.zip
 
       - name: Upload to release
         shell: pwsh
