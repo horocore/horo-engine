@@ -39,7 +39,7 @@ namespace Horo::Navigation {
         [[nodiscard]] const NavigationCrowdProfileFacts *FindProfile(const Detail::NavigationCrowdSnapshotStorage &storage,
                                                                      const NavigationAgentProfileId profile) {
             const auto found = std::ranges::lower_bound(storage.profiles, profile, {}, &NavigationCrowdProfileFacts::profile);
-            return found != storage.profiles.end() && found->profile == profile ? &*found : nullptr;
+            return found != storage.profiles.end() && found->profile == profile ? std::to_address(found) : nullptr;
         }
 
         [[nodiscard]] Result<void> CopyAgents(const NavigationAgentSnapshot &source, std::span<const NavigationCrowdMotionSample> motions,
@@ -69,8 +69,8 @@ namespace Horo::Navigation {
                 const float radius = record.radiusOverride.value_or(profile->radiusMeters);
                 if (!std::isfinite(radius) || radius <= 0.0F || radius > profile->neighborRadiusMeters)
                     return InvalidCapture();
-                std::int32_t cell{};
-                if (!Detail::CrowdCellCoordinate(static_cast<double>(motion.position.x) - profile->neighborRadiusMeters,
+                if (std::int32_t cell{};
+                    !Detail::CrowdCellCoordinate(static_cast<double>(motion.position.x) - profile->neighborRadiusMeters,
                                                  limits.cellSizeMeters, cell) ||
                     !Detail::CrowdCellCoordinate(static_cast<double>(motion.position.x) + profile->neighborRadiusMeters,
                                                  limits.cellSizeMeters, cell) ||
@@ -169,9 +169,9 @@ namespace Horo::Navigation {
             profiles.size() > limits.maximumAgents)
             return Result<NavigationCrowdSnapshot>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         const auto &agentBinding = agents.Binding();
-        const auto &dynamicBinding = dynamic.Binding();
-        if (agentBinding.world != dynamicBinding.world || agentBinding.scene != dynamicBinding.scene ||
-            agentBinding.sceneGeneration != dynamicBinding.sceneGeneration)
+        if (const auto &dynamicBinding = dynamic.Binding(); agentBinding.world != dynamicBinding.world ||
+                                                            agentBinding.scene != dynamicBinding.scene ||
+                                                            agentBinding.sceneGeneration != dynamicBinding.sceneGeneration)
             return Result<NavigationCrowdSnapshot>::Failure(MakeError(NavigationErrors::StaleSnapshot));
 
         auto storage = std::make_shared<Detail::NavigationCrowdSnapshotStorage>();
@@ -188,18 +188,14 @@ namespace Horo::Navigation {
             storage->truncation.push_back({.profile = storage->profiles[index].profile});
         }
 
-        const auto copied = CopyAgents(agents, motions, limits, *storage);
-        if (copied.HasError())
+        if (const auto copied = CopyAgents(agents, motions, limits, *storage); copied.HasError())
             return Result<NavigationCrowdSnapshot>::Failure(copied.ErrorValue());
-        const auto partitioned = Detail::PartitionCrowdAgents(limits, *storage);
-        if (partitioned.HasError())
+        if (const auto partitioned = Detail::PartitionCrowdAgents(limits, *storage); partitioned.HasError())
             return Result<NavigationCrowdSnapshot>::Failure(partitioned.ErrorValue());
         if (limits.mode != AvoidanceExecutionMode::Disabled) {
-            const auto boundaries = Detail::CaptureCrowdBoundaries(dynamic, limits, *storage);
-            if (boundaries.HasError())
+            if (const auto boundaries = Detail::CaptureCrowdBoundaries(dynamic, limits, *storage); boundaries.HasError())
                 return Result<NavigationCrowdSnapshot>::Failure(boundaries.ErrorValue());
-            const auto gathered = Detail::GatherCrowdFacts(limits, *storage);
-            if (gathered.HasError())
+            if (const auto gathered = Detail::GatherCrowdFacts(limits, *storage); gathered.HasError())
                 return Result<NavigationCrowdSnapshot>::Failure(gathered.ErrorValue());
         }
         return Result<NavigationCrowdSnapshot>::Success(NavigationCrowdSnapshot{std::move(storage)});

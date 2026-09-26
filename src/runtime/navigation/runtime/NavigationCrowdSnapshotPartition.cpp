@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <ranges>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -29,14 +30,14 @@ namespace Horo::Navigation::Detail {
 
         /** @brief Projects supported source shapes to a conservative axis-aligned footprint. */
         [[nodiscard]] std::optional<RectangleFootprint> FootprintFor(const NavigationDynamicShape &shape) {
-            if (const auto *box = std::get_if<NavigationDynamicBoxShape>(&shape)) {
-                if (box->IsValid())
-                    return RectangleFootprint{box->center, box->halfExtents.x, box->halfExtents.y, box->halfExtents.z};
-            } else if (const auto *cylinder = std::get_if<NavigationDynamicCylinderShape>(&shape)) {
-                if (cylinder->IsValid())
-                    return RectangleFootprint{cylinder->center, cylinder->radius, cylinder->halfHeight, cylinder->radius};
-            }
-            return std::nullopt;
+            return std::visit([](const auto &value) -> std::optional<RectangleFootprint> {
+                if (!value.IsValid())
+                    return std::nullopt;
+                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, NavigationDynamicBoxShape>)
+                    return RectangleFootprint{value.center, value.halfExtents.x, value.halfExtents.y, value.halfExtents.z};
+                else
+                    return RectangleFootprint{value.center, value.radius, value.halfHeight, value.radius};
+            }, shape);
         }
 
         [[nodiscard]] Result<void> IndexSegmentCells(const NavigationCrowdBoundarySegment &segment, const std::uint32_t segmentIndex,
@@ -52,8 +53,8 @@ namespace Horo::Navigation::Detail {
                 return InvalidBoundary();
             const auto width = static_cast<std::int64_t>(lastX) - firstX + 1;
             const auto height = static_cast<std::int64_t>(lastZ) - firstZ + 1;
-            const std::size_t remaining = limits.maximumCellEntries - storage.agents.size() - storage.boundaryCellEntries.size();
-            if (width > static_cast<std::int64_t>(remaining) || height > static_cast<std::int64_t>(remaining) ||
+            if (const std::size_t remaining = limits.maximumCellEntries - storage.agents.size() - storage.boundaryCellEntries.size();
+                width > static_cast<std::int64_t>(remaining) || height > static_cast<std::int64_t>(remaining) ||
                 width * height > static_cast<std::int64_t>(remaining))
                 return CapacityExceeded();
             for (std::int64_t x = firstX; x <= lastX; ++x) {
@@ -91,8 +92,8 @@ namespace Horo::Navigation::Detail {
                                                              .second = corners[(edge + 1U) % corners.size()],
                                                              .minimumY = minimumY,
                                                              .maximumY = maximumY};
-                const auto indexed = IndexSegmentCells(segment, static_cast<std::uint32_t>(storage.segments.size()), limits, storage);
-                if (indexed.HasError())
+                if (const auto indexed = IndexSegmentCells(segment, static_cast<std::uint32_t>(storage.segments.size()), limits, storage);
+                    indexed.HasError())
                     return indexed;
                 storage.segments.push_back(segment);
             }

@@ -76,8 +76,8 @@ namespace Horo::Navigation::Detail {
             std::int32_t lastX{};
             std::int32_t firstZ{};
             std::int32_t lastZ{};
-            const auto window = CellWindow(agent, profile.neighborRadiusMeters, limits, firstX, lastX, firstZ, lastZ);
-            if (window.HasError())
+            if (const auto window = CellWindow(agent, profile.neighborRadiusMeters, limits, firstX, lastX, firstZ, lastZ);
+                window.HasError())
                 return window;
             const double radiusSquared = static_cast<double>(profile.neighborRadiusMeters) * profile.neighborRadiusMeters;
             const auto [firstCell, lastCell] = AgentCellRange(storage, firstX, lastX);
@@ -126,8 +126,8 @@ namespace Horo::Navigation::Detail {
             std::int32_t lastX{};
             std::int32_t firstZ{};
             std::int32_t lastZ{};
-            const auto window = CellWindow(agent, profile.neighborRadiusMeters, limits, firstX, lastX, firstZ, lastZ);
-            if (window.HasError())
+            if (const auto window = CellWindow(agent, profile.neighborRadiusMeters, limits, firstX, lastX, firstZ, lastZ);
+                window.HasError())
                 return window;
             const auto [firstEntry, lastEntry] = BoundaryCellRange(storage, firstX, lastX);
             for (auto entry = firstEntry; entry != lastEntry; ++entry) {
@@ -137,7 +137,7 @@ namespace Horo::Navigation::Detail {
                     scratch.push_back(entry->index);
             }
             std::ranges::sort(scratch);
-            scratch.erase(std::unique(scratch.begin(), scratch.end()), scratch.end());
+            scratch.erase(std::ranges::unique(scratch).begin(), scratch.end());
             const double radiusSquared = static_cast<double>(profile.neighborRadiusMeters) * profile.neighborRadiusMeters;
             for (const std::uint32_t index : scratch) {
                 const auto &segment = storage.segments[index];
@@ -165,8 +165,8 @@ namespace Horo::Navigation::Detail {
                                                     std::size_t &boundaryChecks, std::vector<std::uint32_t> &scratch,
                                                     std::vector<Candidate> &candidates) {
             auto &agent = storage.agents[agentIndex];
-            const auto collected = CollectBoundaryCandidates(agent, profile, limits, storage, boundaryChecks, scratch, candidates);
-            if (collected.HasError())
+            if (const auto collected = CollectBoundaryCandidates(agent, profile, limits, storage, boundaryChecks, scratch, candidates);
+                collected.HasError())
                 return collected;
             const std::size_t admitted = std::min(candidates.size(), static_cast<std::size_t>(profile.maximumBoundarySegments));
             if (admitted > limits.maximumBoundaryFacts - storage.boundaryIndices.size())
@@ -188,11 +188,10 @@ namespace Horo::Navigation::Detail {
         std::vector<std::uint32_t> boundaryScratch;
         for (std::uint32_t index = 0; index < storage.agents.size(); ++index) {
             const auto &profile = ProfileFor(storage, storage.agents[index].profile);
-            const auto neighbors = GatherNeighbors(index, profile, limits, storage, pairChecks, candidates);
-            if (neighbors.HasError())
+            if (const auto neighbors = GatherNeighbors(index, profile, limits, storage, pairChecks, candidates); neighbors.HasError())
                 return neighbors;
-            const auto boundaries = GatherBoundaries(index, profile, limits, storage, boundaryChecks, boundaryScratch, candidates);
-            if (boundaries.HasError())
+            if (const auto boundaries = GatherBoundaries(index, profile, limits, storage, boundaryChecks, boundaryScratch, candidates);
+                boundaries.HasError())
                 return boundaries;
             const auto &agent = storage.agents[index];
             auto &truncation = TruncationFor(storage, agent.profile);
