@@ -148,8 +148,8 @@ namespace Horo::Assets {
         };
 
         /** @brief Publishes an asset-scoped result with a navigable source path. */
-        void PublishAssetResult(const AssetCookRequest &request, const AssetRecord &record, CookOperationScope &operation,
-                                const std::string_view stage, const DiagnosticCode code, const DiagnosticSeverity severity,
+        void PublishAssetResult(const AssetCookRequest &request, const AssetRecord &record, const CookOperationScope &operation,
+                                const std::string_view stage, const DiagnosticCode &code, const DiagnosticSeverity severity,
                                 const BuildOutputResult result) {
             operation.Publish(BuildOutputRecord{
                 .timestampUtc = std::chrono::system_clock::now(),
@@ -231,6 +231,38 @@ namespace Horo::Assets {
             return Result<void>::Success();
         }
 
+        /** @brief Records the result of one cook callback before fail-fast cancellation reaches its siblings. */
+        JobFunction MakeCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookTargetId &target) {
+            return [&slot, &catalog, &target](const CancellationToken &jobCancellation) {
+                if (jobCancellation.IsCancellationRequested()) {
+                    slot.cookError = MakeError(CookErrors::Cancelled);
+                    return JobCancelled(*slot.cookError);
+                }
+                Result<void> cooked = CookAndEncodeSlot(catalog, slot, target, jobCancellation);
+                if (cooked.HasError())
+                    slot.cookError = cooked.ErrorValue();
+                if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
+                    jobCancellation.IsCancellationRequested())
+                    return JobCancelled(cooked.ErrorValue());
+                return cooked;
+            };
+        }
+
+        /** @brief Publishes failures for callbacks that ran and siblings cancelled before execution. */
+        void PublishCookFailures(const AssetCookRequest &request, std::span<CookSlot> slots, const CookOperationScope &operation,
+                                 const bool groupFailed) {
+            for (CookSlot &slot : slots) {
+                if (!slot.cacheHit && groupFailed && !slot.cookError.has_value() && slot.cookedArtifact.empty())
+                    slot.cookError = MakeError(CookErrors::Cancelled);
+                if (!slot.cookError.has_value())
+                    continue;
+                const bool cancelled = slot.cookError->code.Value() == CookErrors::Cancelled.code.Value();
+                PublishAssetResult(request, slot.record, operation, "cook", DiagnosticCode{slot.cookError->code.Value()},
+                                   cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
+                                   cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed);
+            }
+        }
+
         /** @brief Runs uncached cook slots as a fail-fast group while preserving cancellation causes. */
         Result<void> CookUncachedSlots(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
                                        std::span<CookSlot> slots, const CancellationToken &cancellation, CookOperationScope &operation) {
@@ -239,20 +271,7 @@ namespace Horo::Assets {
             for (CookSlot &slot : slots) {
                 if (slot.cacheHit)
                     continue;
-                const JobFunction work = [&slot, &catalog, &request](const CancellationToken &jobCancellation) {
-                    if (jobCancellation.IsCancellationRequested()) {
-                        slot.cookError = MakeError(CookErrors::Cancelled);
-                        return JobCancelled(*slot.cookError);
-                    }
-                    Result<void> cooked = CookAndEncodeSlot(catalog, slot, request.target, jobCancellation);
-                    if (cooked.HasError())
-                        slot.cookError = cooked.ErrorValue();
-                    if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
-                        jobCancellation.IsCancellationRequested())
-                        return JobCancelled(cooked.ErrorValue());
-                    return cooked;
-                };
-                if (auto spawned = group.Spawn({}, work); spawned.HasError()) {
+                if (auto spawned = group.Spawn({}, MakeCookWork(slot, catalog, request.target)); spawned.HasError()) {
                     slot.cookError = IsJobCancelled(spawned.ErrorValue()) ? MakeError(CookErrors::Cancelled) : spawned.ErrorValue();
                     admissionError = spawned.ErrorValue();
                     group.RequestCancel();
@@ -262,16 +281,7 @@ namespace Horo::Assets {
             Result<void> joined = group.Join();
             if (admissionError.has_value() && (!joined.HasError() || IsJobCancelled(joined.ErrorValue())))
                 joined = Result<void>::Failure(*admissionError);
-            for (CookSlot &slot : slots) {
-                if (!slot.cacheHit && joined.HasError() && !slot.cookError.has_value() && slot.cookedArtifact.empty())
-                    slot.cookError = MakeError(CookErrors::Cancelled);
-                if (!slot.cookError.has_value())
-                    continue;
-                const bool cancelled = slot.cookError->code.Value() == CookErrors::Cancelled.code.Value();
-                PublishAssetResult(request, slot.record, operation, "cook", DiagnosticCode{slot.cookError->code.Value()},
-                                   cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-                                   cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed);
-            }
+            PublishCookFailures(request, slots, operation, joined.HasError());
             return joined;
         }
 
