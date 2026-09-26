@@ -1849,6 +1849,40 @@ Audio exposes:
 
 No ordinary log formatting occurs on the callback thread.
 
+### AUD-010.1 metric bridge
+
+`HoroAudioMetrics` owns the additive `Horo/Audio/AudioMetrics.h` contract. A
+control owner samples the actual `AudioEventQueue::Stats`,
+`AudioCommandStaging::Stats`, and complete set of `AudioMemoryStats`; it classifies
+consumed callback facts and explicit command admission/pump outcomes. The callback
+never registers instruments, formats labels, locks the bridge, or exports data.
+The host registers the fixed `audio.*` catalog once at activation and publishes
+only safe-point snapshot deltas through Foundation Telemetry; editor, headless,
+local sinks and opt-in OTLP consume the same numeric snapshot/descriptor contract.
+One owner generation cannot be reset in place, and a closed owner cannot publish
+new values. Existing audio callers need no migration; hosts adopting this optional
+bridge must retain the source owners through each control safe point.
+Within one owner generation, the host assigns strictly increasing, non-reused
+source generations to event-queue and memory-pool/arena replacements. The bridge
+retains cumulative drop and failure totals after a source retires, rejects stale
+source replay and same-source counter rollback, and bounds simultaneously live
+memory sources to sixteen. Source generations are internal comparison facts,
+never metric labels.
+
+The catalog has no dynamic dimensions or per-device, bus, voice, asset or user
+labels; each named instrument has one series. Counters include callback underruns,
+command-queue admission rejections and retained retries, actual event-queue
+telemetry drops, allocation and backend failures, voice
+rejections, spatial fallbacks and stable-ID lookup failures. Gauges include queue
+depths, voice counts, stream fill, memory, device format, callback budget,
+occlusion staleness and bus levels. Callback/mixer/effect/spatial costs are
+seconds-valued histograms. Sample rate uses the additive `Hertz` telemetry unit,
+exported as OTLP `Hz`; other units are count, bytes, ratio and seconds. A metric
+without a measured source observation is unavailable, not a fabricated zero.
+Callback underruns count consumed facts; separately measured telemetry drops
+explain records lost under event-queue pressure. Critical retries are not called
+drops, because the caller retains the work.
+
 ## Testing
 
 The following is the cumulative contract catalogue. The 1.0 qualification gate

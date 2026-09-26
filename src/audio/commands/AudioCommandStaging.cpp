@@ -374,4 +374,14 @@ namespace Horo::Audio {
             return state.output.IsDrained();
         });
     }
+
+    /** @copydoc AudioCommandStaging::Stats */
+    std::optional<AudioCommandStagingStats> AudioCommandStaging::Stats() const noexcept {
+        if (!state_)
+            return std::nullopt;
+        const std::unique_lock lock(state_->mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            return std::nullopt;
+        return AudioCommandStagingStats{.ingressDepth = state_->count, .callbackDepth = state_->output.Depth()};
+    }
 }  // namespace Horo::Audio

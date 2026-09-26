@@ -688,6 +688,14 @@ add_library(HoroEngine::AudioCommands ALIAS HoroAudioCommands)
 target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory)
 
+add_library(HoroAudioMetrics STATIC
+        audio/metrics/AudioMetrics.cpp
+        audio/metrics/AudioMetricTelemetry.cpp
+)
+add_library(HoroEngine::AudioMetrics ALIAS HoroAudioMetrics)
+target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
+
 add_library(HoroPhysics STATIC
         physics/CharacterControllerContracts.cpp
         physics/CharacterDiagnostics.cpp
