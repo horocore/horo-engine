@@ -34,6 +34,25 @@ Offline bake, live preview and runtime generation evaluate the same validated co
 plan. Runtime never parses graph source, invokes a compiler, repairs a plan or chooses
 a cache entry as active content.
 
+`PCGPointCloudWorkspace` implements the operation-local point-column boundary.
+Admission takes the exact cooked plan and a maximum record count and immutable schema
+for every PointSet output pin. It derives last readers from canonical routes, proves
+the peak simultaneously live record count, and reserves typed contiguous column
+buffers and metadata within the tier scratch slice before evaluation. Outputs with
+no downstream route remain final until the operation ends. A caller replacing an
+operation supplies the still-charged old workspace bytes so old/new overlap is
+admitted before the new buffers are allocated.
+
+One owner thread advances nodes in cooked order. The current node writes only its
+own bounded columns through guarded value setters; sealing validates every value
+and revokes copied writers before downstream reads. An output buffer may be assigned to a later output
+only after its last routed reader has finished. Fan-out therefore retains one
+immutable source buffer through all consumers. Borrowed read/write views expire at
+their documented stage transitions; cancellation closes access, and destruction
+releases every slot. A new workspace is required for a new evaluation, source
+revision, or replacement. The cooked plan exposes its captured operational tier for
+this admission; its portable byte format and compiler version are unchanged.
+
 ### Graph Source Schema 1.1
 
 `PCGGraphAsset` is the implemented bounded semantic source value. It owns stable graph,
