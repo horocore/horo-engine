@@ -4,6 +4,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -184,6 +185,47 @@ namespace Horo::Prefab {
             REQUIRE(graph.RegistryRevision() == firstRegistryRevision);
             REQUIRE(graph.RegistryRevision() != registry.Snapshot().Revision());
             REQUIRE(graph.DependencyClosure(std::array{prefab}).Value() == std::vector{mesh});
+        }
+
+        TEST_CASE("Prefab canonical source and graph retain identity across registry path changes",
+                  "[unit][prefab][qualification][identity]") {
+            const Assets::AssetId prefab = Asset(1);
+            const Assets::AssetId mesh = Asset(2);
+            const auto limits = Limits();
+            PrefabDocumentData data{.projectVersion = ProjectVersion(), .assetId = prefab, .objects = {Root()}, .referencedAssets = {mesh}};
+            data.objects.front().components = {{.instance = PrefabComponentInstanceId::Create(1).Value(),
+                                                .component = {.typeId = Gameplay::ComponentTypeId::Parse("game.tests.unknown").Value(),
+                                                              .schemaVersion = 7,
+                                                              .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson,
+                                                              .payload = {std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}}}}};
+            const auto source = PrefabDocument::Create(std::move(data), limits).Value().SerializeCanonical().Value();
+            const auto parsed = PrefabDocument::Parse(source, limits);
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value().Data().assetId == prefab);
+            REQUIRE(parsed.Value().Data().objects.front().components.front().component.payload ==
+                    std::vector{std::byte{0x00}, std::byte{0x7f}, std::byte{0xff}});
+            REQUIRE(parsed.Value().SerializeCanonical().Value() == source);
+
+            Assets::AssetRegistry registry;
+            PublishRegistry(registry, {Record(prefab, "core.prefab", "assets/prefabs/original.prefab"),
+                                       Record(mesh, "core.mesh", "assets/models/original.obj")});
+            const auto first = BuildPrefabDependencyGraph(registry.Snapshot(), {{parsed.Value(), Revision(1)}}, limits);
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().DependencyClosure(std::array{prefab}).Value() == std::vector{mesh});
+
+            PublishRegistry(registry, {Record(prefab, "core.prefab", "assets/prefabs/renamed.prefab"),
+                                       Record(mesh, "core.mesh", "assets/models/moved.obj")});
+            REQUIRE(first.Value().RegistryRevision() != registry.Snapshot().Revision());
+            REQUIRE(first.Value().FindNode(prefab) != nullptr);
+            REQUIRE(first.Value().DependencyClosure(std::array{prefab}).Value() == std::vector{mesh});
+            const auto stale = BuildPrefabAssetDependencyClosure(registry.Snapshot(), first.Value(), std::array{prefab}, {}, 1);
+            REQUIRE(stale.HasError());
+            RequireCode(stale.ErrorValue(), PrefabErrors::ResolutionStale);
+
+            const auto current = BuildPrefabDependencyGraph(registry.Snapshot(), {{parsed.Value(), Revision(1)}}, limits);
+            REQUIRE(current.HasValue());
+            REQUIRE(current.Value().DependencyClosure(std::array{prefab}).Value() == std::vector{mesh});
+            REQUIRE(current.Value().RegistryRevision() == registry.Snapshot().Revision());
         }
 
         TEST_CASE("Prefab dependency graph rejects incoherent registry type source and authored revisions", "[unit][prefab][dependency]") {
