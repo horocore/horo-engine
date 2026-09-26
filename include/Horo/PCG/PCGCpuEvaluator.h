@@ -93,8 +93,8 @@ namespace Horo::PCG {
                                                       const PCGCpuEvaluationLimits &, PCGCpuAdmission, CancellationToken);
 
         /** @brief Adopts only a completely evaluated, detached result. */
-        PCGCpuCandidate(GraphGeneration generation, Sha256Digest sourceDigest, std::uint64_t seed, SpatialSnapshotId snapshot,
-                        Sha256Digest numericProfile, std::vector<PCGCpuPointOutput> outputs, std::size_t reservedBytes) noexcept;
+        PCGCpuCandidate(GraphGeneration generation, const Sha256Digest &sourceDigest, std::uint64_t seed, SpatialSnapshotId snapshot,
+                        const Sha256Digest &numericProfile, std::vector<PCGCpuPointOutput> outputs, std::size_t reservedBytes) noexcept;
 
         GraphGeneration generation_{};
         Sha256Digest sourceDigest_{};

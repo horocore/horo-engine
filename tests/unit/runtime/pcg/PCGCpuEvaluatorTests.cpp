@@ -1,9 +1,11 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/PCG/PCGCpuEvaluator.h"
 #include "Horo/PCG/PCGErrors.h"
+#include "PCGCpuEvaluatorInternal.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -188,6 +190,10 @@ namespace Horo::PCG {
         CheckError(EvaluatePCGCpu(plan, spatial, narrow, {}, Limits(plan)), PCGErrors::PointCapacityExceeded);
         const std::array wrongType{PCGCpuInput{Id<ExposedInputId>(99), PCGGraphValue{true}}};
         CheckError(EvaluatePCGCpu(plan, spatial, bounds, wrongType, Limits(plan)), PCGErrors::CpuEvaluationInvalid);
+        const std::array nonfinite{PCGCpuInput{Id<ExposedInputId>(99), PCGGraphValue{std::numeric_limits<double>::infinity()}}};
+        CheckError(EvaluatePCGCpu(plan, spatial, bounds, nonfinite, Limits(plan)), PCGErrors::CpuEvaluationInvalid);
+        const std::array unknown{PCGCpuInput{Id<ExposedInputId>(100), PCGGraphValue{0.5}}};
+        CheckError(EvaluatePCGCpu(plan, spatial, bounds, unknown, Limits(plan)), PCGErrors::CpuEvaluationInvalid);
         const std::array duplicate{empty[0], empty[0]};
         CheckError(EvaluatePCGCpu(plan, spatial, bounds, duplicate, Limits(plan)), PCGErrors::CpuEvaluationInvalid);
     }
@@ -223,6 +229,15 @@ namespace Horo::PCG {
         const auto spatial = Spatial();
         const auto bounds = Bounds();
         const auto plan = Plan();
+        auto missingOutput = plan.Nodes()[0];
+        missingOutput.pins.clear();
+        CheckError(detail::ValidateNode(missingOutput), PCGErrors::CpuEvaluationInvalid);
+        auto missingPointInput = plan.Nodes()[1];
+        missingPointInput.pins.erase(missingPointInput.pins.begin());
+        CheckError(detail::ValidateNode(missingPointInput), PCGErrors::CpuEvaluationInvalid);
+        auto excessivePins = plan.Nodes()[0];
+        excessivePins.pins.insert(excessivePins.pins.end(), 3, excessivePins.pins.front());
+        CheckError(detail::ValidateNode(excessivePins), PCGErrors::CpuEvaluationInvalid);
         auto limits = Limits(plan);
         limits.numericProfile = {};
         CheckError(EvaluatePCGCpu(plan, spatial, bounds, {}, limits), PCGErrors::CpuEvaluationUnsupported);
@@ -236,6 +251,9 @@ namespace Horo::PCG {
         CheckError(EvaluatePCGCpu(plan, spatial, bounds, {}, limits), PCGErrors::CpuEvaluationInvalid);
         limits = Limits(plan, 2);
         CheckError(EvaluatePCGCpu(plan, spatial, bounds, {}, limits), PCGErrors::CpuEvaluationInvalid);
+        JobSystem closedJobs{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 4}};
+        closedJobs.Shutdown(ShutdownPolicy::Cancel);
+        CHECK(EvaluatePCGCpu(plan, spatial, bounds, {}, Limits(plan, 2, &closedJobs)).HasError());
 
         const auto malformed = Plan(false, true);
         CheckError(EvaluatePCGCpu(malformed, spatial, bounds, {}, Limits(malformed)), PCGErrors::CpuEvaluationInvalid);
