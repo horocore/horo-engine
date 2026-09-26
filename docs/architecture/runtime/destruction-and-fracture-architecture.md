@@ -205,6 +205,17 @@ connectivity rules, selected tier/limits and artifact/toolchain schemas. Physics
 Render add their own native target fingerprints to the accepted DFR artifact identity;
 a solver/backend upgrade invalidates its derived product without changing DFR topology.
 
+The DFR-002.3 offline Voronoi cook entry point accepts a closed, outward-wound
+normalized source, exact source digest/revision and recipe/toolchain provenance. It
+partitions a non-convex source along its deterministic surface-plane arrangement into
+bounded convex regions, then clips each region against every ordered site bisector.
+The result contains closed solver-neutral convex collision pieces under stable semantic
+chunk IDs, visible exterior/interior faces, per-face material slots, volume/center-of-
+mass inputs and site-neighbor connectivity. If the finite region, work or output budget
+cannot hold the complete result, generation fails before publication. The detached
+candidate is for later Assets publication and separate Physics/Render derived cooking;
+runtime composition has no call into this cook entry point.
+
 ## Runtime Pre-Cooked Fracture
 
 Runtime fracture can be triggered by:

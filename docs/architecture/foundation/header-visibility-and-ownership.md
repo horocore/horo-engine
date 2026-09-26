@@ -37,6 +37,18 @@ preparations before accepting any later candidate; acceptance itself also rotate
 the revision and cancellation token. Shutdown closes acceptance but retains the
 last immutable snapshot for existing readers.
 
+## DFR-002.3 Offline Generator Boundary
+
+`HoroEngine::DestructionCook` owns the additive
+`Horo/Destruction/OfflineVoronoi.h` contract. Authoring and asset-cook callers link
+that target, capture normalized source bytes and an exact source revision, and provide
+an explicit seed, recipe revision, limits, tier, and pinned toolchain fingerprint.
+`GenerateOfflineVoronoi` returns a detached candidate. The authoring owner compares
+the captured owner/source/recipe generation at `Accept`; generation alone never
+publishes a durable asset or changes a runtime world. Existing pre-fractured import
+callers do not migrate. The generated DestructionCook public-header consumer covers
+the additive header without exposing Physics, Render, editor, or parser types.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
