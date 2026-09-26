@@ -290,4 +290,15 @@ namespace Horo::Vfx::VfxErrors {
                                             .defaultSeverity = ErrorSeverity::Error,
                                             .summary = "The prepared CPU particle simulation descriptor is invalid.",
                                             .remediationHint = "Use finite bounded forces, curves, payloads, and collision adapters."};
+    const ErrorCodeDescriptor EffectPoolInvalid{.domain = VfxDomain,
+                                                .code = ErrorCode{"vfx.effect_pool.invalid"},
+                                                .defaultSeverity = ErrorSeverity::Error,
+                                                .summary = "The effect-pool preparation data or reservation is invalid.",
+                                                .remediationHint = "Provide finite per-effect demand and an admitted scene budget slice."};
+    const ErrorCodeDescriptor EffectPoolAllocationFailed{.domain = VfxDomain,
+                                                         .code = ErrorCode{"vfx.effect_pool.allocation_failed"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "Fixed effect-pool storage could not be prepared.",
+                                                         .remediationHint =
+                                                             "Reduce admitted capacity or release scene memory before activation."};
 }  // namespace Horo::Vfx::VfxErrors

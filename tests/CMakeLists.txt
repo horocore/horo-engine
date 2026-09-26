@@ -451,6 +451,7 @@ add_executable(HoroVfxApiTests
         unit/runtime/vfx/CpuParticleForceQualificationTests.cpp
         unit/runtime/vfx/CpuParticleOverLifePayloadTests.cpp
         unit/runtime/vfx/CpuParticleSpawnPipelineTests.cpp
+        unit/runtime/vfx/EffectInstancePoolTests.cpp
         unit/runtime/vfx/ParticleSystemDescriptorTests.cpp
         unit/runtime/vfx/VfxFoundationQualificationTests.cpp
         unit/runtime/vfx/VfxIdentityTests.cpp
