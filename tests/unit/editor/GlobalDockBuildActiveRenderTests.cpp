@@ -68,6 +68,46 @@ namespace {
         pane.Draw(ImGui::GetCursorScreenPos(), width, command, context);
         ImGui::End();
     }
+
+    [[nodiscard]] bool RenderActiveAndCancellingFrames(Horo::Application::GameplayBuildService &builds, Horo::BuildOutputStore &output,
+                                                       const std::filesystem::path &project,
+                                                       const Horo::Application::GameplayBuildSessionId sessionId) {
+        using namespace Horo::Editor;
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        io.DisplaySize = {1280.0F, 720.0F};
+        io.DeltaTime = 1.0F / 60.0F;
+        ImFont *font = io.Fonts->AddFontDefault();
+        static_cast<void>(io.Fonts->Build());
+
+        Horo::EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        ActiveBuildLocalization localization;
+        const ThemeContext theme{.fonts = {.sans = font, .sansCompact = font, .sansEmphasis = font}};
+        const EditorSettingsSnapshot settings{};
+        const EditorGuiContext context{.engineEvents = engineEvents,
+                                       .editorEvents = editorEvents,
+                                       .localization = localization,
+                                       .theme = theme,
+                                       .settings = settings};
+        GlobalDockBuildOutputPane pane;
+        pane.Attach(&output, &builds, project.generic_string());
+
+        ImGui::NewFrame();
+        DrawBuildPane(pane, context, 900.0F);
+        ImGui::Render();
+        CHECK(ImGui::GetDrawData()->CmdListsCount > 0);
+
+        const bool requested = builds.RequestCancel(sessionId);
+        ImGui::NewFrame();
+        DrawBuildPane(pane, context, 260.0F);
+        ImGui::Render();
+        CHECK(ImGui::GetDrawData()->CmdListsCount > 0);
+        pane.Detach();
+        ImGui::DestroyContext();
+        return requested;
+    }
 }  // namespace
 
 TEST_CASE("Build Output renders a live build at wide and narrow widths and survives cancellation", "[unit][editor][gui]") {
@@ -89,42 +129,10 @@ TEST_CASE("Build Output renders a live build at wide and narrow widths and survi
     REQUIRE(processes.WaitUntilRunning());
     REQUIRE(builds.QueryActiveProject(project).has_value());
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    io.DisplaySize = {1280.0F, 720.0F};
-    io.DeltaTime = 1.0F / 60.0F;
-    ImFont *font = io.Fonts->AddFontDefault();
-    static_cast<void>(io.Fonts->Build());
-
-    EngineDataBus engineEvents;
-    EditorDataBus editorEvents;
-    ActiveBuildLocalization localization;
-    const ThemeContext theme{.fonts = {.sans = font, .sansCompact = font, .sansEmphasis = font}};
-    const EditorSettingsSnapshot settings{};
-    const EditorGuiContext context{.engineEvents = engineEvents,
-                                   .editorEvents = editorEvents,
-                                   .localization = localization,
-                                   .theme = theme,
-                                   .settings = settings};
-    GlobalDockBuildOutputPane pane;
-    pane.Attach(&output, &builds, project.generic_string());
-
-    ImGui::NewFrame();
-    DrawBuildPane(pane, context, 900.0F);
-    ImGui::Render();
-    REQUIRE(ImGui::GetDrawData()->CmdListsCount > 0);
-
-    REQUIRE(builds.RequestCancel(started.Value()));
-    ImGui::NewFrame();
-    DrawBuildPane(pane, context, 260.0F);
-    ImGui::Render();
-    REQUIRE(ImGui::GetDrawData()->CmdListsCount > 0);
+    CHECK(RenderActiveAndCancellingFrames(builds, output, project, started.Value()));
 
     builds.Shutdown();
     REQUIRE_FALSE(builds.QueryActiveProject(project).has_value());
-    pane.Detach();
-    ImGui::DestroyContext();
     jobs.Shutdown(ShutdownPolicy::Cancel);
     std::error_code error;
     std::filesystem::remove_all(project, error);
