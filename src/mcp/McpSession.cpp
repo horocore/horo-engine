@@ -118,7 +118,7 @@ namespace Horo::Mcp {
         auto record = std::make_shared<SessionRecord>();
         record->handle = handle;
         record->admission = std::move(admission);
-        state_->sessions.emplace(handle.id, std::move(record));
+        state_->sessions.try_emplace(handle.id, std::move(record));
         return Result<McpSessionHandle>::Success(handle);
     }
 
@@ -154,7 +154,7 @@ namespace Horo::Mcp {
                        .projectIdentity = record->admission.projectIdentity,
                        .authorizationRevision = record->admission.authorizationRevision,
                        .registryRevision = record->admission.registryRevision};
-            auto [entry, inserted] = record->inFlight.emplace(key, CancellationSource{record->cancellation.Token()});
+            auto [entry, inserted] = record->inFlight.try_emplace(key, CancellationSource{record->cancellation.Token()});
             static_cast<void>(inserted);
             ++state_->activeCallbacks;
             context.cancellation = entry->second.Token();

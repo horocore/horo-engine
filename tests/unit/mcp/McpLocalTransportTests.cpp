@@ -109,6 +109,17 @@ namespace Horo::Mcp {
         REQUIRE(OneReply(transport, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"ping\"}\n")["result"]["method"] == "ping");
     }
 
+    TEST_CASE("local MCP bound scan treats escaped quotes and braces as string content", "[mcp][framing]") {
+        McpSessionLimits limits;
+        limits.maximumDepth = 3;
+        auto transport = Transport(limits);
+        const auto reply =
+            OneReply(transport, R"({"jsonrpc":"2.0","id":9,"method":"ping","params":{"text":"escaped \"{[{\" remains text"}})"
+                                "\n");
+        REQUIRE(reply["id"] == 9);
+        REQUIRE(reply["result"]["params"]["text"] == "escaped \"{[{\" remains text");
+    }
+
     TEST_CASE("local MCP discard mode bounds an oversized partial frame and resumes at newline", "[mcp][framing]") {
         McpSessionLimits limits;
         limits.maximumFrameBytes = 256;

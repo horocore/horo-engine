@@ -129,6 +129,20 @@ namespace Horo::Mcp {
         REQUIRE(manager->ActiveSessions() == 0);
     }
 
+    TEST_CASE("MCP controller exception boundary translates non-standard failures", "[mcp][session]") {
+        auto controller = std::make_shared<Controller>();
+        controller->action = [](const McpRequest &, const McpRequestContext &) -> Result<nlohmann::json> {
+            throw 42;
+        };
+        auto manager = Manager(controller);
+        auto opened = manager->Open(Admission());
+        REQUIRE(opened.HasValue());
+        const auto failed = manager->Dispatch(opened.Value(), {.id = 1, .method = "tools/call"});
+        REQUIRE(failed.HasError());
+        RequireCode(failed.ErrorValue(), McpErrors::ControllerFailed);
+        REQUIRE(manager->Shutdown().HasValue());
+    }
+
     TEST_CASE("MCP cancellation, project switch and disconnect revoke old work", "[mcp][session]") {
         auto gate = std::make_shared<Gate>();
         auto controller = std::make_shared<Controller>();

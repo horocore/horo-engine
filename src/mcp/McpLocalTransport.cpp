@@ -37,6 +37,16 @@ namespace Horo::Mcp {
             return message.is_object() && version != message.end() && version->is_string() &&
                    version->get_ref<const std::string &>() == "2.0" && method != message.end() && method->is_string();
         }
+
+        /** @brief Handles only a well-formed cancellation notification for the admitted generation. */
+        void CancelNotifiedRequest(const nlohmann::json &message, McpSessionManager &manager, const McpSessionHandle session) {
+            const auto params = message.find("params");
+            if (params == message.end() || !params->is_object())
+                return;
+            const auto cancelled = params->find("requestId");
+            if (cancelled != params->end())
+                static_cast<void>(manager.Cancel(session, *cancelled));
+        }
     }  // namespace
 
     /** @copydoc McpLocalTransport::Start */
@@ -151,22 +161,15 @@ namespace Horo::Mcp {
         const std::string &method = message["method"].get_ref<const std::string &>();
         const auto id = message.find("id");
         if (id == message.end()) {
-            if (method == "notifications/cancelled") {
-                const auto params = message.find("params");
-                if (params != message.end() && params->is_object()) {
-                    const auto cancelled = params->find("requestId");
-                    if (cancelled != params->end())
-                        static_cast<void>(manager_->Cancel(session, *cancelled));
-                }
-            }
+            if (method == "notifications/cancelled")
+                CancelNotifiedRequest(message, *manager_, session);
             return std::nullopt;
         }
         if (!ValidRequestId(*id, limits))
             return BoundedLine(ErrorReply(nullptr, -32600, "Invalid JSON-RPC request identity."), limits);
 
         McpRequest request{.id = *id, .method = method};
-        const auto params = message.find("params");
-        if (params != message.end()) {
+        if (const auto params = message.find("params"); params != message.end()) {
             if (!params->is_object() && !params->is_array())
                 return BoundedLine(ErrorReply(*id, -32602, "Invalid JSON-RPC parameters."), limits);
             request.params = *params;
