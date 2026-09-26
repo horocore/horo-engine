@@ -1,6 +1,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 
 #include "GameplayBuildInputs.h"
+#include "GameplayBuildInvocation.h"
 #include "Horo/Application/CompilerDiagnosticParser.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Platform.h"
@@ -36,6 +37,8 @@
 namespace Horo::Application {
     namespace {
         const ErrorDomainId Domain{"horo.application.gameplay_build"};
+        using Detail::BuildConfigureArguments;
+        using Detail::BuildEnvironment;
         using Detail::CompilerIdentity;
         using Detail::ComputeInputHash;
         using Detail::HashFile;
@@ -88,13 +91,6 @@ namespace Horo::Application {
         [[nodiscard]] bool IsTerminal(const GameplayBuildState state) noexcept {
             using enum GameplayBuildState;
             return state == Succeeded || state == Failed || state == Cancelled || state == TimedOut;
-        }
-
-        [[nodiscard]] ProcessEnvironment BuildEnvironment() {
-            ProcessEnvironment environment;
-            environment
-                .unset = {"CC", "CXX", "CMAKE_GENERATOR", "CMAKE_GENERATOR_PLATFORM", "CMAKE_GENERATOR_TOOLSET", "CMAKE_TOOLCHAIN_FILE"};
-            return environment;
         }
 
         [[nodiscard]] std::uint64_t CurrentProcessId() noexcept {
@@ -594,37 +590,6 @@ namespace Horo::Application {
             session->snapshot.pendingInputHash.reset();
             session->snapshot.newerInputsPending = false;
             return true;
-        }
-
-        [[nodiscard]] std::vector<std::string> BuildConfigureArguments(const GameplayBuildRequest &request,
-                                                                       const std::filesystem::path &buildRoot,
-                                                                       const std::filesystem::path &candidateManifest) {
-            std::vector<std::string> arguments{
-                "-S",
-                request.projectRoot.string(),
-                "-B",
-                buildRoot.string(),
-                std::format("-DHoroEngineGameplay_DIR={}", request.environment.gameplaySdkPackage.string()),
-                std::format("-DCMAKE_BUILD_TYPE={}", request.environment.configuration),
-                std::format("-DHORO_GAMEPLAY_MANIFEST_OUTPUT={}", candidateManifest.string()),
-            };
-            if (request.environment.cxxCompiler.has_value())
-                arguments.push_back(std::format("-DCMAKE_CXX_COMPILER={}", request.environment.cxxCompiler->string()));
-            if (request.environment.generator.has_value()) {
-                arguments.emplace_back("-G");
-                arguments.push_back(*request.environment.generator);
-            }
-            if (request.environment.generatorPlatform.has_value()) {
-                arguments.emplace_back("-A");
-                arguments.push_back(*request.environment.generatorPlatform);
-            }
-            if (request.environment.generatorToolset.has_value()) {
-                arguments.emplace_back("-T");
-                arguments.push_back(*request.environment.generatorToolset);
-            }
-            if (request.environment.toolchainFile.has_value())
-                arguments.push_back(std::format("-DCMAKE_TOOLCHAIN_FILE={}", request.environment.toolchainFile->string()));
-            return arguments;
         }
 
         [[nodiscard]] bool HasSupersedingRequest(const std::shared_ptr<GameplayBuildService::State::Session> &session,
