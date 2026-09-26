@@ -130,10 +130,8 @@ namespace Horo::Runtime {
             return ValidateUnrelatedParticipants(before, after, *step.participant, step);
         }
 
-        [[nodiscard]] Result<void> ValidateStepOutput(const StepBaseline &before, const SaveMigrationCandidate &after, const StepView &step,
-                                                      const SaveMigrationLimits &limits) {
-            if (const auto validation = ValidateState(after, limits); validation.HasError())
-                return validation;
+        [[nodiscard]] Result<void> ValidateStepOutput(const StepBaseline &before, const SaveMigrationCandidate &after,
+                                                      const StepView &step) {
             switch (step.axis) {
                 case SaveMigrationAxis::ArchiveFormat:
                     return ValidateArchiveStepOutput(before, after, step);
@@ -213,10 +211,12 @@ namespace Horo::Runtime {
                 return Result<SaveMigrationCandidate>::Failure(WithCause(std::move(wrapped), transformed.ErrorValue()));
             }
             SaveMigrationCandidate output = std::move(transformed).Value();
-            if (const auto outputValidation = ValidateStepOutput(baseline.Value(), output, step, limits); outputValidation.HasError())
-                return Result<SaveMigrationCandidate>::Failure(outputValidation.ErrorValue());
+            if (const auto bounds = ValidateState(output, limits); bounds.HasError())
+                return Result<SaveMigrationCandidate>::Failure(bounds.ErrorValue());
             if (auto charged = ChargeWork(workUsed, CandidateBytes(output), limits); charged.HasError())
                 return Result<SaveMigrationCandidate>::Failure(charged.ErrorValue());
+            if (const auto outputValidation = ValidateStepOutput(baseline.Value(), output, step); outputValidation.HasError())
+                return Result<SaveMigrationCandidate>::Failure(outputValidation.ErrorValue());
             return Result<SaveMigrationCandidate>::Success(std::move(output));
         }
 

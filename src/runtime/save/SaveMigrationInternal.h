@@ -78,37 +78,24 @@ namespace Horo::Runtime::SaveMigrationDetail {
     [[nodiscard]] inline StepView View(const SaveMigrationDefinition &definition) {
         return std::visit([](const auto &step) -> StepView {
             using Step = std::decay_t<decltype(step)>;
+            SaveMigrationAxis axis = SaveMigrationAxis::ParticipantSchema;
+            std::optional<SaveParticipantId> participant;
             if constexpr (std::is_same_v<Step, ArchiveMigrationStep>) {
-                return {.id = step.id,
-                        .axis = SaveMigrationAxis::ArchiveFormat,
-                        .kind = step.kind,
-                        .from = step.from.Value(),
-                        .to = step.to.Value(),
-                        .participant = std::nullopt,
-                        .migrate = &step.migrate,
-                        .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                        .estimatedWork = step.estimatedWork};
+                axis = SaveMigrationAxis::ArchiveFormat;
             } else if constexpr (std::is_same_v<Step, SaveSchemaMigrationStep>) {
-                return {.id = step.id,
-                        .axis = SaveMigrationAxis::SaveSchema,
-                        .kind = step.kind,
-                        .from = step.from.Value(),
-                        .to = step.to.Value(),
-                        .participant = std::nullopt,
-                        .migrate = &step.migrate,
-                        .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                        .estimatedWork = step.estimatedWork};
+                axis = SaveMigrationAxis::SaveSchema;
             } else {
-                return {.id = step.id,
-                        .axis = SaveMigrationAxis::ParticipantSchema,
-                        .kind = step.kind,
-                        .from = step.from.Value(),
-                        .to = step.to.Value(),
-                        .participant = step.participant,
-                        .migrate = &step.migrate,
-                        .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                        .estimatedWork = step.estimatedWork};
+                participant = step.participant;
             }
+            return {.id = step.id,
+                    .axis = axis,
+                    .kind = step.kind,
+                    .from = step.from.Value(),
+                    .to = step.to.Value(),
+                    .participant = std::move(participant),
+                    .migrate = &step.migrate,
+                    .equivalentSequentialSteps = &step.equivalentSequentialSteps,
+                    .estimatedWork = step.estimatedWork};
         }, definition);
     }
 
