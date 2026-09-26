@@ -69,33 +69,35 @@ the embedded path has no privileged handler or service access.
 
 ## Transport Layer
 
-The initial transport/session profile is selected by [MCP-001.2]. This document
-requires any selected transport to be swappable and independent of engine domain
-targets; it does not authorize remote binding or select an HTTP implementation.
+The initial local profile is host-driven newline-delimited JSON-RPC 2.0 over a
+host-owned byte stream (typically standard input/output or an approved local
+pipe). `McpLocalTransport` owns framing and a session, but opens no socket,
+pipe, thread, or listener. The executable composition in [CLI-001.7] owns
+process streams and keeps logs off protocol output. The frame and decoded input
+limits apply before and after parsing; partial oversized frames are discarded
+through the next newline so subsequent messages remain synchronized.
 
-```cpp
-class IMcpTransport {
-public:
-    virtual ~IMcpTransport() = default;
-    virtual void Start(IMcpMessageHandler& handler) = 0;
-    virtual void Send(const nlohmann::json& message) = 0;
-    virtual void Stop() = 0;
-};
-```
-
-The in-process adapter does not implement `IMcpTransport`; it translates its
-caller envelope into the same controller request and receives the same controller
-result. Session creation, concrete transport selection, and remote policy are
-implemented by later lifecycle and security tickets.
+`McpInProcessAdapter` passes decoded values without wire serialization. Both
+adapters submit to one `McpSessionManager` and its injected, host-owned
+`IMcpRequestController`, with identical admission, capability, project,
+cancellation, deadline, and result budgets. Controller/registry implementation
+belongs to later MCP tickets. Neither adapter grants its own capabilities or
+selects a backend. No network transport is selected or authorized here.
 
 ## Session Lifecycle
 
-1. Host starts `McpServer` during initialization.
-2. `McpServer` creates the configured transport.
-3. Client connects and sends `initialize` request.
-4. Server responds with capabilities and tool list.
-5. Client calls `tools/list` and `tools/call`.
-6. On host shutdown, server drains in-flight requests and closes transport.
+1. Host composes one controller and session manager, then explicitly admits a
+   local or embedded client with bounded identity, capabilities, revisions, and
+   optional project identity.
+2. A local host feeds byte chunks to the framing adapter; an embedded caller
+   passes request values directly. Both use the same controller. Protocol
+   `initialize`, tool listing, and tool execution remain controller-owned.
+3. Disconnect closes the session and cancels its requests. A host-approved
+   project switch advances its generation, cancels old work, and discards an
+   incomplete local frame. Old handles cannot admit new work.
+4. Shutdown closes admission, cancels sessions, and waits only its declared
+   drain interval. A callback that outlives the interval retains its controller
+   lease; shutdown reports a typed drain timeout rather than destroying it.
 
 All engine mutations triggered by MCP are queued onto the main thread in the
 GUI host. The CLI host runs them on the host's main thread directly.

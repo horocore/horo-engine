@@ -64,6 +64,13 @@ horo_configure_target_header_boundary(HoroCliHost PUBLIC_HEADERS
     Horo/Cli/CliOptionParser.h
 )
 
+horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
+    Horo/Mcp/McpErrors.h
+    Horo/Mcp/McpSession.h
+    Horo/Mcp/McpInProcessAdapter.h
+    Horo/Mcp/McpLocalTransport.h
+)
+
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 

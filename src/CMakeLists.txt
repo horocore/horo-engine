@@ -66,6 +66,17 @@ target_link_libraries(HoroCliHost
         PRIVATE nlohmann_json::nlohmann_json
 )
 
+add_library(HoroMcpSession STATIC
+        mcp/McpErrors.cpp
+        mcp/McpJsonBounds.cpp
+        mcp/McpSession.cpp
+        mcp/McpInProcessAdapter.cpp
+        mcp/McpLocalTransport.cpp
+)
+add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
+target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
+
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
             foundation/telemetry/OpenTelemetrySink.cpp
