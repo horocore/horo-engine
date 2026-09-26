@@ -687,6 +687,32 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
     REQUIRE((diagnosticCommand.diagnosticSource->line == 12U));
     REQUIRE((diagnosticCommand.diagnosticSource->column == 3U));
     clickableBuild.OnDetach();
+    clickableBuildOutputStore.Append(BuildOutputRecord{
+        .timestampUtc = std::chrono::system_clock::now(),
+        .severity = DiagnosticSeverity::Error,
+        .stage = "compile",
+        .message = "Diagnostic published while the panel is detached",
+        .source = DiagnosticSourceLocation{.absolutePath = "/tmp/HoroProject/assets/reopened.glsl", .line = 27, .column = 9},
+    });
+    clickableBuild.OnAttach(clickableActivityContext);
+    io.AddMousePosEvent(80.0F, buildRowClickY + buildMetrics.tableRowHeight);
+    ImGui::NewFrame();
+    RenderAtWidth(900.0F, "ReopenedBuildRow", clickableBuild, context);
+    ImGui::Render();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    ImGui::NewFrame();
+    RenderAtWidth(900.0F, "ReopenedBuildRow", clickableBuild, context);
+    ImGui::Render();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    ImGui::NewFrame();
+    const EditorWorkspaceViewCommandData reopenedCommand = RenderAtWidth(900.0F, "ReopenedBuildRow", clickableBuild, context);
+    ImGui::Render();
+    REQUIRE((reopenedCommand.command == EditorWorkspaceViewCommand::OpenDiagnosticSource));
+    REQUIRE(reopenedCommand.diagnosticSource.has_value());
+    REQUIRE((reopenedCommand.diagnosticSource->absolutePath == "/tmp/HoroProject/assets/reopened.glsl"));
+    REQUIRE((reopenedCommand.diagnosticSource->line == 27U));
+    REQUIRE((reopenedCommand.diagnosticSource->column == 9U));
+    clickableBuild.OnDetach();
     ImGui::NewFrame();
     RenderAtWidth(900.0F, "LiveBuildRows", liveBuild, context);
     ImGui::Render();
