@@ -1212,6 +1212,7 @@ namespace Horo::Application {
                 state.admissionsFinished.notify_all();
             }
         } admission{*state_};
+
         const std::string projectKey = std::filesystem::absolute(request.projectRoot).lexically_normal().generic_string();
         Result<SessionPreparation> prepared = PrepareSession(state_, request, hash.Value(), projectKey);
         if (prepared.HasError())
