@@ -35,6 +35,24 @@ namespace Horo::PCG {
             return PCGCapabilitySet::Create(required);
         }
 
+        [[nodiscard]] Result<const PCGGraphDescriptor *> ResolveCompileGraph(const PCGGraphAsset &graph, const PCGValidatedGraph &validated,
+                                                                             const PCGRegistrySnapshot &registry,
+                                                                             const PCGCapabilitySet requiredCapabilities) {
+            const PCGGraphSourceData &source = graph.Data();
+            if (!graph.IsCookEligible())
+                return Reject<const PCGGraphDescriptor *>(PCGErrors::GraphNodeTypeUnknown);
+            if (!registry.IsValid() || validated.Generation() != source.generation ||
+                validated.RegistryGeneration() != registry.Generation() ||
+                validated.RegistryGraph().registry != registry.RegistryInstance() || validated.Nodes().size() != source.nodes.size())
+                return Reject<const PCGGraphDescriptor *>(PCGErrors::CookedPlanStale);
+            auto descriptor = registry.Resolve(validated.RegistryGraph());
+            if (descriptor.HasError() || descriptor.Value()->generation != source.generation)
+                return Reject<const PCGGraphDescriptor *>(PCGErrors::CookedPlanStale);
+            if (!registry.Capabilities().granted.ContainsAll(requiredCapabilities))
+                return Reject<const PCGGraphDescriptor *>(PCGErrors::UnsupportedCapability);
+            return descriptor;
+        }
+
         class BoundedWriter final {
         public:
             explicit BoundedWriter(const std::size_t maximum) : maximum_(maximum) {}
@@ -337,16 +355,9 @@ namespace Horo::PCG {
         if (tierLimits.HasError() || maximumPlanBytes == 0 || maximumPlanBytes > PCGGraphSourceHardLimits::SourceBytes)
             return Reject<PCGCookedPlan>(PCGErrors::CookedPlanCapacityExceeded);
         const std::size_t effectiveMaximum = std::min(maximumPlanBytes, tierLimits.Value().maximumPlanAndAuxiliaryBytes);
-        if (!graph.IsCookEligible())
-            return Reject<PCGCookedPlan>(PCGErrors::GraphNodeTypeUnknown);
-        if (!registry.IsValid() || validated.Generation() != source.generation || validated.RegistryGeneration() != registry.Generation() ||
-            validated.RegistryGraph().registry != registry.RegistryInstance() || validated.Nodes().size() != source.nodes.size())
-            return Reject<PCGCookedPlan>(PCGErrors::CookedPlanStale);
-        auto graphDescriptor = registry.Resolve(validated.RegistryGraph());
-        if (graphDescriptor.HasError() || graphDescriptor.Value()->generation != source.generation)
-            return Reject<PCGCookedPlan>(PCGErrors::CookedPlanStale);
-        if (!registry.Capabilities().granted.ContainsAll(requiredCapabilities))
-            return Reject<PCGCookedPlan>(PCGErrors::UnsupportedCapability);
+        auto graphDescriptor = ResolveCompileGraph(graph, validated, registry, requiredCapabilities);
+        if (graphDescriptor.HasError())
+            return Result<PCGCookedPlan>::Failure(graphDescriptor.ErrorValue());
         auto sourceBytes = SerializePCGGraphAsset(graph);
         if (sourceBytes.HasError())
             return Result<PCGCookedPlan>::Failure(WrapError(PCGErrors::CookedPlanInvalid, sourceBytes.ErrorValue()));
