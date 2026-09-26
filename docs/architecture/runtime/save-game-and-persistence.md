@@ -606,6 +606,15 @@ The storage adapter resolves paths, performs quota checks and reserves peak spac
 for old file, temporary file and any required recovery copy. Quota estimates do not
 replace handling a later disk-full/write error.
 
+The local archive file primitive maps only typed namespace and slot identities below
+the resolved product root. It holds directory handles across reads and publication,
+rejects redirected directory entries, reparse/symlink targets, hard-linked archives,
+and case aliases where the platform folds names. It writes a complete temporary
+archive through the held slot directory before replacing a generation. Callers must
+still hold the namespace and per-slot lease and reconcile a reported error after
+the atomic rename, because a post-publication durability failure cannot restore
+the previous generation by assumption.
+
 Cancellation is cooperative until the worker atomically enters CommitStarted after
 its final cancellation check and before replacement. That gate is the practical point
 of no return: cancellation arriving afterward returns TooLate and cannot label a
