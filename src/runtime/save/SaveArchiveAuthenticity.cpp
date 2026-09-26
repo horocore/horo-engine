@@ -94,17 +94,17 @@ namespace Horo::Runtime {
                                                         const std::span<const std::byte> trustedScope,
                                                         SaveArchiveSignatureProvider *provider, const SaveArchiveReader &reader,
                                                         const std::size_t maximumArchiveBytes) {
-        if (trustedScope.empty() || trustedScope.size() > 4'096 ||
-            (policy != SaveSignaturePolicy::Disabled && policy != SaveSignaturePolicy::Optional && policy != SaveSignaturePolicy::Required))
+        using enum SaveSignaturePolicy;
+        if (trustedScope.empty() || trustedScope.size() > 4'096 || (policy != Disabled && policy != Optional && policy != Required))
             return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::ProtectionInvalid));
         auto trailer = Preflight(archive, maximumArchiveBytes);
         if (trailer.HasError())
             return Result<ValidatedSaveArchive>::Failure(trailer.ErrorValue());
         if (trailer.Value().algorithm == SaveArchiveSignatureAlgorithm::None) {
-            if (policy == SaveSignaturePolicy::Required)
+            if (policy == Required)
                 return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::SignatureRequired));
         } else {
-            if (policy == SaveSignaturePolicy::Disabled)
+            if (policy == Disabled)
                 return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::SignatureDisallowed));
             if (provider == nullptr)
                 return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::ProtectionUnavailable));
