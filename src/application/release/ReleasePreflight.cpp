@@ -38,17 +38,18 @@ namespace Horo::Release {
         /** @brief Appends one independently actionable validation failure. */
         void AddIssue(std::vector<ReleasePreflightIssue> &issues, const ReleasePreflightIssueCode code, std::string field,
                       std::string message) {
-            issues.push_back({code, std::move(field), std::move(message)});
+            issues.emplace_back(code, std::move(field), std::move(message));
         }
 
         /** @brief Formats the stable platform token used by the plan snapshot. */
         [[nodiscard]] const char *PlatformName(const DistributionPlatform platform) noexcept {
+            using enum DistributionPlatform;
             switch (platform) {
-                case DistributionPlatform::Windows:
+                case Windows:
                     return "windows";
-                case DistributionPlatform::MacOS:
+                case MacOS:
                     return "macos";
-                case DistributionPlatform::Linux:
+                case Linux:
                     return "linux";
             }
             return "unknown";
@@ -67,12 +68,13 @@ namespace Horo::Release {
 
         /** @brief Formats the stable configuration token used by the plan snapshot. */
         [[nodiscard]] const char *ConfigurationName(const ReleaseBuildConfiguration configuration) noexcept {
+            using enum ReleaseBuildConfiguration;
             switch (configuration) {
-                case ReleaseBuildConfiguration::Debug:
+                case Debug:
                     return "debug";
-                case ReleaseBuildConfiguration::Development:
+                case Development:
                     return "development";
-                case ReleaseBuildConfiguration::Shipping:
+                case Shipping:
                     return "shipping";
             }
             return "unknown";
@@ -99,15 +101,15 @@ namespace Horo::Release {
 
         /** @brief Revalidates manually constructed typed versions against canonical authority rules. */
         [[nodiscard]] bool ValidVersionAuthority(const ReleaseVersionAuthority &version) {
-            const bool validSemantic = std::visit([](const auto &product) {
+            const auto validateSemantic = [](const auto &product) {
                 const ReleaseSemanticVersion &semantic = product.value;
                 if (semantic.prerelease.size() > MaximumReleaseVersionBytes || semantic.buildMetadata.size() > MaximumReleaseVersionBytes)
                     return false;
                 const std::string text = FormatReleaseVersion(semantic);
                 const auto parsed = ParseReleaseVersion(text);
                 return parsed.HasValue() && parsed.Value() == semantic;
-            }, version.productVersion);
-            if (!validSemantic)
+            };
+            if (const bool validSemantic = std::visit(validateSemantic, version.productVersion); !validSemantic)
                 return false;
             const ReleaseVersionClaim requested{ReleaseVersionClaimSource::Requested,
                                                 std::visit([](const auto &product) -> ReleaseVersionClaimValue {
@@ -118,93 +120,94 @@ namespace Horo::Release {
 
         /** @brief Collects every independent malformed request field before reading facts. */
         void ValidateRequest(const ReleasePreflightRequest &request, std::vector<ReleasePreflightIssue> &issues) {
+            using enum ReleasePreflightIssueCode;
             if (!ValidAbsolutePath(request.projectRoot) || !IsValidDistributionIdentity(request.projectId))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "project",
-                         "Project root and identity must be absolute and valid.");
+                AddIssue(issues, InvalidRequest, "project", "Project root and identity must be absolute and valid.");
             if (!ValidAbsolutePath(request.outputRoot) || request.requiredFreeBytes == 0)
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "output", "Output root and required space must be specified.");
+                AddIssue(issues, InvalidRequest, "output", "Output root and required space must be specified.");
             if (!IsValidDistributionIdentity(request.toolchainId))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "toolchain", "Toolchain identity is invalid.");
+                AddIssue(issues, InvalidRequest, "toolchain", "Toolchain identity is invalid.");
             if ((request.architecture != DistributionArchitecture::X64 && request.architecture != DistributionArchitecture::Arm64) ||
                 (request.configuration != ReleaseBuildConfiguration::Debug &&
                  request.configuration != ReleaseBuildConfiguration::Development &&
                  request.configuration != ReleaseBuildConfiguration::Shipping))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "target", "Target architecture or configuration is invalid.");
+                AddIssue(issues, InvalidRequest, "target", "Target architecture or configuration is invalid.");
             if (!VersionMatchesProduct(request) || !ValidVersionAuthority(request.version))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "version", "Product version or source revision is invalid.");
+                AddIssue(issues, InvalidRequest, "version", "Product version or source revision is invalid.");
             if (request.credentials.size() > MaximumReleaseCredentialHandles)
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "credentials", "Too many credential handles were selected.");
+                AddIssue(issues, InvalidRequest, "credentials", "Too many credential handles were selected.");
             if (request.profile.Signing() == ReleaseSigningPolicy::Required && request.credentials.empty())
-                AddIssue(issues, ReleasePreflightIssueCode::CredentialUnavailable, "credentials",
-                         "A signing credential handle is required.");
+                AddIssue(issues, CredentialUnavailable, "credentials", "A signing credential handle is required.");
             for (std::size_t index = 0; index < std::min(request.credentials.size(), MaximumReleaseCredentialHandles); ++index) {
                 if (request.credentials[index].value == 0)
-                    AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "credentials", "A credential handle is invalid.");
+                    AddIssue(issues, InvalidRequest, "credentials", "A credential handle is invalid.");
                 if (std::ranges::find(request.credentials.begin(), request.credentials.begin() + static_cast<std::ptrdiff_t>(index),
                                       request.credentials[index]) != request.credentials.begin() + static_cast<std::ptrdiff_t>(index))
-                    AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "credentials", "Credential handles must be unique.");
+                    AddIssue(issues, InvalidRequest, "credentials", "Credential handles must be unique.");
             }
         }
 
-        /** @brief Compares trusted read-only host observations with the requested target. */
-        void ValidateFacts(const ReleasePreflightRequest &request, const ReleasePreflightFacts &facts,
-                           std::vector<ReleasePreflightIssue> &issues) {
-            if (facts.requestedProjectRoot.lexically_normal() != request.projectRoot.lexically_normal())
-                AddIssue(issues, ReleasePreflightIssueCode::ProjectUnavailable, "project",
-                         "Project observations do not match the requested source root.");
-            if (facts.requestedOutputRoot.lexically_normal() != request.outputRoot.lexically_normal())
-                AddIssue(issues, ReleasePreflightIssueCode::OutputUnavailable, "output",
-                         "Output observations do not match the requested output root.");
-            if (!facts.projectReadable || !ValidAbsolutePath(facts.canonicalProjectRoot))
-                AddIssue(issues, ReleasePreflightIssueCode::ProjectUnavailable, "project", "Project source is not readable.");
-            if (facts.currentVersion != request.version)
-                AddIssue(issues, ReleasePreflightIssueCode::SourceChanged, "version",
-                         "Observed version or source revision differs from the request.");
-            if (facts.profileDigest != DigestText(request.profile.SerializeCanonical()))
-                AddIssue(issues, ReleasePreflightIssueCode::ProfileChanged, "profile",
-                         "Observed release profile differs from the selected profile.");
-            if (!facts.toolchainAvailable || IsEmptyDigest(facts.toolchainDigest))
-                AddIssue(issues, ReleasePreflightIssueCode::ToolchainUnavailable, "toolchain", "Selected toolchain is unavailable.");
-            if (!facts.targetSupported)
-                AddIssue(issues, ReleasePreflightIssueCode::TargetUnsupported, "target", "Selected target is unsupported by this host.");
-            if (facts.hostPlatform != DistributionPlatform::Windows && facts.hostPlatform != DistributionPlatform::MacOS &&
-                facts.hostPlatform != DistributionPlatform::Linux)
-                AddIssue(issues, ReleasePreflightIssueCode::TargetUnsupported, "host", "Host platform is unknown.");
-            if (facts.hostPlatform != request.profile.Platform() && !facts.crossCompilerAvailable)
-                AddIssue(issues, ReleasePreflightIssueCode::CrossCompilerUnavailable, "target",
-                         "Cross-compilation support is unavailable.");
-            if (facts.outputExists)
-                AddIssue(issues, ReleasePreflightIssueCode::OutputCollision, "output", "The output path already exists.");
-            if (!facts.outputWritable || !ValidAbsolutePath(facts.canonicalOutputRoot) ||
-                facts.canonicalOutputRoot == facts.canonicalProjectRoot || !facts.availableBytes.has_value())
-                AddIssue(issues, ReleasePreflightIssueCode::OutputUnavailable, "output", "Output root is unavailable or unsafe.");
-            if (facts.availableBytes.has_value() && *facts.availableBytes < request.requiredFreeBytes)
-                AddIssue(issues, ReleasePreflightIssueCode::InsufficientSpace, "output", "Output root does not have enough free space.");
-            if (IsEmptyDigest(facts.sourceTreeDigest))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "sourceTree", "Source-tree identity is missing.");
-            if (IsEmptyDigest(facts.dependencyLockDigest))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "dependencyLock", "Dependency-lock identity is missing.");
-            if (IsEmptyDigest(facts.policyDigest))
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "policy", "Release-policy identity is missing.");
+        /** @brief Checks bounded host capabilities and credential handles against the selected profile. */
+        void ValidateObservedAccess(const ReleasePreflightRequest &request, const ReleasePreflightFacts &facts,
+                                    std::vector<ReleasePreflightIssue> &issues) {
+            using enum ReleasePreflightIssueCode;
             if (facts.availableCapabilities.size() > MaximumObservedCapabilities)
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "capabilities", "Too many host capabilities were observed.");
+                AddIssue(issues, InvalidRequest, "capabilities", "Too many host capabilities were observed.");
             if (facts.availableCredentials.size() > MaximumObservedCredentials)
-                AddIssue(issues, ReleasePreflightIssueCode::InvalidRequest, "credentials", "Too many credential handles were observed.");
+                AddIssue(issues, InvalidRequest, "credentials", "Too many credential handles were observed.");
             const auto capabilities =
                 std::span{facts.availableCapabilities}.first(std::min(facts.availableCapabilities.size(), MaximumObservedCapabilities));
             const auto credentials =
                 std::span{facts.availableCredentials}.first(std::min(facts.availableCredentials.size(), MaximumObservedCredentials));
             for (const ReleaseCapabilityId &required : request.profile.RequiredCapabilities()) {
                 if (std::ranges::find(capabilities, required) == capabilities.end())
-                    AddIssue(issues, ReleasePreflightIssueCode::CapabilityUnavailable, "capabilities",
+                    AddIssue(issues, CapabilityUnavailable, "capabilities",
                              "Required release capability is unavailable: " + required.value);
             }
             for (const ReleaseCredentialHandle &handle :
                  std::span{request.credentials}.first(std::min(request.credentials.size(), MaximumReleaseCredentialHandles))) {
                 if (std::ranges::find(credentials, handle) == credentials.end())
-                    AddIssue(issues, ReleasePreflightIssueCode::CredentialUnavailable, "credentials",
-                             "A selected credential handle is unavailable.");
+                    AddIssue(issues, CredentialUnavailable, "credentials", "A selected credential handle is unavailable.");
             }
+        }
+
+        /** @brief Compares trusted read-only host observations with the requested target. */
+        void ValidateFacts(const ReleasePreflightRequest &request, const ReleasePreflightFacts &facts,
+                           std::vector<ReleasePreflightIssue> &issues) {
+            using enum ReleasePreflightIssueCode;
+            if (facts.requestedProjectRoot.lexically_normal() != request.projectRoot.lexically_normal())
+                AddIssue(issues, ProjectUnavailable, "project", "Project observations do not match the requested source root.");
+            if (facts.requestedOutputRoot.lexically_normal() != request.outputRoot.lexically_normal())
+                AddIssue(issues, OutputUnavailable, "output", "Output observations do not match the requested output root.");
+            if (!facts.projectReadable || !ValidAbsolutePath(facts.canonicalProjectRoot))
+                AddIssue(issues, ProjectUnavailable, "project", "Project source is not readable.");
+            if (facts.currentVersion != request.version)
+                AddIssue(issues, SourceChanged, "version", "Observed version or source revision differs from the request.");
+            if (facts.profileDigest != DigestText(request.profile.SerializeCanonical()))
+                AddIssue(issues, ProfileChanged, "profile", "Observed release profile differs from the selected profile.");
+            if (!facts.toolchainAvailable || IsEmptyDigest(facts.toolchainDigest))
+                AddIssue(issues, ToolchainUnavailable, "toolchain", "Selected toolchain is unavailable.");
+            if (!facts.targetSupported)
+                AddIssue(issues, TargetUnsupported, "target", "Selected target is unsupported by this host.");
+            if (facts.hostPlatform != DistributionPlatform::Windows && facts.hostPlatform != DistributionPlatform::MacOS &&
+                facts.hostPlatform != DistributionPlatform::Linux)
+                AddIssue(issues, TargetUnsupported, "host", "Host platform is unknown.");
+            if (facts.hostPlatform != request.profile.Platform() && !facts.crossCompilerAvailable)
+                AddIssue(issues, CrossCompilerUnavailable, "target", "Cross-compilation support is unavailable.");
+            if (facts.outputExists)
+                AddIssue(issues, OutputCollision, "output", "The output path already exists.");
+            if (!facts.outputWritable || !ValidAbsolutePath(facts.canonicalOutputRoot) ||
+                facts.canonicalOutputRoot == facts.canonicalProjectRoot || !facts.availableBytes.has_value())
+                AddIssue(issues, OutputUnavailable, "output", "Output root is unavailable or unsafe.");
+            if (facts.availableBytes.has_value() && *facts.availableBytes < request.requiredFreeBytes)
+                AddIssue(issues, InsufficientSpace, "output", "Output root does not have enough free space.");
+            if (IsEmptyDigest(facts.sourceTreeDigest))
+                AddIssue(issues, InvalidRequest, "sourceTree", "Source-tree identity is missing.");
+            if (IsEmptyDigest(facts.dependencyLockDigest))
+                AddIssue(issues, InvalidRequest, "dependencyLock", "Dependency-lock identity is missing.");
+            if (IsEmptyDigest(facts.policyDigest))
+                AddIssue(issues, InvalidRequest, "policy", "Release-policy identity is missing.");
+            ValidateObservedAccess(request, facts, issues);
         }
     }  // namespace
 
