@@ -99,9 +99,8 @@ namespace Horo::Terrain {
                                                                        const TerrainAsyncJobLimits limits) {
         if (!fence.IsValid() || !available.IsValid() || !limits.IsValid())
             return Result<std::unique_ptr<TerrainAsyncJobs>>::Failure(MakeError(TerrainErrors::WorkInvalid));
-        std::unique_ptr<TerrainAsyncJobs> owner{
-            new TerrainAsyncJobs(  // NOSONAR(cpp:S5950) make_unique cannot access the validated private constructor.
-                std::make_unique<Impl>(jobs, fence, available, limits))};
+        auto owner = std::unique_ptr<TerrainAsyncJobs>(  // NOSONAR(cpp:S5950) make_unique cannot access the validated private constructor.
+            new TerrainAsyncJobs(std::make_unique<Impl>(jobs, fence, available, limits)));
         return Result<std::unique_ptr<TerrainAsyncJobs>>::Success(std::move(owner));
     }
 
