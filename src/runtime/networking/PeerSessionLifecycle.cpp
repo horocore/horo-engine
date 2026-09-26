@@ -1,6 +1,7 @@
 #include "Horo/Network/PeerSessionLifecycle.h"
 
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetrics.h"
 #include "NetworkValidationInternal.h"
 
 #include <algorithm>
@@ -64,16 +65,16 @@ namespace Horo::Network {
     }  // namespace
 
     PeerSessionLifecycle::PeerSessionLifecycle(const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration,
-                                               const PeerSessionDeadlines &deadlines) noexcept
-        : connection_(connection), sessionGeneration_(sessionGeneration), deadlines_(deadlines) {}
+                                               const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics) noexcept
+        : connection_(connection), sessionGeneration_(sessionGeneration), deadlines_(deadlines), metrics_(metrics) {}
 
     /** @copydoc PeerSessionLifecycle::Create */
     Result<PeerSessionLifecycle> PeerSessionLifecycle::Create(const ConnectionHandle connection,
                                                               const NetworkOperationGeneration sessionGeneration,
-                                                              const PeerSessionDeadlines &deadlines) {
+                                                              const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics) {
         if (!connection.IsValid() || !sessionGeneration.IsValid() || !ValidDeadlines(deadlines))
             return Result<PeerSessionLifecycle>::Failure(MakeError(NetworkErrors::NetworkLifecycleInvalid));
-        return Result<PeerSessionLifecycle>::Success(PeerSessionLifecycle{connection, sessionGeneration, deadlines});
+        return Result<PeerSessionLifecycle>::Success(PeerSessionLifecycle{connection, sessionGeneration, deadlines, metrics});
     }
 
     bool PeerSessionLifecycle::Owns(const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration) const noexcept {
@@ -112,6 +113,35 @@ namespace Horo::Network {
         state_ = IsGracefulClose(kind) || kind == PeerSessionTerminalKind::LocalCancellation || kind == PeerSessionTerminalKind::Shutdown
                      ? PeerSessionState::Closed
                      : PeerSessionState::Failed;
+        if (metrics_ && metrics_->IsCollecting()) {
+            switch (kind) {
+                case PeerSessionTerminalKind::ProtocolRejected:
+                case PeerSessionTerminalKind::NegotiationTimeout:
+                    (void)metrics_->RecordFailure(NetworkMetricFailure::Protocol);
+                    break;
+                case PeerSessionTerminalKind::AuthenticationRejected:
+                case PeerSessionTerminalKind::AuthenticationTimeout:
+                case PeerSessionTerminalKind::CredentialExpired:
+                    (void)metrics_->RecordFailure(NetworkMetricFailure::Authentication);
+                    break;
+                case PeerSessionTerminalKind::TransportFailed:
+                    (void)metrics_->RecordFailure(NetworkMetricFailure::Transport);
+                    break;
+                case PeerSessionTerminalKind::LocalCancellation:
+                    (void)metrics_->RecordDrop(NetworkMetricDrop::Cancelled);
+                    break;
+                case PeerSessionTerminalKind::ActivationTimeout:
+                case PeerSessionTerminalKind::InactivityTimeout:
+                case PeerSessionTerminalKind::LifetimeTimeout:
+                    (void)metrics_->RecordFailure(NetworkMetricFailure::Session);
+                    break;
+                case PeerSessionTerminalKind::LocalClose:
+                case PeerSessionTerminalKind::RemoteClose:
+                case PeerSessionTerminalKind::Shutdown:
+                case PeerSessionTerminalKind::Count:
+                    break;
+            }
+        }
         return Result<void>::Success();
     }
 

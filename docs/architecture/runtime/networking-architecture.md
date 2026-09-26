@@ -698,6 +698,38 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
 - **Gauges**: `net.active_connections`, `net.inbound_queue_depth`, `net.outbound_queue_depth`, `net.rtt_ms`.
 - **Tracing**: Transport connection events and session handshakes log to the `LogCategory::Network` category. Payloads are scrubbed of sensitive data by default.
 
+The host may compose `NetworkMetrics` with the selected transport, I/O service,
+peer-session lifecycle, and replication-world lifecycle. A metrics owner outlives
+those services and shuts them down before closing or destroying the collector.
+Only the owning network thread records measurements. I/O producers retain a
+separate shared admission flag, not the collector, so a late completion cannot
+access a retired metric owner. Closing the collector disables producer-side
+capacity-drop accounting immediately. The host calls `Publish` at a network
+safe point; `Snapshot` returns the last coherent fixed-size value to editor,
+headless, or other readers without touching in-flight network state. Process
+composition alone registers telemetry descriptors and passes pre-bound handles
+to `NetworkMetricPublisher`; no network component chooses an exporter.
+
+Transport-category outbound counts are admitted send requests; inbound counts
+are delivered normalized transport events. The deterministic transport counts
+each emitted fragment as a received event and its actual emitted bytes; seeded
+loss does not fabricate receive traffic.
+Additional closed control/replication/RPC categories are semantic observations,
+not partitions of those wire totals. Replication mapping counters count only
+successful register/retire operations, not unimplemented wire spawns or updates.
+`net.packets_lost` is qualified by `lossAvailable`: a backend without an actual
+loss counter does not turn absence of evidence into zero loss. RTT is the mean
+of owner-observed finite connection samples in one publication window and is
+unavailable when that window contains none. Queue and connection gauges are
+owner-safe-point values. Every series name and category is compiled from a
+closed vocabulary; peer handles, addresses, protocol IDs, message IDs, payloads,
+and native diagnostics never become metric dimensions. Saturation clamps
+counters and marks the snapshot; instrumentation failure never affects network
+admission, send, terminal state, or replication authority.
+The new observer parameters on existing network factories default to null;
+existing callers keep their behavior and need no migration. Hosts opting in
+must enforce the documented owner and shutdown order.
+
 ## Testing and Verification Strategy
 
 The networking subsystem requires targeted automated verification:

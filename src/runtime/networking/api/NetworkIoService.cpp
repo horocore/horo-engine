@@ -1,6 +1,7 @@
 #include "Horo/Network/NetworkIoService.h"
 
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetrics.h"
 
 #include <atomic>
 #include <limits>
@@ -34,8 +35,9 @@ namespace Horo::Network {
     class NetworkIoServiceState final {
     public:
         explicit NetworkIoServiceState(const NetworkIoServiceLimits &configuredLimits,
-                                       std::vector<std::optional<NetworkIoCompletion>> preparedRecords) noexcept
-            : limits(configuredLimits), records(std::move(preparedRecords)) {}
+                                       std::vector<std::optional<NetworkIoCompletion>> preparedRecords,
+                                       std::shared_ptr<std::atomic<bool>> admissionGate) noexcept
+            : limits(configuredLimits), records(std::move(preparedRecords)), metricAdmission(std::move(admissionGate)) {}
 
         [[nodiscard]] Result<void> Publish(NetworkIoCompletion completion, const std::uint64_t observedPollGeneration) {
             std::scoped_lock lock{queueMutex};
@@ -43,11 +45,20 @@ namespace Horo::Network {
                 return Fail<void>(NetworkErrors::TransportShuttingDown);
             if (!pollActive || observedPollGeneration != pollGeneration)
                 return Fail<void>(NetworkErrors::NetworkIoPollStale);
-            if (remainingPollCompletions == 0 || size == limits.maximumQueuedCompletions)
+            if (remainingPollCompletions == 0 || size == limits.maximumQueuedCompletions) {
+                if (metricAdmission && metricAdmission->load()) {
+                    auto observed = capacityDrops.load();
+                    while (observed != std::numeric_limits<std::uint64_t>::max() &&
+                           !capacityDrops.compare_exchange_weak(observed, observed + 1)) {
+                    }
+                }
                 return Fail<void>(NetworkErrors::NetworkIoCompletionQueueFull);
+            }
             if (nextSequence == 0 || nextSequence == std::numeric_limits<std::uint64_t>::max())
                 return Fail<void>(NetworkErrors::NetworkIoSequenceExhausted);
             completion.sequence_ = nextSequence++;
+            if (completion.Kind() == NetworkIoCompletionKind::PacketReceived)
+                ++inboundPackets;
             records[tail].emplace(std::move(completion));
             tail = (tail + 1) % limits.maximumQueuedCompletions;
             ++size;
@@ -60,12 +71,15 @@ namespace Horo::Network {
 
         NetworkIoServiceLimits limits;
         std::vector<std::optional<NetworkIoCompletion>> records;
+        std::shared_ptr<std::atomic<bool>> metricAdmission;
+        std::atomic<std::uint64_t> capacityDrops{};
         const std::thread::id ownerThread{std::this_thread::get_id()};
         mutable std::mutex queueMutex;
         std::atomic<bool> shuttingDown{false};
         std::size_t head{};
         std::size_t tail{};
         std::size_t size{};
+        std::size_t inboundPackets{};
         std::uint64_t nextSequence{1};
         std::uint64_t pollGeneration{};
         std::size_t remainingPollCompletions{};
@@ -120,19 +134,19 @@ namespace Horo::Network {
     }
 
     NetworkIoService::NetworkIoService(ConstructionKey, std::unique_ptr<INetworkIoPollSource> backend,
-                                       std::shared_ptr<NetworkIoServiceState> state) noexcept
-        : backend_(std::move(backend)), state_(std::move(state)) {}
+                                       std::shared_ptr<NetworkIoServiceState> state, NetworkMetrics *metrics) noexcept
+        : backend_(std::move(backend)), state_(std::move(state)), metrics_(metrics) {}
 
     /** @copydoc NetworkIoService::Create */
     Result<std::unique_ptr<NetworkIoService>> NetworkIoService::Create(std::unique_ptr<INetworkIoPollSource> backend,
-                                                                       const NetworkIoServiceLimits &limits) {
+                                                                       const NetworkIoServiceLimits &limits, NetworkMetrics *metrics) {
         if (!backend || !ValidLimits(limits))
             return Fail<std::unique_ptr<NetworkIoService>>(NetworkErrors::NetworkIoServiceInvalid);
         try {
             std::vector<std::optional<NetworkIoCompletion>> records(limits.maximumQueuedCompletions);
-            auto state = std::make_shared<NetworkIoServiceState>(limits, std::move(records));
+            auto state = std::make_shared<NetworkIoServiceState>(limits, std::move(records), metrics ? metrics->admission_ : nullptr);
             return Result<std::unique_ptr<NetworkIoService>>::Success(
-                std::make_unique<NetworkIoService>(ConstructionKey{}, std::move(backend), std::move(state)));
+                std::make_unique<NetworkIoService>(ConstructionKey{}, std::move(backend), std::move(state), metrics));
         } catch (const std::bad_alloc &) {
             return Fail<std::unique_ptr<NetworkIoService>>(NetworkErrors::NetworkIoServiceCapacityExceeded);
         }
@@ -194,13 +208,29 @@ namespace Horo::Network {
                 std::scoped_lock lock{state_->queueMutex};
                 if (state_->size == 0)
                     break;
+                if (state_->records[state_->head]->Kind() == NetworkIoCompletionKind::PacketReceived)
+                    --state_->inboundPackets;
                 completion.emplace(std::move(*state_->records[state_->head]));
                 state_->records[state_->head].reset();
                 state_->head = (state_->head + 1) % state_->limits.maximumQueuedCompletions;
                 --state_->size;
             }
+            if (metrics_ && completion->Kind() == NetworkIoCompletionKind::OperationFailed)
+                (void)metrics_->RecordFailure(NetworkMetricFailure::Transport);
             consumer.Consume(std::move(*completion));
             ++drained;
+        }
+        if (metrics_ && metrics_->IsCollecting()) {
+            (void)metrics_->RecordDrop(NetworkMetricDrop::Capacity, state_->capacityDrops.exchange(0));
+            std::size_t completionDepth{};
+            std::size_t inboundDepth{};
+            {
+                std::scoped_lock lock{state_->queueMutex};
+                completionDepth = state_->size;
+                inboundDepth = state_->inboundPackets;
+            }
+            (void)metrics_->SetQueueDepth(NetworkMetricQueue::Completion, completionDepth);
+            (void)metrics_->SetQueueDepth(NetworkMetricQueue::Inbound, inboundDepth);
         }
         return Result<std::size_t>::Success(drained);
     }
@@ -222,6 +252,7 @@ namespace Horo::Network {
             state_->head = (state_->head + 1) % state_->limits.maximumQueuedCompletions;
             --state_->size;
         }
+        state_->inboundPackets = 0;
     }
 
     /** @copydoc NetworkIoService::QueuedCompletions */

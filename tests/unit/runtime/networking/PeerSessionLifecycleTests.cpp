@@ -1,3 +1,4 @@
+#include "Horo/Network/NetworkMetrics.h"
 #include "Horo/Network/PeerSessionLifecycle.h"
 #include "NetworkTestUtils.h"
 
@@ -264,5 +265,24 @@ namespace Horo::Network {
         REQUIRE(closing.Terminal()->closeReason == reason);
         REQUIRE(closing.Terminal()->terminalTick == 100);
         REQUIRE_FALSE(closing.Expire(101));
+    }
+
+    TEST_CASE("Peer session metric terminal observation follows the first authoritative outcome", "[unit][network][session][metrics]") {
+        NetworkMetrics metrics{50, true};
+        auto rejected = PeerSessionLifecycle::Create(Connection(), Session(), Deadlines(), &metrics).Value();
+        ReachAuthenticating(rejected);
+        REQUIRE(rejected.RejectAuthentication(Connection(), Session(), 12).HasValue());
+        RequireError(rejected.RejectAuthentication(Connection(), Session(), 13), NetworkErrors::TerminalAlreadyResolved);
+
+        auto closing = PeerSessionLifecycle::Create(Connection(), Session(), Deadlines(), &metrics).Value();
+        ReachActive(closing);
+        const auto reason = WireIdentity<CloseReasonId>(77);
+        REQUIRE(closing.RequestClose(Connection(), Session(), PeerSessionTerminalKind::LocalClose, reason, 22).HasValue());
+        REQUIRE(closing.FailTransport(Connection(), Session(), NetworkFailureKind::TransportUnavailable, 23).HasValue());
+        REQUIRE(metrics.Publish());
+        const auto snapshot = metrics.Snapshot();
+        REQUIRE(snapshot.failures[static_cast<std::size_t>(NetworkMetricFailure::Authentication)] == 1);
+        REQUIRE(snapshot.failures[static_cast<std::size_t>(NetworkMetricFailure::Transport)] == 0);
+        REQUIRE(metrics.Close());
     }
 }  // namespace Horo::Network

@@ -1,5 +1,6 @@
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkIoService.h"
+#include "Horo/Network/NetworkMetrics.h"
 #include "NetworkTestUtils.h"
 
 #include <array>
@@ -107,10 +108,10 @@ namespace Horo::Network {
         };
 
         ServiceFixture MakeService(const ScriptedPollSource::Script script, const NetworkIoServiceLimits limits = {4, 4, 4},
-                                   PacketBufferPool *pool = nullptr) {
+                                   PacketBufferPool *pool = nullptr, NetworkMetrics *metrics = nullptr) {
             auto source = std::make_unique<ScriptedPollSource>(script, pool);
             auto *sourcePointer = source.get();
-            auto created = NetworkIoService::Create(std::move(source), limits);
+            auto created = NetworkIoService::Create(std::move(source), limits, metrics);
             REQUIRE(created.HasValue());
             return {std::move(created).Value(), sourcePointer};
         }
@@ -161,6 +162,62 @@ namespace Horo::Network {
         RecordingConsumer consumer;
         RequireError(fixture.service->DrainOwnerThread(consumer, 0), NetworkErrors::NetworkIoServiceInvalid);
         RequireError(fixture.service->DrainOwnerThread(consumer, 2), NetworkErrors::NetworkIoServiceInvalid);
+    }
+
+    TEST_CASE("Network I/O metrics publish owner-drained queue and capacity drops", "[unit][network][io][metrics]") {
+        NetworkMetrics metrics{77, true};
+        auto fixture = MakeService(ScriptedPollSource::Script::Overproduce, {1, 1, 1}, nullptr, &metrics);
+        REQUIRE(fixture.service->PollBackend(1).HasValue());
+        RecordingConsumer consumer;
+        REQUIRE(fixture.service->DrainOwnerThread(consumer, 1).Value() == 1);
+        REQUIRE(metrics.Publish());
+        const auto snapshot = metrics.Snapshot();
+        REQUIRE(snapshot.queueDepth[static_cast<std::size_t>(NetworkMetricQueue::Completion)] == 0);
+        REQUIRE(snapshot.drops[static_cast<std::size_t>(NetworkMetricDrop::Capacity)] == 1);
+        fixture.service->Shutdown();
+        REQUIRE(metrics.Close());
+    }
+
+    TEST_CASE("Inbound packet depth excludes non-packet completions at the owner drain", "[unit][network][io][metrics]") {
+        auto prepared = PacketBufferPool::Create({2, 8, 8});
+        REQUIRE(prepared.HasValue());
+        auto pool = std::move(prepared).Value();
+        NetworkMetrics metrics{80, true};
+        auto fixture = MakeService(ScriptedPollSource::Script::Packet, {2, 2, 1}, &pool, &metrics);
+        REQUIRE(fixture.service->PollBackend(2).HasValue());
+        RecordingConsumer consumer;
+        REQUIRE(fixture.service->DrainOwnerThread(consumer, 1).Value() == 1);
+        REQUIRE(metrics.Publish());
+        const auto snapshot = metrics.Snapshot();
+        REQUIRE(snapshot.queueDepth[static_cast<std::size_t>(NetworkMetricQueue::Inbound)] == 1);
+        REQUIRE(snapshot.queueDepth[static_cast<std::size_t>(NetworkMetricQueue::Completion)] == 1);
+        fixture.service->Shutdown();
+        REQUIRE(metrics.Close());
+    }
+
+    TEST_CASE("Disabled I/O observer and late producer never retain metric object", "[unit][network][io][metrics]") {
+        NetworkMetrics disabled{78, false};
+        auto unobserved = MakeService(ScriptedPollSource::Script::Overproduce, {1, 1, 1}, nullptr, &disabled);
+        REQUIRE(unobserved.service->PollBackend(1).HasValue());
+        RecordingConsumer consumer;
+        REQUIRE(unobserved.service->DrainOwnerThread(consumer, 1).Value() == 1);
+        REQUIRE(disabled.Publish());
+        REQUIRE(disabled.Snapshot().drops[static_cast<std::size_t>(NetworkMetricDrop::Capacity)] == 0);
+        unobserved.service->Shutdown();
+        REQUIRE(disabled.Close());
+
+        std::optional<NetworkIoCompletionProducer> late;
+        {
+            NetworkMetrics enabled{79, true};
+            auto fixture = MakeService(ScriptedPollSource::Script::RetainProducer, {1, 1, 1}, nullptr, &enabled);
+            REQUIRE(fixture.service->PollBackend(1).HasValue());
+            late = *fixture.source->retainedProducer;
+            REQUIRE(enabled.Close());
+            fixture.service->Shutdown();
+            fixture.service.reset();
+        }
+        auto candidate = NetworkIoCompletion::MakeOperation(NetworkIoCompletionKind::OperationSucceeded, Connection());
+        RequireError(late->Publish(std::move(candidate).Value()), NetworkErrors::TransportShuttingDown);
     }
 
     TEST_CASE("Network I/O completion construction rejects malformed kind identity payload and provenance", "[unit][network][io]") {

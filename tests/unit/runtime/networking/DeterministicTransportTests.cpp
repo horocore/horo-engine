@@ -1,5 +1,6 @@
 #include "Horo/Network/DeterministicTransport.h"
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetrics.h"
 #include "NetworkTestUtils.h"
 
 #include <algorithm>
@@ -82,6 +83,52 @@ namespace Horo::Network {
         const std::array payload{std::byte{1}};
         RequireError(transport.Send(Connection(), Channel(), TransportTrafficClass::Reliable, 0, payload),
                      NetworkErrors::TransportCapabilityUnavailable);
+    }
+
+    TEST_CASE("Deterministic transport reports committed simulated loss and owner queue state", "[unit][network][metrics]") {
+        NetworkMetrics metrics{92, true};
+        auto descriptor = Descriptor(DeterministicTransportMode::Simulated);
+        descriptor.scenario.lossPerTenThousand = 10'000;
+        auto transport = std::move(DeterministicTransport::Create(descriptor, &metrics)).Value();
+        REQUIRE(transport.Open(Connection()).HasValue());
+        std::array<DeterministicTransportEvent, 1> events{};
+        REQUIRE(transport.Advance(1, events).Value() == 0);
+        const std::array payload{std::byte{1}, std::byte{2}};
+        REQUIRE(transport.Send(Connection(), Channel(), TransportTrafficClass::Reliable, 0, payload).Value().outcome ==
+                DeterministicSendOutcome::SimulatedLoss);
+        REQUIRE(transport.Advance(2, events).Value() == 0);
+        REQUIRE(metrics.Publish());
+        const auto snapshot = metrics.Snapshot();
+        REQUIRE(snapshot.packetsLost == 1);
+        REQUIRE(snapshot.messages[static_cast<std::size_t>(NetworkMetricDirection::Sent)]
+                                 [static_cast<std::size_t>(NetworkMetricCategory::Transport)] == 1);
+        REQUIRE(snapshot.activeConnections == 1);
+        REQUIRE(snapshot.queueDepth[static_cast<std::size_t>(NetworkMetricQueue::Outbound)] == 0);
+        REQUIRE(transport.Shutdown() == 0);
+        REQUIRE(metrics.Close());
+    }
+
+    TEST_CASE("Loopback metrics count only emitted receive fragments and their bytes", "[unit][network][metrics]") {
+        NetworkMetrics metrics{93, true};
+        auto transport = std::move(DeterministicTransport::Create(Descriptor(DeterministicTransportMode::Loopback), &metrics)).Value();
+        REQUIRE(transport.Open(Connection()).HasValue());
+        std::array<DeterministicTransportEvent, 2> events{};
+        REQUIRE(transport.Advance(1, events).Value() == 0);
+        const std::array payload{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}, std::byte{5}, std::byte{6}};
+        REQUIRE(transport.Send(Connection(), Channel(), TransportTrafficClass::Reliable, 0, payload).HasValue());
+        REQUIRE(transport.Advance(2, std::span{events}.first(1)).Value() == 1);
+        REQUIRE(transport.Advance(3, events).Value() == 1);
+        REQUIRE(metrics.Publish());
+        const auto snapshot = metrics.Snapshot();
+        constexpr auto sent = static_cast<std::size_t>(NetworkMetricDirection::Sent);
+        constexpr auto received = static_cast<std::size_t>(NetworkMetricDirection::Received);
+        constexpr auto transportCategory = static_cast<std::size_t>(NetworkMetricCategory::Transport);
+        REQUIRE(snapshot.messages[sent][transportCategory] == 1);
+        REQUIRE(snapshot.bytes[sent][transportCategory] == payload.size());
+        REQUIRE(snapshot.messages[received][transportCategory] == 2);
+        REQUIRE(snapshot.bytes[received][transportCategory] == payload.size());
+        REQUIRE(transport.Shutdown() == 0);
+        REQUIRE(metrics.Close());
     }
 
     TEST_CASE_METHOD(ReadyLoopback, "Loopback copies and deterministically fragments caller payload", "[unit][network][transport-null]") {
