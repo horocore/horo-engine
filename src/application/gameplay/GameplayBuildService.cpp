@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -370,6 +371,7 @@ namespace Horo::Application {
             JobId jobId{};
             std::shared_ptr<JobHandle> job;
 
+            std::mutex transitionMutex;
             std::mutex mutex_;
         };
 
@@ -386,6 +388,10 @@ namespace Horo::Application {
         std::unordered_map<GameplayBuildSessionId, std::shared_ptr<Session>> sessions;
         std::unordered_map<std::string, GameplayBuildSessionId, TransparentStringHash, std::equal_to<>> activeProjects;
         bool shutdown{false};
+        bool shutdownFinished{false};
+        std::size_t activeAdmissions{};
+        std::condition_variable admissionsFinished;
+        std::condition_variable shutdownCompleted;
 
         std::mutex mutex_;
     };
@@ -1035,11 +1041,15 @@ namespace Horo::Application {
                     target = found->second;
             }
             if (target) {
-                target->cancellation.RequestCancellation();
+                std::lock_guard transitionLock(target->transitionMutex);
                 std::string phase;
                 {
                     std::lock_guard lock(target->Mutex());
+                    if (IsTerminal(target->snapshot.state))
+                        return;
+                    target->cancellation.RequestCancellation();
                     phase = target->snapshot.phase;
+                    target->pendingRequest.reset();
                     target->snapshot.pendingInputHash.reset();
                     target->snapshot.newerInputsPending = false;
                 }
@@ -1113,14 +1123,12 @@ namespace Horo::Application {
                                      const std::shared_ptr<GameplayBuildService::State::Session> &session, const Result<void> &result,
                                      const GameplayBuildState terminal, const bool cacheHit) {
             if (result.HasError()) {
-                Update(session, terminal, "terminal", result.ErrorValue());
                 const OperationState operationState =
                     terminal == GameplayBuildState::Cancelled ? OperationState::Cancelled : OperationState::Failed;
                 UpdateOperation(state, session, operationState, "terminal", result.ErrorValue().message.c_str(), std::nullopt,
                                 result.ErrorValue());
                 return;
             }
-            Update(session, terminal, "complete");
             UpdateOperation(state, session, OperationState::Succeeded, "complete",
                             cacheHit ? "Gameplay module was already up to date." : "Gameplay module built successfully.", 1.0F);
         }
@@ -1137,13 +1145,13 @@ namespace Horo::Application {
                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session,
                                                  const std::string_view projectKey) {
             Result<void> result = RunBuild(state, session);
+            std::lock_guard transitionLock(session->transitionMutex);
             const GameplayBuildState terminal = TerminalStateFor(result);
             bool cacheHit = false;
             {
                 std::lock_guard lock(session->Mutex());
                 cacheHit = session->cacheHit;
             }
-            UpdateTerminalOperation(*state, session, result, terminal, cacheHit);
             BuildTerminalOutput output = MakeTerminalOutput(result, terminal, cacheHit);
             PublishRecord(*state, session,
                           BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
@@ -1152,6 +1160,9 @@ namespace Horo::Application {
                                             .stage = output.stage,
                                             .code = std::move(output.code),
                                             .message = std::move(output.message)});
+            UpdateTerminalOperation(*state, session, result, terminal, cacheHit);
+            Update(session, terminal, result.HasValue() ? "complete" : "terminal",
+                   result.HasError() ? std::optional<Error>{result.ErrorValue()} : std::nullopt);
             RemoveActiveProject(state, projectKey, session->snapshot.id);
             return result;
         }
@@ -1185,6 +1196,22 @@ namespace Horo::Application {
         Result<std::string> hash = ComputeInputHash(request);
         if (hash.HasError())
             return Result<GameplayBuildSessionId>::Failure(hash.ErrorValue());
+        {
+            std::lock_guard lock(state_->Mutex());
+            if (state_->shutdown)
+                return Result<GameplayBuildSessionId>::Failure(MakeError(CancelledDescriptor, "Gameplay build service is shut down."));
+            ++state_->activeAdmissions;
+        }
+
+        struct AdmissionGuard final {
+            State &state;
+
+            ~AdmissionGuard() {
+                std::lock_guard lock(state.Mutex());
+                --state.activeAdmissions;
+                state.admissionsFinished.notify_all();
+            }
+        } admission{*state_};
         const std::string projectKey = std::filesystem::absolute(request.projectRoot).lexically_normal().generic_string();
         Result<SessionPreparation> prepared = PrepareSession(state_, request, hash.Value(), projectKey);
         if (prepared.HasError())
@@ -1202,9 +1229,6 @@ namespace Horo::Application {
             return CompleteBuild(state, session, projectKey);
         });
         if (submitted.HasError()) {
-            Update(session, GameplayBuildState::Failed, "terminal", submitted.ErrorValue());
-            UpdateOperation(*state_, session, OperationState::Failed, "terminal", submitted.ErrorValue().message.c_str(), std::nullopt,
-                            submitted.ErrorValue());
             PublishRecord(*state_, session,
                           BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
                                             .severity = DiagnosticSeverity::Error,
@@ -1212,6 +1236,9 @@ namespace Horo::Application {
                                             .stage = "terminal",
                                             .code = DiagnosticCode{"gameplay.build.failed"},
                                             .message = submitted.ErrorValue().message});
+            UpdateOperation(*state_, session, OperationState::Failed, "terminal", submitted.ErrorValue().message.c_str(), std::nullopt,
+                            submitted.ErrorValue());
+            Update(session, GameplayBuildState::Failed, "terminal", submitted.ErrorValue());
             RemoveUnsubmittedSession(state_, session, projectKey);
             return Result<GameplayBuildSessionId>::Failure(submitted.ErrorValue());
         }
@@ -1235,16 +1262,16 @@ namespace Horo::Application {
         const std::shared_ptr<State::Session> session = FindSession(state_, id);
         if (!session)
             return false;
-        session->cancellation.RequestCancellation();
-        {
-            std::lock_guard lock(session->Mutex());
-            session->pendingRequest.reset();
-            session->snapshot.pendingInputHash.reset();
-            session->snapshot.newerInputsPending = false;
-        }
+        std::lock_guard transitionLock(session->transitionMutex);
         std::string phase;
         {
             std::lock_guard lock(session->Mutex());
+            if (IsTerminal(session->snapshot.state))
+                return false;
+            session->cancellation.RequestCancellation();
+            session->pendingRequest.reset();
+            session->snapshot.pendingInputHash.reset();
+            session->snapshot.newerInputsPending = false;
             phase = session->snapshot.phase;
         }
         UpdateOperation(*state_, session, OperationState::Cancelling, phase.c_str(), "Gameplay build cancellation requested.");
@@ -1260,10 +1287,17 @@ namespace Horo::Application {
     void GameplayBuildService::Shutdown() const noexcept {
         std::vector<std::shared_ptr<State::Session>> sessions;
         {
-            std::lock_guard lock(state_->Mutex());
-            if (state_->shutdown)
+            std::unique_lock lock(state_->Mutex());
+            if (state_->shutdown) {
+                state_->shutdownCompleted.wait(lock, [this] {
+                    return state_->shutdownFinished;
+                });
                 return;
+            }
             state_->shutdown = true;
+            state_->admissionsFinished.wait(lock, [this] {
+                return state_->activeAdmissions == 0;
+            });
             for (const auto &[sessionId, session] : state_->sessions) {
                 static_cast<void>(sessionId);
                 sessions.push_back(session);
@@ -1283,5 +1317,10 @@ namespace Horo::Application {
             if (job)
                 static_cast<void>(job->Wait());
         }
+        {
+            std::lock_guard lock(state_->Mutex());
+            state_->shutdownFinished = true;
+        }
+        state_->shutdownCompleted.notify_all();
     }
 }  // namespace Horo::Application

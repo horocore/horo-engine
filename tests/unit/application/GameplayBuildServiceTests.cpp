@@ -237,6 +237,32 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
         std::mutex callMutex_;
     };
 
+    class CancellationWaitingProcessRunner final : public IExternalProcessRunner {
+    public:
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &cancellation) override {
+            {
+                std::lock_guard lock(mutex_);
+                running_ = true;
+            }
+            condition_.notify_one();
+            while (!cancellation.IsCancellationRequested())
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Cancelled, 1});
+        }
+
+        [[nodiscard]] bool WaitUntilRunning() {
+            std::unique_lock lock(mutex_);
+            return condition_.wait_for(lock, std::chrono::seconds{30}, [this] {
+                return running_;
+            });
+        }
+
+    private:
+        std::mutex mutex_;
+        std::condition_variable condition_;
+        bool running_{};
+    };
+
     template <typename ProcessRunner> class GameplayBuildFixture final {
     public:
         explicit GameplayBuildFixture(ProcessRunner &runner, const std::size_t workerCount = 1U, const std::size_t queueCapacity = 4U,
@@ -466,13 +492,12 @@ TEST_CASE("Gameplay build output classifies bounded GCC and Clang diagnostics", 
 }
 
 TEST_CASE("Gameplay build service maps cancellation to one correlated terminal record", "[unit][gameplay][build][cancellation]") {
-    TerminalProcessRunner processes{ProcessTerminationReason::Cancelled};
+    CancellationWaitingProcessRunner processes;
     GameplayBuildFixture fixture{processes};
 
     const auto started = fixture.service.Start(fixture.Request(std::chrono::seconds{1}));
     REQUIRE(started.HasValue());
-    REQUIRE(processes.WaitForCall(std::chrono::seconds{30}));
-    REQUIRE((processes.calls.load(std::memory_order_relaxed) == 1U));
+    REQUIRE(processes.WaitUntilRunning());
     REQUIRE(fixture.service.RequestCancel(started.Value()));
     const GameplayBuildSnapshot terminal = AwaitTerminal(fixture.service, started.Value());
     REQUIRE(terminal.state == GameplayBuildState::Cancelled);
@@ -481,6 +506,48 @@ TEST_CASE("Gameplay build service maps cancellation to one correlated terminal r
     REQUIRE(snapshot.has_value());
     AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
     AssertTerminalOperation(fixture.operations, terminal, OperationState::Cancelled);
+    REQUIRE_FALSE(fixture.service.RequestCancel(started.Value()));
+}
+
+TEST_CASE("Gameplay build shutdown joins active work and publishes terminal output before returning", "[unit][gameplay][build][shutdown]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto started = fixture.service.Start(fixture.Request());
+    REQUIRE(started.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+
+    fixture.service.Shutdown();
+
+    const std::optional<GameplayBuildSnapshot> terminal = fixture.service.Query(started.Value());
+    REQUIRE(terminal.has_value());
+    REQUIRE(terminal->state == GameplayBuildState::Cancelled);
+    const std::optional<BuildOutputSnapshot> output = fixture.output.SnapshotIfChanged(0);
+    REQUIRE(output.has_value());
+    AssertTerminalOutput(*output, *terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+    AssertTerminalOperation(fixture.operations, *terminal, OperationState::Cancelled);
+    REQUIRE_FALSE(fixture.service.RequestCancel(started.Value()));
+}
+
+TEST_CASE("Gameplay build cancellation and shutdown publish one terminal outcome", "[unit][gameplay][build][shutdown][race]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto started = fixture.service.Start(fixture.Request());
+    REQUIRE(started.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+
+    std::thread cancellation{[&fixture, id = started.Value()] {
+        static_cast<void>(fixture.service.RequestCancel(id));
+    }};
+    fixture.service.Shutdown();
+    cancellation.join();
+
+    const std::optional<GameplayBuildSnapshot> terminal = fixture.service.Query(started.Value());
+    REQUIRE(terminal.has_value());
+    REQUIRE(terminal->state == GameplayBuildState::Cancelled);
+    const std::optional<BuildOutputSnapshot> output = fixture.output.SnapshotIfChanged(0);
+    REQUIRE(output.has_value());
+    AssertTerminalOutput(*output, *terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+    AssertTerminalOperation(fixture.operations, *terminal, OperationState::Cancelled);
 }
 
 TEST_CASE("Gameplay build service maps process timeout to one correlated terminal record", "[unit][gameplay][build][timeout]") {
