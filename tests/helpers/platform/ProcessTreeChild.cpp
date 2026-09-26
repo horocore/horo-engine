@@ -36,10 +36,11 @@ namespace {
         CloseHandle(process.hProcess);
         return true;
 #else
+        static_cast<void>(executable);
         const pid_t child = fork();
         if (child == 0) {
-            execl(executable, executable, "descendant", marker, static_cast<char *>(nullptr));
-            _exit(127);
+            Heartbeat(marker);
+            _exit(0);
         }
         return child > 0;
 #endif
