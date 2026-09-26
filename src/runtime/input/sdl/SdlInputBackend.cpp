@@ -486,12 +486,12 @@ namespace Horo::Input {
     }
 
     /** @copydoc SdlInputBackend::StartTextInput */
-    bool SdlInputBackend::StartTextInput(SDL_Window *window, const SdlTextInputArea area) noexcept {
+    bool SdlInputBackend::StartTextInput(SDL_Window *window, const SdlTextInputArea area) const noexcept {
         return SetTextInputArea(window, area) && SDL_StartTextInput(window);
     }
 
     /** @copydoc SdlInputBackend::SetTextInputArea */
-    bool SdlInputBackend::SetTextInputArea(SDL_Window *window, const SdlTextInputArea area) noexcept {
+    bool SdlInputBackend::SetTextInputArea(SDL_Window *window, const SdlTextInputArea area) const noexcept {
         if (window == nullptr || impl_->windowId == 0 || SDL_GetWindowID(window) != impl_->windowId || area.width <= 0 || area.height <= 0)
             return false;
         const SDL_Rect nativeArea{area.x, area.y, area.width, area.height};
@@ -499,7 +499,7 @@ namespace Horo::Input {
     }
 
     /** @copydoc SdlInputBackend::StopTextInput */
-    void SdlInputBackend::StopTextInput(SDL_Window *window) noexcept {
+    void SdlInputBackend::StopTextInput(SDL_Window *window) const noexcept {
         if (window != nullptr && impl_->windowId != 0 && SDL_GetWindowID(window) == impl_->windowId)
             SDL_StopTextInput(window);
     }

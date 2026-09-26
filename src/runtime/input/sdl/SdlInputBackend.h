@@ -32,11 +32,11 @@ namespace Horo::Input {
         [[nodiscard]] IGamepadHaptics *Haptics() noexcept;
 
         /** @brief Enables native text/IME for a window after positioning its candidate area. */
-        [[nodiscard]] bool StartTextInput(SDL_Window *window, SdlTextInputArea area) noexcept;
+        [[nodiscard]] bool StartTextInput(SDL_Window *window, SdlTextInputArea area) const noexcept;
         /** @brief Repositions the native candidate area while a text surface is active. */
-        [[nodiscard]] bool SetTextInputArea(SDL_Window *window, SdlTextInputArea area) noexcept;
+        [[nodiscard]] bool SetTextInputArea(SDL_Window *window, SdlTextInputArea area) const noexcept;
         /** @brief Ends native text/IME for a window; safe for a null window. */
-        void StopTextInput(SDL_Window *window) noexcept;
+        void StopTextInput(SDL_Window *window) const noexcept;
 
         [[nodiscard]] Result<void> PlayRumble(GamepadDeviceId id, RumbleEffect effect) override;
 

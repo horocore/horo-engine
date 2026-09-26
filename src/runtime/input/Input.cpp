@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <format>
 #include <fstream>
 #include <limits>
@@ -308,8 +309,8 @@ namespace Horo::Input {
 
     void RawInputCollector::AppendText(const std::string_view utf8) {
         RawInputSnapshot &snapshot = impl_->snapshots[impl_->write];
-        constexpr std::size_t maximumTextBytes = 4096;
-        if (utf8.size() > maximumTextBytes - snapshot.text.size() || !IsValidUtf8ScalarSequence(utf8))
+        if (constexpr std::size_t maximumTextBytes = 4096;
+            utf8.size() > maximumTextBytes - snapshot.text.size() || !IsValidUtf8ScalarSequence(utf8))
             return;
         snapshot.text.append(utf8);
         if (!utf8.empty() && snapshot.composition.active) {
@@ -321,15 +322,15 @@ namespace Horo::Input {
     void RawInputCollector::SetTextComposition(const std::string_view utf8, const std::int32_t selectionStart,
                                                const std::int32_t selectionLength) {
         TextCompositionState &composition = impl_->snapshots[impl_->write].composition;
-        constexpr std::size_t maximumCompositionBytes = 4096;
-        if (utf8.size() > maximumCompositionBytes || !IsValidUtf8ScalarSequence(utf8)) {
+        if (constexpr std::size_t maximumCompositionBytes = 4096;
+            utf8.size() > maximumCompositionBytes || !IsValidUtf8ScalarSequence(utf8)) {
             composition = {};
             ++impl_->snapshots[impl_->write].compositionRevision;
             return;
         }
         composition.text.assign(utf8);
         const auto characterCount = static_cast<std::int32_t>(std::ranges::count_if(utf8, [](const char byte) {
-            return (static_cast<unsigned char>(byte) & 0xC0U) != 0x80U;
+            return (std::to_integer<unsigned int>(static_cast<std::byte>(byte)) & 0xC0U) != 0x80U;
         }));
         composition.selectionStart = std::clamp(selectionStart, 0, characterCount);
         composition.selectionLength = std::clamp(selectionLength, 0, characterCount - composition.selectionStart);
@@ -823,6 +824,15 @@ namespace Horo::Input {
             IInputCaptureOwner *owner;
         };
 
+        // One owner and one delivery window govern all committed text and pre-edit state.
+        struct TextFocusState {
+            std::uint64_t focusToken{0};
+            std::uint64_t minimumCompositionRevision{0};
+            std::uint64_t lastDeliveredCompositionRevision{0};
+            bool served{false};
+            bool blockedFrame{false};
+        };
+
         const RawInputSnapshot *snapshot{nullptr};
         const RawInputSnapshot *previousSnapshot{nullptr};
         RawInputSnapshot empty;
@@ -839,11 +849,7 @@ namespace Horo::Input {
         std::uint64_t nextToken{1};
         bool modalBarrier{false};
         bool blockNextFrame{false};
-        std::uint64_t textFocusToken{0};
-        std::uint64_t minimumCompositionRevision{0};
-        std::uint64_t lastDeliveredCompositionRevision{0};
-        bool textServed{false};
-        bool textBlockedFrame{false};
+        TextFocusState textFocus;
     };
 
     namespace {
@@ -875,12 +881,12 @@ namespace Horo::Input {
         });
         impl_->previousSnapshot = impl_->snapshot;
         impl_->snapshot = &snapshot;
-        impl_->textServed = false;
-        impl_->textBlockedFrame = false;
+        impl_->textFocus.served = false;
+        impl_->textFocus.blockedFrame = false;
         if (!snapshot.window.focused) {
-            impl_->textFocusToken = 0;
-            impl_->minimumCompositionRevision = snapshot.compositionRevision + 1;
-            impl_->textBlockedFrame = true;
+            impl_->textFocus.focusToken = 0;
+            impl_->textFocus.minimumCompositionRevision = snapshot.compositionRevision + 1;
+            impl_->textFocus.blockedFrame = true;
         }
         impl_->consumedKeys.clear();
         impl_->consumedPointerButtons.clear();
@@ -904,20 +910,20 @@ namespace Horo::Input {
     InputContextToken InputRouter::PushContext(InputContextId id, const InputContextKind kind) {
         using enum InputContextKind;
         const std::uint64_t token = impl_->nextToken++;
-        if (impl_->textFocusToken != 0) {
-            const auto focused = std::ranges::find(impl_->contexts, impl_->textFocusToken, &Impl::Context::token);
+        if (impl_->textFocus.focusToken != 0) {
+            const auto focused = std::ranges::find(impl_->contexts, impl_->textFocus.focusToken, &Impl::Context::token);
             if (focused != impl_->contexts.end() && Priority(kind) >= Priority(focused->kind)) {
-                impl_->textFocusToken = 0;
-                impl_->textBlockedFrame = true;
-                impl_->minimumCompositionRevision = Snapshot().compositionRevision + 1;
+                impl_->textFocus.focusToken = 0;
+                impl_->textFocus.blockedFrame = true;
+                impl_->textFocus.minimumCompositionRevision = Snapshot().compositionRevision + 1;
             }
         }
         if (kind == ModalRoot || kind == ModalChild || kind == NativeDialog) {
             CancelCapture(CaptureCancellationReason::ModalOpened);
             impl_->modalBarrier = true;
-            impl_->textFocusToken = 0;
-            impl_->textBlockedFrame = true;
-            impl_->minimumCompositionRevision = Snapshot().compositionRevision + 1;
+            impl_->textFocus.focusToken = 0;
+            impl_->textFocus.blockedFrame = true;
+            impl_->textFocus.minimumCompositionRevision = Snapshot().compositionRevision + 1;
             if (kind == NativeDialog)
                 impl_->blockNextFrame = true;
         } else if (impl_->capture) {
@@ -933,41 +939,43 @@ namespace Horo::Input {
     bool InputRouter::FocusText(const InputContextToken &context) noexcept {
         if (!IsContextActive(context))
             return false;
-        const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
-        if (found == impl_->contexts.end() || Priority(found->kind) < Priority(InputContextKind::FocusedGuiWidget))
+        if (const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
+            found == impl_->contexts.end() || Priority(found->kind) < Priority(InputContextKind::FocusedGuiWidget))
             return false;
-        if (impl_->textFocusToken != context.token_) {
-            impl_->textFocusToken = context.token_;
-            impl_->textBlockedFrame = true;
-            impl_->minimumCompositionRevision = Snapshot().compositionRevision + 1;
+        if (impl_->textFocus.focusToken != context.token_) {
+            impl_->textFocus.focusToken = context.token_;
+            impl_->textFocus.blockedFrame = true;
+            impl_->textFocus.minimumCompositionRevision = Snapshot().compositionRevision + 1;
         }
         return true;
     }
 
     /** @copydoc InputRouter::BlurText */
     void InputRouter::BlurText(const InputContextToken &context) noexcept {
-        if (context.router_ != this || context.token_ != impl_->textFocusToken)
+        if (context.router_ != this || context.token_ != impl_->textFocus.focusToken)
             return;
-        impl_->textFocusToken = 0;
-        impl_->textBlockedFrame = true;
-        impl_->minimumCompositionRevision = Snapshot().compositionRevision + 1;
+        impl_->textFocus.focusToken = 0;
+        impl_->textFocus.blockedFrame = true;
+        impl_->textFocus.minimumCompositionRevision = Snapshot().compositionRevision + 1;
     }
 
     /** @copydoc InputRouter::TakeText */
     std::optional<TextInputDelivery> InputRouter::TakeText(const InputContextToken &context) {
-        if (impl_->textServed || impl_->textBlockedFrame || context.token_ != impl_->textFocusToken || !IsContextActive(context))
+        if (impl_->textFocus.served || impl_->textFocus.blockedFrame || context.token_ != impl_->textFocus.focusToken ||
+            !IsContextActive(context))
             return std::nullopt;
         const RawInputSnapshot &snapshot = Snapshot();
-        const bool compositionCurrent = snapshot.compositionRevision >= impl_->minimumCompositionRevision;
-        const bool compositionChanged = compositionCurrent && snapshot.compositionRevision != impl_->lastDeliveredCompositionRevision;
+        const bool compositionCurrent = snapshot.compositionRevision >= impl_->textFocus.minimumCompositionRevision;
+        const bool compositionChanged =
+            compositionCurrent && snapshot.compositionRevision != impl_->textFocus.lastDeliveredCompositionRevision;
         if (snapshot.text.empty() && !compositionChanged && !(compositionCurrent && snapshot.composition.active))
             return std::nullopt;
         TextInputDelivery delivery{.committed = snapshot.text,
                                    .composition = compositionCurrent ? snapshot.composition : TextCompositionState{},
                                    .compositionChanged = compositionChanged};
-        impl_->textServed = true;
+        impl_->textFocus.served = true;
         if (compositionCurrent)
-            impl_->lastDeliveredCompositionRevision = snapshot.compositionRevision;
+            impl_->textFocus.lastDeliveredCompositionRevision = snapshot.compositionRevision;
         return delivery;
     }
 
@@ -1189,10 +1197,10 @@ namespace Horo::Input {
     }
 
     void InputRouter::RemoveContext(const std::uint64_t token) noexcept {
-        if (impl_->textFocusToken == token) {
-            impl_->textFocusToken = 0;
-            impl_->textBlockedFrame = true;
-            impl_->minimumCompositionRevision = Snapshot().compositionRevision + 1;
+        if (impl_->textFocus.focusToken == token) {
+            impl_->textFocus.focusToken = 0;
+            impl_->textFocus.blockedFrame = true;
+            impl_->textFocus.minimumCompositionRevision = Snapshot().compositionRevision + 1;
         }
         if (impl_->capture && impl_->capture->context == token)
             CancelCapture(CaptureCancellationReason::ContextRemoved);

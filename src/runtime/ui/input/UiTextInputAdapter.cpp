@@ -16,8 +16,8 @@ namespace Horo::Runtime::Ui::InputAdapter {
         const auto state = control.Snapshot();
         if (state.HasError())
             return Result<Delivery>::Failure(state.ErrorValue());
-        const auto &textState = std::get<UiTextInputControlState>(state.Value());
-        if (textState.availability != UiControlAvailability::Enabled || !textState.focused || !textState.editing)
+        if (const auto &textState = std::get<UiTextInputControlState>(state.Value());
+            textState.availability != UiControlAvailability::Enabled || !textState.focused || !textState.editing)
             return Result<Delivery>::Success(std::nullopt);
         Delivery delivery = router.TakeText(context);
         if (!delivery || delivery->committed.empty())
