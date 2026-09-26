@@ -51,8 +51,7 @@ namespace Horo::Destruction::Detail {
             if (u < -epsilon || u > 1.0 + epsilon)
                 return std::nullopt;
             const Point q = Cross(offset, edgeA);
-            const double v = Dot(direction, q) * inverse;
-            if (v < -epsilon || u + v > 1.0 + epsilon)
+            if (const double v = Dot(direction, q) * inverse; v < -epsilon || u + v > 1.0 + epsilon)
                 return std::nullopt;
             const double t = Dot(edgeB, q) * inverse;
             if (t < -epsilon || t > 1.0 + epsilon)
@@ -73,9 +72,8 @@ namespace Horo::Destruction::Detail {
             const double ac = Orient(a, b, c);
             const double ad = Orient(a, b, d);
             const double ca = Orient(c, d, a);
-            const double cb = Orient(c, d, b);
-            if ((ac > epsilon && ad > epsilon) || (ac < -epsilon && ad < -epsilon) || (ca > epsilon && cb > epsilon) ||
-                (ca < -epsilon && cb < -epsilon))
+            if (const double cb = Orient(c, d, b); (ac > epsilon && ad > epsilon) || (ac < -epsilon && ad < -epsilon) ||
+                                                   (ca > epsilon && cb > epsilon) || (ca < -epsilon && cb < -epsilon))
                 return false;
             const auto overlap = [](const double a0, const double a1, const double b0, const double b1) {
                 return std::max(std::min(a0, a1), std::min(b0, b1)) <= std::min(std::max(a0, a1), std::max(b0, b1)) + 1.0e-10;
@@ -169,6 +167,16 @@ namespace Horo::Destruction::Detail {
             return true;
         }
 
+        [[nodiscard]] bool EdgesPierceBeyondShared(const std::array<Point, 3> &edges, const std::array<Point, 3> &triangle,
+                                                   const std::optional<Point> &sharedPoint) {
+            for (std::size_t edge = 0; edge < 3; ++edge) {
+                const auto hit = SegmentPiercesTriangle(edges[edge], edges[(edge + 1U) % 3U], triangle);
+                if (hit.has_value() && (!sharedPoint.has_value() || !SamePoint(*hit, *sharedPoint)))
+                    return true;
+            }
+            return false;
+        }
+
         [[nodiscard]] bool TrianglesIntersect(const Assets::PreFracturedSourceNode &node, const Triangle &a, const Triangle &b) {
             std::array<Point, 3> pointsA{};
             std::array<Point, 3> pointsB{};
@@ -190,13 +198,9 @@ namespace Horo::Destruction::Detail {
                 return true;
             if (sharedCount == 2)
                 return coplanar && CoplanarAreaOverlap(pointsA, pointsB, normal);
-            for (std::size_t edge = 0; edge < 3; ++edge) {
-                for (const auto &hit : {SegmentPiercesTriangle(pointsA[edge], pointsA[(edge + 1U) % 3U], pointsB),
-                                        SegmentPiercesTriangle(pointsB[edge], pointsB[(edge + 1U) % 3U], pointsA)}) {
-                    if (hit && (sharedCount == 0 || !SamePoint(*hit, Position(node, shared[0]))))
-                        return true;
-                }
-            }
+            const std::optional<Point> sharedPoint = sharedCount == 0 ? std::nullopt : std::optional{Position(node, shared[0])};
+            if (EdgesPierceBeyondShared(pointsA, pointsB, sharedPoint) || EdgesPierceBeyondShared(pointsB, pointsA, sharedPoint))
+                return true;
             if (!coplanar)
                 return false;
             return sharedCount == 0 ? CoplanarOverlap(pointsA, pointsB, normal) : CoplanarAreaOverlap(pointsA, pointsB, normal);
@@ -224,7 +228,7 @@ namespace Horo::Destruction::Detail {
             }
             triangles.push_back(triangle);
         }
-        std::sort(triangles.begin(), triangles.end(), [](const Triangle &a, const Triangle &b) {
+        std::ranges::sort(triangles, [](const Triangle &a, const Triangle &b) {
             return a.minimum[0] < b.minimum[0];
         });
         for (std::size_t left = 0; left < triangles.size(); ++left) {
