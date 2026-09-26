@@ -1,0 +1,69 @@
+name: MCP Session Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mcp-session-windows.yml'
+      - 'cmake/**'
+      - 'include/Horo/Mcp/**'
+      - 'src/CMakeLists.txt'
+      - 'src/mcp/**'
+      - 'tests/CMakeLists.txt'
+      - 'tests/unit/mcp/**'
+  pull_request:
+    paths:
+      - '.github/workflows/mcp-session-windows.yml'
+      - 'cmake/**'
+      - 'include/Horo/Mcp/**'
+      - 'src/CMakeLists.txt'
+      - 'src/mcp/**'
+      - 'tests/CMakeLists.txt'
+      - 'tests/unit/mcp/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mcp-session-windows:
+    name: MCP Session · Windows / MSVC
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.17.0
+
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: fetchcontent-mcp-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: fetchcontent-mcp-windows-
+
+      - name: Build and test MCP session contracts
+        shell: bash
+        run: |
+          cmake -S . -B build/mcp-windows -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_ENABLE_OPENTELEMETRY=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          cmake --build build/mcp-windows --target HoroMcpSessionTests HoroMcpSessionPublicHeaderConsumer --parallel 2
+          ctest --test-dir build/mcp-windows -R '^HoroMcpSessionTests' --output-on-failure --timeout 30
+        env:
+          CC: cl
+          CXX: cl
+          FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
+          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
