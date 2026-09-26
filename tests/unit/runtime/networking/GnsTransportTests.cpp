@@ -64,6 +64,42 @@ namespace {
         }
         return Horo::Result<ListenerHandle>::Failure(Horo::MakeError(NetworkErrors::TransportNativeUnavailable));
     }
+
+    void VerifyLoopbackDelivery(INetworkTransport &transport, Collector &collector, const ConnectionHandle outgoing,
+                                const ConnectionHandle incoming) {
+        const auto channel = ChannelId::Create(0, 1);
+        REQUIRE(channel.HasValue());
+        const std::array<std::byte, 3> reliable{std::byte{1}, std::byte{2}, std::byte{3}};
+        const std::array<std::byte, 2> unreliable{std::byte{4}, std::byte{5}};
+        REQUIRE(transport.Send(outgoing, channel.Value(), reliable, DeliveryPolicy::ReliableOrdered).HasValue());
+        REQUIRE(transport.Send(incoming, channel.Value(), unreliable, DeliveryPolicy::UnreliableUnordered).HasValue());
+        REQUIRE(transport.Send(outgoing, channel.Value(), {}, DeliveryPolicy::ReliableOrdered).HasValue());
+        REQUIRE(WaitFor(transport, collector, NetworkTransportEventKind::PacketReceived, 3));
+        std::size_t reliableReceived{};
+        std::size_t unreliableReceived{};
+        std::size_t emptyReceived{};
+        for (const auto &event : collector.events) {
+            if (event.kind != NetworkTransportEventKind::PacketReceived)
+                continue;
+            if (event.connection == incoming && event.payload.size() == reliable.size() &&
+                std::equal(event.payload.begin(), event.payload.end(), reliable.begin())) {
+                REQUIRE(event.delivery == DeliveryPolicy::ReliableOrdered);
+                ++reliableReceived;
+            } else if (event.connection == outgoing && event.payload.size() == unreliable.size() &&
+                       std::equal(event.payload.begin(), event.payload.end(), unreliable.begin())) {
+                REQUIRE(event.delivery == DeliveryPolicy::UnreliableUnordered);
+                ++unreliableReceived;
+            } else if (event.connection == incoming && event.payload.empty()) {
+                REQUIRE(event.delivery == DeliveryPolicy::ReliableOrdered);
+                ++emptyReceived;
+            } else {
+                FAIL("GNS delivered a packet outside the exact peer, payload and mode contract");
+            }
+        }
+        REQUIRE(reliableReceived == 1);
+        REQUIRE(unreliableReceived == 1);
+        REQUIRE(emptyReceived == 1);
+    }
 }  // namespace
 
 TEST_CASE("GNS explicit factory initializes exact bounded capabilities and rejects malformed input", "[network][gns]") {
@@ -128,38 +164,10 @@ TEST_CASE("GNS loopback connects, exchanges exact delivery modes, and closes wit
             incoming = event.connection;
     }
     REQUIRE(incoming.IsValid());
+    VerifyLoopbackDelivery(*transport, collector, outgoing.Value(), incoming);
     const auto channel = ChannelId::Create(0, 1);
     REQUIRE(channel.HasValue());
     const std::array<std::byte, 3> reliable{std::byte{1}, std::byte{2}, std::byte{3}};
-    const std::array<std::byte, 2> unreliable{std::byte{4}, std::byte{5}};
-    REQUIRE(transport->Send(outgoing.Value(), channel.Value(), reliable, DeliveryPolicy::ReliableOrdered).HasValue());
-    REQUIRE(transport->Send(incoming, channel.Value(), unreliable, DeliveryPolicy::UnreliableUnordered).HasValue());
-    REQUIRE(transport->Send(outgoing.Value(), channel.Value(), {}, DeliveryPolicy::ReliableOrdered).HasValue());
-    REQUIRE(WaitFor(*transport, collector, NetworkTransportEventKind::PacketReceived, 3));
-    std::size_t reliableReceived{};
-    std::size_t unreliableReceived{};
-    std::size_t emptyReceived{};
-    for (const auto &event : collector.events) {
-        if (event.kind != NetworkTransportEventKind::PacketReceived)
-            continue;
-        if (event.connection == incoming && event.payload.size() == reliable.size() &&
-            std::equal(event.payload.begin(), event.payload.end(), reliable.begin())) {
-            REQUIRE(event.delivery == DeliveryPolicy::ReliableOrdered);
-            ++reliableReceived;
-        } else if (event.connection == outgoing.Value() && event.payload.size() == unreliable.size() &&
-                   std::equal(event.payload.begin(), event.payload.end(), unreliable.begin())) {
-            REQUIRE(event.delivery == DeliveryPolicy::UnreliableUnordered);
-            ++unreliableReceived;
-        } else if (event.connection == incoming && event.payload.empty()) {
-            REQUIRE(event.delivery == DeliveryPolicy::ReliableOrdered);
-            ++emptyReceived;
-        } else {
-            FAIL("GNS delivered a packet outside the exact peer, payload and mode contract");
-        }
-    }
-    REQUIRE(reliableReceived == 1);
-    REQUIRE(unreliableReceived == 1);
-    REQUIRE(emptyReceived == 1);
     const auto unsupported = transport->Send(outgoing.Value(), channel.Value(), reliable, DeliveryPolicy::ReliableUnordered);
     REQUIRE(unsupported.HasError());
     REQUIRE(unsupported.ErrorValue().code.Value() == NetworkErrors::TransportDeliveryUnsupported.code.Value());

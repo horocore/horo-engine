@@ -12,4 +12,4 @@ namespace Horo::Network {
      * @return Unique transport or a typed unavailable/capacity error; never a Null substitute.
      */
     [[nodiscard]] Result<std::unique_ptr<INetworkTransport>> CreateGnsTransport();
-} // namespace Horo::Network
+}  // namespace Horo::Network
