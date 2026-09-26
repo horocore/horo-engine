@@ -230,6 +230,7 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/AuthenticationSessionAdapter.h
     Horo/Network/HandshakeNegotiation.h
     Horo/Network/NetworkObjectMapping.h
+    Horo/Network/NetworkTickAlignment.h
     Horo/Network/PeerSessionLifecycle.h
     Horo/Network/ReplicationWorldLifecycle.h
 )

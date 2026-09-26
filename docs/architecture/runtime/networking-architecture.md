@@ -489,6 +489,26 @@ Every other terminal path publishes once, clears gameplay admission and rejects 
 messages/callbacks or replacement generations. Transport close remains externally
 owned and cannot rewrite the session snapshot.
 
+`NetworkTickAlignment` is a NetworkRuntime owner-thread projection for one admitted
+connection/session generation. The host supplies committed local fixed ticks and
+owner-stamped round-trip samples expressed in negotiated fixed-tick units; wall
+time never assigns simulation ticks. A sample estimates receive-time server tick
+from send tick plus ceiling of half the bounded measured round trip; that
+symmetry assumption is quality evidence, not gameplay authority. Its fixed
+eight-sample ceiling produces a
+median server-tick estimate and immutable quality/drift evidence. Each local
+fixed-tick advance maps to at most two projected server ticks (or holds one
+server tick), bounding correction to one tick without invoking additional
+fixed updates. The mapper does not own an input journal, canonical state,
+checkpoint, restore, or rollback path: those remain under ADR-100's declared
+prediction/provider contracts. Pause and host suspension freeze projection,
+increment a local sample epoch, and discard old samples. Reconnect accepts an
+explicit newly admitted handle (same-slot reuse requires its exact next
+generation) and a different session generation; a new admitted session on the
+same connection is also fenced. Loss ages
+quality to stale while projection advances ordinarily; it never silently
+expands history or simulation catch-up limits.
+
 The canonical hello exchange includes:
 
 - Product/protocol family identity and minimum/maximum wire versions.

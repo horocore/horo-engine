@@ -971,3 +971,15 @@ worker, child and completion drain. Closed scopes are retired after their
 terminal records are released. The generated standalone PCG public-header
 consumer covers the new header through
 its sole owning target.
+
+## NET-005.2 Fixed-Tick Alignment Boundary
+
+`HoroEngine::NetworkRuntime` solely owns the additive public
+`Horo/Network/NetworkTickAlignment.h` contract. It consumes NetworkApi connection
+and session generations and returns value snapshots; it does not move the host
+fixed-step clock, simulation input, canonical state or restore authority into
+NetworkRuntime. Existing callers require no signature migration. Hosts that opt
+in must supply owner-stamped fixed-tick samples, advance only after committed
+local fixed ticks, and treat stale quality as evidence rather than permission to
+run extra simulation steps. The generated standalone NetworkRuntime public-header
+consumer and `HoroNetworkRuntimeTests` cover the new boundary.
