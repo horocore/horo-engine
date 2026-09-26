@@ -112,6 +112,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/DistributionModel.h
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseProfile.h
+    Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
