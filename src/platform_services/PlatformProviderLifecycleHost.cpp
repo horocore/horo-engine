@@ -154,6 +154,12 @@ namespace Horo::PlatformServices {
         }
 
         /** @brief Closes admission once and retains failed native teardown for an owner-thread retry. */
+        void CloseCallbackIngress(PlatformProviderLifecycleState &state) {
+            std::scoped_lock lock{state.mutex};
+            state.callbackOpen = false;
+            state.completionCount = 0;
+        }
+
         [[nodiscard]] Result<void> CloseNativeAdmission(const std::shared_ptr<PlatformProviderLifecycleState> &state) {
             if (state->stages.admissionClosed)
                 return Result<void>::Success();
@@ -346,11 +352,7 @@ namespace Horo::PlatformServices {
         if (auto closed = CloseNativeAdmission(state_); closed.HasError())
             return closed;
         if (!state.stages.ingressClosed) {
-            {
-                std::scoped_lock lock{state.mutex};
-                state.callbackOpen = false;
-                state.completionCount = 0;
-            }
+            CloseCallbackIngress(state);
             if (state.stages.ingressAttempted &&
                 Detail::InvokeProvider(state.operations.closeIngress, state.candidate) != HORO_EXTENSION_SUCCESS) {
                 state.quarantine = state_;
