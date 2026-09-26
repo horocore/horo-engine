@@ -34,6 +34,12 @@ namespace Horo::Network {
             return value_ != 0;
         }
 
+        /** @brief Returns the opaque owner-issued generation for safe numeric diagnostics. @return Non-zero value for a valid generation.
+         */
+        [[nodiscard]] constexpr std::uint64_t Value() const noexcept {
+            return value_;
+        }
+
         constexpr auto operator<=>(const NetworkOperationGeneration &) const noexcept = default;
 
     private:
