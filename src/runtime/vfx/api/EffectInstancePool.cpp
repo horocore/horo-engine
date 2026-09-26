@@ -160,6 +160,48 @@ namespace Horo::Vfx {
                 return policy.maximumDelayTicks == 0;
             return budget.maximumDelayed > 0 && policy.maximumDelayTicks > 0;
         }
+
+        enum class StoragePreparationStatus : std::uint8_t {
+            Ready,
+            Invalid,
+            AllocationFailed
+        };
+
+        /** @brief Allocates contiguous fixed-capacity storage and charges any vector over-reservation. */
+        [[nodiscard]] StoragePreparationStatus PrepareStorage(const std::uint32_t capacity, const std::uint32_t delayedCapacity,
+                                                              const std::uint64_t maximumBytes, const std::uint64_t plannedBytes,
+                                                              std::unique_ptr<EffectInstancePoolState> &state,
+                                                              std::uint64_t &reservedBytes) noexcept {
+            using enum StoragePreparationStatus;
+            if (plannedBytes > maximumBytes)
+                return Invalid;
+            std::unique_ptr<EffectInstancePoolState> prepared;
+            try {
+                prepared = std::make_unique<EffectInstancePoolState>();
+                if (capacity > prepared->slots.max_size() || capacity > prepared->freeSlots.max_size() ||
+                    delayedCapacity > prepared->delayed.max_size())
+                    return Invalid;
+                prepared->slots.resize(capacity);
+                prepared->freeSlots.resize(capacity);
+                prepared->delayed.resize(delayedCapacity);
+            } catch (const std::bad_alloc &) {
+                return AllocationFailed;
+            }
+            std::uint64_t remainingBytes = maximumBytes - plannedBytes;
+            const auto chargeExtra = [&remainingBytes](const std::size_t elements, const std::size_t elementBytes) noexcept {
+                if (elements > remainingBytes / elementBytes)
+                    return false;
+                remainingBytes -= static_cast<std::uint64_t>(elements) * elementBytes;
+                return true;
+            };
+            if (!chargeExtra(prepared->slots.capacity() - capacity, sizeof(EffectPoolSlot)) ||
+                !chargeExtra(prepared->freeSlots.capacity() - capacity, sizeof(std::uint32_t)) ||
+                !chargeExtra(prepared->delayed.capacity() - delayedCapacity, sizeof(Detail::DelayedEffectRequest)))
+                return Invalid;
+            reservedBytes = maximumBytes - remainingBytes;
+            state = std::move(prepared);
+            return Ready;
+        }
     }  // namespace
 
     EffectInstancePool::EffectInstancePool(std::unique_ptr<EffectInstancePoolState> state) noexcept : state_(std::move(state)) {}
@@ -171,6 +213,7 @@ namespace Horo::Vfx {
     /** @copydoc EffectInstancePool::Prepare */
     Result<EffectInstancePool> EffectInstancePool::Prepare(const EffectPoolDescriptor &descriptor, const EffectPoolBudget &budget,
                                                            const EffectPoolPolicy &policy) {
+        using enum StoragePreparationStatus;
         if (!ValidPlanInputs(descriptor, budget, policy))
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
         const std::uint32_t delayedCapacity = policy.overBudget == EffectPoolOverBudgetPolicy::DelayBounded ? budget.maximumDelayed : 0;
@@ -192,28 +235,12 @@ namespace Horo::Vfx {
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
 
         std::unique_ptr<EffectInstancePoolState> state;
-        try {
-            state = std::make_unique<EffectInstancePoolState>();
-            if (capacity > state->slots.max_size() || capacity > state->freeSlots.max_size() || delayedCapacity > state->delayed.max_size())
-                return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
-            state->slots.resize(capacity);
-            state->freeSlots.resize(capacity);
-            state->delayed.resize(delayedCapacity);
-        } catch (const std::bad_alloc &) {
-            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
-        }
-        // Vector capacity can exceed size; charge any extra storage before the pool becomes playable.
+        std::uint64_t reservedBytes{};
         const std::uint64_t plannedBytes = fixedBytes + static_cast<std::uint64_t>(capacity) * bytesPerSlot;
-        std::uint64_t remainingBytes = budget.maximumBytes - plannedBytes;
-        const auto chargeExtra = [&remainingBytes](const std::size_t elements, const std::size_t elementBytes) noexcept {
-            if (elements > remainingBytes / elementBytes)
-                return false;
-            remainingBytes -= elements * elementBytes;
-            return true;
-        };
-        if (!chargeExtra(state->slots.capacity() - capacity, sizeof(EffectPoolSlot)) ||
-            !chargeExtra(state->freeSlots.capacity() - capacity, sizeof(std::uint32_t)) ||
-            !chargeExtra(state->delayed.capacity() - delayedCapacity, sizeof(Detail::DelayedEffectRequest)))
+        const auto storageStatus = PrepareStorage(capacity, delayedCapacity, budget.maximumBytes, plannedBytes, state, reservedBytes);
+        if (storageStatus == AllocationFailed)
+            return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolAllocationFailed));
+        if (storageStatus != Ready)
             return Result<EffectInstancePool>::Failure(MakeError(VfxErrors::EffectPoolInvalid));
         state->freeCount = capacity;
         for (std::uint32_t index = 0; index < capacity; ++index)
@@ -226,7 +253,7 @@ namespace Horo::Vfx {
                        .requiredReserve = budget.requiredReserve,
                        .delayedCapacity = delayedCapacity,
                        .reservedEmitterSlots = static_cast<std::uint64_t>(capacity) * descriptor.emittersPerInstance,
-                       .reservedBytes = budget.maximumBytes - remainingBytes};
+                       .reservedBytes = reservedBytes};
         return Result<EffectInstancePool>::Success(EffectInstancePool{std::move(state)});
     }
 
