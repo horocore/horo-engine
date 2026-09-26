@@ -204,6 +204,14 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotIndexLimitExceeded;
     /** @brief Private slot-index candidate or diagnostic storage could not be allocated. */
     extern const ErrorCodeDescriptor SlotIndexAllocationFailed;
+    /** @brief Save-manager source, revision, filter, or command arguments are invalid. */
+    extern const ErrorCodeDescriptor ManagerProjectionInvalid;
+    /** @brief Save-manager source or page request exceeds a qualified finite bound. */
+    extern const ErrorCodeDescriptor ManagerProjectionLimitExceeded;
+    /** @brief A page cursor, assessment, or command no longer matches the current publication. */
+    extern const ErrorCodeDescriptor ManagerProjectionStale;
+    /** @brief Detached save-manager presentation storage could not be allocated. */
+    extern const ErrorCodeDescriptor ManagerProjectionAllocationFailed;
     /** @brief A local storage operation request, address, payload, or configured limit is invalid. */
     extern const ErrorCodeDescriptor StorageOperationInvalid;
     /** @brief The selected storage provider does not implement the requested operation. */

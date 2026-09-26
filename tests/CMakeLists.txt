@@ -1735,6 +1735,11 @@ add_executable(HoroRuntimeSaveSlotIndexTests
 )
 target_compile_features(HoroRuntimeSaveSlotIndexTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotIndexTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveManagerProjectionTests
+        unit/runtime/save/SaveManagerProjectionTests.cpp
+)
+target_compile_features(HoroRuntimeSaveManagerProjectionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveManagerProjectionTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveOperationTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveOperationTests.cpp
@@ -2454,6 +2459,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveReferenceTests
         HoroRuntimeSaveSlotMetadataTests
         HoroRuntimeSaveSlotIndexTests
+        HoroRuntimeSaveManagerProjectionTests
         HoroRuntimeSaveOperationTests
         HoroRuntimeSaveParticipationTests
         HoroRuntimePersistentEntityIdentityTests
