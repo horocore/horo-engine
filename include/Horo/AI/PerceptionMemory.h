@@ -110,7 +110,8 @@ namespace Horo::AI {
          * @return Memory or a typed invalid scene, agent, or policy failure; every unsigned initial tick is valid.
          */
         [[nodiscard]] static Result<AIPerceptionMemory> Create(std::uint64_t sceneIncarnation, AgentHandle agent,
-                                                               PerceptionMemoryPolicy policy = {}, std::uint64_t initialSimulationTick = 0);
+                                                               const PerceptionMemoryPolicy &policy = {},
+                                                               std::uint64_t initialSimulationTick = 0);
 
         /**
          * @brief Refreshes or admits a stimulus at a monotonic simulation time.
@@ -127,7 +128,7 @@ namespace Horo::AI {
          * @param simulationTick Current monotonic committed simulation tick.
          * @return Success even when already absent, or a typed invalid key/time failure.
          */
-        [[nodiscard]] Result<void> MarkLost(PerceptionMemoryKey key, std::uint64_t simulationTick);
+        [[nodiscard]] Result<void> MarkLost(const PerceptionMemoryKey &key, std::uint64_t simulationTick);
 
         /**
          * @brief Advances age, decay, and expiry only when simulation time advances.
@@ -152,7 +153,7 @@ namespace Horo::AI {
          * @param liveness Synchronous exact-generation scene residency adapter.
          * @return Value copy or no entry; invalid key, time, or adapter produces a typed failure.
          */
-        [[nodiscard]] Result<std::optional<PerceivedStimulus>> Find(PerceptionMemoryKey key, std::uint64_t simulationTick,
+        [[nodiscard]] Result<std::optional<PerceivedStimulus>> Find(const PerceptionMemoryKey &key, std::uint64_t simulationTick,
                                                                     PerceptionSourceLiveness liveness);
 
         /**
@@ -180,7 +181,7 @@ namespace Horo::AI {
         [[nodiscard]] std::size_t StoredCount() const noexcept;
 
     private:
-        AIPerceptionMemory(std::uint64_t sceneIncarnation, AgentHandle agent, PerceptionMemoryPolicy policy,
+        AIPerceptionMemory(std::uint64_t sceneIncarnation, AgentHandle agent, const PerceptionMemoryPolicy &policy,
                            std::uint64_t initialSimulationTick) noexcept;
         [[nodiscard]] bool ValidKey(const PerceptionMemoryKey &key) const noexcept;
         [[nodiscard]] double AgeSeconds(std::uint64_t lastSensedTick) const noexcept;

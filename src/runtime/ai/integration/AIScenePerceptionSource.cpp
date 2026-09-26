@@ -4,7 +4,7 @@ namespace Horo::AI {
     namespace {
         /** @brief Checks the current structural revision rather than trusting a retained entity slot. */
         [[nodiscard]] bool SceneSourceAlive(void *context, const PerceptionSourceRef &source) {
-            auto &scene = *static_cast<Runtime::RuntimeScene *>(context);
+            const auto &scene = *static_cast<Runtime::RuntimeScene *>(context);
             const auto view = scene.View();
             if (!source.IsValid() || view.RuntimeId().value != source.sceneIncarnation)
                 return false;

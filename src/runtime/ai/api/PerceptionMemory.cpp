@@ -26,12 +26,12 @@ namespace Horo::AI {
     }  // namespace
 
     AIPerceptionMemory::AIPerceptionMemory(const std::uint64_t sceneIncarnation, const AgentHandle agent,
-                                           const PerceptionMemoryPolicy policy, const std::uint64_t initialSimulationTick) noexcept
+                                           const PerceptionMemoryPolicy &policy, const std::uint64_t initialSimulationTick) noexcept
         : sceneIncarnation_(sceneIncarnation), agent_(agent), policy_(policy), simulationTick_(initialSimulationTick) {}
 
     /** @copydoc AIPerceptionMemory::Create */
     Result<AIPerceptionMemory> AIPerceptionMemory::Create(const std::uint64_t sceneIncarnation, const AgentHandle agent,
-                                                          const PerceptionMemoryPolicy policy, const std::uint64_t initialSimulationTick) {
+                                                          const PerceptionMemoryPolicy &policy, const std::uint64_t initialSimulationTick) {
         if (sceneIncarnation == 0 || !agent.IsValid() || !ValidPolicy(policy))
             return Result<AIPerceptionMemory>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
         return Result<AIPerceptionMemory>::Success(AIPerceptionMemory{sceneIncarnation, agent, policy, initialSimulationTick});
@@ -96,8 +96,7 @@ namespace Horo::AI {
         std::size_t listenerCount = 0;
         for (std::size_t index = 0; index < count_; ++index)
             listenerCount += entries_[index].key.listener == observation.key.listener ? 1U : 0U;
-        const bool listenerFull = listenerCount >= ListenerCapacity();
-        if (listenerFull || count_ == Capacity()) {
+        if (const bool listenerFull = listenerCount >= ListenerCapacity(); listenerFull || count_ == Capacity()) {
             std::size_t victim = count_;
             for (std::size_t index = 0; index < count_; ++index) {
                 if (listenerFull && entries_[index].key.listener != observation.key.listener)
@@ -118,7 +117,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AIPerceptionMemory::MarkLost */
-    Result<void> AIPerceptionMemory::MarkLost(const PerceptionMemoryKey key, const std::uint64_t simulationTick) {
+    Result<void> AIPerceptionMemory::MarkLost(const PerceptionMemoryKey &key, const std::uint64_t simulationTick) {
         if (!ValidKey(key))
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
         if (const auto advanced = AdvanceTo(simulationTick); advanced.HasError())
@@ -159,7 +158,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AIPerceptionMemory::Find */
-    Result<std::optional<PerceivedStimulus>> AIPerceptionMemory::Find(const PerceptionMemoryKey key, const std::uint64_t simulationTick,
+    Result<std::optional<PerceivedStimulus>> AIPerceptionMemory::Find(const PerceptionMemoryKey &key, const std::uint64_t simulationTick,
                                                                       const PerceptionSourceLiveness liveness) {
         if (!ValidKey(key) || liveness.isAlive == nullptr)
             return Result<std::optional<PerceivedStimulus>>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
