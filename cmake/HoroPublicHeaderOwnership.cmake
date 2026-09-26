@@ -406,6 +406,7 @@ horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/SkeletalMeshSkinning.h
 )
 horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
+    Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h
     Horo/PCG/PCGGenerationPlan.h
     Horo/PCG/PCGGraphAsset.h
@@ -415,6 +416,7 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGProvenance.h
     Horo/PCG/PCGSpatialSnapshot.h
     Horo/PCG/PCGRegistry.h
+    Horo/PCG/PCGAsyncOperation.h
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h

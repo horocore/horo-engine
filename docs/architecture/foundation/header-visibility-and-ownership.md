@@ -20,6 +20,16 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PCG-2.4 Cooked Plan Boundary
+
+`HoroEngine::PCG` owns the additive `Horo/PCG/PCGCookedPlan.h` contract. Callers
+retain the exact immutable registry snapshot used by `ValidatePCGGraph` through
+`CompilePCGGraph`, then may release the graph source and registry: the resulting
+plan owns its nodes, pin schemas, routes, defaults, capability requirements, and
+canonical bytes. No existing PCG caller changes signature. Future evaluators must
+consume the validated cooked plan, not source graph references or runtime handles.
+The generated PCG public-header consumer covers the new sole-owned header.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
@@ -944,3 +954,20 @@ after the corresponding cost query and reservation succeed. Existing host calls 
 retain the finite default memory configuration, while product composition should
 provide its explicit envelope and default scope. Editor viewport and GUI textures use
 separate explicit scopes in the shared frontend ledger.
+
+## PCG-1.6 Async Operation Migration Notes
+
+`HoroEngine::PCG` owns the additive public `Horo/PCG/PCGAsyncOperation.h`
+contract. No existing PCG caller changes signature. A future host evaluator or
+asset cook/load producer must register an exact scene/cell/graph fence, submit
+owned immutable work through the injected Foundation `JobSystem`, and advance
+the result on its owner lane. Existing graph revision alone is insufficient:
+capture the exact canonical source digest and current runtime, input and
+authority generations. A producer may publish only an immutable PCG candidate;
+Scene and other target commits remain separate transactions. Teardown callers
+invalidate the appropriate graph, cell, scene or host scope and retain dependent
+owners until the nonblocking completion sweep and scope drain checks confirm
+worker, child and completion drain. Closed scopes are retired after their
+terminal records are released. The generated standalone PCG public-header
+consumer covers the new header through
+its sole owning target.
