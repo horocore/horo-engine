@@ -464,7 +464,8 @@ TerrainRuntime explicitly and inject their JobSystem, exact runtime/registry
 revision fence and capability grants. Existing TerrainApi metadata callers do
 not change. No production TerrainRuntime caller exists yet to migrate.
 
-Future producers pass owned immutable candidate inputs to `Submit`, then call
+Future producers pass owned immutable candidate inputs to `SubmitCook`,
+`SubmitLoad` or `SubmitEditPreview`, then call
 `Advance` on the Terrain owner lane at a safe point. They retain candidate and
 provider leases until `IsDrained` and consumer retirement acknowledge release;
 they do not publish from worker callbacks or reuse a stale result after

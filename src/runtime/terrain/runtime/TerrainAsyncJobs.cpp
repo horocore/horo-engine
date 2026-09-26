@@ -83,14 +83,28 @@ namespace Horo::Terrain {
             std::unique_ptr<TerrainAsyncJobs>(new TerrainAsyncJobs(std::make_unique<Impl>(jobs, fence, available, limits))));
     }
 
-    /** @copydoc TerrainAsyncJobs::Submit */
-    Result<TerrainAsyncWorkId> TerrainAsyncJobs::Submit(TerrainAsyncWorkRequest request) {
+    /** @copydoc TerrainAsyncJobs::SubmitCook */
+    Result<TerrainAsyncWorkId> TerrainAsyncJobs::SubmitCook(TerrainAsyncWorkRequest request) {
+        return Submit(TerrainAsyncWorkKind::Cook, std::move(request));
+    }
+
+    /** @copydoc TerrainAsyncJobs::SubmitLoad */
+    Result<TerrainAsyncWorkId> TerrainAsyncJobs::SubmitLoad(TerrainAsyncWorkRequest request) {
+        return Submit(TerrainAsyncWorkKind::Load, std::move(request));
+    }
+
+    /** @copydoc TerrainAsyncJobs::SubmitEditPreview */
+    Result<TerrainAsyncWorkId> TerrainAsyncJobs::SubmitEditPreview(TerrainAsyncWorkRequest request) {
+        return Submit(TerrainAsyncWorkKind::EditPreview, std::move(request));
+    }
+
+    Result<TerrainAsyncWorkId> TerrainAsyncJobs::Submit(const TerrainAsyncWorkKind kind, TerrainAsyncWorkRequest request) {
         if (!impl_->OnOwnerThread())
             return Result<TerrainAsyncWorkId>::Failure(MakeError(TerrainErrors::WorkWrongThread));
         if (!impl_->accepting)
             return Result<TerrainAsyncWorkId>::Failure(MakeError(TerrainErrors::LifecycleUnavailable));
-        if (request.kind >= TerrainAsyncWorkKind::Count || request.workUnits == 0 || request.workUnits > impl_->limits.maximumWorkUnits ||
-            !request.requiredCapabilities.IsValid() || !request.prepare || !request.publish)
+        if (request.workUnits == 0 || request.workUnits > impl_->limits.maximumWorkUnits || !request.requiredCapabilities.IsValid() ||
+            !request.prepare || !request.publish)
             return Result<TerrainAsyncWorkId>::Failure(MakeError(TerrainErrors::WorkInvalid));
         if (!impl_->available.ContainsAll(request.requiredCapabilities))
             return Result<TerrainAsyncWorkId>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
@@ -106,7 +120,7 @@ namespace Horo::Terrain {
             return Result<TerrainAsyncWorkId>::Failure(id.ErrorValue());
         auto record = std::make_unique<Impl::Record>(request.parentCancellation);
         record->snapshot.id = id.Value();
-        record->snapshot.kind = request.kind;
+        record->snapshot.kind = kind;
         record->snapshot.fence = impl_->currentFence;
         record->publish = std::move(request.publish);
         JobDescriptor descriptor{.parentCancellation = record->cancellation.Token(),

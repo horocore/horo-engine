@@ -115,7 +115,8 @@ duplicate, foreign-dataset and over-capacity candidates transactionally.
 `TerrainAsyncJobs` is the first `TerrainRuntime` implementation slice. The host
 injects its Foundation `JobSystem`, an exact runtime/registry/revision fence,
 finite work limits and explicit capability grants. Cook, load and edit-preview
-requests submit immutable-input preparation to durable Foundation jobs with
+requests enter through distinct `SubmitCook`, `SubmitLoad` and
+`SubmitEditPreview` operations and submit immutable-input preparation to durable Foundation jobs with
 captured parent cancellation, operation correlation and optional configuration.
 Callbacks own their candidate values or leases; worker callbacks never publish
 Terrain state or touch Scene, editor or native consumer owners.
@@ -133,6 +134,11 @@ whether workers have drained without blocking the owner thread. Host code retain
 candidate/provider dependencies until that drain and any downstream consumer
 retirement are acknowledged. This slice does not create a second cell scheduler,
 cache authority or generic Foundation terrain dependency.
+Concrete height/weight tile cook and cache producers remain TRF-002.2/002.3/002.5,
+tile residency/resource loading remains TRF-002.6/002.7, and authored preview
+producers remain TRF-006.2 and later. Those producers compose this lifecycle
+boundary when their typed payloads and owners exist; this slice does not claim
+to cook, decode or preview terrain assets by itself.
 
 ## Terrain System
 

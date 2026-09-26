@@ -9,7 +9,8 @@ Host composition creates one `TerrainAsyncJobs` owner for an exact live terrain
 incarnation and injects the process `JobSystem`, current four-part Terrain
 revision, registry publication, finite limits and capability grants. Submit
 immutable cook, load or edit-preview preparation with an owned candidate or
-lease, parent cancellation and optional operation/configuration correlation.
+lease, parent cancellation and optional operation/configuration correlation
+through `SubmitCook`, `SubmitLoad` or `SubmitEditPreview` respectively.
 Worker callbacks return typed `Result<void>` and acknowledge cooperative abort
 with `JobCancelled()`; ordinary typed failures remain failures.
 
@@ -28,3 +29,7 @@ has terminated.
 The new contract contains Horo typed identities and errors only. Backend-native
 handles, global schedulers, implicit capability fallback and worker-side live
 Terrain mutation are outside it.
+
+Concrete tile cooking, cache/residency loading and authored preview pipelines
+are later TRF-002/TRF-006 producer stages. This coordinator executes their
+owned callbacks and gates publication; it does not implement those algorithms.

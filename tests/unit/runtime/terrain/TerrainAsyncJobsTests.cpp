@@ -39,8 +39,7 @@ namespace Horo::Terrain {
 
         TerrainAsyncWorkRequest Request(std::function<Result<void>(const JobExecutionContext &)> prepare,
                                         std::function<Result<void>(const CancellationToken &)> publish) {
-            return {.kind = TerrainAsyncWorkKind::Cook,
-                    .workUnits = 4,
+            return {.workUnits = 4,
                     .requiredCapabilities =
                         TerrainFoliageCapabilitySet::Create(std::array{TerrainFoliageCapability::TerrainRuntime}).Value(),
                     .prepare = std::move(prepare),
@@ -103,7 +102,7 @@ namespace Horo::Terrain {
             const std::thread::id owner = std::this_thread::get_id();
             std::atomic<int> prepared{};
             int publications{};
-            auto submitted = jobs->Submit(Request([&](const JobExecutionContext &) {
+            auto submitted = jobs->SubmitCook(Request([&](const JobExecutionContext &) {
                 ++prepared;
                 return Result<void>::Success();
             }, [&](const CancellationToken &cancellation) {
@@ -115,6 +114,7 @@ namespace Horo::Terrain {
             REQUIRE(submitted.HasValue());
             const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
             REQUIRE(terminal.state == TerrainAsyncWorkState::Succeeded);
+            REQUIRE(terminal.kind == TerrainAsyncWorkKind::Cook);
             REQUIRE(terminal.jobId != 0);
             REQUIRE(prepared == 1);
             REQUIRE(publications == 1);
@@ -137,24 +137,25 @@ namespace Horo::Terrain {
             };
             auto invalid = Request(normal, publish);
             invalid.workUnits = 5;
-            REQUIRE(jobs->Submit(std::move(invalid)).ErrorValue().code.Value() == TerrainErrors::WorkInvalid.code.Value());
+            REQUIRE(jobs->SubmitCook(std::move(invalid)).ErrorValue().code.Value() == TerrainErrors::WorkInvalid.code.Value());
             auto unsupported = Request(normal, publish);
             unsupported.requiredCapabilities =
                 TerrainFoliageCapabilitySet::Create(std::array{TerrainFoliageCapability::GpuIndirectCulling}).Value();
-            REQUIRE(jobs->Submit(std::move(unsupported)).ErrorValue().code.Value() == TerrainErrors::CapabilityUnsupported.code.Value());
-            auto accepted = jobs->Submit(Request(normal, publish));
+            REQUIRE(jobs->SubmitCook(std::move(unsupported)).ErrorValue().code.Value() ==
+                    TerrainErrors::CapabilityUnsupported.code.Value());
+            auto accepted = jobs->SubmitCook(Request(normal, publish));
             REQUIRE(accepted.HasValue());
-            REQUIRE(jobs->Submit(Request(normal, publish)).ErrorValue().code.Value() == TerrainErrors::CapacityExceeded.code.Value());
+            REQUIRE(jobs->SubmitCook(Request(normal, publish)).ErrorValue().code.Value() == TerrainErrors::CapacityExceeded.code.Value());
             REQUIRE(AdvanceUntilTerminal(*jobs, accepted.Value()).state == TerrainAsyncWorkState::Succeeded);
             REQUIRE(jobs->Forget(accepted.Value()).HasValue());
-            REQUIRE(jobs->Submit(Request(normal, publish)).HasValue());
+            REQUIRE(jobs->SubmitCook(Request(normal, publish)).HasValue());
         }
 
         TEST_CASE("Terrain worker failure retains its typed error and never publishes", "[unit][terrain][jobs]") {
             JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
             auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
             bool published{};
-            auto submitted = jobs->Submit(Request([](const JobExecutionContext &) {
+            auto submitted = jobs->SubmitLoad(Request([](const JobExecutionContext &) {
                 return Result<void>::Failure(MakeError(TerrainErrors::DescriptorInvalid));
             }, [&](const CancellationToken &) {
                 published = true;
@@ -163,16 +164,38 @@ namespace Horo::Terrain {
             REQUIRE(submitted.HasValue());
             const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
             REQUIRE(terminal.state == TerrainAsyncWorkState::Failed);
+            REQUIRE(terminal.kind == TerrainAsyncWorkKind::Load);
             REQUIRE(terminal.error.has_value());
             REQUIRE(terminal.error->code.Value() == TerrainErrors::DescriptorInvalid.code.Value());
             REQUIRE_FALSE(published);
+        }
+
+        TEST_CASE("Terrain load preparation publishes only after its worker succeeds", "[unit][terrain][jobs]") {
+            JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
+            auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
+            std::atomic<bool> decoded{};
+            bool published{};
+            auto submitted = jobs->SubmitLoad(Request([&](const JobExecutionContext &) {
+                decoded = true;
+                return Result<void>::Success();
+            }, [&](const CancellationToken &token) {
+                REQUIRE(decoded);
+                REQUIRE_FALSE(token.IsCancellationRequested());
+                published = true;
+                return Result<void>::Success();
+            }));
+            REQUIRE(submitted.HasValue());
+            const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
+            REQUIRE(terminal.kind == TerrainAsyncWorkKind::Load);
+            REQUIRE(terminal.state == TerrainAsyncWorkState::Succeeded);
+            REQUIRE(published);
         }
 
         TEST_CASE("Terrain publication failure retains the typed error and one terminal result", "[unit][terrain][jobs]") {
             JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
             auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
             int publications{};
-            auto submitted = jobs->Submit(Request([](const JobExecutionContext &) {
+            auto submitted = jobs->SubmitLoad(Request([](const JobExecutionContext &) {
                 return Result<void>::Success();
             }, [&](const CancellationToken &) {
                 ++publications;
@@ -197,8 +220,8 @@ namespace Horo::Terrain {
                 return Result<void>::Success();
             });
             request.parentCancellation = parent.Token();
-            REQUIRE(IsJobCancelled(jobs->Submit(std::move(request)).ErrorValue()));
-            auto submitted = jobs->Submit(Request([](const JobExecutionContext &) {
+            REQUIRE(IsJobCancelled(jobs->SubmitCook(std::move(request)).ErrorValue()));
+            auto submitted = jobs->SubmitCook(Request([](const JobExecutionContext &) {
                 return Result<void>::Success();
             }, [](const CancellationToken &) {
                 return Result<void>::Success();
@@ -218,7 +241,7 @@ namespace Horo::Terrain {
             auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
             WorkerGate gate;
             int publication{};
-            auto stale = jobs->Submit(Request([&](const JobExecutionContext &context) {
+            auto stale = jobs->SubmitEditPreview(Request([&](const JobExecutionContext &context) {
                 return gate.Prepare(context);
             }, [&](const CancellationToken &) {
                 publication = 1;
@@ -230,11 +253,12 @@ namespace Horo::Terrain {
             gate.Release();
             const auto cancelled = AdvanceUntilTerminal(*jobs, stale.Value());
             REQUIRE(cancelled.state == TerrainAsyncWorkState::Cancelled);
+            REQUIRE(cancelled.kind == TerrainAsyncWorkKind::EditPreview);
             REQUIRE(cancelled.error.has_value());
             REQUIRE(IsJobCancelled(*cancelled.error));
             REQUIRE(publication == 0);
 
-            auto current = jobs->Submit(Request([](const JobExecutionContext &) {
+            auto current = jobs->SubmitEditPreview(Request([](const JobExecutionContext &) {
                 return Result<void>::Success();
             }, [&](const CancellationToken &) {
                 publication = 2;
@@ -242,6 +266,7 @@ namespace Horo::Terrain {
             }));
             REQUIRE(current.HasValue());
             REQUIRE(AdvanceUntilTerminal(*jobs, current.Value()).state == TerrainAsyncWorkState::Succeeded);
+            REQUIRE(jobs->Snapshot(current.Value()).Value().kind == TerrainAsyncWorkKind::EditPreview);
             REQUIRE(publication == 2);
         }
 
@@ -269,7 +294,7 @@ namespace Horo::Terrain {
                 return Result<void>::Success();
             });
             request.parentCancellation = parent.Token();
-            auto submitted = jobs->Submit(std::move(request));
+            auto submitted = jobs->SubmitCook(std::move(request));
             REQUIRE(submitted.HasValue());
             gate.WaitUntilEntered();
             parent.RequestCancellation();
@@ -281,11 +306,11 @@ namespace Horo::Terrain {
             REQUIRE(IsJobCancelled(*terminal.error));
             REQUIRE_FALSE(published);
             REQUIRE(jobs->IsDrained());
-            REQUIRE(jobs->Submit(Request(
-                                     [](const JobExecutionContext &) {
+            REQUIRE(jobs->SubmitCook(Request(
+                                         [](const JobExecutionContext &) {
                 return Result<void>::Success();
             },
-                                     [](const CancellationToken &) {
+                                         [](const CancellationToken &) {
                 return Result<void>::Success();
             }))
                         .ErrorValue()

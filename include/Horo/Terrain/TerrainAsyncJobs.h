@@ -79,7 +79,6 @@ namespace Horo::Terrain {
      * It must validate its candidate before making an atomic authoritative change.
      */
     struct TerrainAsyncWorkRequest final {
-        TerrainAsyncWorkKind kind{TerrainAsyncWorkKind::Cook};
         std::uint64_t workUnits{};                                      /**< Finite declared preparation work. */
         TerrainFoliageCapabilitySet requiredCapabilities{};             /**< Exact required grants; no fallback. */
         CancellationToken parentCancellation{};                         /**< Parent operation cancellation ancestry. */
@@ -132,11 +131,23 @@ namespace Horo::Terrain {
         TerrainAsyncJobs &operator=(const TerrainAsyncJobs &) = delete;
 
         /**
-         * @brief Admits bounded cook, load or edit preparation against the current fence.
+         * @brief Admits bounded cook preparation against the current fence.
          * @param request Owned callbacks, cancellation ancestry and exact requirements.
          * @return Durable typed item ID, or a rejection with no item record.
          */
-        [[nodiscard]] Result<TerrainAsyncWorkId> Submit(TerrainAsyncWorkRequest request);
+        [[nodiscard]] Result<TerrainAsyncWorkId> SubmitCook(TerrainAsyncWorkRequest request);
+        /**
+         * @brief Admits bounded decoded load preparation against the current fence.
+         * @param request Owned callbacks, cancellation ancestry and exact requirements.
+         * @return Durable typed item ID, or a rejection with no item record.
+         */
+        [[nodiscard]] Result<TerrainAsyncWorkId> SubmitLoad(TerrainAsyncWorkRequest request);
+        /**
+         * @brief Admits bounded edit-preview preparation against the current fence.
+         * @param request Owned callbacks, cancellation ancestry and exact requirements.
+         * @return Durable typed item ID, or a rejection with no item record.
+         */
+        [[nodiscard]] Result<TerrainAsyncWorkId> SubmitEditPreview(TerrainAsyncWorkRequest request);
         /**
          * @brief Observes a worker and publishes its candidate at this owner safe point if still current.
          * @param id Accepted item identity.
@@ -169,6 +180,7 @@ namespace Horo::Terrain {
     private:
         struct Impl;
         explicit TerrainAsyncJobs(std::unique_ptr<Impl> impl) noexcept;
+        [[nodiscard]] Result<TerrainAsyncWorkId> Submit(TerrainAsyncWorkKind kind, TerrainAsyncWorkRequest request);
         std::unique_ptr<Impl> impl_;
     };
 }  // namespace Horo::Terrain
