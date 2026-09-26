@@ -5,7 +5,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -201,8 +200,8 @@ namespace {
         }
         REQUIRE((files.TryAcquireExclusive(root / "mutation.lock", "after-release").HasValue()));
         const std::string text = "durable";
-        std::vector<std::byte> bytes(text.size());
-        std::memcpy(bytes.data(), text.data(), text.size());
+        const auto source = std::as_bytes(std::span{text.data(), text.size()});
+        const std::vector<std::byte> bytes(source.begin(), source.end());
         REQUIRE((files.WriteDurable(root / "prepared", bytes).HasValue()));
         REQUIRE((files.AtomicReplace(root / "prepared", root / "published").HasValue()));
         {
