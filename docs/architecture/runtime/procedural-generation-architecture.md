@@ -137,6 +137,39 @@ therefore remains memory-valid while failing current-at-commit validation. Schem
 copies canonical Horo values; provider read-lease and multi-provider coordinator
 semantics remain later integration work and cannot be inferred from this value model.
 
+### Deterministic Provenance Schema 1
+
+`Horo/PCG/PCGProvenance.h` is the PCG-1.5 immutable evaluation provenance boundary.
+An evaluation captures the exact graph identity, source revision and canonical content
+digest, authored graph seed, world identity, signed cell coordinates, stable node
+identity, policy version, typed input revisions and content digests, and every provider's
+source revision, snapshot identity, origin epoch and canonical content digest. The host
+supplies the digest of canonical bytes when capturing an input or provider; a revision
+alone does not prove unchanged content. Capture sorts bounded input and provider sets
+by stable identity and rejects duplicates, missing evidence and closed lifecycle states.
+The captured root owns its records, so replacing source or provider snapshots does not
+mutate readers already evaluating the previous root.
+
+The closed determinism class is `PortableDeterministic`, `ProfileDeterministic` or
+`BestEffortPreview`. Each maps to a matching numeric support tier. Portable integer
+semantics require no profile fingerprint; certified profile floating point requires an
+exact non-zero fingerprint. Preview is explicitly ineligible for reproducible seed,
+output hash and reuse. A non-deterministic input or provider is admissible only for
+preview. These are semantic promises, independent of operational capacity tiers.
+Admission checks the declared capability; it does not certify an implementation's
+numeric behavior. Hosts must select only kernels qualified for the declared promise.
+
+Within a deterministic tier, a versioned SHA-256 provenance key encodes fixed-width
+network-order values. Sample streams derive from that key and stable sample identity,
+never traversal or thread completion order. Output hashing sorts by node, pin, sample
+and ordinal, includes canonical output content, and omits the attempt-local execution
+value. One output batch must still belong to one exact graph revision, node and
+execution. Reuse requires exact current provenance key equality and a deterministic
+tier; changed graph, input, provider, world/cell, node, numeric policy or certified
+profile invalidates it. The owner must recapture current authoritative evidence before
+calling the reuse check. This contract is a pure foundation for future cooked-plan and
+evaluation integration; no graph evaluator is implemented by this schema.
+
 ## PCG Model
 
 PCG is expressed as a directed acyclic graph (DAG) of nodes:

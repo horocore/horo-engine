@@ -20,6 +20,17 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PCG-1.5 Provenance Boundary
+
+`HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
+callers should capture this immutable value from exact graph, input and provider-owner
+snapshots, then use its seed and output-hash functions and compare it against a newly
+captured current value before reusing derived results. Existing identity, graph and
+generation-plan callers have no signature migration. Future evaluators must carry the
+provenance root through evaluation and target preparation; the existing generation-plan
+seed alone is not a substitute for a complete input snapshot. The generated standalone
+PCG public-header consumer compiles the new header through its sole owning target.
+
 ## PLS-002.3 Migration Notes
 
 `HoroEngine::Extensions` owns the additive `ExtensionPlatformProvider.h` candidate

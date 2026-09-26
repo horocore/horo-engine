@@ -395,6 +395,7 @@ add_executable(HoroPCGTests
         unit/runtime/pcg/PCGGenerationPlanTests.cpp
         unit/runtime/pcg/PCGIdentityTests.cpp
         unit/runtime/pcg/PCGPointSchemaTests.cpp
+        unit/runtime/pcg/PCGProvenanceTests.cpp
         unit/runtime/pcg/PCGSpatialSnapshotTests.cpp
         unit/runtime/pcg/PCGRegistryTests.cpp
 )

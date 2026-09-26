@@ -94,4 +94,16 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor GenerationOwnershipMismatch;
     /** @brief Generation-plan admission is closed by cancellation or shutdown. */
     extern const ErrorCodeDescriptor GenerationPlanLifecycleUnavailable;
+    /** @brief A provenance stamp, identity, digest, or output is malformed. */
+    extern const ErrorCodeDescriptor ProvenanceInvalid;
+    /** @brief Provenance contains duplicate input, provider, or output identities. */
+    extern const ErrorCodeDescriptor ProvenanceDuplicate;
+    /** @brief A bounded provenance input or output ceiling was exceeded. */
+    extern const ErrorCodeDescriptor ProvenanceCapacityExceeded;
+    /** @brief A numeric tier, profile, or non-deterministic input cannot satisfy the requested promise. */
+    extern const ErrorCodeDescriptor ProvenanceTierUnsupported;
+    /** @brief Authoritative provenance changed since capture. */
+    extern const ErrorCodeDescriptor ProvenanceStale;
+    /** @brief Provenance admission is closed by cancellation or shutdown. */
+    extern const ErrorCodeDescriptor ProvenanceLifecycleUnavailable;
 }  // namespace Horo::PCG::PCGErrors

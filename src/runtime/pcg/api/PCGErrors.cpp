@@ -248,4 +248,37 @@ namespace Horo::PCG::PCGErrors {
                                                                  .summary = "PCG generation-plan admission is closed.",
                                                                  .remediationHint =
                                                                      "Do not build plans after cancellation or shutdown begins."};
+    const ErrorCodeDescriptor ProvenanceInvalid{.domain = PcgDomain,
+                                                .code = ErrorCode{"pcg.provenance.invalid"},
+                                                .defaultSeverity = ErrorSeverity::Error,
+                                                .summary = "PCG execution provenance is malformed.",
+                                                .remediationHint =
+                                                    "Capture valid stable identities, revisions, and canonical content digests."};
+    const ErrorCodeDescriptor ProvenanceDuplicate{.domain = PcgDomain,
+                                                  .code = ErrorCode{"pcg.provenance.duplicate"},
+                                                  .defaultSeverity = ErrorSeverity::Error,
+                                                  .summary = "PCG provenance repeats a semantic identity.",
+                                                  .remediationHint =
+                                                      "Supply each input, provider source, and output identity exactly once."};
+    const ErrorCodeDescriptor ProvenanceCapacityExceeded{.domain = PcgDomain,
+                                                         .code = ErrorCode{"pcg.provenance.capacity_exceeded"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "PCG provenance exceeds a finite input or output ceiling.",
+                                                         .remediationHint = "Partition or reduce the captured work before admission."};
+    const ErrorCodeDescriptor
+        ProvenanceTierUnsupported{.domain = PcgDomain,
+                                  .code = ErrorCode{"pcg.provenance.tier_unsupported"},
+                                  .defaultSeverity = ErrorSeverity::Error,
+                                  .summary = "PCG inputs or numeric implementation cannot meet the determinism promise.",
+                                  .remediationHint = "Use a certified numeric policy and deterministic inputs or isolate preview work."};
+    const ErrorCodeDescriptor ProvenanceStale{.domain = PcgDomain,
+                                              .code = ErrorCode{"pcg.provenance.stale"},
+                                              .defaultSeverity = ErrorSeverity::Warning,
+                                              .summary = "Authoritative PCG provenance changed after capture.",
+                                              .remediationHint = "Recapture the graph, inputs, providers, and scope before reuse."};
+    const ErrorCodeDescriptor ProvenanceLifecycleUnavailable{.domain = PcgDomain,
+                                                             .code = ErrorCode{"pcg.provenance.lifecycle_unavailable"},
+                                                             .defaultSeverity = ErrorSeverity::Warning,
+                                                             .summary = "PCG provenance admission is closed.",
+                                                             .remediationHint = "Stop new captures after cancellation or shutdown begins."};
 }  // namespace Horo::PCG::PCGErrors

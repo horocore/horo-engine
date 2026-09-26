@@ -404,6 +404,7 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGGraphValidation.h
     Horo/PCG/PCGIdentity.h
     Horo/PCG/PCGPointSchema.h
+    Horo/PCG/PCGProvenance.h
     Horo/PCG/PCGSpatialSnapshot.h
     Horo/PCG/PCGRegistry.h
 )

@@ -767,6 +767,7 @@ add_library(HoroPCG STATIC
         runtime/pcg/api/PCGGraphValidation.cpp
         runtime/pcg/api/PCGIdentity.cpp
         runtime/pcg/api/PCGPointSchema.cpp
+        runtime/pcg/api/PCGProvenance.cpp
         runtime/pcg/api/PCGSpatialSnapshot.cpp
         runtime/pcg/api/PCGRegistry.cpp
 )
