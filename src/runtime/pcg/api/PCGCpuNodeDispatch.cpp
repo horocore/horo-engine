@@ -442,8 +442,7 @@ namespace Horo::PCG {
             for (const auto &pin : inputs)
                 if (pin.type == PCGPinType::PointSet)
                     pointPins.values[pointPins.count++] = pin;
-            const std::size_t expectedPoints = kind == PCGCpuNodeKind::Merge ? 2 : 1;
-            if (pointPins.size() != expectedPoints)
+            if (const std::size_t expectedPoints = kind == PCGCpuNodeKind::Merge ? 2 : 1; pointPins.size() != expectedPoints)
                 return Reject<void>(PCGErrors::CpuEvaluationInvalid);
             const auto first = RoutedInput(context.plan, context.workspace, node, pointPins.values[0].id);
             if (first.HasError())
