@@ -188,13 +188,14 @@ namespace Horo::Vfx {
                 return AllocationFailed;
             }
             std::uint64_t remainingBytes = maximumBytes - plannedBytes;
-            const auto chargeExtra = [&remainingBytes](const std::size_t elements, const std::size_t elementBytes) noexcept {
+            if (const auto chargeExtra =
+                    [&remainingBytes](const std::size_t elements, const std::size_t elementBytes) noexcept {
                 if (elements > remainingBytes / elementBytes)
                     return false;
                 remainingBytes -= static_cast<std::uint64_t>(elements) * elementBytes;
                 return true;
             };
-            if (!chargeExtra(prepared->slots.capacity() - capacity, sizeof(EffectPoolSlot)) ||
+                !chargeExtra(prepared->slots.capacity() - capacity, sizeof(EffectPoolSlot)) ||
                 !chargeExtra(prepared->freeSlots.capacity() - capacity, sizeof(std::uint32_t)) ||
                 !chargeExtra(prepared->delayed.capacity() - delayedCapacity, sizeof(Detail::DelayedEffectRequest)))
                 return Invalid;
