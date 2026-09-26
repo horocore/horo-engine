@@ -767,6 +767,8 @@ add_library(HoroAI STATIC
         runtime/ai/api/DecisionAssetValidation.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
+        runtime/ai/api/PerceptionErrors.cpp
+        runtime/ai/api/PerceptionMemory.cpp
 )
 add_library(HoroEngine::AI ALIAS HoroAI)
 target_compile_features(HoroAI PUBLIC cxx_std_20)
@@ -775,7 +777,8 @@ target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroAISceneIntegration STATIC
-        runtime/ai/integration/AISceneActivation.cpp)
+        runtime/ai/integration/AISceneActivation.cpp
+        runtime/ai/integration/AIScenePerceptionSource.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
