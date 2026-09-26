@@ -77,26 +77,8 @@ namespace Horo::PCG {
             [[nodiscard]] bool Value(const PCGGraphValue &value) {
                 if (value.index() == 0 || !Integer(value.index(), 1))
                     return false;
-                return std::visit([this](const auto &typed) -> bool {
-                    using T = std::decay_t<decltype(typed)>;
-                    if constexpr (std::is_same_v<T, bool>)
-                        return Integer(typed ? 1 : 0, 1);
-                    else if constexpr (std::is_same_v<T, std::int64_t>)
-                        return Integer(static_cast<std::uint64_t>(typed), 8);
-                    else if constexpr (std::is_same_v<T, std::uint64_t>)
-                        return Integer(typed, 8);
-                    else if constexpr (std::is_same_v<T, double>)
-                        return Integer(std::bit_cast<std::uint64_t>(typed), 8);
-                    else if constexpr (std::is_same_v<T, Math::Vec2>)
-                        return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4);
-                    else if constexpr (std::is_same_v<T, Math::Vec3>)
-                        return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
-                               Integer(std::bit_cast<std::uint32_t>(typed.z), 4);
-                    else if constexpr (std::is_same_v<T, Math::Vec4>)
-                        return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
-                               Integer(std::bit_cast<std::uint32_t>(typed.z), 4) && Integer(std::bit_cast<std::uint32_t>(typed.w), 4);
-                    else
-                        return false;
+                return std::visit([this]<typename T>(const T &typed) {
+                    return WriteValuePayload(typed);
                 }, value);
             }
 
@@ -105,6 +87,27 @@ namespace Horo::PCG {
             }
 
         private:
+            template <typename T> [[nodiscard]] bool WriteValuePayload(const T &typed) {
+                if constexpr (std::is_same_v<T, bool>)
+                    return Integer(typed ? 1 : 0, 1);
+                else if constexpr (std::is_same_v<T, std::int64_t>)
+                    return Integer(static_cast<std::uint64_t>(typed), 8);
+                else if constexpr (std::is_same_v<T, std::uint64_t>)
+                    return Integer(typed, 8);
+                else if constexpr (std::is_same_v<T, double>)
+                    return Integer(std::bit_cast<std::uint64_t>(typed), 8);
+                else if constexpr (std::is_same_v<T, Math::Vec2>)
+                    return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4);
+                else if constexpr (std::is_same_v<T, Math::Vec3>)
+                    return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
+                           Integer(std::bit_cast<std::uint32_t>(typed.z), 4);
+                else if constexpr (std::is_same_v<T, Math::Vec4>)
+                    return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
+                           Integer(std::bit_cast<std::uint32_t>(typed.z), 4) && Integer(std::bit_cast<std::uint32_t>(typed.w), 4);
+                else
+                    return false;
+            }
+
             std::size_t maximum_{};
             std::vector<std::uint8_t> bytes_;
         };
