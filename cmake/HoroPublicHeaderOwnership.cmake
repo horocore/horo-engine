@@ -438,6 +438,7 @@ horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
     Horo/Vfx/CpuParticleSimulator.h
     Horo/Vfx/CpuParticleSpawnPipeline.h
+    Horo/Vfx/EffectInstancePool.h
     Horo/Vfx/ParticleSystemDescriptor.h
     Horo/Vfx/VfxErrors.h
     Horo/Vfx/VfxIdentity.h

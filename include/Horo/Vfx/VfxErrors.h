@@ -102,4 +102,8 @@ namespace Horo::Vfx::VfxErrors {
     extern const ErrorCodeDescriptor ParticleCollisionQueryFailed;
     /** @brief CPU simulation preparation inputs are malformed or exceed fixed limits. */
     extern const ErrorCodeDescriptor ParticleSimulationDescriptorInvalid;
+    /** @brief Effect-pool descriptor, budget slice, or overload policy is invalid. */
+    extern const ErrorCodeDescriptor EffectPoolInvalid;
+    /** @brief Explicit effect-pool preparation could not allocate its fixed storage. */
+    extern const ErrorCodeDescriptor EffectPoolAllocationFailed;
 }  // namespace Horo::Vfx::VfxErrors

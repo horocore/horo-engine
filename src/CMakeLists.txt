@@ -849,6 +849,7 @@ add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleSimulatorPreparation.cpp
         runtime/vfx/api/CpuParticleSimulatorStages.cpp
         runtime/vfx/api/CpuParticleSpawnPipeline.cpp
+        runtime/vfx/api/EffectInstancePool.cpp
         runtime/vfx/api/ParticleSystemDescriptor.cpp
         runtime/vfx/api/VfxErrors.cpp
         runtime/vfx/api/VfxIdentity.cpp
