@@ -131,6 +131,11 @@ namespace Horo::Editor {
         [[nodiscard]] float DrawToolbarTargets(const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float x,
                                                float controlY);
         void DrawFilterPopup(const EditorGuiContext &context);
+        void DrawStatusFilter(const EditorGuiContext &context);
+        void DrawSeverityFilter(const EditorGuiContext &context);
+        void DrawStageFilter(const EditorGuiContext &context);
+        void DrawSessionFilter(const EditorGuiContext &context);
+        void DrawClearFilter(const EditorGuiContext &context);
         void DrawTable(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                        EditorWorkspaceViewCommandData &command, bool snapshotChanged);
         void DrawTableHeader(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
