@@ -366,6 +366,18 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     REQUIRE(failedOutput.has_value());
     REQUIRE(successfulOutputSession.has_value());
     AssertFailedBuildOutput(*failedOutput, *successfulOutputSession, failure);
+    const auto compilerError = std::ranges::find_if(failedOutput->records, [&](const BuildOutputRecord &record) {
+        return record.operationId == failure.operationId && record.code.Value() == "gameplay.build.compiler_error" &&
+               record.source.has_value() &&
+               std::filesystem::path{record.source->absolutePath}.lexically_normal() ==
+                   (project.root / "source/gameplay/Movement.cpp").lexically_normal();
+    });
+    REQUIRE((compilerError != failedOutput->records.end()));
+    REQUIRE((compilerError->severity == DiagnosticSeverity::Error));
+    REQUIRE((compilerError->source->line == 1U));
+#if !defined(_WIN32)
+    REQUIRE((compilerError->source->column > 0U));
+#endif
     REQUIRE(Read(successfulState) == beforeFailure);
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
     REQUIRE_FALSE(service.IsUpToDate(request));
