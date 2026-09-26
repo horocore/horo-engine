@@ -221,6 +221,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveDiagnostics.cpp
         runtime/save/SaveIdentity.cpp
         runtime/save/SaveRootResolver.cpp
+        runtime/save/SaveFilesystemStorage.cpp
         runtime/save/SaveNamespace.cpp
         runtime/save/SaveParticipantRegistry.cpp
         runtime/save/SaveParticipation.cpp
@@ -245,6 +246,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveReference.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
+        runtime/save/SaveManagerProjection.cpp
+        runtime/save/SaveManagerProjectionErrors.cpp
         runtime/save/SaveStorageAdapter.cpp
         runtime/save/SaveSlotCommitTransaction.cpp
         runtime/save/SaveSlotRecovery.cpp
@@ -282,6 +285,7 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/RpcDescriptorErrors.cpp
         runtime/networking/api/RpcDescriptorRegistry.cpp
         runtime/networking/api/TransportCapabilities.cpp
+        runtime/networking/api/TransportBackendErrors.cpp
         runtime/networking/api/TransportBudget.cpp
 )
 add_library(HoroEngine::NetworkApi ALIAS HoroNetworkApi)
@@ -290,6 +294,7 @@ target_link_libraries(HoroNetworkApi PUBLIC HoroEngine::Foundation)
 
 add_library(HoroNetworkTransportNull STATIC
         runtime/networking/null/DeterministicTransport.cpp
+        runtime/networking/null/NullTransportBackend.cpp
 )
 add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
 target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
@@ -431,6 +436,7 @@ target_include_directories(HoroRuntimeScene PUBLIC ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::GameplayApi HoroEngine::RuntimeUi)
 
 add_library(HoroNetworkRuntime STATIC
+        runtime/networking/TransportBackendComposition.cpp
         runtime/networking/AuthenticationSessionAdapter.cpp
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp
@@ -690,6 +696,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
@@ -700,6 +707,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp

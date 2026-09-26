@@ -178,6 +178,31 @@ namespace {
         CHECK(result.Value().Signature().algorithm == SaveArchiveSignatureAlgorithm::None);
     }
 
+    TEST_CASE("Archive reader reserves cumulative validation work before hashing", "[runtime][save][archive-reader]") {
+        const auto fixture = MakeArchive();
+        SaveArchiveReaderLimits limits;
+        limits.maximumReadWorkBytes = fixture.bytes.size() * 3 - 1;
+        const auto exhausted = SaveArchiveReader{limits}.Read(fixture.bytes);
+        REQUIRE(exhausted.HasError());
+        CHECK(exhausted.ErrorValue().code.Value() == SaveErrors::ArchiveFramingLimitExceeded.code.Value());
+        REQUIRE(exhausted.ErrorValue().diagnostics.size() == 1);
+        CHECK(exhausted.ErrorValue().diagnostics.front().code.Value() == "save.archive.limit.read_work");
+        limits.maximumReadWorkBytes = fixture.bytes.size() * 3;
+        CHECK(SaveArchiveReader{limits}.Read(fixture.bytes).HasValue());
+        limits.maximumReadWorkBytes += 4;
+        auto validated = SaveArchiveReader{limits}.Read(fixture.bytes);
+        REQUIRE(validated.HasValue());
+        CHECK(validated.Value().SelectChunk(Id<SaveRecordId>(20)).HasValue());
+        const auto repeated = validated.Value().SelectChunk(Id<SaveRecordId>(20));
+        REQUIRE(repeated.HasError());
+        CHECK(repeated.ErrorValue().code.Value() == SaveErrors::ArchiveFramingLimitExceeded.code.Value());
+        CHECK(repeated.ErrorValue().diagnostics.front().code.Value() == "save.archive.limit.read_work");
+
+        limits = {};
+        limits.maximumExpansionRatio = std::numeric_limits<std::uint64_t>::max();
+        CHECK(SaveArchiveReader{limits}.Read(fixture.bytes).HasError());
+    }
+
     TEST_CASE("Bounded reader rejects truncation, trailing bytes, overlap, gaps, and arithmetic overflow",
               "[runtime][save][archive-reader]") {
         auto fixture = MakeArchive();

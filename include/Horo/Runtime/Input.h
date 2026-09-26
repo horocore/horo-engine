@@ -568,24 +568,51 @@ namespace Horo::Input {
         float lookY{0.0F};
         bool jumpPressed{false};
         bool interactPressed{false};
+        bool moveDown{false};
+        bool movePressed{false};
+        bool moveReleased{false};
         [[nodiscard]] friend bool operator==(const GameplayInputFrame &, const GameplayInputFrame &) noexcept = default;
     };
 
-    /** @brief Projects resolved actions into deterministic fixed-tick gameplay frames. */
+    /** @brief Captures routed actions before fixed update and emits device-independent tick commands. */
     class GameplayInputFrameBuilder {
     public:
+        /** @brief Binds the semantic actions for one player; use a separate builder for each player. */
         GameplayInputFrameBuilder(ActionId move, ActionId look, ActionId jump, ActionId interact);
-        [[nodiscard]] GameplayInputFrame Consume(InputRouter &router, const InputContextToken &context, SimulationTick tick,
-                                                 std::optional<PlayerId> player = std::nullopt);
+        /**
+         * @brief Latches the ledger-filtered projection once after UI consumption and before fixed updates.
+         * @param router Router holding the committed presentation snapshot.
+         * @param context Gameplay context; inactive or unfocused input neutralizes held and pending commands.
+         * @param player Optional player assignment owned by this builder.
+         * @details Edges survive presentation frames with no fixed tick and fire on the next tick only.
+         *          Call once per committed snapshot after all higher-priority input consumers have run.
+         */
+        void Capture(InputRouter &router, const InputContextToken &context, std::optional<PlayerId> player = std::nullopt);
+        /**
+         * @brief Returns a value command for one fixed tick without accessing device or router state.
+         * @param tick Tick assigned by the fixed-step scheduler; successive calls must use successive ticks.
+         * @return Held axes and at most one pending edge per action, stamped with @p tick.
+         */
+        [[nodiscard]] GameplayInputFrame Consume(SimulationTick tick) noexcept;
+        /** @brief Clears pending and held commands at a session or ownership boundary. */
+        void Reset() noexcept;
 
     private:
         ActionId move_;
         ActionId look_;
         ActionId jump_;
         ActionId interact_;
-        FrameNumber edgeFrame_{0};
-        bool jumpConsumed_{false};
-        bool interactConsumed_{false};
+        FrameNumber capturedFrame_{0};
+        bool hasCapturedFrame_{false};
+        float moveX_{0.0F};
+        float moveY_{0.0F};
+        float lookX_{0.0F};
+        float lookY_{0.0F};
+        bool pendingJump_{false};
+        bool pendingInteract_{false};
+        bool moveDown_{false};
+        bool pendingMovePressed_{false};
+        bool pendingMoveReleased_{false};
     };
 
     /** @brief In-memory deterministic record/replay sequence of resolved gameplay frames. */
