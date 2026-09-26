@@ -53,7 +53,7 @@ namespace Horo::Audio {
             {"audio.spatial.duration", Telemetry::MetricUnit::Seconds},
         }};
 
-        [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(const MetricSpec spec, const Telemetry::InstrumentKind kind) {
+        [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(const MetricSpec &spec, const Telemetry::InstrumentKind kind) {
             return {.kind = kind,
                     .name = std::string{spec.name},
                     .subsystem = "audio",
