@@ -14,22 +14,25 @@ namespace {
         return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));
     }
 
-    [[nodiscard]] EffectiveReleaseProfile Profile() {
+    [[nodiscard]] EffectiveReleaseProfile Profile(const ReleaseSigningPolicy signing = ReleaseSigningPolicy::Disabled,
+                                                  const bool allowPublication = false) {
         ReleaseProfilePreset preset;
         preset.id = {"shipping"};
         preset.product = DistributionProductIdentity{DistributionProductKind::Editor, {}};
         preset.artifactClass = DistributionArtifactClass::InstallableProduct;
         preset.platform = DistributionPlatform::Linux;
-        preset.packageFormat = DistributionPackageFormat::TarGzip;
+        preset.packageFormat =
+            signing == ReleaseSigningPolicy::Required ? DistributionPackageFormat::LinuxAppImage : DistributionPackageFormat::TarGzip;
         preset.content = ReleaseContentPolicy{true, true, ReleaseAssetPolicy::SinglePackage, false, false};
         preset.symbols = ReleaseSymbolPolicy::Omit;
-        preset.signing = ReleaseSigningPolicy::Disabled;
+        preset.signing = signing;
         preset.notarizationRequired = false;
         preset.includeLicensesAndNotices = true;
         preset.includeReleaseNotes = true;
         preset.updateEligible = false;
         preset.patchEligible = false;
-        preset.eligibleDestinations = std::vector<ReleaseDestinationId>{};
+        preset.eligibleDestinations =
+            allowPublication ? std::vector<ReleaseDestinationId>{{"github-releases"}} : std::vector<ReleaseDestinationId>{};
         preset.requiredCapabilities = std::vector<ReleaseCapabilityId>{{"release.packaging"}};
         auto catalog = ReleaseProfileCatalog::Create({std::move(preset)});
         REQUIRE(catalog.HasValue());
@@ -104,9 +107,33 @@ TEST_CASE("Release preflight captures exact validated inputs without exposing cr
     CHECK(snapshot.at("version").at("value") == "0.4.2");
     CHECK(snapshot.at("target").at("configuration") == "shipping");
     CHECK(snapshot.at("credentialHandles") == nlohmann::json::array({42}));
+    CHECK(snapshot.at("signingSelected") == false);
+    CHECK(snapshot.at("publicationDestination").is_null());
     CHECK(snapshot.at("identities").at("dependencyLock") == FormatSha256(facts.dependencyLockDigest));
     CHECK(outcome.plan->SerializeCanonical() == outcome.plan->SerializeCanonical());
     CHECK(ValidateReleaseInputFreeze(*outcome.plan, facts).empty());
+}
+
+TEST_CASE("Release preflight freezes signing and publication choices before submission", "[unit][application][release][preflight]") {
+    ReleasePreflightRequest request = Request();
+    request.profile = Profile(ReleaseSigningPolicy::Required, true);
+    request.signingSelected = true;
+    request.publicationDestination = ReleaseDestinationId{"github-releases"};
+    const ReleasePreflightFacts facts = Facts(request);
+    const ReleasePreflightOutcome accepted = PreflightRelease(request, facts);
+    REQUIRE(accepted.plan.has_value());
+    CHECK(accepted.plan->Request().signingSelected);
+    CHECK(accepted.plan->Request().publicationDestination == request.publicationDestination);
+    CHECK(accepted.plan->Summary().find("Publication: github-releases") != std::string::npos);
+    const nlohmann::json snapshot = nlohmann::json::parse(accepted.plan->SerializeCanonical());
+    CHECK(snapshot.at("signingSelected") == true);
+    CHECK(snapshot.at("publicationDestination") == "github-releases");
+
+    request.signingSelected = false;
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::InvalidRequest));
+    request.signingSelected = true;
+    request.publicationDestination = ReleaseDestinationId{"unlisted"};
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::InvalidRequest));
 }
 
 TEST_CASE("Release plan retains requested paths beside resolved execution roots", "[unit][application][release][preflight]") {

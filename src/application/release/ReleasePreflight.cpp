@@ -144,8 +144,17 @@ namespace Horo::Release {
                 AddIssue(issues, InvalidRequest, "version", "Product version or source revision is invalid.");
             if (request.credentials.size() > MaximumReleaseCredentialHandles)
                 AddIssue(issues, InvalidRequest, "credentials", "Too many credential handles were selected.");
-            if (request.profile.Signing() == ReleaseSigningPolicy::Required && request.credentials.empty())
+            if ((request.profile.Signing() == ReleaseSigningPolicy::Disabled && request.signingSelected) ||
+                (request.profile.Signing() == ReleaseSigningPolicy::Required && !request.signingSelected))
+                AddIssue(issues, InvalidRequest, "signing", "Signing selection conflicts with the release profile.");
+            if (request.signingSelected && request.credentials.empty())
                 AddIssue(issues, CredentialUnavailable, "credentials", "A signing credential handle is required.");
+            if (request.publicationDestination) {
+                const auto eligible = request.profile.EligibleDestinations();
+                if (!IsValidDistributionIdentity(request.publicationDestination->value) ||
+                    std::ranges::find(eligible, *request.publicationDestination) == eligible.end())
+                    AddIssue(issues, InvalidRequest, "publication", "Publication destination is not allowed by the profile.");
+            }
             for (std::size_t index = 0; index < std::min(request.credentials.size(), MaximumReleaseCredentialHandles); ++index) {
                 if (request.credentials[index].value == 0)
                     AddIssue(issues, InvalidRequest, "credentials", "A credential handle is invalid.");
@@ -251,13 +260,16 @@ namespace Horo::Release {
     /** @copydoc ReleaseExecutionPlan::Summary */
     std::string ReleaseExecutionPlan::Summary() const {
         return std::format("{} {} for {}/{} ({})\nProject: {}\nSource revision: {}\nSource tree: {}\nDependency lock: {}\n"
-                           "Profile: {} ({})\nToolchain: {} ({})\nPolicy: {}\nOutput: {}\nCredentials: {} opaque handle(s)",
+                           "Profile: {} ({})\nToolchain: {} ({})\nPolicy: {}\nOutput: {}\nSigning: {}\nPublication: {}\n"
+                           "Credentials: {} opaque handle(s)",
                            request_.projectId, VersionText(request_.version.productVersion), PlatformName(request_.profile.Platform()),
                            ArchitectureName(request_.architecture), ConfigurationName(request_.configuration), projectRoot_.string(),
                            request_.version.sourceRevision.value, FormatSha256(identities_.sourceTree),
                            FormatSha256(identities_.dependencyLock), request_.profile.Id().value, FormatSha256(identities_.profile),
                            request_.toolchainId, FormatSha256(identities_.toolchain), FormatSha256(identities_.policy),
-                           outputRoot_.string(), request_.credentials.size());
+                           outputRoot_.string(), request_.signingSelected ? "selected" : "disabled",
+                           request_.publicationDestination ? request_.publicationDestination->value : "local candidate",
+                           request_.credentials.size());
     }
 
     /** @copydoc ReleaseExecutionPlan::SerializeCanonical */
@@ -265,6 +277,9 @@ namespace Horo::Release {
         nlohmann::json credentials = nlohmann::json::array();
         for (const ReleaseCredentialHandle &handle : request_.credentials)
             credentials.push_back(handle.value);
+        nlohmann::json publicationDestination = nullptr;
+        if (request_.publicationDestination)
+            publicationDestination = request_.publicationDestination->value;
         const nlohmann::json snapshot{{"schemaVersion", 1},
                                       {"project", {{"id", request_.projectId}, {"root", projectRoot_.generic_string()}}},
                                       {"version",
@@ -280,6 +295,8 @@ namespace Horo::Release {
                                       {"outputRoot", outputRoot_.generic_string()},
                                       {"requiredFreeBytes", request_.requiredFreeBytes},
                                       {"credentialHandles", std::move(credentials)},
+                                      {"signingSelected", request_.signingSelected},
+                                      {"publicationDestination", std::move(publicationDestination)},
                                       {"reproducible", request_.reproducible},
                                       {"identities",
                                        {{"sourceTree", FormatSha256(identities_.sourceTree)},

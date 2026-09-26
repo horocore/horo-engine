@@ -46,6 +46,8 @@ namespace Horo::Release {
         std::filesystem::path outputRoot;
         std::uintmax_t requiredFreeBytes{};
         std::vector<ReleaseCredentialHandle> credentials;
+        bool signingSelected{}; /**< Frozen choice for optional signing; required signing must be selected. */
+        std::optional<ReleaseDestinationId> publicationDestination; /**< Absent for a local candidate without publication. */
         bool reproducible{};
     };
 

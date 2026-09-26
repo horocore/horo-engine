@@ -10,6 +10,13 @@ returned `ReleaseExecutionPlan`. The facts must echo the requested project and
 output roots before canonical resolution; preflight rejects observations for a
 different request.
 
+The request freezes optional signing selection and the optional publication
+destination before submission. Required signing must be selected, disabled
+signing cannot be selected, and a publication destination must be eligible under
+the resolved profile. A local candidate leaves publication absent. Adapters must
+show these choices in the plan summary and must not add or change them when
+dispatching a worker.
+
 The executor must call
 `ValidateReleaseInputFreeze` with newly observed identities before consuming
 each stage's inputs. Credential values remain with the injected provider;
