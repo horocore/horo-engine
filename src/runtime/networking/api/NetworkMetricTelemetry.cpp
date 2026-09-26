@@ -78,6 +78,7 @@ namespace Horo::Network {
 
     /** @copydoc RegisterNetworkMetricHandles */
     NetworkMetricHandles RegisterNetworkMetricHandles(const Telemetry::MetricCollectionLevel level) {
+        using enum Telemetry::MetricUnit;
         NetworkMetricHandles handles{};
         if (level == Telemetry::MetricCollectionLevel::Off)
             return handles;
@@ -86,24 +87,22 @@ namespace Horo::Network {
                 const std::string suffix = category == static_cast<std::size_t>(NetworkMetricCategory::Transport)
                                                ? std::string{}
                                                : "." + std::string{Categories[category]};
-                handles.bytes[direction][category] =
-                    Counter("net.bytes_" + std::string{Directions[direction]} + suffix, Telemetry::MetricUnit::Bytes);
-                handles.messages[direction][category] =
-                    Counter("net.messages_" + std::string{Directions[direction]} + suffix, Telemetry::MetricUnit::Count);
+                handles.bytes[direction][category] = Counter("net.bytes_" + std::string{Directions[direction]} + suffix, Bytes);
+                handles.messages[direction][category] = Counter("net.messages_" + std::string{Directions[direction]} + suffix, Count);
             }
         }
         for (std::size_t index = 0; index < NetworkMetricQueueCount; ++index)
-            handles.queues[index] = Gauge("net." + std::string{Queues[index]} + "_queue_depth", Telemetry::MetricUnit::Count);
+            handles.queues[index] = Gauge("net." + std::string{Queues[index]} + "_queue_depth", Count);
         for (std::size_t index = 0; index < NetworkMetricDropCount; ++index)
-            handles.drops[index] = Counter("net.packets_dropped." + std::string{Drops[index]}, Telemetry::MetricUnit::Count);
-        handles.totalDrops = Counter("net.packets_dropped", Telemetry::MetricUnit::Count);
+            handles.drops[index] = Counter("net.packets_dropped." + std::string{Drops[index]}, Count);
+        handles.totalDrops = Counter("net.packets_dropped", Count);
         for (std::size_t index = 0; index < NetworkMetricFailureCount; ++index)
-            handles.failures[index] = Counter("net.failures." + std::string{Failures[index]}, Telemetry::MetricUnit::Count);
+            handles.failures[index] = Counter("net.failures." + std::string{Failures[index]}, Count);
         for (std::size_t index = 0; index < NetworkMetricReplicationCount; ++index)
-            handles.replication[index] = Counter("net.replication." + std::string{Replication[index]}, Telemetry::MetricUnit::Count);
-        handles.lost = Counter("net.packets_lost", Telemetry::MetricUnit::Count);
-        handles.connections = Gauge("net.active_connections", Telemetry::MetricUnit::Count);
-        handles.rtt = Gauge("net.rtt_ms", Telemetry::MetricUnit::Count);
+            handles.replication[index] = Counter("net.replication." + std::string{Replication[index]}, Count);
+        handles.lost = Counter("net.packets_lost", Count);
+        handles.connections = Gauge("net.active_connections", Count);
+        handles.rtt = Gauge("net.rtt_ms", Count);
         return handles;
     }
 

@@ -50,6 +50,7 @@ namespace Horo::Network {
                     auto observed = capacityDrops.load();
                     while (observed != std::numeric_limits<std::uint64_t>::max() &&
                            !capacityDrops.compare_exchange_weak(observed, observed + 1)) {
+                        // The owner may exchange the counter while this producer retries.
                     }
                 }
                 return Fail<void>(NetworkErrors::NetworkIoCompletionQueueFull);
