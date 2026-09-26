@@ -1,5 +1,4 @@
-#include "Horo/Network/GnsTransport.h"
-
+#include "GnsTransportFactory.h"
 #include "Horo/Network/NetworkErrors.h"
 
 #ifdef _WIN32

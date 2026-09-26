@@ -1,5 +1,5 @@
+#include "GnsTransportFactory.h"
 #include "Horo/Foundation/CancellationToken.h"
-#include "Horo/Network/GnsTransport.h"
 #include "Horo/Network/NetworkErrors.h"
 
 #include <algorithm>

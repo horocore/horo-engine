@@ -296,12 +296,17 @@ target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
 if(HORO_BUILD_NETWORK_GNS)
+    add_library(HoroNetworkTransportGNSFactoryInternal INTERFACE)
+    target_include_directories(HoroNetworkTransportGNSFactoryInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/networking/gns>)
+    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi)
     add_library(HoroNetworkTransportGNS STATIC
+        runtime/networking/gns/GnsTransportFactory.h
         runtime/networking/gns/GnsTransport.cpp
     )
     add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
     target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
-    target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroEngine::NetworkApi
+    target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroNetworkTransportGNSFactoryInternal
         PRIVATE GameNetworkingSockets::static)
 endif()
 

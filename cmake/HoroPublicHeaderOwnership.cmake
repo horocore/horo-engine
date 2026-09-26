@@ -230,11 +230,6 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
     Horo/Network/DeterministicTransport.h
 )
-if(HORO_BUILD_NETWORK_GNS)
-    horo_configure_target_header_boundary(HoroNetworkTransportGNS PUBLIC_HEADERS
-        Horo/Network/GnsTransport.h
-    )
-endif()
 
 horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/Behavior.h

@@ -108,7 +108,7 @@ jobs:
             "${crypto_args[@]}"
       - name: Build focused production transport tests
         shell: bash
-        run: cmake --build build/network-gns --target HoroNetworkTransportGnsTests HoroNetworkTransportGNSPublicHeaderConsumer --parallel 2
+        run: cmake --build build/network-gns --target HoroNetworkTransportGnsTests HoroNetworkApiPublicHeaderConsumer --parallel 2
       - name: Test direct-IP, DNS, delivery and lifecycle
         shell: bash
         run: ctest --test-dir build/network-gns -R '^HoroNetworkTransportGnsTests::' --output-on-failure
