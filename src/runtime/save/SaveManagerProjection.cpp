@@ -129,8 +129,7 @@ namespace Horo::Runtime {
         /** @brief Copies validated opaque profile summaries into detached view rows. */
         void AppendProfiles(std::vector<SaveManagerProfileRow> &rows, const SaveManagerProjectionInput &input) {
             for (const auto &profile : input.profiles)
-                rows.emplace_back(
-                    SaveManagerProfileRow{profile.namespaceId, profile.available, profile.namespaceId == *input.binding.active});
+                rows.emplace_back(profile.namespaceId, profile.available, profile.namespaceId == *input.binding.active);
         }
 
         /** @brief Combines validated catalog facts with generation-matched assessments. */
