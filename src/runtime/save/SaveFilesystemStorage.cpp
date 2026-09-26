@@ -174,22 +174,7 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> WriteWindowsBytes(HANDLE file, std::span<const std::byte> bytes) {
-            std::size_t offset = 0;
-            while (offset < bytes.size()) {
-                const DWORD amount = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, std::numeric_limits<DWORD>::max()));
-                DWORD written{};
-                if (!::WriteFile(file, bytes.data() + offset, amount, &written, nullptr) || written == 0)
-                    return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows temporary write", ::GetLastError()));
-                offset += written;
-            }
-            if (!::FlushFileBuffers(file))
-                return Result<void>::Failure(
-                    Failure(SaveErrors::StoragePermanentIo, "Windows temporary synchronization", ::GetLastError()));
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> RenameWindowsFile(HANDLE file, const std::wstring &destination) {
+        [[nodiscard]] Result<void> RenameWindowsFile(HANDLE file, HANDLE directory, const std::wstring &destination) {
             if (destination.empty() || destination.size() > (std::numeric_limits<DWORD>::max() / sizeof(wchar_t)))
                 return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination length"));
             const std::size_t byteLength = destination.size() * sizeof(wchar_t);
@@ -200,15 +185,28 @@ namespace Horo::Runtime {
             const std::size_t size = sizeof(FILE_RENAME_INFO) + byteLength;
             const std::size_t words = size / sizeof(std::uint64_t) + (size % sizeof(std::uint64_t) != 0);
             std::vector<std::uint64_t> buffer(words);
+            // FILE_RENAME_INFO has the FILE_RENAME_INFORMATION field layout required by NtSetInformationFile.
             auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
             rename->ReplaceIfExists = TRUE;
-            // A simple name with no RootDirectory renames within the open file's parent.
-            // Supplying that same parent as RootDirectory is invalid for this operation.
-            rename->RootDirectory = nullptr;
+            rename->RootDirectory = directory;
             rename->FileNameLength = static_cast<DWORD>(byteLength);
             std::copy(destination.begin(), destination.end(), rename->FileName);
-            if (!::SetFileInformationByHandle(file, FileRenameInfo, rename, static_cast<DWORD>(size)))
-                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows atomic replacement", ::GetLastError()));
+            // Win32 FileRenameInfo rejects this held-directory root; the native information
+            // class accepts a simple name relative to the RootDirectory capability.
+            using NtSetInformationFileFunction = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, ULONG);
+            const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
+            const auto set =
+                library ? reinterpret_cast<NtSetInformationFileFunction>(::GetProcAddress(library, "NtSetInformationFile")) : nullptr;
+            if (!set)
+                return Result<void>::Failure(Failure(SaveErrors::StorageCapabilityUnsupported, "relative Windows replacement"));
+            IO_STATUS_BLOCK status{};
+            // WDK FILE_INFORMATION_CLASS fixes FileRenameInformation at 10; the user-mode
+            // winternl.h enum omits it. See MicrosoftDocs/windows-driver-docs-ddi at
+            // 7515063cea4c9e98db6a92986c5b4ddb0463fd16, ne-wdm-_file_information_class.md.
+            constexpr ULONG kFileRenameInformation = 10;
+            const NTSTATUS result = set(file, &status, rename, static_cast<ULONG>(size), kFileRenameInformation);
+            if (result != 0)
+                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows atomic replacement", result));
             return Result<void>::Success();
         }
 #else
@@ -502,13 +500,13 @@ namespace Horo::Runtime {
             return Result<void>::Failure(created.ErrorValue());
         Handle file = std::move(created).Value();
         SaveFilesystemDetails::WindowsTemporary cleanup{file.Get()};
-        if (auto written = WriteWindowsBytes(file.Get(), bytes); written.HasError())
+        if (auto written = SaveFilesystemDetails::WriteWindowsBytes(file.Get(), bytes); written.HasError())
             return written;
         if (auto valid = Verify(); valid.HasError())
             return valid;
         if (auto safe = ExistingWindowsTargetSafe(Slots(), destination); safe.HasError())
             return safe;
-        if (auto renamed = RenameWindowsFile(file.Get(), destination); renamed.HasError())
+        if (auto renamed = RenameWindowsFile(file.Get(), Slots().Get(), destination); renamed.HasError())
             return renamed;
         cleanup.Published();
         if (!::FlushFileBuffers(file.Get()))

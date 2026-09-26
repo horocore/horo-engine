@@ -3,6 +3,10 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveNamespace.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <limits>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -63,5 +67,19 @@ namespace Horo::Runtime::SaveFilesystemDetails {
     private:
         HANDLE file_;
     };
+
+    [[nodiscard]] inline Result<void> WriteWindowsBytes(HANDLE file, std::span<const std::byte> bytes) {
+        std::size_t offset = 0;
+        while (offset < bytes.size()) {
+            const DWORD amount = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, std::numeric_limits<DWORD>::max()));
+            DWORD written{};
+            if (!::WriteFile(file, bytes.data() + offset, amount, &written, nullptr) || written == 0)
+                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows temporary write", ::GetLastError()));
+            offset += written;
+        }
+        if (!::FlushFileBuffers(file))
+            return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows temporary synchronization", ::GetLastError()));
+        return Result<void>::Success();
+    }
 #endif
 }  // namespace Horo::Runtime::SaveFilesystemDetails
