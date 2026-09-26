@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <ranges>
 #include <variant>
 #include <vector>
@@ -17,6 +18,25 @@ namespace Horo::Navigation::Detail {
 
         [[nodiscard]] Result<void> CapacityExceeded() {
             return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        }
+
+        struct RectangleFootprint final {
+            Math::Vec3 center;
+            float halfX{};
+            float halfY{};
+            float halfZ{};
+        };
+
+        /** @brief Projects supported source shapes to a conservative axis-aligned footprint. */
+        [[nodiscard]] std::optional<RectangleFootprint> FootprintFor(const NavigationDynamicShape &shape) {
+            if (const auto *box = std::get_if<NavigationDynamicBoxShape>(&shape)) {
+                if (box->IsValid())
+                    return RectangleFootprint{box->center, box->halfExtents.x, box->halfExtents.y, box->halfExtents.z};
+            } else if (const auto *cylinder = std::get_if<NavigationDynamicCylinderShape>(&shape)) {
+                if (cylinder->IsValid())
+                    return RectangleFootprint{cylinder->center, cylinder->radius, cylinder->halfHeight, cylinder->radius};
+            }
+            return std::nullopt;
         }
 
         [[nodiscard]] Result<void> IndexSegmentCells(const NavigationCrowdBoundarySegment &segment, const std::uint32_t segmentIndex,
@@ -46,27 +66,10 @@ namespace Horo::Navigation::Detail {
         [[nodiscard]] Result<void> AppendRectangle(const NavigationCrowdBoundarySource &source, const std::uint64_t stableId,
                                                    const NavigationDynamicLayerMask layers, const NavigationDynamicShape &shape,
                                                    const NavigationCrowdSnapshotLimits &limits, NavigationCrowdSnapshotStorage &storage) {
-            Math::Vec3 center;
-            float halfX{};
-            float halfZ{};
-            float halfY{};
-            if (const auto *box = std::get_if<NavigationDynamicBoxShape>(&shape)) {
-                if (!box->IsValid())
-                    return InvalidBoundary();
-                center = box->center;
-                halfX = box->halfExtents.x;
-                halfZ = box->halfExtents.z;
-                halfY = box->halfExtents.y;
-            } else if (const auto *cylinder = std::get_if<NavigationDynamicCylinderShape>(&shape)) {
-                if (!cylinder->IsValid())
-                    return InvalidBoundary();
-                center = cylinder->center;
-                halfX = cylinder->radius;
-                halfZ = cylinder->radius;
-                halfY = cylinder->halfHeight;
-            } else {
+            const auto footprint = FootprintFor(shape);
+            if (!footprint)
                 return InvalidBoundary();
-            }
+            const auto &[center, halfX, halfY, halfZ] = *footprint;
             if (storage.segments.size() + 4 > limits.maximumBoundarySegments)
                 return CapacityExceeded();
             const float minimumY = center.y - halfY;

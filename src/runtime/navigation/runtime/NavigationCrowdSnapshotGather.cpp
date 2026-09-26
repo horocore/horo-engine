@@ -114,11 +114,12 @@ namespace Horo::Navigation::Detail {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> GatherBoundaries(const std::uint32_t agentIndex, const NavigationCrowdProfileFacts &profile,
-                                                    const NavigationCrowdSnapshotLimits &limits, NavigationCrowdSnapshotStorage &storage,
-                                                    std::size_t &boundaryChecks, std::vector<std::uint32_t> &scratch,
-                                                    std::vector<Candidate> &candidates) {
-            auto &agent = storage.agents[agentIndex];
+        /** @brief Finds each relevant segment once, then orders equal distances by stable source identity. */
+        [[nodiscard]] Result<void> CollectBoundaryCandidates(const NavigationCrowdAgentFact &agent,
+                                                             const NavigationCrowdProfileFacts &profile,
+                                                             const NavigationCrowdSnapshotLimits &limits,
+                                                             const NavigationCrowdSnapshotStorage &storage, std::size_t &boundaryChecks,
+                                                             std::vector<std::uint32_t> &scratch, std::vector<Candidate> &candidates) {
             scratch.clear();
             candidates.clear();
             std::int32_t firstX{};
@@ -156,6 +157,17 @@ namespace Horo::Navigation::Detail {
                 const auto &b = storage.segments[right.index];
                 return std::tuple{a.source.index(), a.stableId, a.edge} < std::tuple{b.source.index(), b.stableId, b.edge};
             });
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> GatherBoundaries(const std::uint32_t agentIndex, const NavigationCrowdProfileFacts &profile,
+                                                    const NavigationCrowdSnapshotLimits &limits, NavigationCrowdSnapshotStorage &storage,
+                                                    std::size_t &boundaryChecks, std::vector<std::uint32_t> &scratch,
+                                                    std::vector<Candidate> &candidates) {
+            auto &agent = storage.agents[agentIndex];
+            const auto collected = CollectBoundaryCandidates(agent, profile, limits, storage, boundaryChecks, scratch, candidates);
+            if (collected.HasError())
+                return collected;
             const std::size_t admitted = std::min(candidates.size(), static_cast<std::size_t>(profile.maximumBoundarySegments));
             if (admitted > limits.maximumBoundaryFacts - storage.boundaryIndices.size())
                 return CapacityExceeded();
