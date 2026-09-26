@@ -1,6 +1,8 @@
 #include "Horo/Network/NetworkProjectSettings.h"
 
+#include <algorithm>
 #include <array>
+#include <charconv>
 #include <functional>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -16,17 +18,14 @@ namespace Horo::Network {
         bool HasFields(const Json &object, const std::initializer_list<std::string_view> fields) {
             if (!object.is_object() || object.size() != fields.size())
                 return false;
-            for (const auto field : fields) {
-                if (!object.contains(field))
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(fields, [&](const std::string_view field) {
+                return object.contains(field);
+            });
         }
 
         /** @brief Reads a non-negative integer without narrowing or floating-point conversion. */
         bool ReadUnsigned(const Json &object, const char *key, std::uint64_t &out, const std::uint64_t maximum) {
-            const Json &value = object.at(key);
-            if (value.is_number_unsigned()) {
+            if (const Json &value = object.at(key); value.is_number_unsigned()) {
                 out = value.get<std::uint64_t>();
             } else if (value.is_number_integer()) {
                 const auto signedValue = value.get<std::int64_t>();
@@ -146,21 +145,17 @@ namespace Horo::Network {
                     result += std::to_string(bytes[index]);
                 }
             } else {
-                constexpr char Digits[] = "0123456789abcdef";
                 const auto bytes = endpoint.AddressBytes();
                 result.push_back('[');
                 for (std::size_t index = 0; index < bytes.size(); index += 2) {
                     if (index != 0)
                         result.push_back(':');
                     const auto group = static_cast<std::uint16_t>((static_cast<std::uint16_t>(bytes[index]) << 8U) | bytes[index + 1]);
-                    bool started = false;
-                    for (int shift = 12; shift >= 0; shift -= 4) {
-                        const auto digit = Digits[(group >> shift) & 0xFU];
-                        if (digit != '0' || started || shift == 0) {
-                            result.push_back(digit);
-                            started = true;
-                        }
-                    }
+                    std::array<char, 4> digits{};
+                    const auto [end, error] = std::to_chars(digits.data(), digits.data() + digits.size(), group, 16);
+                    if (error != std::errc{})
+                        return {};
+                    result.append(digits.data(), end);
                 }
                 result.push_back(']');
             }
@@ -249,12 +244,11 @@ namespace Horo::Network {
         bool ReadVersionTwo(const Json &root, NetworkProjectSettingsInput &input) {
             if (!root.at("defaultEndpoint").is_string())
                 return false;
-            const auto endpoint = root.at("defaultEndpoint").get<std::string>();
-            if (!endpoint.empty()) {
-                const auto parsed = NetworkAddress::Parse(endpoint);
-                if (parsed.HasError())
+            if (const auto endpoint = root.at("defaultEndpoint").get<std::string>(); !endpoint.empty()) {
+                if (const auto parsed = NetworkAddress::Parse(endpoint); parsed.HasValue())
+                    input.defaultEndpoint = parsed.Value();
+                else
                     return false;
-                input.defaultEndpoint = parsed.Value();
             }
             std::uint64_t number{};
             if (!ReadUnsigned(root, "credentialRequirementId", number, std::numeric_limits<std::uint32_t>::max()))
@@ -329,8 +323,7 @@ namespace Horo::Network {
         input.protocol.protocol = ProtocolId::Create(1).Value();
         input.protocol.supportedVersions = {.minimum = {.major = 1, .minor = 0}, .maximum = {.major = 1, .minor = 0}};
         input.protocol.schemaFingerprint = 1;
-        const auto validated = NetworkProjectSettings::Create(input);
-        if (validated.HasError())
+        if (const auto validated = NetworkProjectSettings::Create(input); validated.HasError())
             return Result<NetworkProjectSettingsInput>::Failure(validated.ErrorValue());
         return Result<NetworkProjectSettingsInput>::Success(input);
     }
@@ -373,8 +366,7 @@ namespace Horo::Network {
         NetworkProjectSettingsInput input;
         if (guard.rejected || parsed.is_discarded() || !Decode(parsed, input))
             return Result<NetworkProjectSettingsInput>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
-        const auto validated = NetworkProjectSettings::Create(input);
-        if (validated.HasError())
+        if (const auto validated = NetworkProjectSettings::Create(input); validated.HasError())
             return Result<NetworkProjectSettingsInput>::Failure(validated.ErrorValue());
         return Result<NetworkProjectSettingsInput>::Success(input);
     }
@@ -388,8 +380,8 @@ namespace Horo::Network {
             return Result<void>::Success();
         if (settings.Transport().requirement != NetworkProjectTransportRequirement::Required)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
-        const auto selected = ResolveTransportCapabilities(capabilities, capabilities.revision, settings.Transport().capabilities);
-        if (selected.HasError())
+        if (const auto selected = ResolveTransportCapabilities(capabilities, capabilities.revision, settings.Transport().capabilities);
+            selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         return Result<void>::Success();
     }
