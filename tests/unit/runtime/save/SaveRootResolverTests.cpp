@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -211,13 +212,16 @@ namespace Horo::Runtime {
             const std::array second{std::byte{4}, std::byte{5}};
             const auto firstWrite = storage.Replace(slot, first);
             if (firstWrite.HasError())
-                INFO(firstWrite.ErrorValue().message);
+                WARN(firstWrite.ErrorValue().message);
             REQUIRE(firstWrite.HasValue());
             REQUIRE(storage.Read(slot, 3).Value() == std::vector<std::byte>(first.begin(), first.end()));
             REQUIRE(storage.Read(slot, 2).HasError());
+            REQUIRE(storage.Read(slot, std::numeric_limits<std::size_t>::max()).Value() ==
+                    std::vector<std::byte>(first.begin(), first.end()));
+            REQUIRE(storage.Read(slot, 0).HasError());
             const auto secondWrite = storage.Replace(slot, second);
             if (secondWrite.HasError())
-                INFO(secondWrite.ErrorValue().message);
+                WARN(secondWrite.ErrorValue().message);
             REQUIRE(secondWrite.HasValue());
             REQUIRE(storage.Read(slot, 3).Value() == std::vector<std::byte>(second.begin(), second.end()));
             REQUIRE(storage.Replace(slot, {}).HasError());
@@ -288,7 +292,10 @@ namespace Horo::Runtime {
             auto storage = std::move(opened).Value();
             const auto slot = Test::Id<SaveGameSlotId>(5);
             const std::array previous{std::byte{3}, std::byte{4}};
-            REQUIRE(storage.Replace(slot, previous).HasValue());
+            const auto previousWrite = storage.Replace(slot, previous);
+            if (previousWrite.HasError())
+                WARN(previousWrite.ErrorValue().message);
+            REQUIRE(previousWrite.HasValue());
             const auto original = root.CanonicalPath() / name.environment.ToString();
             const auto moved = temporary.Path() / "moved-namespace";
             std::error_code renameError;
@@ -296,6 +303,13 @@ namespace Horo::Runtime {
 #ifdef _WIN32
             // Windows may deny moving a tree while the storage capability owns child handles.
             if (renameError == std::errc::permission_denied) {
+                const auto retained = original / "server" / std::get<ServerWorldOwner>(name.owner).owner.ToString() / "slots" /
+                                      (slot.ToString() + ".horosave");
+                std::ifstream input{retained, std::ios::binary};
+                REQUIRE(input.good());
+                REQUIRE(input.get() == 3);
+                REQUIRE(input.get() == 4);
+                REQUIRE(input.get() == std::char_traits<char>::eof());
                 SUCCEED("Windows denied namespace replacement while child handles were held");
                 return;
             }
@@ -335,6 +349,38 @@ namespace Horo::Runtime {
             auto opened = SaveFilesystemStorage::Open(root, name);
             REQUIRE(opened.HasError());
             REQUIRE(opened.ErrorValue().code.Value() == SaveErrors::SaveRootContainmentViolation.code.Value());
+        }
+
+        TEST_CASE("Windows save storage rejects case aliases for existing slot files", "[unit][save][storage]") {
+            TemporaryDirectory temporary;
+            FixedEnvironment environment;
+            const auto root =
+                Resolve({.product = Product(), .platform = SaveRootPlatform::Test, .testStateRoot = temporary.Path() / "approved"},
+                        environment);
+            const SaveNamespaceId name{.product = Product(),
+                                       .environment = Test::Id<EnvironmentStorageId>(2),
+                                       .owner = ServerWorldOwner{Test::Id<ServerStorageOwnerId>(3)}};
+            auto opened = SaveFilesystemStorage::Open(root, name);
+            REQUIRE(opened.HasValue());
+            auto storage = std::move(opened).Value();
+            const auto slot = Test::Id<SaveGameSlotId>(0xab);
+            std::string upper = slot.ToString() + ".horosave";
+            for (char &value : upper)
+                value = static_cast<char>(std::toupper(static_cast<unsigned char>(value)));
+            const auto slots = root.CanonicalPath() / name.environment.ToString() / "server" /
+                               std::get<ServerWorldOwner>(name.owner).owner.ToString() / "slots";
+            const auto alias = slots / upper;
+            {
+                std::ofstream output{alias, std::ios::binary};
+                REQUIRE(output.good());
+                output << "old";
+            }
+            const std::array candidate{std::byte{9}};
+            REQUIRE(storage.Replace(slot, candidate).HasError());
+            std::ifstream input{alias, std::ios::binary};
+            std::string content;
+            input >> content;
+            REQUIRE(content == "old");
         }
 #endif
 
