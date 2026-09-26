@@ -12,6 +12,11 @@
 
 namespace Horo::Network::GnsDetail {
     struct Resolution final {
+        Resolution() = default;
+        Resolution(const Resolution &) = delete;
+        Resolution &operator=(const Resolution &) = delete;
+        Resolution(Resolution &&) = delete;
+        Resolution &operator=(Resolution &&) = delete;
         ~Resolution() noexcept;
 
         ares_channel_t *channel{};

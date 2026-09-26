@@ -28,7 +28,7 @@ namespace Horo::Network::GnsDetail {
             SteamNetworkingIPAddr numeric{};
             if (node.ai_family == AF_INET && node.ai_addrlen >= sizeof(sockaddr_in)) {
                 sockaddr_in address{};
-                std::memcpy(&address, node.ai_addr, sizeof(address));
+                std::memcpy(&address, node.ai_addr, sizeof(address));  // NOSONAR: native sockaddr storage must not be type-punned.
                 static_assert(sizeof(decltype(address.sin_addr)) == 4);
                 static_assert(std::is_trivially_copyable_v<decltype(address.sin_addr)>);
                 // Preserve network-order bytes, not host-endian integer order.
@@ -41,7 +41,7 @@ namespace Horo::Network::GnsDetail {
             }
             if (node.ai_family == AF_INET6 && node.ai_addrlen >= sizeof(sockaddr_in6)) {
                 sockaddr_in6 address{};
-                std::memcpy(&address, node.ai_addr, sizeof(address));
+                std::memcpy(&address, node.ai_addr, sizeof(address));  // NOSONAR: native sockaddr storage must not be type-punned.
                 static_assert(sizeof(decltype(address.sin6_addr)) == 16);
                 static_assert(std::is_trivially_copyable_v<decltype(address.sin6_addr)>);
                 const auto bytes = std::bit_cast<std::array<std::uint8_t, 16>>(address.sin6_addr);
@@ -120,7 +120,8 @@ namespace Horo::Network::GnsDetail {
         if (state.complete)
             return true;
         std::array<ares_socket_t, ARES_GETSOCK_MAXNUM> sockets{};
-        const int interest = ares_getsock(state.channel, sockets.data(), static_cast<int>(sockets.size()));
+        // The pinned c-ares socket API supports bounded polling on the owner thread.
+        const int interest = ares_getsock(state.channel, sockets.data(), static_cast<int>(sockets.size()));  // NOSONAR(cpp:S1874)
         fd_set readable{};
         fd_set writable{};
         FD_ZERO(&readable);
@@ -143,12 +144,13 @@ namespace Horo::Network::GnsDetail {
             highest = std::max(highest, sockets[i]);
 #endif
         }
-        timeval zero{};
-        if (hasSockets && select(highest + 1, &readable, &writable, nullptr, &zero) < 0)
+        if (timeval zero{}; hasSockets && select(highest + 1, &readable, &writable, nullptr, &zero) < 0)
             return false;
         std::array<ares_fd_events_t, MaximumReadySocketsPerPoll> ready{};
         std::size_t count{};
-        for (std::size_t offset = 0; offset < sockets.size() && count < ready.size(); ++offset) {
+        for (std::size_t offset = 0; offset < sockets.size(); ++offset) {
+            if (count == ready.size())
+                break;
             const auto i = (state.socketCursor + offset) % sockets.size();
             unsigned int events{};
             if (ARES_GETSOCK_READABLE(interest, i) && FD_ISSET(sockets[i], &readable))

@@ -475,6 +475,7 @@ TEST_CASE("GNS delivers native callbacks on the owner thread outside its state l
 
 TEST_CASE("GNS rejects malformed native packet metadata before payload copy", "[network][gns]") {
     struct TestMessage final : SteamNetworkingMessage_t {
+        TestMessage() = default;
         ~TestMessage() = default;
     } message{};
 

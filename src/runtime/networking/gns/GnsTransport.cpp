@@ -44,7 +44,8 @@ namespace Horo::Network {
         }
     }  // namespace
 
-    void GnsTransport::OnStatus(SteamNetConnectionStatusChangedCallback_t *status) {
+    // GNS fixes the mutable callback parameter type.
+    void GnsTransport::OnStatus(SteamNetConnectionStatusChangedCallback_t *status) {  // NOSONAR(cpp:S995)
         if (!status)
             return;
         auto &host = NativeHost();
@@ -52,9 +53,10 @@ namespace Horo::Network {
         auto *transport = host.active;
         if (!transport)
             return;
-        std::lock_guard queueLock(transport->callbackMutex_);
-        const std::size_t capacity = std::size_t{transport->config_.maximumConnections} * 4 + transport->config_.maximumEventsPerPoll + 1;
-        if (transport->callbacks_.size() >= capacity) {
+        std::lock_guard queueLock(transport->callbackMutex_);  // NOSONAR: host lifetime must be locked before accessing transport.
+        if (const std::size_t capacity =
+                std::size_t{transport->config_.maximumConnections} * 4 + transport->config_.maximumEventsPerPoll + 1;
+            transport->callbacks_.size() >= capacity) {
             transport->callbackOverflow_ = true;
             return;
         }
@@ -159,7 +161,8 @@ namespace Horo::Network {
         if (address.HasError())
             return Result<ListenerHandle>::Failure(std::move(address).ErrorValue());
         SteamNetworkingConfigValue_t option{};
-        option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void *>(&OnStatus));
+        option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
+                      reinterpret_cast<void *>(&OnStatus));  // NOSONAR: GNS stores its C callback as void*.
         const auto native = native_->CreateListenSocketIP(address.Value(), 1, &option);
         if (native == k_HSteamListenSocket_Invalid)
             return Result<ListenerHandle>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
@@ -226,8 +229,8 @@ namespace Horo::Network {
     const ErrorCodeDescriptor *GnsTransport::StartResolution(ConnectionSlot &slot) const {
         try {
             auto resolution = std::make_unique<GnsDetail::Resolution>();
-            const std::string hostname(slot.pendingEndpoint->Hostname());
-            if (!GnsDetail::StartResolution(*resolution, hostname, slot.pendingEndpoint->Port(), resolverServer_))
+            if (const std::string hostname(slot.pendingEndpoint->Hostname());
+                !GnsDetail::StartResolution(*resolution, hostname, slot.pendingEndpoint->Port(), resolverServer_))
                 return &NetworkErrors::NameResolutionFailed;
             slot.resolution = std::move(resolution);
             slot.pendingEndpoint.reset();
@@ -239,7 +242,8 @@ namespace Horo::Network {
 
     Result<void> GnsTransport::StartNative(ConnectionSlot &slot, const SteamNetworkingIPAddr &address) {
         SteamNetworkingConfigValue_t option{};
-        option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void *>(&OnStatus));
+        option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
+                      reinterpret_cast<void *>(&OnStatus));  // NOSONAR: GNS stores its C callback as void*.
         const auto native = native_->ConnectByIPAddress(address, 1, &option);
         if (native == k_HSteamNetConnection_Invalid)
             return Fail(NetworkErrors::TransportNativeUnavailable);
