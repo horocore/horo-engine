@@ -34,7 +34,7 @@ namespace Horo::Runtime {
         [[nodiscard]] bool ValidDiagnostic(const SaveManagerDiagnostic &diagnostic) noexcept {
             return diagnostic.kind <= SaveManagerDiagnosticKind::Unknown && (!diagnostic.slot || diagnostic.slot->IsValid()) &&
                    (!diagnostic.generation || (diagnostic.slot && diagnostic.generation->IsValid())) &&
-                   (!diagnostic.operation || *diagnostic.operation != 0);
+                   (!diagnostic.operation.has_value() || *diagnostic.operation != 0);
         }
 
         [[nodiscard]] bool ValidOperation(const SaveManagerOperationSource &source) noexcept {
@@ -61,17 +61,8 @@ namespace Horo::Runtime {
                    (!filter.integrity || *filter.integrity <= SaveManagerIntegrity::Failed);
         }
 
-        [[nodiscard]] Result<void> ValidateInput(const SaveManagerProjectionInput &input, const SaveManagerProjectionLimits &limits) {
-            if (!ValidLimits(limits) || input.publicationRevision == 0 || input.binding.revision == 0 || !input.binding.active ||
-                input.binding.state != SaveNamespaceBindingState::Available || !input.binding.active->IsValid())
-                return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
-            if (input.profiles.size() > limits.maximumProfiles || input.catalog.entries.size() > limits.maximumSlots ||
-                input.assessments.size() > input.catalog.entries.size() || input.operations.size() > limits.maximumOperations ||
-                input.diagnostics.size() > limits.maximumDiagnostics)
-                return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionLimitExceeded));
-            if (auto index = ValidateSaveSlotIndex(input.catalog, {.maximumEntries = limits.maximumSlots}); index.HasError())
-                return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
-
+        /** @brief Validates the sorted profile list and exact active binding. */
+        [[nodiscard]] Result<void> ValidateProfiles(const SaveManagerProjectionInput &input) {
             bool activeFound = false;
             std::optional<SaveNamespaceId> previousProfile;
             for (const auto &profile : input.profiles) {
@@ -88,7 +79,11 @@ namespace Horo::Runtime {
             }
             if (!activeFound)
                 return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
+            return Result<void>::Success();
+        }
 
+        /** @brief Rejects out-of-order, duplicate, or stale generation assessments. */
+        [[nodiscard]] Result<void> ValidateAssessments(const SaveManagerProjectionInput &input) {
             std::size_t entryPosition = 0;
             for (const auto &assessment : input.assessments) {
                 if (!ValidAssessment(assessment))
@@ -102,6 +97,24 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionStale));
                 ++entryPosition;
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates source shape before copying any presentation values. */
+        [[nodiscard]] Result<void> ValidateInput(const SaveManagerProjectionInput &input, const SaveManagerProjectionLimits &limits) {
+            if (!ValidLimits(limits) || input.publicationRevision == 0 || input.binding.revision == 0 || !input.binding.active ||
+                input.binding.state != SaveNamespaceBindingState::Available || !input.binding.active->IsValid())
+                return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
+            if (input.profiles.size() > limits.maximumProfiles || input.catalog.entries.size() > limits.maximumSlots ||
+                input.assessments.size() > input.catalog.entries.size() || input.operations.size() > limits.maximumOperations ||
+                input.diagnostics.size() > limits.maximumDiagnostics)
+                return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionLimitExceeded));
+            if (auto index = ValidateSaveSlotIndex(input.catalog, {.maximumEntries = limits.maximumSlots}); index.HasError())
+                return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
+            if (auto profiles = ValidateProfiles(input); profiles.HasError())
+                return profiles;
+            if (auto assessments = ValidateAssessments(input); assessments.HasError())
+                return assessments;
             for (const auto &operation : input.operations) {
                 if (!ValidOperation(operation))
                     return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
@@ -116,7 +129,8 @@ namespace Horo::Runtime {
         /** @brief Copies validated opaque profile summaries into detached view rows. */
         void AppendProfiles(std::vector<SaveManagerProfileRow> &rows, const SaveManagerProjectionInput &input) {
             for (const auto &profile : input.profiles)
-                rows.push_back({profile.namespaceId, profile.available, profile.namespaceId == *input.binding.active});
+                rows.emplace_back(
+                    SaveManagerProfileRow{profile.namespaceId, profile.available, profile.namespaceId == *input.binding.active});
         }
 
         /** @brief Combines validated catalog facts with generation-matched assessments. */
@@ -161,7 +175,7 @@ namespace Horo::Runtime {
                                 .failureCategory = source.failureCategory});
             }
             std::ranges::sort(rows, {}, &SaveManagerOperationRow::operation);
-            return std::adjacent_find(rows.begin(), rows.end(), [](const auto &left, const auto &right) {
+            return std::ranges::adjacent_find(rows, [](const auto &left, const auto &right) {
                 return left.operation == right.operation;
             }) == rows.end();
         }
@@ -171,7 +185,7 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveManagerProjection::Create */
     Result<SaveManagerProjection> SaveManagerProjection::Create(const SaveManagerProjectionInput &input,
-                                                                const SaveManagerProjectionLimits limits) {
+                                                                const SaveManagerProjectionLimits &limits) {
         if (auto validated = ValidateInput(input, limits); validated.HasError())
             return Result<SaveManagerProjection>::Failure(validated.ErrorValue());
         try {
@@ -260,10 +274,10 @@ namespace Horo::Runtime {
     Result<SaveManagerCommand> SaveManagerProjection::Command(const SaveManagerCommandKind kind, const SaveGameSlotId slot) const {
         if (kind > SaveManagerCommandKind::Delete || !slot.IsValid())
             return Result<SaveManagerCommand>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
-        const auto found = std::ranges::lower_bound(data_->slots, slot, {}, &SaveManagerSlotRow::slot);
-        if (found == data_->slots.end() || found->slot != slot)
-            return Result<SaveManagerCommand>::Failure(MakeError(SaveErrors::ManagerProjectionStale));
-        return Result<SaveManagerCommand>::Success({kind, data_->id, slot, found->generation});
+        if (const auto found = std::ranges::lower_bound(data_->slots, slot, {}, &SaveManagerSlotRow::slot);
+            found != data_->slots.end() && found->slot == slot)
+            return Result<SaveManagerCommand>::Success({kind, data_->id, slot, found->generation});
+        return Result<SaveManagerCommand>::Failure(MakeError(SaveErrors::ManagerProjectionStale));
     }
 
     /** @copydoc SaveManagerProjection::ValidateCommand */
@@ -272,8 +286,8 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
         if (command.expectedSnapshot != data_->id)
             return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionStale));
-        const auto found = std::ranges::lower_bound(data_->slots, command.slot, {}, &SaveManagerSlotRow::slot);
-        if (found == data_->slots.end() || found->slot != command.slot || found->generation != command.expectedGeneration)
+        if (const auto found = std::ranges::lower_bound(data_->slots, command.slot, {}, &SaveManagerSlotRow::slot);
+            found == data_->slots.end() || found->slot != command.slot || found->generation != command.expectedGeneration)
             return Result<void>::Failure(MakeError(SaveErrors::ManagerProjectionStale));
         return Result<void>::Success();
     }

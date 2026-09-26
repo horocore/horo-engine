@@ -203,7 +203,7 @@ namespace Horo::Runtime {
          * @return Owned immutable publication or a stable projection error.
          */
         [[nodiscard]] static Result<SaveManagerProjection> Create(const SaveManagerProjectionInput &input,
-                                                                  SaveManagerProjectionLimits limits = {});
+                                                                  const SaveManagerProjectionLimits &limits = {});
 
         /** @brief Returns the exact view publication identity. @return Snapshot identity. */
         [[nodiscard]] const SaveManagerSnapshotId &Id() const noexcept;
