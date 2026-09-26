@@ -110,6 +110,39 @@ read instead of substituting a generic dirty flag. Bounded catalog validation pe
 no registration, I/O, backend selection or ambient mutation and rejects malformed,
 duplicate, foreign-dataset and over-capacity candidates transactionally.
 
+### TRF-001.5 Async Preparation Boundary
+
+`TerrainAsyncJobs` is the first `TerrainRuntime` implementation slice. The host
+injects its Foundation `JobSystem`, an exact runtime/registry/revision fence,
+finite work limits and explicit capability grants. Cook, load and edit-preview
+requests enter through distinct `SubmitCook`, `SubmitLoad` and
+`SubmitEditPreview` operations and submit immutable-input preparation to durable Foundation jobs with
+captured parent cancellation, operation correlation and optional configuration.
+Callbacks own their candidate values or leases; worker callbacks never publish
+Terrain state or touch Scene, editor or native consumer owners.
+
+The Terrain owner calls `Advance` at a safe point. Only a successful prepared job
+whose complete captured fence still equals the current fence may run its atomic
+publication callback. A `JobCancelled()` publication result remains cancellation
+with its typed cause and is never retried; other failures retain their original
+typed errors. Owner publication rejects reentrant fence replacement or nested
+`Advance`, so its validated fence cannot change inside that callback. A queued or
+running cancellation, replacement, capability revision or shutdown prevents
+publication and terminates as cancellation, with stale revision retained as a
+typed cause. A new fence cancels outstanding candidates without changing the
+previous publication. Each accepted item has one immutable terminal outcome;
+records remain bounded and durable until the owner explicitly forgets them.
+Shutdown closes admission and publication, requests cancellation and reports
+whether workers have drained without blocking the owner thread. Host code retains
+candidate/provider dependencies until that drain and any downstream consumer
+retirement are acknowledged. This slice does not create a second cell scheduler,
+cache authority or generic Foundation terrain dependency.
+Concrete height/weight tile cook and cache producers remain TRF-002.2/002.3/002.5,
+tile residency/resource loading remains TRF-002.6/002.7, and authored preview
+producers remain TRF-006.2 and later. Those producers compose this lifecycle
+boundary when their typed payloads and owners exist; this slice does not claim
+to cook, decode or preview terrain assets by itself.
+
 ## Terrain System
 
 ### Heightfield Model

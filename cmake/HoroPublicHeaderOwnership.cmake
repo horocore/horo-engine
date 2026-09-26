@@ -494,6 +494,9 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
 )
+horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
+    Horo/Terrain/TerrainAsyncJobs.h
+)
 horo_configure_target_header_boundary(HoroNavigationNull PUBLIC_HEADERS
     Horo/Navigation/Backends/NullProvider.h
 )

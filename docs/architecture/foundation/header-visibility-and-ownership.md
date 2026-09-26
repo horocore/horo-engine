@@ -478,6 +478,24 @@ only the fixed-width stable identity or dataset-plus-tile-coordinate encodings.
 be resolved again after replacement, world unload or shutdown; they are deliberately
 excluded from the serialization surface.
 
+## TRF-001.5 Migration Notes
+
+`HoroEngine::TerrainRuntime` now owns `Horo/Terrain/TerrainAsyncJobs.h`. Its public
+dependencies are TerrainApi and Foundation; the new target does not publish a
+repository-wide source root or native Render/Physics/Navigation headers. Host
+compositions that schedule terrain cook, load or edit-preview work must link
+TerrainRuntime explicitly and inject their JobSystem, exact runtime/registry
+revision fence and capability grants. Existing TerrainApi metadata callers do
+not change. No production TerrainRuntime caller exists yet to migrate.
+
+Future producers pass owned immutable candidate inputs to `SubmitCook`,
+`SubmitLoad` or `SubmitEditPreview`, then call
+`Advance` on the Terrain owner lane at a safe point. They retain candidate and
+provider leases until `IsDrained` and consumer retirement acknowledge release;
+they do not publish from worker callbacks or reuse a stale result after
+`ReplaceFence`. The dedicated public-header consumer is
+`HoroTerrainAsyncJobsTests`.
+
 ## CIN-001.3 Migration Notes
 
 `HoroEngine::CinematicModel` now owns `Horo/Cinematic/SequenceAsset.h` and has the
