@@ -1,5 +1,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 
+#include "GameplayBuildInputs.h"
+#include "GameplayBuildInvocation.h"
 #include "Horo/Application/CompilerDiagnosticParser.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Platform.h"
@@ -10,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
 #include <exception>
 #include <format>
 #include <fstream>
@@ -34,13 +37,14 @@
 namespace Horo::Application {
     namespace {
         const ErrorDomainId Domain{"horo.application.gameplay_build"};
-        const ErrorCodeDescriptor InvalidRequest{Domain,
-                                                 ErrorCode{"invalid_request"},
-                                                 ErrorSeverity::Error,
-                                                 "Gameplay build request is invalid.",
-                                                 "Verify the project and SDK paths.",
-                                                 false,
-                                                 true};
+        using Detail::BuildConfigureArguments;
+        using Detail::BuildEnvironment;
+        using Detail::CompilerIdentity;
+        using Detail::ComputeInputHash;
+        using Detail::HashFile;
+        using Detail::ReadSuccessfulHash;
+        using Detail::ResolveCompilerIdentity;
+        using Detail::TransparentStringHash;
         const ErrorCodeDescriptor BuildFailed{Domain,
                                               ErrorCode{"build_failed"},
                                               ErrorSeverity::Error,
@@ -89,257 +93,6 @@ namespace Horo::Application {
             return state == Succeeded || state == Failed || state == Cancelled || state == TimedOut;
         }
 
-        struct TransparentStringHash {
-            using is_transparent = void;
-
-            [[nodiscard]] std::size_t operator()(const std::string_view value) const noexcept {
-                return std::hash<std::string_view>{}(value);
-            }
-        };
-
-        [[nodiscard]] bool NativeInputExtension(const std::filesystem::path &path) {
-            static const std::set<std::string, std::less<>> extensions{".c",   ".cc",  ".cpp", ".cxx", ".h",    ".hh",
-                                                                       ".hpp", ".hxx", ".inl", ".ixx", ".cppm", ".cmake"};
-            return extensions.contains(path.extension().string());
-        }
-
-        [[nodiscard]] bool HasPathPrefix(const std::filesystem::path &root, const std::filesystem::path &candidate) {
-            return Horo::Foundation::Paths::HasPathPrefix(root, candidate);
-        }
-
-        struct CompilerIdentity {
-            std::filesystem::path canonicalPath;
-            std::uintmax_t size{};
-            std::int64_t lastWrite{};
-            std::string nativeFileIdentity;
-            std::string binaryHash;
-        };
-
-        [[nodiscard]] Result<std::string> HashFile(const std::filesystem::path &path, const std::uintmax_t maximumBytes) {
-            std::error_code error;
-            const std::uintmax_t size = std::filesystem::file_size(path, error);
-            if (error || size > maximumBytes)
-                return Result<std::string>::Failure(MakeError(InvalidRequest, "File exceeds the bounded SHA-256 budget."));
-            std::ifstream stream{path, std::ios::binary};
-            std::vector<char> bytes(size);
-            stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-            if ((!stream && !stream.eof()) || static_cast<std::uintmax_t>(stream.gcount()) != size)
-                return Result<std::string>::Failure(MakeError(InvalidRequest, "File could not be hashed."));
-            return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes}))));
-        }
-
-        [[nodiscard]] Result<CompilerIdentity> ResolveCompilerIdentity(const std::filesystem::path &compiler) {
-            std::error_code error;
-            CompilerIdentity identity;
-            identity.canonicalPath = std::filesystem::canonical(compiler, error);
-            if (error || !std::filesystem::is_regular_file(identity.canonicalPath, error))
-                return Result<CompilerIdentity>::Failure(MakeError(InvalidRequest, "Selected C++ compiler is unavailable."));
-            identity.size = std::filesystem::file_size(identity.canonicalPath, error);
-            const auto writeTime = std::filesystem::last_write_time(identity.canonicalPath, error);
-            if (error || identity.size > 512U * 1024U * 1024U)
-                return Result<CompilerIdentity>::Failure(MakeError(InvalidRequest, "Selected C++ compiler identity is unreadable."));
-            identity.lastWrite = static_cast<std::int64_t>(writeTime.time_since_epoch().count());
-#if defined(_WIN32)
-            HANDLE handle =
-                CreateFileW(identity.canonicalPath.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            BY_HANDLE_FILE_INFORMATION information{};
-            if (handle == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(handle, &information)) {
-                if (handle != INVALID_HANDLE_VALUE)
-                    CloseHandle(handle);
-                return Result<CompilerIdentity>::Failure(MakeError(InvalidRequest, "Compiler file identity is unavailable."));
-            }
-            CloseHandle(handle);
-            identity.nativeFileIdentity =
-                std::format("{}:{}:{}", information.dwVolumeSerialNumber, information.nFileIndexHigh, information.nFileIndexLow);
-#else
-            struct stat information = {};
-
-            if (stat(identity.canonicalPath.c_str(), &information) != 0)
-                return Result<CompilerIdentity>::Failure(MakeError(InvalidRequest, "Compiler file identity is unavailable."));
-            identity.nativeFileIdentity =
-                std::format("{} : {}", static_cast<std::uintmax_t>(information.st_dev), static_cast<std::uintmax_t>(information.st_ino));
-#endif
-            const std::string cacheKey = std::format("{}\n{}\n{}\n{}", identity.canonicalPath.generic_string(), identity.nativeFileIdentity,
-                                                     identity.size, identity.lastWrite);
-            static std::mutex cacheMutex;
-            static std::unordered_map<std::string, std::string, TransparentStringHash, std::equal_to<>> hashes;
-            {
-                std::lock_guard lock(cacheMutex);
-                if (const auto found = hashes.find(cacheKey); found != hashes.end()) {
-                    identity.binaryHash = found->second;
-                    return Result<CompilerIdentity>::Success(std::move(identity));
-                }
-            }
-            Result<std::string> binaryHash = HashFile(identity.canonicalPath, 512U * 1024U * 1024U);
-            if (binaryHash.HasError())
-                return Result<CompilerIdentity>::Failure(binaryHash.ErrorValue());
-            identity.binaryHash = std::move(binaryHash).Value();
-            {
-                std::lock_guard lock(cacheMutex);
-                hashes.try_emplace(cacheKey, identity.binaryHash);
-            }
-            return Result<CompilerIdentity>::Success(std::move(identity));
-        }
-
-        [[nodiscard]] Result<void> CollectNativeInputs(const std::filesystem::path &root, std::vector<std::filesystem::path> &inputs) {
-            std::error_code error;
-            for (const char *directoryName : {"cmake", "source", "include"}) {
-                const std::filesystem::path directory = root / directoryName;
-                if (!std::filesystem::is_directory(directory, error)) {
-                    error.clear();
-                    continue;
-                }
-                std::filesystem::recursive_directory_iterator iterator{directory, error};
-                const std::filesystem::recursive_directory_iterator end;
-                if (error)
-                    return Result<void>::Failure(MakeError(InvalidRequest, "Gameplay build inputs could not be enumerated."));
-                while (iterator != end) {
-                    const std::filesystem::file_status status = iterator->symlink_status(error);
-                    if (error)
-                        return Result<void>::Failure(MakeError(InvalidRequest, "Gameplay build inputs could not be inspected."));
-                    if (std::filesystem::is_symlink(status))
-                        return Result<void>::Failure(MakeError(InvalidRequest, "Gameplay build inputs may not use symlinks."));
-                    if (std::filesystem::is_regular_file(status) && NativeInputExtension(iterator->path()))
-                        inputs.push_back(iterator->path());
-                    iterator.increment(error);
-                    if (error)
-                        return Result<void>::Failure(MakeError(InvalidRequest, "Gameplay build inputs could not be enumerated."));
-                }
-            }
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<bool> CollectResolvedInputs(const std::filesystem::path &root, const std::filesystem::path &manifestPath,
-                                                         std::vector<std::filesystem::path> &inputs) {
-            std::ifstream manifest{manifestPath, std::ios::binary};
-            if (!manifest)
-                return Result<bool>::Success(false);
-
-            std::error_code error;
-            std::string relativeInput;
-            while (std::getline(manifest, relativeInput)) {
-                if (!relativeInput.empty() && relativeInput.back() == '\r')
-                    relativeInput.pop_back();
-                if (relativeInput.empty())
-                    continue;
-                const std::filesystem::path unresolved{relativeInput};
-                if (unresolved.is_absolute())
-                    return Result<bool>::Failure(MakeError(InvalidRequest, "Gameplay build input must be project-relative."));
-                const std::filesystem::path canonicalInput = std::filesystem::weakly_canonical(root / unresolved, error);
-                if (error || !HasPathPrefix(root, canonicalInput) || !std::filesystem::is_regular_file(canonicalInput, error))
-                    return Result<bool>::Failure(
-                        MakeError(InvalidRequest, "Resolved gameplay build input escapes the project or is unavailable."));
-                inputs.push_back(canonicalInput);
-            }
-            return Result<bool>::Success(true);
-        }
-
-        [[nodiscard]] Result<std::string> ResolveCompilerHash(const GameplayBuildRequest &request) {
-            if (!request.environment.cxxCompiler.has_value())
-                return Result<std::string>::Success({});
-            Result<CompilerIdentity> compiler = ResolveCompilerIdentity(*request.environment.cxxCompiler);
-            if (compiler.HasError())
-                return Result<std::string>::Failure(compiler.ErrorValue());
-            return Result<std::string>::Success(std::move(compiler).Value().binaryHash);
-        }
-
-        [[nodiscard]] std::string BuildInputHashPrefix(const GameplayBuildRequest &request, const std::string_view compilerHash,
-                                                       const std::string_view resolvedInputStructureHash) {
-            return std::format("{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n", Gameplay::CurrentGameplayBuildFingerprint(),
-                               request.environment.configuration, request.environment.gameplaySdkPackage.generic_string(),
-                               request.environment.cxxCompiler.value_or(std::filesystem::path{}).generic_string(),
-                               request.environment.generator.value_or(""), request.environment.generatorPlatform.value_or(""),
-                               request.environment.generatorToolset.value_or(""),
-                               request.environment.toolchainFile.value_or(std::filesystem::path{}).generic_string(), compilerHash,
-                               resolvedInputStructureHash);
-        }
-
-        [[nodiscard]] Result<std::string> FinalizeInputHash(std::string bytes) {
-            return Result<std::string>::Success(FormatSha256(ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))));
-        }
-
-        [[nodiscard]] Result<std::string> HashBuildInputs(const std::filesystem::path &root,
-                                                          const std::vector<std::filesystem::path> &inputs, std::string bytes) {
-            constexpr std::uintmax_t MaximumInputBytes = 64U * 1024U * 1024U;
-            std::error_code error;
-            for (const std::filesystem::path &path : inputs) {
-                if (const std::uintmax_t size = std::filesystem::file_size(path, error);
-                    error || size > MaximumInputBytes || bytes.size() + size > MaximumInputBytes)
-                    return Result<std::string>::Failure(MakeError(InvalidRequest, "Gameplay build inputs exceed the bounded hash budget."));
-                std::ifstream stream{path, std::ios::binary};
-                if (!stream)
-                    return Result<std::string>::Failure(MakeError(InvalidRequest, "Gameplay build input could not be read."));
-                bytes.append(std::filesystem::relative(path, root, error).generic_string()).push_back('\0');
-                bytes.append(std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{});
-                bytes.push_back('\0');
-            }
-            return FinalizeInputHash(std::move(bytes));
-        }
-
-        [[nodiscard]] Result<std::string> HashInputStructure(const std::filesystem::path &root,
-                                                             const std::vector<std::filesystem::path> &inputs) {
-            constexpr std::size_t MaximumStructureBytes = 1U * 1024U * 1024U;
-            std::string bytes;
-            for (const std::filesystem::path &path : inputs) {
-                std::error_code error;
-                const std::string relative = std::filesystem::relative(path, root, error).generic_string();
-                if (error || bytes.size() + relative.size() + 1U > MaximumStructureBytes)
-                    return Result<std::string>::Failure(
-                        MakeError(InvalidRequest, "Gameplay input structure exceeds the bounded hash budget."));
-                bytes.append(relative).push_back('\0');
-            }
-            return FinalizeInputHash(std::move(bytes));
-        }
-
-        [[nodiscard]] Result<std::string> ComputeInputHash(const GameplayBuildRequest &request) {
-            std::error_code error;
-            const std::filesystem::path root = std::filesystem::weakly_canonical(request.projectRoot, error);
-            if (error || !std::filesystem::is_directory(root))
-                return Result<std::string>::Failure(MakeError(InvalidRequest, "Project root is unavailable."));
-
-            std::vector<std::filesystem::path> inputs;
-            if (const std::filesystem::path cmakeLists = root / "CMakeLists.txt"; std::filesystem::is_regular_file(cmakeLists, error))
-                inputs.push_back(cmakeLists);
-            if (Result<void> collected = CollectNativeInputs(root, inputs); collected.HasError())
-                return Result<std::string>::Failure(collected.ErrorValue());
-            const std::filesystem::path resolvedManifest = root / ".horo/local/gameplay_build_inputs.txt";
-            if (Result<bool> resolvedInputs = CollectResolvedInputs(root, resolvedManifest, inputs); resolvedInputs.HasError())
-                return Result<std::string>::Failure(resolvedInputs.ErrorValue());
-            std::ranges::sort(inputs);
-            inputs.erase(std::ranges::unique(inputs).begin(), inputs.end());
-
-            Result<std::string> inputStructureHash = HashInputStructure(root, inputs);
-            if (inputStructureHash.HasError())
-                return Result<std::string>::Failure(inputStructureHash.ErrorValue());
-            Result<std::string> compilerHash = ResolveCompilerHash(request);
-            if (compilerHash.HasError())
-                return Result<std::string>::Failure(compilerHash.ErrorValue());
-            return HashBuildInputs(root, inputs, BuildInputHashPrefix(request, compilerHash.Value(), inputStructureHash.Value()));
-        }
-
-        [[nodiscard]] std::optional<std::string> ReadSuccessfulHash(const std::filesystem::path &root) {
-            std::ifstream stream{root / ".horo/local/gameplay_build_state.json", std::ios::binary};
-            if (!stream)
-                return std::nullopt;
-            try {
-                const nlohmann::json document = nlohmann::json::parse(stream, nullptr, true, true);
-                if (document.value("schemaVersion", 0) != 1 || !document.contains("successfulInputHash") ||
-                    !document["successfulInputHash"].is_string())
-                    return std::nullopt;
-                return document["successfulInputHash"].get<std::string>();
-            } catch (const nlohmann::json::exception &) {
-                return std::nullopt;
-            }
-        }
-
-        [[nodiscard]] ProcessEnvironment BuildEnvironment() {
-            ProcessEnvironment environment;
-            environment
-                .unset = {"CC", "CXX", "CMAKE_GENERATOR", "CMAKE_GENERATOR_PLATFORM", "CMAKE_GENERATOR_TOOLSET", "CMAKE_TOOLCHAIN_FILE"};
-            return environment;
-        }
-
         [[nodiscard]] std::uint64_t CurrentProcessId() noexcept {
 #if defined(_WIN32)
             return static_cast<std::uint64_t>(GetCurrentProcessId());
@@ -370,6 +123,7 @@ namespace Horo::Application {
             JobId jobId{};
             std::shared_ptr<JobHandle> job;
 
+            std::mutex transitionMutex;
             std::mutex mutex_;
         };
 
@@ -386,6 +140,10 @@ namespace Horo::Application {
         std::unordered_map<GameplayBuildSessionId, std::shared_ptr<Session>> sessions;
         std::unordered_map<std::string, GameplayBuildSessionId, TransparentStringHash, std::equal_to<>> activeProjects;
         bool shutdown{false};
+        bool shutdownFinished{false};
+        std::size_t activeAdmissions{};
+        std::condition_variable admissionsFinished;
+        std::condition_variable shutdownCompleted;
 
         std::mutex mutex_;
     };
@@ -834,37 +592,6 @@ namespace Horo::Application {
             return true;
         }
 
-        [[nodiscard]] std::vector<std::string> BuildConfigureArguments(const GameplayBuildRequest &request,
-                                                                       const std::filesystem::path &buildRoot,
-                                                                       const std::filesystem::path &candidateManifest) {
-            std::vector<std::string> arguments{
-                "-S",
-                request.projectRoot.string(),
-                "-B",
-                buildRoot.string(),
-                std::format("-DHoroEngineGameplay_DIR={}", request.environment.gameplaySdkPackage.string()),
-                std::format("-DCMAKE_BUILD_TYPE={}", request.environment.configuration),
-                std::format("-DHORO_GAMEPLAY_MANIFEST_OUTPUT={}", candidateManifest.string()),
-            };
-            if (request.environment.cxxCompiler.has_value())
-                arguments.push_back(std::format("-DCMAKE_CXX_COMPILER={}", request.environment.cxxCompiler->string()));
-            if (request.environment.generator.has_value()) {
-                arguments.emplace_back("-G");
-                arguments.push_back(*request.environment.generator);
-            }
-            if (request.environment.generatorPlatform.has_value()) {
-                arguments.emplace_back("-A");
-                arguments.push_back(*request.environment.generatorPlatform);
-            }
-            if (request.environment.generatorToolset.has_value()) {
-                arguments.emplace_back("-T");
-                arguments.push_back(*request.environment.generatorToolset);
-            }
-            if (request.environment.toolchainFile.has_value())
-                arguments.push_back(std::format("-DCMAKE_TOOLCHAIN_FILE={}", request.environment.toolchainFile->string()));
-            return arguments;
-        }
-
         [[nodiscard]] bool HasSupersedingRequest(const std::shared_ptr<GameplayBuildService::State::Session> &session,
                                                  const std::string_view activeHash) {
             std::lock_guard lock(session->Mutex());
@@ -1035,11 +762,15 @@ namespace Horo::Application {
                     target = found->second;
             }
             if (target) {
-                target->cancellation.RequestCancellation();
+                std::lock_guard transitionLock(target->transitionMutex);
                 std::string phase;
                 {
                     std::lock_guard lock(target->Mutex());
+                    if (IsTerminal(target->snapshot.state))
+                        return;
+                    target->cancellation.RequestCancellation();
                     phase = target->snapshot.phase;
+                    target->pendingRequest.reset();
                     target->snapshot.pendingInputHash.reset();
                     target->snapshot.newerInputsPending = false;
                 }
@@ -1113,14 +844,12 @@ namespace Horo::Application {
                                      const std::shared_ptr<GameplayBuildService::State::Session> &session, const Result<void> &result,
                                      const GameplayBuildState terminal, const bool cacheHit) {
             if (result.HasError()) {
-                Update(session, terminal, "terminal", result.ErrorValue());
                 const OperationState operationState =
                     terminal == GameplayBuildState::Cancelled ? OperationState::Cancelled : OperationState::Failed;
                 UpdateOperation(state, session, operationState, "terminal", result.ErrorValue().message.c_str(), std::nullopt,
                                 result.ErrorValue());
                 return;
             }
-            Update(session, terminal, "complete");
             UpdateOperation(state, session, OperationState::Succeeded, "complete",
                             cacheHit ? "Gameplay module was already up to date." : "Gameplay module built successfully.", 1.0F);
         }
@@ -1137,13 +866,13 @@ namespace Horo::Application {
                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session,
                                                  const std::string_view projectKey) {
             Result<void> result = RunBuild(state, session);
+            std::lock_guard transitionLock(session->transitionMutex);
             const GameplayBuildState terminal = TerminalStateFor(result);
             bool cacheHit = false;
             {
                 std::lock_guard lock(session->Mutex());
                 cacheHit = session->cacheHit;
             }
-            UpdateTerminalOperation(*state, session, result, terminal, cacheHit);
             BuildTerminalOutput output = MakeTerminalOutput(result, terminal, cacheHit);
             PublishRecord(*state, session,
                           BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
@@ -1152,6 +881,9 @@ namespace Horo::Application {
                                             .stage = output.stage,
                                             .code = std::move(output.code),
                                             .message = std::move(output.message)});
+            UpdateTerminalOperation(*state, session, result, terminal, cacheHit);
+            Update(session, terminal, result.HasValue() ? "complete" : "terminal",
+                   result.HasError() ? std::optional<Error>{result.ErrorValue()} : std::nullopt);
             RemoveActiveProject(state, projectKey, session->snapshot.id);
             return result;
         }
@@ -1164,6 +896,23 @@ namespace Horo::Application {
             if (const auto active = state->activeProjects.find(projectKey);
                 active != state->activeProjects.end() && active->second == session->snapshot.id)
                 state->activeProjects.erase(active);
+        }
+
+        /** @brief Publishes a failed job admission before removing the unsubmitted session. */
+        Result<GameplayBuildSessionId> FailJobSubmission(const std::shared_ptr<GameplayBuildService::State> &state,
+                                                         const std::shared_ptr<GameplayBuildService::State::Session> &session,
+                                                         const std::string_view projectKey, const Error &error) {
+            PublishRecord(*state, session,
+                          BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
+                                            .severity = DiagnosticSeverity::Error,
+                                            .result = BuildOutputResult::Failed,
+                                            .stage = "terminal",
+                                            .code = DiagnosticCode{"gameplay.build.failed"},
+                                            .message = error.message});
+            UpdateOperation(*state, session, OperationState::Failed, "terminal", error.message.c_str(), std::nullopt, error);
+            Update(session, GameplayBuildState::Failed, "terminal", error);
+            RemoveUnsubmittedSession(state, session, projectKey);
+            return Result<GameplayBuildSessionId>::Failure(error);
         }
     }  // namespace
 
@@ -1185,6 +934,32 @@ namespace Horo::Application {
         Result<std::string> hash = ComputeInputHash(request);
         if (hash.HasError())
             return Result<GameplayBuildSessionId>::Failure(hash.ErrorValue());
+        {
+            std::lock_guard lock(state_->Mutex());
+            if (state_->shutdown)
+                return Result<GameplayBuildSessionId>::Failure(MakeError(CancelledDescriptor, "Gameplay build service is shut down."));
+            ++state_->activeAdmissions;
+        }
+
+        struct AdmissionGuard final {
+            State &state;
+
+            explicit AdmissionGuard(State &target) : state(target) {}
+
+            AdmissionGuard(const AdmissionGuard &) = delete;
+            AdmissionGuard &operator=(const AdmissionGuard &) = delete;
+            AdmissionGuard(AdmissionGuard &&) = delete;
+            AdmissionGuard &operator=(AdmissionGuard &&) = delete;
+
+            ~AdmissionGuard() {
+                std::lock_guard lock(state.Mutex());
+                --state.activeAdmissions;
+                state.admissionsFinished.notify_all();
+            }
+        };
+
+        AdmissionGuard admission{*state_};
+
         const std::string projectKey = std::filesystem::absolute(request.projectRoot).lexically_normal().generic_string();
         Result<SessionPreparation> prepared = PrepareSession(state_, request, hash.Value(), projectKey);
         if (prepared.HasError())
@@ -1201,20 +976,8 @@ namespace Horo::Application {
         Result<JobHandle> submitted = state_->jobs->SubmitResult({}, [state = state_, session, projectKey](const CancellationToken &) {
             return CompleteBuild(state, session, projectKey);
         });
-        if (submitted.HasError()) {
-            Update(session, GameplayBuildState::Failed, "terminal", submitted.ErrorValue());
-            UpdateOperation(*state_, session, OperationState::Failed, "terminal", submitted.ErrorValue().message.c_str(), std::nullopt,
-                            submitted.ErrorValue());
-            PublishRecord(*state_, session,
-                          BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
-                                            .severity = DiagnosticSeverity::Error,
-                                            .result = BuildOutputResult::Failed,
-                                            .stage = "terminal",
-                                            .code = DiagnosticCode{"gameplay.build.failed"},
-                                            .message = submitted.ErrorValue().message});
-            RemoveUnsubmittedSession(state_, session, projectKey);
-            return Result<GameplayBuildSessionId>::Failure(submitted.ErrorValue());
-        }
+        if (submitted.HasError())
+            return FailJobSubmission(state_, session, projectKey, submitted.ErrorValue());
         {
             std::lock_guard lock(session->Mutex());
             session->jobId = submitted.Value().Id();
@@ -1235,16 +998,16 @@ namespace Horo::Application {
         const std::shared_ptr<State::Session> session = FindSession(state_, id);
         if (!session)
             return false;
-        session->cancellation.RequestCancellation();
-        {
-            std::lock_guard lock(session->Mutex());
-            session->pendingRequest.reset();
-            session->snapshot.pendingInputHash.reset();
-            session->snapshot.newerInputsPending = false;
-        }
+        std::lock_guard transitionLock(session->transitionMutex);
         std::string phase;
         {
             std::lock_guard lock(session->Mutex());
+            if (IsTerminal(session->snapshot.state))
+                return false;
+            session->cancellation.RequestCancellation();
+            session->pendingRequest.reset();
+            session->snapshot.pendingInputHash.reset();
+            session->snapshot.newerInputsPending = false;
             phase = session->snapshot.phase;
         }
         UpdateOperation(*state_, session, OperationState::Cancelling, phase.c_str(), "Gameplay build cancellation requested.");
@@ -1260,10 +1023,17 @@ namespace Horo::Application {
     void GameplayBuildService::Shutdown() const noexcept {
         std::vector<std::shared_ptr<State::Session>> sessions;
         {
-            std::lock_guard lock(state_->Mutex());
-            if (state_->shutdown)
+            std::unique_lock lock(state_->Mutex());
+            if (state_->shutdown) {
+                state_->shutdownCompleted.wait(lock, [this] {
+                    return state_->shutdownFinished;
+                });
                 return;
+            }
             state_->shutdown = true;
+            state_->admissionsFinished.wait(lock, [this] {
+                return state_->activeAdmissions == 0;
+            });
             for (const auto &[sessionId, session] : state_->sessions) {
                 static_cast<void>(sessionId);
                 sessions.push_back(session);
@@ -1283,5 +1053,10 @@ namespace Horo::Application {
             if (job)
                 static_cast<void>(job->Wait());
         }
+        {
+            std::lock_guard lock(state_->Mutex());
+            state_->shutdownFinished = true;
+        }
+        state_->shutdownCompleted.notify_all();
     }
 }  // namespace Horo::Application
