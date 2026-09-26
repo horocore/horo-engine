@@ -406,6 +406,7 @@ add_executable(HoroVfxApiTests
         support/AllocationProbe.cpp
         unit/runtime/vfx/CpuParticleBufferTests.cpp
         unit/runtime/vfx/CpuParticleSimulatorTests.cpp
+        unit/runtime/vfx/CpuSimulationQualificationTests.cpp
         unit/runtime/vfx/CpuParticleSpawnPipelineTests.cpp
         unit/runtime/vfx/ParticleSystemDescriptorTests.cpp
         unit/runtime/vfx/VfxFoundationQualificationTests.cpp
@@ -414,8 +415,14 @@ add_executable(HoroVfxApiTests
 )
 target_compile_features(HoroVfxApiTests PRIVATE cxx_std_20)
 target_include_directories(HoroVfxApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(HoroVfxApiTests PRIVATE HoroEngine::VfxApi)
+target_compile_definitions(HoroVfxApiTests PRIVATE HORO_VFX_CPU_BASELINE_PATH="${PROJECT_SOURCE_DIR}/tests/fixtures/vfx/cpu_simulation_baseline.json")
+target_link_libraries(HoroVfxApiTests PRIVATE HoroEngine::VfxApi nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroVfxApiTests LABELS "unit;vfx;headless")
+
+add_executable(HoroVfxCpuSimulationBenchmark EXCLUDE_FROM_ALL benchmarks/vfx/CpuSimulationBenchmark.cpp)
+target_compile_features(HoroVfxCpuSimulationBenchmark PRIVATE cxx_std_20)
+target_include_directories(HoroVfxCpuSimulationBenchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroVfxCpuSimulationBenchmark PRIVATE HoroEngine::VfxApi)
 
 add_executable(HoroDestructionApiTests
         support/AllocationProbe.cpp
