@@ -68,6 +68,72 @@ namespace {
         CHECK(SelectSaveChunkPayload(payload, directory, Id<SaveRecordId>(21)).HasError());
     }
 
+    TEST_CASE("Codec inventory and per-chunk policy keep metadata and small records raw", "[runtime][save][compression]") {
+        const auto installed = InstalledSaveChunkCodecs();
+        REQUIRE(installed.size() == 2);
+        CHECK(installed[0].codec == SaveChunkCodec::Raw);
+        CHECK(installed[1].codec == SaveChunkCodec::Deflate);
+        CHECK(installed[1].minimumLevel == 1);
+        CHECK(installed[1].maximumLevel == 9);
+        CHECK_FALSE(installed[1].supportsDictionaries);
+
+        const auto small = Payload();
+        CHECK(EncodeSaveChunk(small, {.preferred = SaveChunkCodec::Deflate}, {}).Value().codec == SaveChunkCodec::Raw);
+        CHECK(EncodeSaveChunk(small, {.preferred = SaveChunkCodec::Deflate, .metadata = true}, {}).Value().codec == SaveChunkCodec::Raw);
+        CHECK(EncodeSaveChunk(small, {.preferred = SaveChunkCodec::Deflate, .required = true}, {}).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveCompressionPolicyInvalid.code.Value());
+        CHECK(EncodeSaveChunk(small, {.preferred = static_cast<SaveChunkCodec>(99)}, {}).Value().codec == SaveChunkCodec::Raw);
+        CHECK(EncodeSaveChunk(small, {.preferred = static_cast<SaveChunkCodec>(99), .required = true}, {}).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveCodecUnsupported.code.Value());
+        CHECK(EncodeSaveChunk(small, {.preferred = SaveChunkCodec::Deflate, .level = 10}, {}).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveCompressionPolicyInvalid.code.Value());
+    }
+
+    TEST_CASE("Compression cannot alter the canonical hash and rejects bounded output policy", "[runtime][save][compression]") {
+        std::vector<std::byte> canonical(2'048);
+        for (std::size_t index = 0; index < canonical.size(); ++index)
+            canonical[index] = static_cast<std::byte>(index % 64);
+        const auto logical = ComputeCanonicalStateHash(canonical);
+        const auto encoded = EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, {});
+        REQUIRE(encoded.HasValue());
+        CHECK(encoded.Value().codec == SaveChunkCodec::Deflate);
+        CHECK(encoded.Value().decodedHash == ComputeSha256(canonical));
+        CHECK(ComputeCanonicalStateHash(encoded.Value().stored) != logical);
+
+        auto limits = SaveChunkDirectoryLimits{};
+        limits.maximumDecodedChunkBytes = 512;
+        CHECK(EncodeSaveChunk(canonical, {}, limits).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveDecompressionLimitExceeded.code.Value());
+        limits = {};
+        limits.maximumStoredChunkBytes = 16;
+        CHECK(EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, limits).HasError());
+    }
+
+    TEST_CASE("Compressed chunks reject trailing bytes inside their declared stored range", "[runtime][save][compression]") {
+        std::vector<std::byte> canonical(2'048);
+        for (std::size_t index = 0; index < canonical.size(); ++index)
+            canonical[index] = static_cast<std::byte>(index % 64);
+        const auto encoded = EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, {});
+        REQUIRE(encoded.HasValue());
+        auto payload = encoded.Value().stored;
+        payload.push_back(std::byte{0x7f});
+        const auto raw = Payload();
+        payload.insert(payload.end(), raw.begin() + 3, raw.end());
+        auto directory = Directory(raw);
+        directory.payloadByteLength = payload.size();
+        directory.entries[0].codec = SaveChunkCodec::Deflate;
+        directory.entries[0].storedByteLength = encoded.Value().stored.size() + 1;
+        directory.entries[0].decodedByteLength = canonical.size();
+        directory.entries[0].decodedHash = encoded.Value().decodedHash;
+        directory.entries[1].offset = directory.entries[0].storedByteLength;
+        directory.entries[2].offset = directory.entries[1].offset + directory.entries[1].storedByteLength;
+        const auto validated = ValidateSaveChunkDirectory(std::move(directory), Manifest());
+        REQUIRE(validated.HasValue());
+        const auto selected = SelectSaveChunkPayload(payload, validated.Value(), Id<SaveRecordId>(20));
+        REQUIRE(selected.HasError());
+        CHECK(selected.ErrorValue().code.Value() == SaveErrors::ArchiveChunkDecodeFailed.code.Value());
+    }
+
     TEST_CASE("Save chunk directory rejects gaps overlap truncation and trailing bytes", "[runtime][save][framing]") {
         const auto payload = Payload();
         auto directory = Directory(payload);

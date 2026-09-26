@@ -249,6 +249,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveMigrationRegistry.cpp
         runtime/save/SaveMigrationValidation.cpp
         runtime/save/SaveArchiveFraming.cpp
+        runtime/save/SaveChunkCompression.cpp
         runtime/save/SaveArchiveFinalization.cpp
         runtime/save/SaveArchiveFraming.cpp
         runtime/save/SaveArchiveReader.cpp
@@ -277,7 +278,7 @@ add_library(HoroRuntime STATIC
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
 target_compile_features(HoroRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json utf8proc)
+target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
 
 add_library(HoroNetworkApi STATIC
         runtime/networking/api/MessageCodecRegistry.cpp

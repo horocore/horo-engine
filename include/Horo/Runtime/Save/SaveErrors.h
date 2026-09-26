@@ -122,6 +122,12 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor ArchiveEntryInvalid;
     /** @brief A save archive declares a codec this backend does not implement. */
     extern const ErrorCodeDescriptor ArchiveCodecUnsupported;
+    /** @brief A trusted compression policy requested an invalid level or impossible required choice. */
+    extern const ErrorCodeDescriptor ArchiveCompressionPolicyInvalid;
+    /** @brief A supported encoder failed to produce a complete bounded stored chunk. */
+    extern const ErrorCodeDescriptor ArchiveCompressionFailed;
+    /** @brief Compressed chunk bytes are malformed or do not decode to their declared exact length. */
+    extern const ErrorCodeDescriptor ArchiveChunkDecodeFailed;
     /** @brief A save archive exceeds its decoded-byte or expansion budget. */
     extern const ErrorCodeDescriptor ArchiveDecompressionLimitExceeded;
     /** @brief A save archive exceeds its bounded structural nesting budget. */

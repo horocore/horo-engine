@@ -82,7 +82,8 @@ namespace Horo::Runtime {
                    limits.metadata.maximumParticipants <= 4'096 && limits.metadata.maximumTotalChunks <= limits.maximumEntries &&
                    limits.chunks.maximumEntries <= limits.maximumEntries &&
                    limits.chunks.maximumPayloadBytes <= limits.maximumStoredPayloadBytes &&
-                   limits.chunks.maximumDecodedChunkBytes <= limits.maximumDecodedBytes;
+                   limits.chunks.maximumStoredChunkBytes <= limits.maximumStoredPayloadBytes && limits.chunks.maximumExpansionRatio != 0 &&
+                   limits.chunks.maximumExpansionRatio <= 64 && limits.chunks.maximumDecodedChunkBytes <= limits.maximumDecodedBytes;
         }
 
         [[nodiscard]] bool ValidLimits(const SaveArchiveReaderLimits &limits) noexcept {
@@ -114,7 +115,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidateEnvelopeHeader(const EnvelopeFields &fields, const SaveArchiveReaderLimits &limits) {
             if (fields.archiveVersion == 0)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, 8, "envelope/archiveFormatVersion"));
-            if (fields.archiveVersion > 1)
+            if (fields.archiveVersion > 2)
                 return Result<void>::Failure(ReaderError(SaveErrors::VersionUnsupportedNewer, 8, "envelope/archiveFormatVersion"));
             if (fields.payloadLength > limits.maximumStoredPayloadBytes || fields.payloadLength > std::numeric_limits<std::size_t>::max())
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveFramingLimitExceeded, 16, "envelope/payloadLength"));
@@ -237,8 +238,9 @@ namespace Horo::Runtime {
             return Result<ContainerHeader>::Success(header);
         }
 
-        [[nodiscard]] Result<void> ValidateContainerHeader(const ContainerHeader &header, const SaveArchiveReaderLimits &limits) {
-            if (header.version != 1 || header.flags != 0 || header.reserved != 0 ||
+        [[nodiscard]] Result<void> ValidateContainerHeader(const ContainerHeader &header, const SaveArchiveReaderLimits &limits,
+                                                           const std::uint32_t archiveVersion) {
+            if (header.version != archiveVersion || header.flags != 0 || header.reserved != 0 ||
                 header.recordSize != SaveArchiveContainerEntryByteLength)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveContainerInvalid, 8, "container/header"));
             if (header.count == 0 || header.count > limits.maximumEntries || header.count > limits.chunks.maximumEntries ||
@@ -259,11 +261,11 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<ContainerInfo> ReadContainerInfo(const std::span<const std::byte> payload,
-                                                              const SaveArchiveReaderLimits &limits) {
+                                                              const SaveArchiveReaderLimits &limits, const std::uint32_t archiveVersion) {
             auto header = ReadContainerHeader(payload);
             if (header.HasError())
                 return Result<ContainerInfo>::Failure(header.ErrorValue());
-            if (auto valid = ValidateContainerHeader(header.Value(), limits); valid.HasError())
+            if (auto valid = ValidateContainerHeader(header.Value(), limits, archiveVersion); valid.HasError())
                 return Result<ContainerInfo>::Failure(valid.ErrorValue());
             return MakeContainerInfo(header.Value(), payload);
         }
@@ -321,7 +323,8 @@ namespace Horo::Runtime {
             return Result<RawEntry>::Success(std::move(entry));
         }
 
-        [[nodiscard]] Result<void> ValidateEntryKindValue(const RawEntry &entry, const std::size_t recordOffset) {
+        [[nodiscard]] Result<void> ValidateEntryKindValue(const RawEntry &entry, const std::size_t recordOffset,
+                                                          const std::uint32_t archiveVersion) {
             using enum SaveArchiveEntryKind;
             if (entry.ownerLength > entry.owner.size())
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveStringInvalid, recordOffset, "entry/ownerLength"));
@@ -329,7 +332,8 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveExtensionInvalid, recordOffset, "entry/extension"));
             if (entry.kind != Header && entry.kind != Manifest && entry.kind != Chunk)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEntryInvalid, recordOffset, "entry/kind"));
-            if (entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Raw))
+            if (entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Raw) &&
+                (entry.kind != Chunk || archiveVersion < 2 || entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Deflate)))
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveCodecUnsupported, recordOffset, "entry/codec"));
             return Result<void>::Success();
         }
@@ -348,8 +352,9 @@ namespace Horo::Runtime {
                                                            const std::span<const std::byte> payload, const std::size_t dataOffset,
                                                            const std::size_t recordOffset) {
             if (entry.storedByteLength == 0 || entry.decodedByteLength == 0 || entry.storedByteLength > payload.size() - dataOffset ||
-                entry.storedByteLength != entry.decodedByteLength || entry.alignment == 0 || !std::has_single_bit(entry.alignment) ||
-                entry.alignment > limits.chunks.maximumAlignment)
+                entry.storedByteLength > limits.chunks.maximumStoredChunkBytes ||
+                (entry.codec == static_cast<std::uint16_t>(SaveChunkCodec::Raw) && entry.storedByteLength != entry.decodedByteLength) ||
+                entry.alignment == 0 || !std::has_single_bit(entry.alignment) || entry.alignment > limits.chunks.maximumAlignment)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEntryInvalid, recordOffset, "entry/bounds"));
             return Result<void>::Success();
         }
@@ -377,52 +382,56 @@ namespace Horo::Runtime {
             return Result<std::size_t>::Success(expectedRelativeOffset + static_cast<std::size_t>(entry.storedByteLength));
         }
 
+        struct ContainerReadState final {
+            std::size_t expectedRelativeOffset{};
+            std::uint64_t decodedTotal{};
+            bool sawChunk{};
+        };
+
         [[nodiscard]] Result<RawEntry> ReadContainerEntry(const std::span<const std::byte> payload, const SaveArchiveReaderLimits &limits,
-                                                          const ContainerInfo &info, const std::size_t index,
-                                                          std::size_t &expectedRelativeOffset, bool &sawChunk,
-                                                          std::uint64_t &decodedTotal) {
+                                                          const ContainerInfo &info, const std::size_t index, ContainerReadState &state,
+                                                          const std::uint32_t archiveVersion) {
             const std::size_t recordOffset = SaveArchiveContainerHeaderByteLength + index * SaveArchiveContainerEntryByteLength;
             auto entry = ReadRawEntry(payload, recordOffset);
             if (entry.HasError())
                 return Result<RawEntry>::Failure(entry.ErrorValue());
             auto parsedEntry = std::move(entry).Value();
-            if (auto valid = ValidateEntryKindValue(parsedEntry, recordOffset); valid.HasError())
+            if (auto valid = ValidateEntryKindValue(parsedEntry, recordOffset, archiveVersion); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
-            if (auto valid = ValidateEntryIdentity(parsedEntry, recordOffset, sawChunk); valid.HasError())
+            if (auto valid = ValidateEntryIdentity(parsedEntry, recordOffset, state.sawChunk); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateStoredEntrySize(parsedEntry, limits, payload, info.dataOffset, recordOffset); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateEntryExpansion(parsedEntry, limits, recordOffset); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
-            auto validatedRange = ValidateEntryRange(parsedEntry, payload, info.dataOffset, expectedRelativeOffset, recordOffset);
+            auto validatedRange = ValidateEntryRange(parsedEntry, payload, info.dataOffset, state.expectedRelativeOffset, recordOffset);
             if (validatedRange.HasError())
                 return Result<RawEntry>::Failure(validatedRange.ErrorValue());
-            expectedRelativeOffset = std::move(validatedRange).Value();
-            sawChunk |= parsedEntry.kind == SaveArchiveEntryKind::Chunk;
-            if (decodedTotal > limits.maximumDecodedBytes - parsedEntry.decodedByteLength)
+            state.expectedRelativeOffset = std::move(validatedRange).Value();
+            state.sawChunk |= parsedEntry.kind == SaveArchiveEntryKind::Chunk;
+            if (state.decodedTotal > limits.maximumDecodedBytes - parsedEntry.decodedByteLength)
                 return Result<RawEntry>::Failure(
                     ReaderError(SaveErrors::ArchiveDecompressionLimitExceeded, recordOffset, "container/decodedBytes"));
-            decodedTotal += parsedEntry.decodedByteLength;
+            state.decodedTotal += parsedEntry.decodedByteLength;
             return Result<RawEntry>::Success(std::move(parsedEntry));
         }
 
         [[nodiscard]] Result<std::vector<RawEntry>> ReadContainer(const std::span<const std::byte> payload,
-                                                                  const SaveArchiveReaderLimits &limits) {
-            auto info = ReadContainerInfo(payload, limits);
+                                                                  const SaveArchiveReaderLimits &limits,
+                                                                  const std::uint32_t archiveVersion) {
+            auto info = ReadContainerInfo(payload, limits, archiveVersion);
             if (info.HasError())
                 return Result<std::vector<RawEntry>>::Failure(info.ErrorValue());
             std::vector<RawEntry> entries;
             entries.reserve(info.Value().entryCount);
-            std::uint64_t decodedTotal = 0;
-            std::size_t expectedRelativeOffset = 0;
-            bool sawChunk = false;
+            ContainerReadState state;
             for (std::size_t index = 0; index < info.Value().entryCount; ++index) {
-                auto entry = ReadContainerEntry(payload, limits, info.Value(), index, expectedRelativeOffset, sawChunk, decodedTotal);
+                auto entry = ReadContainerEntry(payload, limits, info.Value(), index, state, archiveVersion);
                 if (entry.HasError())
                     return Result<std::vector<RawEntry>>::Failure(entry.ErrorValue());
                 entries.push_back(std::move(entry).Value());
             }
-            if (expectedRelativeOffset != payload.size() - info.Value().dataOffset || entries.size() < 3 ||
+            if (state.expectedRelativeOffset != payload.size() - info.Value().dataOffset || entries.size() < 3 ||
                 entries[0].kind != SaveArchiveEntryKind::Header || entries[1].kind != SaveArchiveEntryKind::Manifest)
                 return Result<std::vector<RawEntry>>::Failure(
                     ReaderError(SaveErrors::ArchiveDirectoryInvalid, info.Value().dataOffset, "container/data"));
@@ -453,7 +462,7 @@ namespace Horo::Runtime {
 
                     const auto payload =
                         archive.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble.payloadByteLength));
-                    auto rawEntries = ReadContainer(payload, limits);
+                    auto rawEntries = ReadContainer(payload, limits, preamble.archiveFormatVersion.Value());
                     if (rawEntries.HasError())
                         return Result<ValidatedSaveArchive>::Failure(rawEntries.ErrorValue());
                     const auto &entries = rawEntries.Value();
@@ -519,15 +528,16 @@ namespace Horo::Runtime {
         return payload_;
     }
 
-    Result<std::optional<std::span<const std::byte>>> ValidatedSaveArchive::SelectChunk(const SaveRecordId record) const {
+    Result<std::optional<std::vector<std::byte>>> ValidatedSaveArchive::SelectChunk(const SaveRecordId record) const {
         const auto entries = directory_.Entries();
         if (const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
             found != entries.end() && found->record == record) {
             std::uint64_t remaining = remainingReadWork_->load(std::memory_order_relaxed);
             while (true) {
-                if (found->storedByteLength > remaining)
-                    return Result<std::optional<std::span<const std::byte>>>::Failure(ReadWorkError(found->offset, "chunk/readWork"));
-                if (remainingReadWork_->compare_exchange_weak(remaining, remaining - found->storedByteLength, std::memory_order_relaxed))
+                const std::uint64_t work = found->storedByteLength + (found->codec == SaveChunkCodec::Raw ? 0 : found->decodedByteLength);
+                if (work < found->storedByteLength || work > remaining)
+                    return Result<std::optional<std::vector<std::byte>>>::Failure(ReadWorkError(found->offset, "chunk/readWork"));
+                if (remainingReadWork_->compare_exchange_weak(remaining, remaining - work, std::memory_order_relaxed))
                     break;
             }
         }
