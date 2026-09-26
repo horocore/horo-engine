@@ -96,6 +96,18 @@ namespace Horo::PCG {
     class PCGPointCloudWorkspace final {
     public:
         struct State;
+
+        /** @brief Token restricting construction to validated admission. */
+        struct CreationKey final {
+            CreationKey(const CreationKey &) = default;
+
+        private:
+            friend class PCGPointCloudWorkspace;
+            CreationKey() = default;
+        };
+
+        /** @brief Internal construction token; use Create for validated admission. */
+        explicit PCGPointCloudWorkspace(CreationKey, std::unique_ptr<State> state) noexcept;
         PCGPointCloudWorkspace(const PCGPointCloudWorkspace &) = delete;
         PCGPointCloudWorkspace &operator=(const PCGPointCloudWorkspace &) = delete;
         ~PCGPointCloudWorkspace();
@@ -134,8 +146,6 @@ namespace Horo::PCG {
         void Cancel() noexcept;
 
     private:
-        explicit PCGPointCloudWorkspace(std::unique_ptr<State> state) noexcept;
-
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::PCG

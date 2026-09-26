@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -341,13 +342,20 @@ namespace Horo::PCG {
         auto created = PCGPointCloudWorkspace::Create(plan, bounds, LimitsForTier(plan.Tier()).Value().maximumScratchBytes);
         REQUIRE(created.HasValue());
         auto &workspace = *created.Value();
+        CHECK(workspace.CurrentNode() == 0);
         CHECK(workspace.PeakRecords() == 4);
+        CHECK(workspace.ReadFinal(2, Id<PinId>(301)).HasError());
         WritePoints(workspace, 0, Id<PinId>(101), 10);
         const auto first = workspace.ReadInput(0, Id<PinId>(101));
         CHECK(first.HasError());
         REQUIRE(workspace.FinishNode(0).HasValue());
         auto input = workspace.ReadInput(0, Id<PinId>(101));
         REQUIRE(input.HasValue());
+        CHECK(workspace.CurrentNode() == 1);
+        CHECK(input.Value().PointCount() == 2);
+        CHECK(input.Value().Transforms().size() == 2);
+        CHECK(input.Value().Bounds().size() == 2);
+        CHECK(input.Value().Densities()[0] == 0.5F);
         CHECK(input.Value().Seeds()[0] == 10);
         const auto *firstAddress = input.Value().Seeds().data();
         WritePoints(workspace, 1, Id<PinId>(201), 20);
@@ -367,6 +375,7 @@ namespace Horo::PCG {
         REQUIRE(workspace.FinishNode(2).HasValue());
         const auto final = workspace.ReadFinal(2, Id<PinId>(301));
         REQUIRE(final.HasValue());
+        CHECK(workspace.CurrentNode() == 3);
         CHECK(final.Value().Seeds()[0] == 30);
         CHECK(final.Value().Seeds()[1] == 0);
         CHECK(final.Value().Seeds().data() == firstAddress);
@@ -416,6 +425,9 @@ namespace Horo::PCG {
         auto duplicate = bounds;
         duplicate[1] = duplicate[0];
         CheckError(PCGPointCloudWorkspace::Create(plan, duplicate, scratch), PCGErrors::PointDataInvalid);
+        auto wrongPin = bounds;
+        wrongPin[0].pin = Id<PinId>(999);
+        CheckError(PCGPointCloudWorkspace::Create(plan, wrongPin, scratch), PCGErrors::PointDataInvalid);
         auto missing = bounds;
         missing.pop_back();
         CheckError(PCGPointCloudWorkspace::Create(plan, missing, scratch), PCGErrors::PointDataInvalid);
@@ -438,6 +450,14 @@ namespace Horo::PCG {
         CheckError(boundary.Value()->FinishNode(0), PCGErrors::PointDataInvalid);
         boundary.Value()->Cancel();
         CheckError(boundary.Value()->BeginOutput(0, Id<PinId>(101), 1), PCGErrors::PointDataInvalid);
+
+        auto invalidAttribute = PCGPointCloudWorkspace::Create(plan, PointBounds(schema), scratch);
+        REQUIRE(invalidAttribute.HasValue());
+        auto attributeWriter = invalidAttribute.Value()->BeginOutput(0, Id<PinId>(101), 1);
+        REQUIRE(attributeWriter.HasValue());
+        REQUIRE(
+            attributeWriter.Value().SetColumnValue<PCGScalarColumn>("pcg.weight", 0, std::numeric_limits<double>::quiet_NaN()).HasValue());
+        CheckError(invalidAttribute.Value()->SealOutput(0, Id<PinId>(101)), PCGErrors::PointDataInvalid);
 
         const auto wideGraph = PointGraph(true, true);
         const auto widePlan = Compile(wideGraph, registry.Snapshot().Value()).Value();

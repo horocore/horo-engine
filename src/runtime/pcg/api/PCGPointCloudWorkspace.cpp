@@ -108,8 +108,8 @@ namespace Horo::PCG {
             bytes += candidate.attributes.capacity() * sizeof(PCGAttributeColumn);
             for (const auto &attribute : candidate.attributes) {
                 bytes += attribute.key.capacity();
-                bytes += std::visit([](const auto &values) {
-                    return values.capacity() * sizeof(typename std::remove_cvref_t<decltype(values)>::value_type);
+                bytes += std::visit([]<typename Column>(const Column &values) {
+                    return values.capacity() * sizeof(typename Column::value_type);
                 }, attribute.values);
             }
             return bytes;
@@ -167,11 +167,9 @@ namespace Horo::PCG {
         [[nodiscard]] bool ValidPrefix(const PCGPointStorageCandidate &candidate, const std::size_t count) noexcept {
             if (!ValidCorePrefix(candidate.core, count))
                 return false;
-            for (const auto &attribute : candidate.attributes) {
-                if (!ValidAttributePrefix(attribute.values, count))
-                    return false;
-            }
-            return true;
+            return std::ranges::all_of(candidate.attributes, [count](const auto &attribute) {
+                return ValidAttributePrefix(attribute.values, count);
+            });
         }
 
         template <typename Outputs> [[nodiscard]] auto FindOutput(Outputs &outputs, const std::uint32_t node, const PinId pin) {
@@ -184,7 +182,8 @@ namespace Horo::PCG {
             std::size_t pointPins{};
             for (const PCGCookedNode &node : plan.Nodes())
                 for (const PCGCookedPin &pin : node.pins)
-                    pointPins += pin.direction == PCGPinDirection::Output && pin.type == PCGPinType::PointSet;
+                    if (pin.direction == PCGPinDirection::Output && pin.type == PCGPinType::PointSet)
+                        ++pointPins;
             return pointPins;
         }
 
@@ -194,8 +193,7 @@ namespace Horo::PCG {
                 return Reject<void>(PCGErrors::PointCapacityExceeded);
             if (bound.node >= plan.Nodes().size() || bound.schema == nullptr || bound.schema->Tier() != plan.Tier())
                 return Reject<void>(PCGErrors::PointDataInvalid);
-            const auto &pins = plan.Nodes()[bound.node].pins;
-            if (std::ranges::none_of(pins, [&](const PCGCookedPin &pin) {
+            if (const auto &pins = plan.Nodes()[bound.node].pins; std::ranges::none_of(pins, [&](const PCGCookedPin &pin) {
                 return pin.id == bound.pin && pin.direction == PCGPinDirection::Output && pin.type == PCGPinType::PointSet;
             }))
                 return Reject<void>(PCGErrors::PointDataInvalid);
@@ -211,7 +209,8 @@ namespace Horo::PCG {
             for (const auto &bound : bounds) {
                 if (const auto valid = ValidateOutputBound(plan, bound, limits); valid.HasError())
                     return valid;
-                state.outputs.push_back({bound.node, bound.pin, 0, bound.maximumPoints, 0, state.nodeCount});
+                state.outputs.emplace_back(
+                    PCGPointCloudWorkspace::State::Output{bound.node, bound.pin, 0, bound.maximumPoints, 0, state.nodeCount});
             }
             std::ranges::sort(state.outputs, {}, [](const auto &output) {
                 return std::tuple(output.node, output.pin);
@@ -232,7 +231,7 @@ namespace Horo::PCG {
                 if (route.targetNode <= route.sourceNode || route.targetNode >= state.nodeCount)
                     return Reject<void>(PCGErrors::PointDataInvalid);
                 const auto index = static_cast<std::size_t>(found - state.outputs.begin());
-                state.routes.push_back({index, route.targetNode});
+                state.routes.emplace_back(PCGPointCloudWorkspace::State::Route{index, route.targetNode});
                 found->lastReader = found->lastReader == state.nodeCount ? route.targetNode : std::max(found->lastReader, route.targetNode);
             }
             // An unconnected output remains a final candidate until the operation ends.
@@ -244,18 +243,25 @@ namespace Horo::PCG {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<std::size_t> LiveRecordsAt(const PCGPointCloudWorkspace::State &state, const std::uint32_t node) {
+            std::size_t live{};
+            for (const auto &output : state.outputs) {
+                if (output.node > node || output.lastReader < node)
+                    continue;
+                auto next = CheckedPCGAdd(live, output.maximumPoints);
+                if (next.HasError())
+                    return Reject<std::size_t>(PCGErrors::PointSizeOverflow);
+                live = next.Value();
+            }
+            return Result<std::size_t>::Success(live);
+        }
+
         [[nodiscard]] Result<void> ProvePeakRecords(PCGPointCloudWorkspace::State &state, const PCGTierLimits &limits) {
             for (std::uint32_t node = 0; node < state.nodeCount; ++node) {
-                std::size_t live{};
-                for (const auto &output : state.outputs) {
-                    if (output.node <= node && output.lastReader >= node) {
-                        auto next = CheckedPCGAdd(live, output.maximumPoints);
-                        if (next.HasError())
-                            return Reject<void>(PCGErrors::PointSizeOverflow);
-                        live = next.Value();
-                    }
-                }
-                state.peakRecords = std::max(state.peakRecords, live);
+                auto live = LiveRecordsAt(state, node);
+                if (live.HasError())
+                    return Result<void>::Failure(live.ErrorValue());
+                state.peakRecords = std::max(state.peakRecords, live.Value());
             }
             return state.peakRecords <= limits.maximumMaterializedPointRecords ? Result<void>::Success()
                                                                                : Reject<void>(PCGErrors::PointCapacityExceeded);
@@ -288,7 +294,7 @@ namespace Horo::PCG {
                 });
                 std::size_t slotIndex = state.slots.size();
                 for (std::size_t index = 0; index < state.slots.size(); ++index) {
-                    auto &slot = state.slots[index];
+                    const auto &slot = state.slots[index];
                     if (slot.lastReader < output.node && slot.capacity >= output.maximumPoints &&
                         SameSchema(*slot.columns.schema, *bound.schema)) {
                         slotIndex = index;
@@ -303,7 +309,8 @@ namespace Horo::PCG {
                     if (next.HasError())
                         return next;
                     bytes = next.Value();
-                    state.slots.push_back({PCGPointStorageCandidate{bound.schema}, output.maximumPoints, output.lastReader});
+                    state.slots.emplace_back(PCGPointCloudWorkspace::State::Slot{PCGPointStorageCandidate{bound.schema},
+                                                                                 output.maximumPoints, output.lastReader});
                 } else {
                     state.slots[slotIndex].lastReader = output.lastReader;
                 }
@@ -321,7 +328,8 @@ namespace Horo::PCG {
                 core.seeds.resize(slot.capacity);
                 slot.columns.attributes.reserve(slot.columns.schema->Attributes().size());
                 for (const auto &attribute : slot.columns.schema->Attributes())
-                    slot.columns.attributes.push_back({std::string(attribute.key.Value()), AllocateValues(attribute.type, slot.capacity)});
+                    slot.columns.attributes.emplace_back(
+                        PCGAttributeColumn{std::string(attribute.key.Value()), AllocateValues(attribute.type, slot.capacity)});
                 const auto charge = SlotBytes(*slot.columns.schema, slot.capacity);
                 if (charge.HasError() || ActualSlotBytes(slot.columns) > charge.Value())
                     return Reject<void>(PCGErrors::PointCapacityExceeded);
@@ -390,7 +398,7 @@ namespace Horo::PCG {
         return {candidate_->core.seeds.data(), count_};
     }
 
-    PCGPointCloudWorkspace::PCGPointCloudWorkspace(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+    PCGPointCloudWorkspace::PCGPointCloudWorkspace(CreationKey, std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
 
     PCGPointCloudWorkspace::~PCGPointCloudWorkspace() = default;
 
@@ -411,7 +419,7 @@ namespace Horo::PCG {
             if (const auto reserved = ReserveStorage(*state, bounds, tier.Value(), maximumBytes, retainedBytes); reserved.HasError())
                 return Result<std::unique_ptr<PCGPointCloudWorkspace>>::Failure(reserved.ErrorValue());
             return Result<std::unique_ptr<PCGPointCloudWorkspace>>::Success(
-                std::unique_ptr<PCGPointCloudWorkspace>(new PCGPointCloudWorkspace(std::move(state))));
+                std::make_unique<PCGPointCloudWorkspace>(CreationKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Reject<std::unique_ptr<PCGPointCloudWorkspace>>(PCGErrors::PointCapacityExceeded);
         }
@@ -450,8 +458,8 @@ namespace Horo::PCG {
         std::fill_n(columns.core.densities.begin(), count, 0.0F);
         std::fill_n(columns.core.seeds.begin(), count, std::uint64_t{});
         for (auto &attribute : columns.attributes)
-            std::visit([count](auto &values) {
-                std::fill_n(values.begin(), count, typename std::remove_cvref_t<decltype(values)>::value_type{});
+            std::visit([count]<typename Column>(Column &values) {
+                std::fill_n(values.begin(), count, typename Column::value_type{});
             }, attribute.values);
         return Result<PCGPointWriteView>::Success(PCGPointWriteView{&columns, &found->writable, count});
     }
@@ -479,8 +487,8 @@ namespace Horo::PCG {
         const auto found = FindOutput(state_->outputs, sourceNode, sourcePin);
         if (found == state_->outputs.end() || found->node != sourceNode || found->pin != sourcePin || found->phase != State::Phase::Sealed)
             return Reject<PCGPointReadView>(PCGErrors::PointDataInvalid);
-        const auto index = static_cast<std::size_t>(found - state_->outputs.begin());
-        if (std::ranges::none_of(state_->routes, [&](const State::Route &route) {
+        if (const auto index = static_cast<std::size_t>(found - state_->outputs.begin());
+            std::ranges::none_of(state_->routes, [&](const State::Route &route) {
             return route.output == index && route.target == state_->currentNode;
         }))
             return Reject<PCGPointReadView>(PCGErrors::PointDataInvalid);
