@@ -118,7 +118,7 @@ namespace Horo::Destruction::VoronoiDetail {
         mass.sixVolume += volume6;
         const Point tetraCenter = Scale(Add(Add(Add(mass.reference, triangle[0]), triangle[1]), triangle[2]), 0.25);
         mass.weightedCenter = Add(mass.weightedCenter, Scale(tetraCenter, volume6));
-        const std::uint32_t renderFirst = static_cast<std::uint32_t>(chunk.positions.size());
+        const auto renderFirst = static_cast<std::uint32_t>(chunk.positions.size());
         std::array<std::uint32_t, 3> collisionIndices{};
         std::size_t vertexIndex{};
         for (const auto &point : triangle) {
