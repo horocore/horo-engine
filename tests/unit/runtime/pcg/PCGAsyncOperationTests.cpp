@@ -388,6 +388,30 @@ namespace Horo::PCG {
         CHECK(publications == 0);
     }
 
+    TEST_CASE("PCG async non-standard publication exception remains a typed terminal failure", "[unit][pcg][async]") {
+        auto jobs = Jobs();
+        auto operations = Operations(jobs);
+        const auto fence = Fence();
+        REQUIRE(operations->RegisterFence(fence).HasValue());
+        std::atomic<int> attempts{0};
+        std::atomic<int> publications{0};
+        auto request = Request(fence, publications);
+        request.publish = [&attempts](const CancellationToken &) -> Result<void> {
+            ++attempts;
+            throw 7;
+        };
+        auto submitted = operations->Submit(PCGAsyncKind::Cook, std::move(request));
+        REQUIRE(submitted.HasValue());
+        const auto terminal = AwaitTerminal(*operations, submitted.Value());
+        REQUIRE(terminal.terminal.has_value());
+        CHECK(terminal.state == PCGAsyncState::Failed);
+        REQUIRE(terminal.terminal->error.has_value());
+        CHECK(terminal.terminal->error->code.Value() == PCGErrors::AsyncPublicationFailed.code.Value());
+        CHECK(operations->Advance(submitted.Value()).Value().state == PCGAsyncState::Failed);
+        CHECK(attempts == 1);
+        CHECK(publications == 0);
+    }
+
     TEST_CASE("PCG async completion sweep and closed scope retirement restore bounded admission", "[unit][pcg][async]") {
         auto jobs = Jobs();
         PCGAsyncLimits limits;
@@ -395,6 +419,7 @@ namespace Horo::PCG {
         auto created = PCGAsyncOperations::Create(jobs, limits);
         REQUIRE(created.HasValue());
         auto operations = std::move(created).Value();
+        limits.maximumScopes = 2;  // The coordinator retains its validated admission snapshot.
         const auto first = Fence();
         const auto second = Fence(1, 1, 1, 1, 2);
         REQUIRE(operations->RegisterFence(first).HasValue());

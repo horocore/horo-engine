@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <ranges>
 #include <thread>
 #include <utility>
@@ -73,9 +74,9 @@ namespace Horo::PCG {
         if (joined.HasError() && !children.Outcome().has_value()) {
             const Error interruption = joined.ErrorValue();
             children.RequestCancel();
-            const auto drained = children.Join();  // Lifetime fallback: accepted children must be accounted for.
-            if (drained.HasError() && !IsJobCancelled(drained.ErrorValue()) &&
-                (!prepared.HasError() || IsJobCancelled(prepared.ErrorValue())))
+            // Lifetime fallback: accepted children must be accounted for before parent completion.
+            if (const auto drained = children.Join(); drained.HasError() && !IsJobCancelled(drained.ErrorValue()) &&
+                                                      (!prepared.HasError() || IsJobCancelled(prepared.ErrorValue())))
                 return drained;
             if (prepared.HasError())
                 return prepared;
@@ -96,6 +97,8 @@ namespace Horo::PCG {
         struct Scope final {
             PCGAsyncFence fence;
             bool open{true};
+
+            explicit Scope(const PCGAsyncFence &current) : fence(current) {}
         };
 
         struct Record final {
@@ -118,7 +121,7 @@ namespace Horo::PCG {
         bool accepting{true};
         bool publishing{false};
 
-        Impl(JobSystem &scheduler, const PCGAsyncLimits bounds) : jobs(scheduler), limits(bounds) {
+        Impl(JobSystem &scheduler, const PCGAsyncLimits &bounds) : jobs(scheduler), limits(bounds) {
             scopes.reserve(limits.maximumScopes);
             records.reserve(limits.maximumTracked);
         }
@@ -131,14 +134,14 @@ namespace Horo::PCG {
             const auto found = std::ranges::find_if(scopes, [&fence](const Scope &scope) {
                 return SameScope(scope.fence, fence);
             });
-            return found == scopes.end() ? nullptr : &*found;
+            return found == scopes.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] const Scope *FindScope(const PCGAsyncFence &fence) const noexcept {
             const auto found = std::ranges::find_if(scopes, [&fence](const Scope &scope) {
                 return SameScope(scope.fence, fence);
             });
-            return found == scopes.end() ? nullptr : &*found;
+            return found == scopes.end() ? nullptr : std::to_address(found);
         }
 
         [[nodiscard]] Record *FindRecord(const PCGAsyncOperationId id) const noexcept {
@@ -176,7 +179,7 @@ namespace Horo::PCG {
             return Result<void>::Success();
         }
 
-        void Cancel(Record &record) const {
+        void Cancel(const Record &record) const {
             if (record.snapshot.terminal.has_value())
                 return;
             record.cancellation.RequestCancellation();
@@ -192,18 +195,19 @@ namespace Horo::PCG {
 
         /** @brief Invokes only an immutable-candidate owner callback after the exact fence check. */
         void Publish(Record &record) {
-            record.snapshot.state = PCGAsyncState::CandidateReady;
+            using enum PCGAsyncState;
+            record.snapshot.state = CandidateReady;
             publishing = true;
             try {
                 const auto published = record.publish(record.cancellation.Token());
                 if (published.HasError()) {
                     const bool cancelled = IsJobCancelled(published.ErrorValue());
-                    Finish(record, cancelled ? PCGAsyncState::Cancelled : PCGAsyncState::Failed, published.ErrorValue());
+                    Finish(record, cancelled ? Cancelled : Failed, published.ErrorValue());
                 } else {
-                    Finish(record, PCGAsyncState::Succeeded);
+                    Finish(record, Succeeded);
                 }
             } catch (...) {  // User callbacks may throw non-std exceptions; no exception may escape the owner boundary.
-                Finish(record, PCGAsyncState::Failed, MakeError(PCGErrors::AsyncPublicationFailed));
+                Finish(record, Failed, MakeError(PCGErrors::AsyncPublicationFailed));
             }
             publishing = false;
         }
@@ -217,7 +221,7 @@ namespace Horo::PCG {
     }
 
     /** @copydoc PCGAsyncOperations::Create */
-    Result<std::unique_ptr<PCGAsyncOperations>> PCGAsyncOperations::Create(JobSystem &jobs, const PCGAsyncLimits limits) {
+    Result<std::unique_ptr<PCGAsyncOperations>> PCGAsyncOperations::Create(JobSystem &jobs, const PCGAsyncLimits &limits) {
         if (!limits.IsValid())
             return Result<std::unique_ptr<PCGAsyncOperations>>::Failure(MakeError(PCGErrors::AsyncInvalid));
         auto owner = std::unique_ptr<PCGAsyncOperations>(new PCGAsyncOperations(std::make_unique<Impl>(jobs, limits)));
@@ -249,7 +253,7 @@ namespace Horo::PCG {
         }
         if (impl_->scopes.size() >= impl_->limits.maximumScopes)
             return Result<void>::Failure(MakeError(PCGErrors::AsyncCapacityExceeded));
-        impl_->scopes.push_back({fence});
+        impl_->scopes.emplace_back(fence);
         return Result<void>::Success();
     }
 
@@ -282,8 +286,7 @@ namespace Horo::PCG {
 
     /** @copydoc PCGAsyncOperations::Submit */
     Result<PCGAsyncOperationId> PCGAsyncOperations::Submit(const PCGAsyncKind kind, PCGAsyncRequest request) {
-        const auto admission = impl_->ValidateSubmission(kind, request);
-        if (admission.HasError())
+        if (const auto admission = impl_->ValidateSubmission(kind, request); admission.HasError())
             return Result<PCGAsyncOperationId>::Failure(admission.ErrorValue());
         const auto id = PCGAsyncOperationId::Create(impl_->nextId);
         if (id.HasError())
@@ -330,8 +333,7 @@ namespace Horo::PCG {
             return Result<PCGAsyncSnapshot>::Success(record->snapshot);
         }
 
-        const auto &worker = *job->terminalResult;
-        if (worker.state == JobState::Cancelled) {
+        if (const auto &worker = *job->terminalResult; worker.state == JobState::Cancelled) {
             impl_->Finish(*record, PCGAsyncState::Cancelled, worker.error.value_or(JobCancelled().ErrorValue()));
         } else if (worker.state == JobState::Failed) {
             impl_->Finish(*record, PCGAsyncState::Failed, worker.error);

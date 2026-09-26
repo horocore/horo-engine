@@ -153,7 +153,7 @@ namespace Horo::PCG {
     public:
         /** @brief Creates a coordinator with finite limits. @param jobs Process-owned scheduler.
          * @param limits Admission envelope. @return Coordinator or typed invalid-limit error. */
-        [[nodiscard]] static Result<std::unique_ptr<PCGAsyncOperations>> Create(JobSystem &jobs, PCGAsyncLimits limits = {});
+        [[nodiscard]] static Result<std::unique_ptr<PCGAsyncOperations>> Create(JobSystem &jobs, const PCGAsyncLimits &limits = {});
         ~PCGAsyncOperations();
         PCGAsyncOperations(const PCGAsyncOperations &) = delete;
         PCGAsyncOperations &operator=(const PCGAsyncOperations &) = delete;
