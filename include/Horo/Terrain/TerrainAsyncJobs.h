@@ -76,7 +76,8 @@ namespace Horo::Terrain {
      * The worker callback must capture owned values or leases and must not change live
      * Terrain, editor, Scene or native consumer state. The publication callback runs
      * only from Advance on the creating owner thread after the exact fence is checked.
-     * It must validate its candidate before making an atomic authoritative change.
+     * It must check cancellation and validate its candidate before making an atomic
+     * authoritative change. Reentrant Advance or ReplaceFence is rejected while it runs.
      */
     struct TerrainAsyncWorkRequest final {
         std::uint64_t workUnits{};                                      /**< Finite declared preparation work. */
@@ -164,8 +165,8 @@ namespace Horo::Terrain {
          * @brief Replaces the exact publication fence and cancels all older candidates.
          * @param fence New incarnation and revision fence for the same stable dataset. Revisions cannot regress within an incarnation.
          * @param available New exact host capability grants.
-         * @return Success or typed invalid/stale owner failure without changing current state. Grant changes need a new capability
-         * revision.
+         * @return Success or typed invalid/stale/active-publication owner failure without changing current state. Grant changes need a
+         * new capability revision.
          */
         [[nodiscard]] Result<void> ReplaceFence(TerrainAsyncWorkFence fence, TerrainFoliageCapabilitySet available);
         /** @brief Closes admission and publication and requests cancellation of accepted work; owner-lane only and idempotent. */

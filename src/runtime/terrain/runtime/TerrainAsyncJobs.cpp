@@ -50,6 +50,7 @@ namespace Horo::Terrain {
         std::vector<std::unique_ptr<Record>> records;
         std::uint64_t nextId{1};
         bool accepting{true};
+        bool publishing{false};
 
         Impl(JobSystem &scheduler, const TerrainAsyncWorkFence fence, const TerrainFoliageCapabilitySet capabilities,
              const TerrainAsyncJobLimits bounds)
@@ -148,12 +149,13 @@ namespace Horo::Terrain {
     Result<TerrainAsyncWorkSnapshot> TerrainAsyncJobs::Advance(const TerrainAsyncWorkId id) {
         if (!impl_->OnOwnerThread())
             return Result<TerrainAsyncWorkSnapshot>::Failure(MakeError(TerrainErrors::WorkWrongThread));
+        if (impl_->publishing)
+            return Result<TerrainAsyncWorkSnapshot>::Failure(MakeError(TerrainErrors::WorkNotReady));
         Impl::Record *const record = impl_->Find(id);
         if (record == nullptr)
             return Result<TerrainAsyncWorkSnapshot>::Failure(MakeError(TerrainErrors::WorkUnknown));
         if (record->snapshot.IsTerminal())
             return Result<TerrainAsyncWorkSnapshot>::Success(record->snapshot);
-
         const auto job = record->job.Snapshot();
         if (!job.has_value())
             return Result<TerrainAsyncWorkSnapshot>::Failure(MakeError(TerrainErrors::WorkUnknown));
@@ -177,10 +179,12 @@ namespace Horo::Terrain {
                                          : JobCancelled().ErrorValue();
         } else {
             record->snapshot.state = TerrainAsyncWorkState::Prepared;
+            impl_->publishing = true;
             try {
                 const Result<void> published = record->publish(record->cancellation.Token());
                 if (published.HasError()) {
-                    record->snapshot.state = TerrainAsyncWorkState::Failed;
+                    record->snapshot.state =
+                        IsJobCancelled(published.ErrorValue()) ? TerrainAsyncWorkState::Cancelled : TerrainAsyncWorkState::Failed;
                     record->snapshot.error = published.ErrorValue();
                 } else {
                     record->snapshot.state = TerrainAsyncWorkState::Succeeded;
@@ -192,6 +196,7 @@ namespace Horo::Terrain {
                 record->snapshot.state = TerrainAsyncWorkState::Failed;
                 record->snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
             }
+            impl_->publishing = false;
         }
         record->publish = {};
         return Result<TerrainAsyncWorkSnapshot>::Success(record->snapshot);
@@ -226,6 +231,8 @@ namespace Horo::Terrain {
             return Result<void>::Failure(MakeError(TerrainErrors::WorkWrongThread));
         if (!impl_->accepting)
             return Result<void>::Failure(MakeError(TerrainErrors::LifecycleUnavailable));
+        if (impl_->publishing)
+            return Result<void>::Failure(MakeError(TerrainErrors::WorkNotReady));
         if (!fence.IsValid() || !available.IsValid() || fence.runtime.dataset != impl_->currentFence.runtime.dataset)
             return Result<void>::Failure(MakeError(TerrainErrors::WorkInvalid));
         if (RegressesWithinIncarnation(impl_->currentFence, fence))

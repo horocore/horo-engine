@@ -209,6 +209,69 @@ namespace Horo::Terrain {
             REQUIRE(publications == 1);
         }
 
+        TEST_CASE("Terrain owner publication cancellation retains its typed cause and never retries", "[unit][terrain][jobs]") {
+            JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
+            auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
+            int publications{};
+            auto submitted = jobs->SubmitEditPreview(Request([](const JobExecutionContext &) {
+                return Result<void>::Success();
+            }, [&](const CancellationToken &) {
+                ++publications;
+                return JobCancelled(MakeError(TerrainErrors::RevisionStale));
+            }));
+            REQUIRE(submitted.HasValue());
+            const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
+            REQUIRE(terminal.state == TerrainAsyncWorkState::Cancelled);
+            REQUIRE(terminal.error.has_value());
+            REQUIRE(IsJobCancelled(*terminal.error));
+            REQUIRE(terminal.error->cause.Get() != nullptr);
+            REQUIRE(terminal.error->cause.Get()->code.Value() == TerrainErrors::RevisionStale.code.Value());
+            REQUIRE(jobs->Advance(submitted.Value()).Value().state == TerrainAsyncWorkState::Cancelled);
+            REQUIRE(publications == 1);
+        }
+
+        TEST_CASE("Terrain owner publication cannot reenter fence replacement or advance", "[unit][terrain][jobs]") {
+            JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
+            auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
+            TerrainAsyncWorkId id;
+            std::string replaceCode;
+            std::string advanceCode;
+            auto submitted = jobs->SubmitLoad(Request([](const JobExecutionContext &) {
+                return Result<void>::Success();
+            }, [&](const CancellationToken &) {
+                replaceCode = jobs->ReplaceFence(Fence(2), Capabilities()).ErrorValue().code.Value();
+                advanceCode = jobs->Advance(id).ErrorValue().code.Value();
+                return Result<void>::Success();
+            }));
+            REQUIRE(submitted.HasValue());
+            id = submitted.Value();
+            REQUIRE(AdvanceUntilTerminal(*jobs, id).state == TerrainAsyncWorkState::Succeeded);
+            REQUIRE(replaceCode == TerrainErrors::WorkNotReady.code.Value());
+            REQUIRE(advanceCode == TerrainErrors::WorkNotReady.code.Value());
+            REQUIRE(jobs->ReplaceFence(Fence(2), Capabilities()).HasValue());
+        }
+
+        TEST_CASE("Terrain owner shutdown during publication cancels before commit", "[unit][terrain][jobs]") {
+            JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
+            auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();
+            bool published{};
+            auto submitted = jobs->SubmitEditPreview(Request([](const JobExecutionContext &) {
+                return Result<void>::Success();
+            }, [&](const CancellationToken &token) {
+                jobs->BeginShutdown();
+                if (token.IsCancellationRequested())
+                    return JobCancelled();
+                published = true;
+                return Result<void>::Success();
+            }));
+            REQUIRE(submitted.HasValue());
+            const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
+            REQUIRE(terminal.state == TerrainAsyncWorkState::Cancelled);
+            REQUIRE(IsJobCancelled(*terminal.error));
+            REQUIRE_FALSE(published);
+            REQUIRE(jobs->IsDrained());
+        }
+
         TEST_CASE("Terrain pre-cancelled parent rejects admission and foreign lane cannot publish", "[unit][terrain][jobs]") {
             JobSystem scheduler({.workerCount = 1, .maxQueuedJobs = 4});
             auto jobs = std::move(TerrainAsyncJobs::Create(scheduler, Fence(), Capabilities())).Value();

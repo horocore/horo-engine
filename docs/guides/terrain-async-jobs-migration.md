@@ -20,7 +20,10 @@ receives the cancellation token for its final commit check. A replacement calls
 `ReplaceFence` before new submissions. It cancels old candidates, which can no
 longer publish even if their workers finish late. Replacement rejects revision
 rollback within a live incarnation; capability grant changes must carry a new
-capability revision. `BeginShutdown` closes admission
+capability revision. A publication callback that aborts returns `JobCancelled()`
+with an optional typed cause; the owner records cancellation once, never failure
+or a retry. Reentrant `ReplaceFence` or `Advance` during publication is rejected
+until the callback returns. `BeginShutdown` closes admission
 and publication, and `IsDrained` reports worker completion without an owner-thread
 wait. Keep provider, candidate and consumer leases until their own retirement
 acknowledgements. `Forget` releases a completed record after its Foundation job

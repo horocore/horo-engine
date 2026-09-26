@@ -293,8 +293,8 @@ namespace Horo::Terrain::TerrainErrors {
         .domain = TerrainDomain,
         .code = ErrorCode{"terrain.work.not_ready"},
         .defaultSeverity = ErrorSeverity::Warning,
-        .summary = "Terrain work has not finished and cannot be released.",
-        .remediationHint = "Advance the owner at its safe point and wait for the accepted Foundation job to terminate.",
+        .summary = "Terrain work is not terminal or an owner publication is already active.",
+        .remediationHint = "Advance or replace after the current owner publication and accepted Foundation work have completed.",
         .retryable = true,
         .userActionable = false,
     };

@@ -123,7 +123,10 @@ Terrain state or touch Scene, editor or native consumer owners.
 
 The Terrain owner calls `Advance` at a safe point. Only a successful prepared job
 whose complete captured fence still equals the current fence may run its atomic
-publication callback. Failure retains the original typed error. A queued or
+publication callback. A `JobCancelled()` publication result remains cancellation
+with its typed cause and is never retried; other failures retain their original
+typed errors. Owner publication rejects reentrant fence replacement or nested
+`Advance`, so its validated fence cannot change inside that callback. A queued or
 running cancellation, replacement, capability revision or shutdown prevents
 publication and terminates as cancellation, with stale revision retained as a
 typed cause. A new fence cancels outstanding candidates without changing the
