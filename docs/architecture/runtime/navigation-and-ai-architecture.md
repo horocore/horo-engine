@@ -274,6 +274,29 @@ publishes paths/desired velocities before character locomotion. Stale results re
 `StaleSnapshot` or `InvalidHandle` and may be resubmitted within budget; they are never applied
 to replacement agents or tiles. A held path/corridor must be revalidated before later use too.
 
+`NavigationPathPolicy` is the owner-thread held-corridor boundary while a full coordinator
+is not yet present. The owner assigns a generation-safe `PathId` to each accepted
+path and retains its query provenance, complete or partial region evidence, link
+revision and goal revision. Before handing out a movement corridor, the owner
+compares one fresh combined-world observation with the retained world, topology,
+filter, profile, origin, obstacle, link, region and target revisions. A changed
+region is reported by Horo-owned region ID and generation; a whole-topology
+fallback is mandatory even when exact region generations appear unchanged,
+because canonical corridor polygon indices are topology-scoped. Stale corridors
+remain retained only for diagnostics, never returned as current movement input.
+The policy keeps one coalesced repath intent for the newest goal/source, applies
+fixed-tick debounce and cooldown after ordinary changes, and allows an explicit
+forced request to bypass those delays. Only owner admission consumes that intent;
+the owner must observe the current combined world at that same tick before
+admission. This policy neither runs a provider query nor publishes a result itself.
+World replacement reports a typed invalidation but cannot enqueue a repath
+under the old world identity; the owner clears the policy and creates new-world
+path identity before admitting work. Same-world revision rollback is rejected.
+The new runtime-owned public header is additive; existing query/result callers
+require no source migration, and providers retain the unchanged `NavigationApi`
+boundary. Future coordinator integration must use this owner-phase check rather
+than create a second path-currentness authority.
+
 ADR-018 `OwnerThreadNextFrame` console handlers submit typed navigation commands for this
 phase; they do not introduce a second mutation phase in `PreUpdate` / `DebugPhase`. Heavy
 bake/export commands use asynchronous `OperationId` progress per ADR-010. The application
