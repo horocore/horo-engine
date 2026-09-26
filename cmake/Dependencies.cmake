@@ -11,6 +11,9 @@ if(HORO_BUILD_NETWORK_GNS)
     set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     # The host's MSVC targets use the dynamic CRT; protobuf defaults to /MT.
     set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+    # GNS otherwise marks protobuf references as DLL imports on MSVC even
+    # though this optional profile builds and links libprotobuf statically.
+    set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
     set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
     set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(horo_protobuf
