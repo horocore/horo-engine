@@ -3,9 +3,12 @@
 #include "Horo/Vfx/VfxErrors.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <new>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -43,6 +46,10 @@ namespace Horo::Vfx {
         };
 
         struct EffectInstancePoolState final {
+            /** @brief Keeps MSVC vector proxy allocations in a throwing constructor that preparation can catch. */
+            EffectInstancePoolState(const std::uint32_t capacity, const std::uint32_t delayedCapacity)
+                : slots(capacity), freeSlots(capacity), delayed(delayedCapacity) {}
+
             EffectPoolPlan plan{};
             EffectPoolPolicy policy{};
             VfxIdentityScope scene{};
@@ -176,16 +183,19 @@ namespace Horo::Vfx {
             if (plannedBytes > maximumBytes)
                 return Invalid;
             std::unique_ptr<EffectInstancePoolState> prepared;
+            constexpr std::uint64_t maxVectorIndex = static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max());
+            if (capacity > maxVectorIndex / sizeof(EffectPoolSlot) || capacity > maxVectorIndex / sizeof(std::uint32_t) ||
+                delayedCapacity > maxVectorIndex / sizeof(Detail::DelayedEffectRequest) ||
+                capacity > std::numeric_limits<std::size_t>::max() / sizeof(EffectPoolSlot) ||
+                capacity > std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t) ||
+                delayedCapacity > std::numeric_limits<std::size_t>::max() / sizeof(Detail::DelayedEffectRequest))
+                return Invalid;
             try {
-                prepared = std::make_unique<EffectInstancePoolState>();
-                if (capacity > prepared->slots.max_size() || capacity > prepared->freeSlots.max_size() ||
-                    delayedCapacity > prepared->delayed.max_size())
-                    return Invalid;
-                prepared->slots.resize(capacity);
-                prepared->freeSlots.resize(capacity);
-                prepared->delayed.resize(delayedCapacity);
+                prepared = std::make_unique<EffectInstancePoolState>(capacity, delayedCapacity);
             } catch (const std::bad_alloc &) {
                 return AllocationFailed;
+            } catch (const std::length_error &) {
+                return Invalid;
             }
             std::uint64_t remainingBytes = maximumBytes - plannedBytes;
             if (const auto chargeExtra =

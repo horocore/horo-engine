@@ -98,6 +98,30 @@ namespace Horo::Vfx {
         CHECK(values.empty());
     }
 
+    TEST_CASE("Allocation failure probe unwinds vector growth after a prior allocation", "[unit][vfx][effect-pool]") {
+        std::vector<std::uint32_t> values;
+        void *firstAllocation = nullptr;
+        bool allocationFailed = false;
+        std::fputs("effect-pool second-allocation vector failure probe begin\n", stderr);
+        std::fflush(stderr);
+        {
+            Tests::AllocationProbe::ScopedFailure failSecondAllocation{1};
+            try {
+                firstAllocation = ::operator new(sizeof(std::uint32_t));
+                values.resize(8);
+            } catch (const std::bad_alloc &) {
+                allocationFailed = true;
+            }
+        }
+        std::fputs("effect-pool second-allocation vector failure probe end\n", stderr);
+        std::fflush(stderr);
+        const bool madeFirstAllocation = firstAllocation != nullptr;
+        ::operator delete(firstAllocation);
+        REQUIRE(madeFirstAllocation);
+        CHECK(allocationFailed);
+        CHECK(values.empty());
+    }
+
     TEST_CASE("Effect pool reports allocation failure at every required preparation allocation", "[unit][vfx][effect-pool]") {
         const auto descriptor = Descriptor();
         const auto budget = Budget();
