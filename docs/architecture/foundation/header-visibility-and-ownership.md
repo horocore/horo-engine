@@ -20,6 +20,16 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## MCP-001.2 Session Boundary
+
+`HoroEngine::McpSession` owns the additive `Horo/Mcp/McpErrors.h`,
+`McpSession.h`, `McpInProcessAdapter.h`, and `McpLocalTransport.h` public
+contracts. There are no prior MCP session callers to migrate. Future executable
+hosts link this target at their composition root, supply the controller and
+approved admission snapshots, and retain ownership of process I/O; domain
+targets do not link MCP. The generated standalone `HoroMcpSession` public-header
+consumer verifies each header with only declared public dependencies.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
