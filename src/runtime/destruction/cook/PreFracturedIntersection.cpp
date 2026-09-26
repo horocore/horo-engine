@@ -51,8 +51,7 @@ namespace Horo::Destruction::Detail {
             if (u < -epsilon || u > 1.0 + epsilon)
                 return std::nullopt;
             const Point q = Cross(offset, edgeA);
-            const double v = Dot(direction, q) * inverse;
-            if (v < -epsilon || u + v > 1.0 + epsilon)
+            if (const double v = Dot(direction, q) * inverse; v < -epsilon || u + v > 1.0 + epsilon)
                 return std::nullopt;
             const double t = Dot(edgeB, q) * inverse;
             if (t < -epsilon || t > 1.0 + epsilon)
@@ -73,9 +72,8 @@ namespace Horo::Destruction::Detail {
             const double ac = Orient(a, b, c);
             const double ad = Orient(a, b, d);
             const double ca = Orient(c, d, a);
-            const double cb = Orient(c, d, b);
-            if ((ac > epsilon && ad > epsilon) || (ac < -epsilon && ad < -epsilon) || (ca > epsilon && cb > epsilon) ||
-                (ca < -epsilon && cb < -epsilon))
+            if (const double cb = Orient(c, d, b); (ac > epsilon && ad > epsilon) || (ac < -epsilon && ad < -epsilon) ||
+                                                   (ca > epsilon && cb > epsilon) || (ca < -epsilon && cb < -epsilon))
                 return false;
             const auto overlap = [](const double a0, const double a1, const double b0, const double b1) {
                 return std::max(std::min(a0, a1), std::min(b0, b1)) <= std::min(std::max(a0, a1), std::max(b0, b1)) + 1.0e-10;
@@ -169,6 +167,16 @@ namespace Horo::Destruction::Detail {
             return true;
         }
 
+        [[nodiscard]] bool EdgesPierceBeyondShared(const std::array<Point, 3> &edges, const std::array<Point, 3> &triangle,
+                                                   const std::optional<Point> &sharedPoint) {
+            for (std::size_t edge = 0; edge < 3; ++edge) {
+                const auto hit = SegmentPiercesTriangle(edges[edge], edges[(edge + 1U) % 3U], triangle);
+                if (hit.has_value() && (!sharedPoint.has_value() || !SamePoint(*hit, *sharedPoint)))
+                    return true;
+            }
+            return false;
+        }
+
         [[nodiscard]] bool TrianglesIntersect(const Assets::PreFracturedSourceNode &node, const Triangle &a, const Triangle &b) {
             std::array<Point, 3> pointsA{};
             std::array<Point, 3> pointsB{};
@@ -190,43 +198,45 @@ namespace Horo::Destruction::Detail {
                 return true;
             if (sharedCount == 2)
                 return coplanar && CoplanarAreaOverlap(pointsA, pointsB, normal);
-            for (std::size_t edge = 0; edge < 3; ++edge) {
-                for (const auto &hit : {SegmentPiercesTriangle(pointsA[edge], pointsA[(edge + 1U) % 3U], pointsB),
-                                        SegmentPiercesTriangle(pointsB[edge], pointsB[(edge + 1U) % 3U], pointsA)}) {
-                    if (hit && (sharedCount == 0 || !SamePoint(*hit, Position(node, shared[0]))))
-                        return true;
-                }
-            }
+            if (const std::optional<Point> sharedPoint = sharedCount == 0 ? std::nullopt : std::optional{Position(node, shared[0])};
+                EdgesPierceBeyondShared(pointsA, pointsB, sharedPoint) || EdgesPierceBeyondShared(pointsB, pointsA, sharedPoint))
+                return true;
             if (!coplanar)
                 return false;
             return sharedCount == 0 ? CoplanarOverlap(pointsA, pointsB, normal) : CoplanarAreaOverlap(pointsA, pointsB, normal);
+        }
+
+        [[nodiscard]] Triangle MakeTriangle(const Assets::PreFracturedSourceNode &node, const std::size_t offset) {
+            Triangle triangle;
+            triangle.indices[0] = node.triangleIndices[offset];
+            triangle.minimum = Position(node, triangle.indices[0]);
+            triangle.maximum = triangle.minimum;
+            for (std::size_t vertex = 1; vertex < 3; ++vertex) {
+                triangle.indices[vertex] = node.triangleIndices[offset + vertex];
+                const Point point = Position(node, triangle.indices[vertex]);
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    triangle.minimum[axis] = std::min(triangle.minimum[axis], point[axis]);
+                    triangle.maximum[axis] = std::max(triangle.maximum[axis], point[axis]);
+                }
+            }
+            return triangle;
+        }
+
+        [[nodiscard]] std::vector<Triangle> SortedTriangles(const Assets::PreFracturedSourceNode &node) {
+            std::vector<Triangle> triangles;
+            triangles.reserve(node.triangleIndices.size() / 3U);
+            for (std::size_t offset = 0; offset < node.triangleIndices.size(); offset += 3U)
+                triangles.push_back(MakeTriangle(node, offset));
+            std::ranges::sort(triangles, [](const Triangle &a, const Triangle &b) {
+                return a.minimum[0] < b.minimum[0];
+            });
+            return triangles;
         }
     }  // namespace
 
     IntersectionCheck CheckSelfIntersection(const Assets::PreFracturedSourceNode &node, std::uint64_t &remainingWork,
                                             const CancellationToken &cancellation) {
-        std::vector<Triangle> triangles;
-        triangles.reserve(node.triangleIndices.size() / 3U);
-        for (std::size_t offset = 0; offset < node.triangleIndices.size(); offset += 3U) {
-            Triangle triangle;
-            for (std::size_t vertex = 0; vertex < 3; ++vertex) {
-                triangle.indices[vertex] = node.triangleIndices[offset + vertex];
-                const Point point = Position(node, triangle.indices[vertex]);
-                if (vertex == 0) {
-                    triangle.minimum = point;
-                    triangle.maximum = point;
-                } else {
-                    for (std::size_t axis = 0; axis < 3; ++axis) {
-                        triangle.minimum[axis] = std::min(triangle.minimum[axis], point[axis]);
-                        triangle.maximum[axis] = std::max(triangle.maximum[axis], point[axis]);
-                    }
-                }
-            }
-            triangles.push_back(triangle);
-        }
-        std::sort(triangles.begin(), triangles.end(), [](const Triangle &a, const Triangle &b) {
-            return a.minimum[0] < b.minimum[0];
-        });
+        const auto triangles = SortedTriangles(node);
         for (std::size_t left = 0; left < triangles.size(); ++left) {
             if (cancellation.IsCancellationRequested())
                 return IntersectionCheck::Cancelled;

@@ -1582,6 +1582,15 @@ replace `current.json`, or relax digest and envelope verification on a later hit
 
 Import and cook errors are surfaced as structured diagnostics:
 
+The current asset cook service also publishes typed `BuildOutputStore` records
+under one session and, when operation admission succeeds, one `OperationId`.
+Cache reuse and successful cooks have distinct per-asset results; missing
+cookers, unreadable sources, and cooker failures carry the resolved source path
+for editor navigation. A terminal build-output record is published before the
+matching operation becomes terminal. If the operation store cannot admit the
+cook, the service rejects it before doing asset work or publishing output.
+Records remain subject to the store's bounded retention policy.
+
 ```cpp
 struct ImportDiagnostic {
     enum class Severity { Info, Warning, Error } severity;

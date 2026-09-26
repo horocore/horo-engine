@@ -111,6 +111,9 @@ namespace Horo::Destruction {
         source.nodes[0].parent = 0;
         CheckError(ValidatePreFracturedSource(source, Limits(), CancellationToken{}), PreFracturedImportErrors::InvalidHierarchy,
                    "nodes/7");
+        source.nodes[0].parent = 2;
+        CheckError(ValidatePreFracturedSource(source, Limits(), CancellationToken{}), PreFracturedImportErrors::InvalidHierarchy,
+                   "nodes/7");
         source = Source();
         auto limits = Limits();
         limits.maximumChunksPerDestructible = 1;

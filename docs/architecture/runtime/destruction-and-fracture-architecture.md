@@ -164,6 +164,25 @@ snapshot. Replacement admits only the next generation and resets its state at re
 one, invalidating all previous completions. Shutdown closes preparation, commit and
 replacement admission without discarding the last published snapshot.
 
+`Horo/Destruction/DestructionDamageRuntime.h` is the DFR-003.2 fixed-tick owner value
+over that state machine and the typed command boundary. Each safe-point context names
+the current target, cooked content, configuration and capability revisions, authority
+grant, limits, simulation tick and typed pre/post-Physics safe point. Collision damage
+requires the post-Physics phase. Preparation admits the complete command, rejects
+older or conflicting command identities and older fixed ticks, checks the authored cooldown against the last
+committed damage tick, and delegates the health/phase decision to the canonical state
+machine. An exact latest-command retry returns the previous typed success without a
+second revision or cooldown charge. Cooldown counts fixed ticks between committed
+damage commands; zero disables it, equality admits, and explicit fracture is exempt.
+No candidate mutates the published value. Commit rechecks current evidence and the
+detached successor before returning a new value with its typed terminal result. The
+host publishes that value only with the aggregate Scene/Physics/Render transition.
+Collision commands are admitted only from frozen post-step evidence at the later
+Destruction safe point; a prepared candidate may commit at a later aggregate safe point.
+Physics callbacks never call this owner or change health.
+Replacement clears command and cooldown history; shutdown closes both preparation and
+commit while preserving the last snapshot.
+
 ## Pre-Fractured Geometry
 
 Pre-fractured meshes are authored and cooked offline through ADR-145:

@@ -72,6 +72,10 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor NetworkProjectSettingsStale;
     /** @brief Project-settings publication is closed and rejects late commands. */
     extern const ErrorCodeDescriptor NetworkProjectSettingsShuttingDown;
+    /** @brief Product target capability manifest has an unknown version, field or incoherent claim. */
+    extern const ErrorCodeDescriptor NetworkTargetManifestInvalid;
+    /** @brief Product target capability manifest exceeds its finite byte or provider bound. */
+    extern const ErrorCodeDescriptor NetworkTargetManifestCapacityExceeded;
     /** @brief Replication descriptor metadata is malformed or exceeds its declared bounds. */
     extern const ErrorCodeDescriptor ReplicationDescriptorInvalid;
     /** @brief Schema, field, or tombstone identities collide in one candidate snapshot. */
@@ -156,6 +160,12 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor TransportOperationCancelled;
     /** @brief Caller-owned shutdown state rejected transport admission before queue mutation. */
     extern const ErrorCodeDescriptor TransportShuttingDown;
+    /** @brief Native transport initialization, bind, or connect could not establish the requested endpoint. */
+    extern const ErrorCodeDescriptor TransportNativeUnavailable;
+    /** @brief A native connection ended before an owner-controlled close completed. */
+    extern const ErrorCodeDescriptor TransportConnectionFailed;
+    /** @brief Native receive data violated the bounded packet contract. */
+    extern const ErrorCodeDescriptor TransportMalformedPacket;
     /** @brief Host-scoped network I/O service construction or call bounds are invalid. */
     extern const ErrorCodeDescriptor NetworkIoServiceInvalid;
     /** @brief Prepared network I/O service storage could not be allocated. */
@@ -180,6 +190,14 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor NetworkLifecycleTransitionInvalid;
     /** @brief A completion names a retired handle or asynchronous operation generation. */
     extern const ErrorCodeDescriptor NetworkLifecycleOperationStale;
+    /** @brief Fixed-tick alignment policy, sample, or advance order is malformed. */
+    extern const ErrorCodeDescriptor NetworkClockInvalid;
+    /** @brief A clock sample names an old connection, session, epoch, sequence, or server tick. */
+    extern const ErrorCodeDescriptor NetworkClockSampleStale;
+    /** @brief Mapping is unavailable before the first sample or outside an active session. */
+    extern const ErrorCodeDescriptor NetworkClockUnavailable;
+    /** @brief A clock epoch or tick cannot advance without wrapping. */
+    extern const ErrorCodeDescriptor NetworkClockOverflow;
     /** @brief Protocol identity contributions or version ranges are malformed. */
     extern const ErrorCodeDescriptor ProtocolIdentityDescriptorInvalid;
     /** @brief A protocol-scoped stable identity is registered more than once. */

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -30,22 +31,20 @@ namespace Horo::Assets {
             }
         };
 
-        /** @brief Observes only the token borrowed for the synchronous ufbx load call. */
-        ufbx_progress_result ParseProgress(void *user, const ufbx_progress *) noexcept {
-            const auto *cancellation = static_cast<const CancellationToken *>(user);
-            return cancellation->IsCancellationRequested() ? UFBX_PROGRESS_CANCEL : UFBX_PROGRESS_CONTINUE;
-        }
+        struct ParseContext {
+            const CancellationToken &cancellation;
+        };
 
         [[nodiscard]] Error SourceError(const ErrorCodeDescriptor &code, std::string_view sourceName, std::string_view path,
                                         std::string message) {
             auto error = MakeError(code, message);
-            error.diagnostics.push_back({DiagnosticCode{code.code.Value()}, DiagnosticSeverity::Error, std::move(message),
-                                         SourceLocation{std::string{sourceName}}, std::string{path}});
+            error.diagnostics.emplace_back(DiagnosticCode{code.code.Value()}, DiagnosticSeverity::Error, std::move(message),
+                                           SourceLocation{std::string{sourceName}}, std::string{path});
             return error;
         }
 
         [[nodiscard]] std::string NodePath(const ufbx_node *node) {
-            return "nodes/" + std::to_string(node->typed_id);
+            return std::format("nodes/{}", node->typed_id);
         }
 
         [[nodiscard]] bool FiniteMatrix(const ufbx_matrix &matrix) {
@@ -89,6 +88,23 @@ namespace Horo::Assets {
             return name.data != nullptr ? std::string{name.data, name.length} : std::string{};
         }
 
+        [[nodiscard]] Result<void> AppendTriangle(const ufbx_mesh &mesh, const std::vector<std::uint32_t> &corners,
+                                                  const std::size_t triangle, const bool mirrored, const std::string &material,
+                                                  PreFracturedSourceNode &output, const std::string_view sourceName) {
+            for (std::size_t corner = 0; corner < 3; ++corner) {
+                const std::uint32_t polygonCorner = corners[triangle * 3U + corner];
+                if (polygonCorner >= mesh.vertex_indices.count || mesh.vertex_indices[polygonCorner] >= mesh.vertices.count)
+                    return Result<void>::Failure(SourceError(ImportErrors::PreFracturedSourceInvalid, sourceName, output.sourcePath,
+                                                             "Mesh polygon references an invalid vertex."));
+                output.triangleIndices.push_back(mesh.vertex_indices[polygonCorner]);
+            }
+            if (mirrored)
+                std::swap(output.triangleIndices[output.triangleIndices.size() - 1U],
+                          output.triangleIndices[output.triangleIndices.size() - 2U]);
+            output.triangleMaterials.push_back(material);
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> CopyTriangles(const ufbx_node *node, PreFracturedSourceNode &output, const std::string_view sourceName,
                                                  const CancellationToken &cancellation) {
             const ufbx_mesh *mesh = node->mesh;
@@ -117,17 +133,9 @@ namespace Horo::Assets {
                                                              "Mesh triangulation failed or exceeded the triangle budget."));
                 const std::string material = FaceMaterial(node, faceIndex);
                 for (std::size_t triangle = 0; triangle < triangleCount; ++triangle) {
-                    for (std::size_t corner = 0; corner < 3; ++corner) {
-                        const std::uint32_t polygonCorner = corners[triangle * 3U + corner];
-                        if (polygonCorner >= mesh->vertex_indices.count || mesh->vertex_indices[polygonCorner] >= mesh->vertices.count)
-                            return Result<void>::Failure(SourceError(ImportErrors::PreFracturedSourceInvalid, sourceName, output.sourcePath,
-                                                                     "Mesh polygon references an invalid vertex."));
-                        output.triangleIndices.push_back(mesh->vertex_indices[polygonCorner]);
-                    }
-                    if (mirrored)
-                        std::swap(output.triangleIndices[output.triangleIndices.size() - 1U],
-                                  output.triangleIndices[output.triangleIndices.size() - 2U]);
-                    output.triangleMaterials.push_back(material);
+                    if (auto appended = AppendTriangle(*mesh, corners, triangle, mirrored, material, output, sourceName);
+                        appended.HasError())
+                        return appended;
                 }
             }
             return Result<void>::Success();
@@ -158,9 +166,9 @@ namespace Horo::Assets {
             if (mesh->vertices.count > kMaximumVertices || mesh->num_triangles > kMaximumIndices / 3U || mesh->num_faces > kMaximumFaces)
                 return Result<void>::Failure(
                     SourceError(ImportErrors::PreFracturedSourceLimit, sourceName, output.sourcePath, "Mesh exceeds the geometry budget."));
-            const std::size_t minimumBytes = mesh->vertices.count * sizeof(std::array<float, 3>) +
-                                             mesh->num_triangles * (3U * sizeof(std::uint32_t) + sizeof(std::string));
-            if (minimumBytes > kMaximumNormalizedBytes - normalizedBytes)
+            if (const std::size_t minimumBytes = mesh->vertices.count * sizeof(std::array<float, 3>) +
+                                                 mesh->num_triangles * (3U * sizeof(std::uint32_t) + sizeof(std::string));
+                minimumBytes > kMaximumNormalizedBytes - normalizedBytes)
                 return Result<void>::Failure(SourceError(ImportErrors::PreFracturedSourceLimit, sourceName, output.sourcePath,
                                                          "Mesh exceeds the normalized source budget."));
             if (auto copied = CopyGeometry(node, output, sourceName, cancellation); copied.HasError())
@@ -215,7 +223,7 @@ namespace Horo::Assets {
             return Result<PreFracturedSource>::Success(std::move(result));
         }
 
-        [[nodiscard]] ufbx_load_opts LoadOptions(const CancellationToken &cancellation) {
+        [[nodiscard]] ufbx_load_opts LoadOptions(ParseContext &context) {
             ufbx_load_opts options{};
             options.ignore_animation = true;
             options.ignore_embedded = true;
@@ -225,8 +233,11 @@ namespace Horo::Assets {
             options.target_axes = ufbx_axes_right_handed_y_up;
             options.target_unit_meters = 1.0;
             options.space_conversion = UFBX_SPACE_CONVERSION_ADJUST_TRANSFORMS;
-            options.progress_cb.fn = ParseProgress;
-            options.progress_cb.user = const_cast<CancellationToken *>(&cancellation);
+            options.progress_cb.fn = [](auto *user, const ufbx_progress *) noexcept {
+                const auto *context = static_cast<const ParseContext *>(user);
+                return context->cancellation.IsCancellationRequested() ? UFBX_PROGRESS_CANCEL : UFBX_PROGRESS_CONTINUE;
+            };
+            options.progress_cb.user = &context;
             options.progress_interval_hint = 64U * 1024U;
             options.temp_allocator.memory_limit = kMaximumParserBytes;
             options.result_allocator.memory_limit = kMaximumParserBytes;
@@ -243,7 +254,8 @@ namespace Horo::Assets {
         if (cancellation.IsCancellationRequested())
             return Result<PreFracturedSource>::Failure(
                 SourceError(ImportErrors::ImportCancelled, sourceName, {}, "Pre-fractured source import was cancelled."));
-        const ufbx_load_opts options = LoadOptions(cancellation);
+        ParseContext context{cancellation};
+        const ufbx_load_opts options = LoadOptions(context);
         ufbx_error parserError{};
         std::unique_ptr<ufbx_scene, SceneDeleter> scene{ufbx_load_memory(bytes.data(), bytes.size(), &options, &parserError)};
         if (cancellation.IsCancellationRequested())

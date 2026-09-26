@@ -56,8 +56,8 @@ namespace Horo::Destruction {
         [[nodiscard]] Error ImportError(const ErrorCodeDescriptor &code, const Assets::PreFracturedSource &source, std::string_view path,
                                         std::string message) {
             auto error = MakeError(code, message);
-            error.diagnostics.push_back({DiagnosticCode{code.code.Value()}, DiagnosticSeverity::Error, std::move(message),
-                                         SourceLocation{source.sourceName}, std::string{path}});
+            error.diagnostics.emplace_back(DiagnosticCode{code.code.Value()}, DiagnosticSeverity::Error, std::move(message),
+                                           SourceLocation{source.sourceName}, std::string{path});
             return error;
         }
 
@@ -147,8 +147,7 @@ namespace Horo::Destruction {
             const double vz = static_cast<double>(pc[2]) - pa[2];
             const double cx = uy * vz - uz * vy;
             const double cy = uz * vx - ux * vz;
-            const double cz = ux * vy - uy * vx;
-            if (!std::isfinite(cx * cx + cy * cy + cz * cz) || cx * cx + cy * cy + cz * cz <= 1.0e-24)
+            if (const double cz = ux * vy - uy * vx; !std::isfinite(cx * cx + cy * cy + cz * cz) || cx * cx + cy * cy + cz * cz <= 1.0e-24)
                 return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidTopology, source, node.sourcePath,
                                                          "Chunk contains a zero-area or invalid triangle."));
             if (node.triangleMaterials[triangle / 3U].empty())
@@ -231,7 +230,7 @@ namespace Horo::Destruction {
                     return Result<std::vector<DestructionChunkId>>::Failure(
                         ImportError(PreFracturedImportErrors::MissingChunk, source, node.sourcePath,
                                     "Mesh node '" + node.name + "' lacks a canonical HoroChunk_<id> token."));
-                if (const auto [it, inserted] = seen.emplace(id.Value().Value(), node.sourcePath); !inserted)
+                if (const auto [it, inserted] = seen.try_emplace(id.Value().Value(), node.sourcePath); !inserted)
                     return Result<std::vector<DestructionChunkId>>::Failure(
                         ImportError(PreFracturedImportErrors::DuplicateChunk, source, node.sourcePath,
                                     "Duplicate chunk ID also appears at " + it->second + '.'));
@@ -252,8 +251,12 @@ namespace Horo::Destruction {
             }
             std::uint32_t depth = 1;
             std::optional<std::uint32_t> ancestor = node.parent;
-            while (ancestor) {
-                if (*ancestor >= source.nodes.size() || ++depth > limits.maximumHierarchyDepth)
+            while (ancestor.has_value()) {
+                if (*ancestor >= source.nodes.size())
+                    return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidHierarchy, source, node.sourcePath,
+                                                             "Chunk parent chain is invalid or too deep."));
+                ++depth;
+                if (depth > limits.maximumHierarchyDepth)
                     return Result<void>::Failure(ImportError(PreFracturedImportErrors::InvalidHierarchy, source, node.sourcePath,
                                                              "Chunk parent chain is invalid or too deep."));
                 ancestor = source.nodes[*ancestor].parent;
@@ -338,7 +341,7 @@ namespace Horo::Destruction {
             if (auto surface = ValidateSurface(source, node, limits, cancellation, workItems); surface.HasError())
                 return Result<PreFracturedCandidate>::Failure(surface.ErrorValue());
             PreFracturedChunk chunk{.id = identities.Value()[index],
-                                    .parent = node.parent ? identities.Value()[*node.parent] : DestructionChunkId{},
+                                    .parent = node.parent.has_value() ? identities.Value()[*node.parent] : DestructionChunkId{},
                                     .sourcePath = node.sourcePath,
                                     .geometryToWorld = node.geometryToWorld,
                                     .positions = node.positions,
@@ -346,7 +349,7 @@ namespace Horo::Destruction {
                                     .triangleMaterials = node.triangleMaterials};
             candidate.chunks_.push_back(std::move(chunk));
         }
-        std::sort(candidate.chunks_.begin(), candidate.chunks_.end(), [](const PreFracturedChunk &a, const PreFracturedChunk &b) {
+        std::ranges::sort(candidate.chunks_, [](const PreFracturedChunk &a, const PreFracturedChunk &b) {
             return a.id.Value() < b.id.Value();
         });
         return Result<PreFracturedCandidate>::Success(std::move(candidate));
