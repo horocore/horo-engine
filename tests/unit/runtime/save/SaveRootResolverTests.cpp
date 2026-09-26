@@ -280,6 +280,9 @@ namespace Horo::Runtime {
             auto opened = SaveFilesystemStorage::Open(root, name);
             REQUIRE(opened.HasValue());
             auto storage = std::move(opened).Value();
+            const auto slot = Test::Id<SaveGameSlotId>(5);
+            const std::array previous{std::byte{3}, std::byte{4}};
+            REQUIRE(storage.Replace(slot, previous).HasValue());
             const auto original = root.CanonicalPath() / name.environment.ToString();
             const auto moved = temporary.Path() / "moved-namespace";
             std::filesystem::rename(original, moved);
@@ -288,10 +291,16 @@ namespace Horo::Runtime {
             std::error_code error;
             std::filesystem::create_directory_symlink(outside, original, error);
             const std::array candidate{std::byte{8}};
-            REQUIRE(storage.Replace(Test::Id<SaveGameSlotId>(5), candidate).HasError());
-            REQUIRE(storage.Read(Test::Id<SaveGameSlotId>(5), 10).HasError());
+            REQUIRE(storage.Replace(slot, candidate).HasError());
+            REQUIRE(storage.Read(slot, 10).HasError());
             REQUIRE(std::filesystem::is_empty(outside));
-            REQUIRE(std::filesystem::is_empty(moved / "server" / std::get<ServerWorldOwner>(name.owner).owner.ToString() / "slots"));
+            const auto retained =
+                moved / "server" / std::get<ServerWorldOwner>(name.owner).owner.ToString() / "slots" / (slot.ToString() + ".horosave");
+            std::ifstream input{retained, std::ios::binary};
+            REQUIRE(input.good());
+            REQUIRE(input.get() == 3);
+            REQUIRE(input.get() == 4);
+            REQUIRE(input.get() == std::char_traits<char>::eof());
         }
 
 #ifdef _WIN32
