@@ -227,6 +227,29 @@ add_executable(HoroNetworkRuntimeTests
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
+include(${PROJECT_SOURCE_DIR}/cmake/HoroNetworkTransportComposition.cmake)
+add_executable(HoroNetworkDisabledLinkProbe support/NetworkTransportLinkProbe.cpp)
+horo_configure_network_transport_profile(HoroNetworkDisabledLinkProbe DISABLED)
+add_executable(HoroNetworkNullLinkProbe support/NetworkTransportLinkProbe.cpp)
+horo_configure_network_transport_profile(HoroNetworkNullLinkProbe HEADLESS_NULL)
+foreach(_profile IN ITEMS Disabled Null)
+    file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroNetwork${_profile}LinkProbe-$<CONFIG>.links"
+            CONTENT "$<TARGET_PROPERTY:HoroNetwork${_profile}LinkProbe,LINK_LIBRARIES>")
+    add_test(NAME HoroNetwork${_profile}LinkageContract
+            COMMAND ${CMAKE_COMMAND}
+                    -DPROFILE=${_profile}
+                    -DMANIFEST=${CMAKE_CURRENT_BINARY_DIR}/HoroNetwork${_profile}LinkProbe-$<CONFIG>.links
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/support/AssertNetworkTransportLinkage.cmake)
+    set_tests_properties(HoroNetwork${_profile}LinkageContract PROPERTIES LABELS "unit;network;headless")
+endforeach()
+add_executable(HoroNetworkTransportCompositionTests
+        unit/runtime/networking/TransportBackendCompositionTests.cpp
+)
+target_compile_features(HoroNetworkTransportCompositionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroNetworkTransportCompositionTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
+add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkProbe HoroNetworkNullLinkProbe)
+horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp

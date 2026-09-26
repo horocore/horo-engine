@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Network/TransportBackendInstance.h"
 #include "Horo/Network/TransportBudget.h"
 
 #include <compare>
@@ -186,4 +187,11 @@ namespace Horo::Network {
         std::uint64_t tick_{};
         bool shuttingDown_{};
     };
+
+    /**
+     * @brief Construct the explicit headless Null composition without native transport code.
+     * @param descriptor Fully bounded deterministic transport configuration.
+     * @return Unique backend lifetime or the underlying typed descriptor/storage failure.
+     */
+    [[nodiscard]] Result<TransportBackendInstance> CreateDeterministicTransportBackend(const DeterministicTransportDescriptor &descriptor);
 }  // namespace Horo::Network
