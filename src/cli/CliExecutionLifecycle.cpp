@@ -6,13 +6,14 @@
 #include <cmath>
 #include <nlohmann/json.hpp>
 #include <ostream>
+#include <ranges>
 #include <utility>
 
 namespace Horo::Cli {
     namespace {
         [[nodiscard]] std::string SafeProgressText(std::string value) {
             for (char &character : value) {
-                const unsigned char byte = static_cast<unsigned char>(character);
+                const auto byte = static_cast<unsigned char>(character);
                 if (byte < 0x20U || byte == 0x7FU)
                     character = ' ';
             }
@@ -30,8 +31,7 @@ namespace Horo::Cli {
         if (operations_ != nullptr && correlation_.operation.has_value()) {
             if (auto snapshot = operations_->SnapshotIfChanged(operationRevision_); snapshot.has_value()) {
                 operationRevision_ = snapshot->revision;
-                const auto found =
-                    std::find_if(snapshot->operations.begin(), snapshot->operations.end(), [this](const OperationRecord &record) {
+                const auto found = std::ranges::find_if(snapshot->operations, [this](const OperationRecord &record) {
                     return record.id == correlation_.operation->value;
                 });
                 if (found != snapshot->operations.end()) {
@@ -46,7 +46,7 @@ namespace Horo::Cli {
         if (!snapshot.has_value())
             return std::nullopt;
         jobRevision_ = snapshot->revision;
-        const auto found = std::find_if(snapshot->jobs.begin(), snapshot->jobs.end(), [this](const JobSnapshot &job) {
+        const auto found = std::ranges::find_if(snapshot->jobs, [this](const JobSnapshot &job) {
             return job.id == correlation_.job->value;
         });
         if (found == snapshot->jobs.end())

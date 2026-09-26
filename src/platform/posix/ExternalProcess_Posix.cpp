@@ -192,9 +192,10 @@ namespace Horo {
 
         void UpdateProcessTermination(const pid_t process, const ExternalProcessRequest &request, const CancellationToken &cancellation,
                                       ProcessMonitorState &monitor, const bool childExited) {
+            using enum ProcessStopCause;
             const auto now = std::chrono::steady_clock::now();
             if (request.forceCancellation.IsCancellationRequested() && !monitor.forced) {
-                monitor.cause = monitor.cause == ProcessStopCause::None ? ProcessStopCause::Cancellation : monitor.cause;
+                monitor.cause = monitor.cause == None ? Cancellation : monitor.cause;
                 monitor.terminationRequested = true;
                 static_cast<void>(kill(-process, SIGKILL));
                 monitor.forced = true;
@@ -204,8 +205,12 @@ namespace Horo {
             if (const bool cancelled = cancellation.IsCancellationRequested();
                 !monitor.terminationRequested && (cancelled || now - monitor.started >= request.timeout || childExited)) {
                 monitor.terminationRequested = true;
-                monitor.cause = cancelled ? ProcessStopCause::Cancellation
-                                          : (childExited ? ProcessStopCause::DescendantCleanup : ProcessStopCause::Timeout);
+                if (cancelled)
+                    monitor.cause = Cancellation;
+                else if (childExited)
+                    monitor.cause = DescendantCleanup;
+                else
+                    monitor.cause = Timeout;
                 monitor.terminationStarted = now;
                 static_cast<void>(kill(-process, SIGTERM));
             } else if (monitor.terminationRequested && !monitor.forced && now - monitor.terminationStarted >= request.gracefulTermination) {

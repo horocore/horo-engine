@@ -398,10 +398,10 @@ namespace Horo::Cli {
             const Error &error = result.ErrorValue();
             const bool acknowledgedCancellation = error.domain.Value() == CliErrors::ExecutionCancelled.domain.Value() &&
                                                   error.code.Value() == CliErrors::ExecutionCancelled.code.Value();
-            const bool timedOut = invocation.stopControl != nullptr
-                                      ? invocation.stopControl->Reason() == CliStopReason::TimedOut
-                                      : (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline);
-            if (acknowledgedCancellation && timedOut)
+            if (const bool timedOut = invocation.stopControl != nullptr
+                                          ? invocation.stopControl->Reason() == CliStopReason::TimedOut
+                                          : (deadline.has_value() && std::chrono::steady_clock::now() >= *deadline);
+                acknowledgedCancellation && timedOut)
                 return CliTerminalResult::Failure(std::move(correlation), MakeError(CliErrors::ExecutionTimedOut));
             return CliTerminalResult::Failure(std::move(correlation), error);
         }
