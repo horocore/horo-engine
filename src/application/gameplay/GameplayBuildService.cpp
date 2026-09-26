@@ -1019,11 +1019,11 @@ namespace Horo::Application {
             session = found->second;
         }
         std::scoped_lock lock(state_->Mutex(), session->Mutex());
-        const auto active = state_->activeProjects.find(projectKey);
-        if (active == state_->activeProjects.end() || active->second != sessionId)
+        if (const auto active = state_->activeProjects.find(projectKey);
+            active == state_->activeProjects.end() || active->second != sessionId)
             return std::nullopt;
-        const auto found = state_->sessions.find(sessionId);
-        if (found == state_->sessions.end() || found->second != session || IsTerminal(session->snapshot.state))
+        if (const auto found = state_->sessions.find(sessionId);
+            found == state_->sessions.end() || found->second != session || IsTerminal(session->snapshot.state))
             return std::nullopt;
         return session->snapshot;
     }
