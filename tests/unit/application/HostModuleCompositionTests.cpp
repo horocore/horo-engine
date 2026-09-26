@@ -45,6 +45,31 @@ TEST_CASE("Headless host composition activates only its linked module set", "[un
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.gui"}).has_value());
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.render.opengl"}).has_value());
     REQUIRE_FALSE(composed.Value()->StateOf(ModuleId{"horo.render.metal"}).has_value());
+    CHECK(composed.Value()->BuildConfigurationSchema().Value().FindDescriptor(SettingKey{"editor.test.count"}) == nullptr);
+}
+
+TEST_CASE("Editor host composition publishes module settings to the canonical resolver", "[unit][application][modules]") {
+    ModuleConfigurationContribution contribution{.module = ModuleId{"horo.editor.services"}, .ownerPrefix = "editor"};
+    contribution.settings.push_back(
+        SettingDescriptor{.key = SettingKey{"editor.test.count"},
+                          .type = SettingValueType::Integer,
+                          .defaultValue = std::int64_t{60},
+                          .scope = SettingScope::User,
+                          .reloadPolicy = ReloadPolicy::NextFrame,
+                          .sensitivity = SettingSensitivity::Public,
+                          .sourcePolicy = ConfigurationSourcePolicy{.allowedSources = ConfigurationSourceMask::User}});
+    const std::vector<ModuleConfigurationContribution> contributions{contribution};
+    auto composed = ComposeHostModules({.host = HostKind::Editor, .renderer = HostRenderer::OpenGL}, contributions);
+    REQUIRE(composed.HasValue());
+    CHECK(composed.Value()->ConfigurationEnvironmentBindings().empty());
+    auto schema = composed.Value()->BuildConfigurationSchema();
+    REQUIRE(schema.HasValue());
+    ConfigurationSchema ownedSchema = std::move(schema).Value();
+    REQUIRE(ownedSchema.FindDescriptor(SettingKey{"editor.test.count"}) != nullptr);
+    REQUIRE(ownedSchema.Seal().HasValue());
+    auto resolved = ConfigurationResolver::Resolve(ownedSchema, {});
+    REQUIRE(resolved.HasValue());
+    CHECK(std::get<std::int64_t>(resolved.Value().Get(SettingKey{"editor.test.count"})) == 60);
 }
 
 TEST_CASE("Editor host composition selects exactly one concrete renderer", "[unit][application][modules]") {

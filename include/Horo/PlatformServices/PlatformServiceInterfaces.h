@@ -5,6 +5,7 @@
  * @brief Backend-neutral Platform Services identities, requests, results, and narrow service interfaces.
  */
 
+#include "Horo/PlatformServices/PlatformCloudObjects.h"
 #include "Horo/PlatformServices/PlatformRequest.h"
 #include "Horo/PlatformServices/PlatformUserSession.h"
 
@@ -282,6 +283,26 @@ namespace Horo::PlatformServices {
         [[nodiscard]] virtual Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) = 0;
         /** @brief Writes one complete opaque object. @param request Owned bytes and address. @return Admitted request or failure. */
         [[nodiscard]] virtual Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) = 0;
+
+        /**
+         * @brief Lists bounded opaque object metadata in the captured authenticated session partition.
+         * @param request Opaque prefix/cursor and finite page bound.
+         * @return Admitted metadata request or UnsupportedCapability.
+         * @note The default keeps older providers source-compatible while they opt into PLS-005.2.
+         */
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest) {
+            return Result<PlatformRequestHandle<CloudObjectPage>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
+        }
+
+        /**
+         * @brief Reads one complete bounded opaque object revision.
+         * @param request Opaque key, captured session subject, and maximum result size.
+         * @return Admitted complete read or UnsupportedCapability.
+         * @note The result must pass ValidateCloudBlobReadCompletion before publication.
+         */
+        [[nodiscard]] virtual Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest) {
+            return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(MakeError(CloudObjectErrors::UnsupportedCapability));
+        }
     };
 
     /** @brief Best-effort presence publication surface. */

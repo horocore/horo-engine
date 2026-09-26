@@ -85,6 +85,18 @@ sequence to the complete tick/world/scene/target/source key; no second legacy
 ordering authority remains. Consumers continue linking `HoroEngine::Physics`, and
 native solver identities or random providers are not exposed.
 
+## PHY-004.9 Query And Event Capability Boundary
+
+`HoroEngine::Physics` owns `Horo/Physics/PhysicsQueryEventCapability.h`.
+It introduces an owner-thread, world-generation-bound client interface over the
+existing immediate query descriptor and copied completed-tick event records.
+Existing direct `PhysicsWorld::Query` callers continue to compile; hosts that
+hand query/event access to another client should issue and revoke this capability
+and carry its exact publication identity. No gameplay host, module permission or
+solver header is introduced in the public include graph. The generated
+`HoroPhysicsPublicHeaderConsumer` compiles the new contract with only the Physics
+target's declared public dependencies.
+
 ## Build-Tree Contract
 
 `cmake/HoroPublicHeaderOwnership.cmake` assigns each public header to one real
@@ -356,6 +368,17 @@ identities, and validation admits only bounded inert contributions from those mo
 Constructing or validating policy performs no discovery, registration, lifecycle call,
 SDK initialization or ambient-state mutation. Existing callers require no signature
 migration because this is the first published project configuration contract.
+
+## PLS-003.6 Migration Notes
+
+`HoroEngine::PlatformServices` additionally owns
+`Horo/PlatformServices/PlatformProviderManifestCook.h`. Cook composition passes
+validated immutable ledger, definition and policy snapshots with one exact mapping
+revision. The synchronous cook owns both output buffers; no borrowed snapshot or
+adapter value survives in them. Hosts recheck the captured source revisions and
+atomically publish the two outputs together. Existing callers have no signature
+migration. Provider adapters retain native values and produce their private manifests
+from the canonical mapping handoff; SDK loading is outside this cook boundary.
 
 ## PLS-004.3 Migration Notes
 

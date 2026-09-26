@@ -42,7 +42,7 @@ namespace Horo::Physics::Detail {
                 const auto &world = std::get<Runtime::PhysicsConstraintWorldEndpoint>(planned.authored.second);
                 result.second = PhysicsWorldAnchor{{world.frame.translation, world.frame.rotation}};
             }
-            using RuntimeParameters = std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint>;
+            using RuntimeParameters = decltype(result.parameters);
             result.parameters = std::visit([]<typename Parameter>(const Parameter &parameter) {
                 using ParameterType = std::decay_t<Parameter>;
                 if constexpr (std::is_same_v<ParameterType, Runtime::PhysicsFixedConstraint>)
@@ -158,6 +158,9 @@ namespace Horo::Physics {
         if (const std::array valid{runtime_->State() == PhysicsRuntimeState::Ready, scene.IsCurrent(), scene.RuntimeId().IsValid()};
             !std::ranges::all_of(valid, std::identity{}))
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        if (definition.Id() != scene.DefinitionId() || definition.Revision() != scene.DefinitionRevision())
+            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                MakeError(PhysicsErrors::QuerySnapshotStale, "The Physics definition does not match the resolved scene generation."));
 
         try {
             if (const Result<void> capabilities = Detail::RequirePhysicsSceneCapabilities(*runtime_, definition); capabilities.HasError())
@@ -185,6 +188,7 @@ namespace Horo::Physics {
             Detail::StagedPhysicsScene resources = std::move(staged).Value();
             auto candidate = PhysicsSceneActivationCandidate::Create({.physics = std::move(resources.physics),
                                                                       .character = std::move(resources.character),
+                                                                      .runtime = runtime_,
                                                                       .authority = authority_,
                                                                       .evidence = evidence,
                                                                       .bodyBindings = std::move(resources.bodyBindings),

@@ -78,16 +78,22 @@ horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/AchievementDefinitionRegistry.h
+    Horo/PlatformServices/PlatformCloudObjects.h
     Horo/PlatformServices/PlatformAchievementCoordinator.h
     Horo/PlatformServices/PlatformOfflineQueue.h
     Horo/PlatformServices/PlatformOfflineQueueErrors.h
     Horo/PlatformServices/PlatformDefinitionRegistries.h
+    Horo/PlatformServices/PlatformPresenceCoordinator.h
+    Horo/PlatformServices/PlatformOfflineQueueStorage.h
+    Horo/PlatformServices/PlatformProgressionIdempotency.h
     Horo/PlatformServices/PlatformProjectConfiguration.h
+    Horo/PlatformServices/PlatformProviderManifestCook.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
     Horo/PlatformServices/PlatformServiceInterfaces.h
     Horo/PlatformServices/PlatformServicesBackend.h
     Horo/PlatformServices/PlatformServicesFrontend.h
+    Horo/PlatformServices/PlatformSessionObserver.h
     Horo/PlatformServices/PlatformStatCacheCoordinator.h
     Horo/PlatformServices/PlatformStableIdRegistry.h
     Horo/PlatformServices/PlatformUserSession.h
@@ -351,6 +357,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsMaterialAsset.h
     Horo/Physics/PhysicsPose.h
     Horo/Physics/PhysicsQuery.h
+    Horo/Physics/PhysicsQueryEventCapability.h
     Horo/Physics/PhysicsShapeDescriptor.h
     Horo/Physics/PhysicsStepPolicy.h
     Horo/Physics/PhysicsTransformAuthority.h
@@ -473,6 +480,7 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
     Horo/Terrain/TerrainDescriptor.h
     Horo/Terrain/TerrainErrors.h
+    Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
 )
 horo_configure_target_header_boundary(HoroNavigationNull PUBLIC_HEADERS
@@ -696,6 +704,8 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorThemeTokens.h
     Horo/Extensions/EditorSurfaceDescriptor.h
     Horo/Extensions/EditorSurfaceContext.h
+    Horo/Extensions/EditorSurfaceRegistry.h
+    Horo/Extensions/EditorCommandRegistry.h
     Horo/Extensions/EditorUiForm.h
     Horo/Extensions/ExtensionDiscovery.h
     Horo/Extensions/ExtensionErrors.h

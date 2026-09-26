@@ -411,15 +411,16 @@ namespace Horo::Editor {
         };
 
         [[nodiscard]] EditorTelemetry RegisterEditorTelemetry() {
+            using enum Telemetry::MetricUnit;
             return {
-                .frameNumber = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.editor.frame.number", .subsystem = "Editor.Runtime", .unit = "frames"}),
+                .frameNumber =
+                    Telemetry::Runtime::RegisterGauge({.name = "horo.editor.frame.number", .subsystem = "Editor.Runtime", .unit = Count}),
                 .frameDuration = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.editor.frame.duration", .subsystem = "Editor.Runtime", .unit = "seconds"}),
+                    {.name = "horo.editor.frame.duration", .subsystem = "Editor.Runtime", .unit = Seconds}),
                 .droppedRecords = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = "records"}),
+                    {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = Count}),
                 .sinkFailures = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = "failures"}),
+                    {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = Count}),
             };
         }
 
@@ -1192,6 +1193,35 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @brief Composes editor modules with the settings loaded for this startup. */
+    [[nodiscard]] static Result<std::unique_ptr<ModuleHost>> ComposeEditorModules(const Application::Internal::HostRenderer renderer,
+                                                                                  const EditorSettings &initialSettings) {
+        const std::vector settingsContributions{MakeEditorSettingsContribution(initialSettings)};
+        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
+                                                          .renderer = renderer,
+#if defined(HORO_HAS_OPENTELEMETRY)
+                                                          .includeOpenTelemetry = true
+#else
+                                                          .includeOpenTelemetry = false
+#endif
+                                                         },
+                                                         settingsContributions);
+    }
+
+    /** @brief Applies a saved input profile while retaining defaults on load or validation failure. */
+    static void LoadEditorInputProfile(Input::InputRouter &inputRouter) {
+        const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
+        if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
+            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
+            if (loaded.HasError())
+                LOG_ERROR("editor.input", "Keeping default input bindings; unable to load '%s': %s", editorInputProfile.string().c_str(),
+                          loaded.ErrorValue().message.c_str());
+            else if (const Result<void> applied = inputRouter.SetProfile(loaded.Value()); applied.HasError())
+                LOG_ERROR("editor.input", "Keeping last valid input bindings; profile '%s' is invalid: %s",
+                          editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
+        }
+    }
+
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
@@ -1240,20 +1270,20 @@ namespace Horo::Editor {
             Log::Logger::Shutdown();
             return 1;
         }
-        auto composedModules = Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
-                                                                          .renderer = selectedRenderer.Value(),
-#if defined(HORO_HAS_OPENTELEMETRY)
-                                                                          .includeOpenTelemetry = true
-#else
-                                                                          .includeOpenTelemetry = false
-#endif
-        });
+        const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
+        auto composedModules = ComposeEditorModules(selectedRenderer.Value(), initialSettings);
         if (composedModules.HasError()) {
             LOG_CRITICAL("editor.startup", "Module composition failed: %s", composedModules.ErrorValue().message.c_str());
             Log::Logger::Shutdown();
             return 1;
         }
         std::unique_ptr<ModuleHost> moduleHost = std::move(composedModules).Value();
+        Result<ConfigurationSchema> moduleSchema = moduleHost->BuildConfigurationSchema();
+        if (moduleSchema.HasError()) {
+            LOG_CRITICAL("editor.startup", "Module configuration failed: %s", moduleSchema.ErrorValue().message.c_str());
+            Log::Logger::Shutdown();
+            return 1;
+        }
 
         SDL_Window *w = nullptr;
         if (!InitializeSdlAndCreateWindow(w, moduleInfo->windowRequirements))
@@ -1286,14 +1316,14 @@ namespace Horo::Editor {
         JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256}};
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
-        const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", initialSettings.languageTag.c_str());
         LocalizationService localization{LocaleTag{"en-US"}};
         const bool loadedCatalogs = LoadEditorCatalogResources(localization);
         LOG_INFO("editor.startup", "Catalog resources loaded: %s", loadedCatalogs ? "true" : "false");
         ActivateInitialLocale(initialSettings, localization);
 
-        ConfigurationService configuration = CreateEditorConfigurationService(initialSettings, &engineEvents);
+        ConfigurationService configuration =
+            CreateEditorConfigurationService(initialSettings, &engineEvents, std::move(moduleSchema).Value());
         EditorSettingsService settings{initialSettings, configuration, editorEvents, localization};
 
         const Subscription settingsSub =
@@ -1314,16 +1344,7 @@ namespace Horo::Editor {
         if (const Result<void> installedInputActions = inputRouter.SetActionMap(BuildEditorInputActions());
             installedInputActions.HasError())
             LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installedInputActions.ErrorValue().message.c_str());
-        const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
-        if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
-            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
-            if (loaded.HasError())
-                LOG_ERROR("editor.input", "Keeping default input bindings; unable to load '%s': %s", editorInputProfile.string().c_str(),
-                          loaded.ErrorValue().message.c_str());
-            else if (const Result<void> applied = inputRouter.SetProfile(loaded.Value()); applied.HasError())
-                LOG_ERROR("editor.input", "Keeping last valid input bindings; profile '%s' is invalid: %s",
-                          editorInputProfile.string().c_str(), applied.ErrorValue().message.c_str());
-        }
+        LoadEditorInputProfile(inputRouter);
         EditorModalHost modalHost{editorEvents, inputRouter};
         GuiRoute initialRoute = opts.projectRoot.empty() ? GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}
                                                          : GuiRoute{GuiRouteKind::ProjectLoading,

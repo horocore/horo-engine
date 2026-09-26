@@ -57,6 +57,37 @@ namespace Horo::Physics {
             return Result<ConstraintHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (const Result<void> valid = ValidatePhysicsConstraintDescriptor(descriptor, impl_->identity); valid.HasError())
             return Result<ConstraintHandle>::Failure(valid.ErrorValue());
+        if (std::holds_alternative<PhysicsBodyAnchor>(descriptor.second) &&
+            descriptor.collisionPolicy == PhysicsJointCollisionPolicy::AllowBetweenBodies)
+            return Result<ConstraintHandle>::Failure(
+                MakeError(PhysicsErrors::OperationUnsupported,
+                          "CanonicalV1 scene collision layers are closed; joints cannot enable contacts between their body endpoints."));
         return Detail::CreateCanonicalSceneConstraint(impl_->native, impl_->identity, descriptor);
+    }
+
+    /** @copydoc PhysicsWorld::DestroySceneConstraint */
+    Result<void> PhysicsWorld::DestroySceneConstraint(const ConstraintHandle constraint) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsHandleOwner(constraint, impl_->identity); valid.HasError())
+            return valid;
+        return Detail::DestroyCanonicalSceneConstraint(impl_->native, constraint);
+    }
+
+    /** @copydoc PhysicsWorld::ReadSceneJointState */
+    Result<PhysicsJointState> PhysicsWorld::ReadSceneJointState(const ConstraintHandle constraint) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsHandleOwner(constraint, impl_->identity); valid.HasError())
+            return Result<PhysicsJointState>::Failure(valid.ErrorValue());
+        return Detail::ReadCanonicalSceneJointState(impl_->native, constraint);
     }
 }  // namespace Horo::Physics

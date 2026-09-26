@@ -325,4 +325,338 @@ namespace {
         REQUIRE(observed.changedKeys[0].Value() == "editor.autosave.enabled");
         REQUIRE(observed.changedKeys[1].Value() == "editor.theme.active");
     }
+
+    TEST_CASE("Reload Storm Commits Latest Valid Snapshot Once On Owner Dispatch", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Register(kAutosaveDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema), &events};
+        std::vector<ConfigurationChangedEvent> observed;
+        std::vector<std::thread::id> deliveryThreads;
+        bool mismatchedRevision = false;
+        const Subscription subscription = events.Subscribe<ConfigurationChangedEvent>([&](const auto &event) {
+            observed.push_back(event);
+            deliveryThreads.push_back(std::this_thread::get_id());
+            mismatchedRevision |= service.Snapshot().Revision() != event.revision;
+        });
+
+        const ConfigurationSnapshot captured = service.Snapshot();
+        std::atomic<bool> producerFailed{false};
+        std::thread producer([&] {
+            for (int iteration = 0; iteration < 100; ++iteration) {
+                ConfigurationResolutionRequest request;
+                request.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{iteration == 99 ? "light" : "dark"}, "user"));
+                request.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+                if (service.StageReload(request).HasError())
+                    producerFailed.store(true);
+            }
+            if (const auto activated = service.ActivateReload(ConfigurationReloadPoint::NextFrame);
+                activated.HasError() || !activated.Value())
+                producerFailed.store(true);
+        });
+        producer.join();
+        REQUIRE_FALSE(producerFailed.load());
+        REQUIRE(observed.empty());
+        REQUIRE(service.Snapshot().Revision() == 1);
+        REQUIRE(captured.Revision() == 0);
+        REQUIRE(events.QueueStats().enqueued == 1);
+        REQUIRE(events.QueueStats().droppedNewest == 0);
+        events.DispatchQueued();
+        REQUIRE(observed.size() == 1);
+        REQUIRE_FALSE(mismatchedRevision);
+        REQUIRE(observed.front().changedKeys.size() == 2);
+        REQUIRE(deliveryThreads.front() == std::this_thread::get_id());
+        REQUIRE(std::get<std::string>(service.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+    }
+
+    TEST_CASE("Reload Of Unchanged Values Does Not Notify", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Register(kAutosaveDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema), &events};
+        int notifications = 0;
+        const Subscription subscription = events.Subscribe<ConfigurationChangedEvent>([&](const auto &) {
+            ++notifications;
+        });
+        ConfigurationResolutionRequest unchanged;
+        unchanged.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        unchanged.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+        REQUIRE(service.StageReload(unchanged).HasValue());
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        events.DispatchQueued();
+        REQUIRE(notifications == 1);
+        REQUIRE(service.StageReload(unchanged).HasValue());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        events.DispatchQueued();
+        REQUIRE(notifications == 1);
+        REQUIRE(service.Snapshot().Revision() == 1);
+    }
+
+    TEST_CASE("Reload Rejects Whole Invalid Candidate And Cancels Pending Input", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Register(kAutosaveDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema), &events};
+        int notifications = 0;
+        const Subscription subscription = events.Subscribe<ConfigurationChangedEvent>([&](const auto &) {
+            ++notifications;
+        });
+        ConfigurationResolutionRequest valid;
+        valid.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        REQUIRE(service.StageReload(valid).HasValue());
+        ConfigurationResolutionRequest invalid = valid;
+        invalid.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(std::string{"invalid"}, "user"));
+        const auto rejected = service.StageReload(invalid);
+        REQUIRE(rejected.HasError());
+        REQUIRE_FALSE(rejected.ErrorValue().diagnostics.empty());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        events.DispatchQueued();
+        REQUIRE(notifications == 0);
+        REQUIRE(service.Snapshot().Revision() == 0);
+    }
+
+    TEST_CASE("Malformed Reload Document Cancels Earlier Staged Candidate", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{schema, &events};
+        ConfigurationResolutionRequest valid;
+        valid.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        REQUIRE(service.StageReload(valid).HasValue());
+
+        const auto malformed = ConfigurationResolver::ParseDocument(schema, "{", "user.json");
+        REQUIRE(malformed.HasError());
+        REQUIRE_FALSE(malformed.ErrorValue().diagnostics.empty());
+        service.CancelPendingReload();
+
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        REQUIRE(service.Snapshot().Revision() == 0);
+        REQUIRE(events.QueueStats().enqueued == 0);
+    }
+
+    TEST_CASE("Reload Waits For Every Descriptor Policy And Invalidates On Direct Commit", "[unit][foundation][configuration]") {
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        SettingDescriptor reopen = kAutosaveDescriptor;
+        reopen.reloadPolicy = ReloadPolicy::ProjectReopen;
+        REQUIRE(schema.Register(reopen).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema)};
+        ConfigurationResolutionRequest request;
+        request.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        request.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+        REQUIRE(service.StageReload(request).HasValue());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::Immediate).Value());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        REQUIRE(service.Snapshot().Revision() == 0);
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::ProjectReopen).Value());
+        REQUIRE(service.Snapshot().Revision() == 1);
+
+        REQUIRE(service.StageReload({}).HasValue());
+        ConfigurationDraft direct{.baseRevision = 1};
+        direct.proposedValues.try_emplace(SettingKey{"editor.theme.active"}, std::string{"dark"});
+        REQUIRE(service.Commit(direct).HasValue());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::ProcessRestart).Value());
+        REQUIRE(service.Snapshot().Revision() == 2);
+    }
+
+    TEST_CASE("Process Restart Policy Defers Activation And Equal Reload Is Silent", "[unit][foundation][configuration]") {
+        ConfigurationSchema schema;
+        SettingDescriptor restart = ResolutionDescriptor();
+        restart.reloadPolicy = ReloadPolicy::ProcessRestart;
+        REQUIRE(schema.Register(restart).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema)};
+        REQUIRE(service.StageReload({}).HasValue());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::ProcessRestart).Value());
+        REQUIRE(service.Snapshot().Revision() == 0);
+        ConfigurationResolutionRequest request;
+        request.invocation.try_emplace(SettingKey{"runtime.worker_count"}, Input(std::int64_t{4}, "--workers"));
+        REQUIRE(service.StageReload(request).HasValue());
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::ProjectReopen).Value());
+        REQUIRE(service.Snapshot().Revision() == 0);
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::ProcessRestart).Value());
+        REQUIRE(service.Snapshot().Revision() == 1);
+    }
+
+    TEST_CASE("Every Reload Policy Requires Its Host Owned Boundary", "[unit][foundation][configuration]") {
+        const auto check = [](const ReloadPolicy policy, const std::vector<ConfigurationReloadPoint> &early,
+                              const ConfigurationReloadPoint allowed) {
+            ConfigurationSchema schema;
+            SettingDescriptor descriptor = kAutosaveDescriptor;
+            descriptor.reloadPolicy = policy;
+            REQUIRE(schema.Register(descriptor).HasValue());
+            REQUIRE(schema.Seal().HasValue());
+            ConfigurationService service{std::move(schema)};
+            ConfigurationResolutionRequest request;
+            request.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+            REQUIRE(service.StageReload(request).HasValue());
+            for (const ConfigurationReloadPoint point : early) {
+                REQUIRE_FALSE(service.ActivateReload(point).Value());
+                REQUIRE(service.Snapshot().Revision() == 0);
+            }
+            REQUIRE(service.ActivateReload(allowed).Value());
+            REQUIRE(service.Snapshot().Revision() == 1);
+        };
+        using enum ConfigurationReloadPoint;
+        check(ReloadPolicy::Immediate, {}, Immediate);
+        check(ReloadPolicy::NextFrame, {Immediate, NextOperation}, NextFrame);
+        check(ReloadPolicy::NextOperation, {Immediate, NextFrame}, NextOperation);
+        check(ReloadPolicy::ProjectReopen, {Immediate, NextFrame, NextOperation, NextFrameAndOperation}, ProjectReopen);
+        check(ReloadPolicy::ProcessRestart, {Immediate, NextFrame, NextOperation, NextFrameAndOperation, ProjectReopen}, ProcessRestart);
+
+        ConfigurationSchema mixedSchema;
+        REQUIRE(mixedSchema.Register(kThemeDescriptor).HasValue());
+        SettingDescriptor operation = kAutosaveDescriptor;
+        operation.reloadPolicy = ReloadPolicy::NextOperation;
+        REQUIRE(mixedSchema.Register(operation).HasValue());
+        REQUIRE(mixedSchema.Seal().HasValue());
+        ConfigurationService mixed{std::move(mixedSchema)};
+        ConfigurationResolutionRequest request;
+        request.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        request.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+        REQUIRE(mixed.StageReload(request).HasValue());
+        REQUIRE_FALSE(mixed.ActivateReload(NextFrame).Value());
+        REQUIRE_FALSE(mixed.ActivateReload(NextOperation).Value());
+        REQUIRE(mixed.ActivateReload(NextFrameAndOperation).Value());
+    }
+
+    TEST_CASE("Invalid Reload Storm Cancels Pending Candidate And Reports Diagnostics", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationService service{BuildSchema(), &events};
+        int notifications = 0;
+        const Subscription subscription = events.Subscribe<ConfigurationChangedEvent>([&](const auto &) {
+            ++notifications;
+        });
+        ConfigurationResolutionRequest valid;
+        valid.invocation.try_emplace(SettingKey{"runtime.worker_count"}, Input(std::int64_t{3}, "--workers"));
+        for (int iteration = 0; iteration < 50; ++iteration) {
+            REQUIRE(service.StageReload(valid).HasValue());
+            ConfigurationResolutionRequest invalid = valid;
+            invalid.user.try_emplace(SettingKey{"runtime.worker_count"}, Input(std::string{"wrong-type"}, "user.json"));
+            const auto rejected = service.StageReload(invalid);
+            REQUIRE(rejected.HasError());
+            REQUIRE_FALSE(rejected.ErrorValue().diagnostics.empty());
+        }
+        REQUIRE_FALSE(service.ActivateReload(ConfigurationReloadPoint::NextOperation).Value());
+        events.DispatchQueued();
+        REQUIRE(notifications == 0);
+        REQUIRE(service.Snapshot().Revision() == 0);
+        REQUIRE(service.StageReload(valid).HasValue());
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::NextOperation).Value());
+        events.DispatchQueued();
+        REQUIRE(notifications == 1);
+    }
+
+    TEST_CASE("Queued Reload Events Stay Snapshot Correlated When Direct Commits Deliver First", "[unit][foundation][configuration]") {
+        EngineDataBus events{EngineDataBusConfig{.traceDispatch = false}};
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema), &events};
+        std::vector<ConfigurationRevision> delivered;
+        bool eventAheadOfSnapshot = false;
+        const Subscription subscription = events.Subscribe<ConfigurationChangedEvent>([&](const auto &event) {
+            delivered.push_back(event.revision);
+            eventAheadOfSnapshot |= service.Snapshot().Revision() < event.revision;
+        });
+        ConfigurationResolutionRequest reloaded;
+        reloaded.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        REQUIRE(service.StageReload(reloaded).HasValue());
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        const ConfigurationSnapshot first = service.Snapshot();
+        REQUIRE(first.Revision() == 1);
+
+        ConfigurationResolutionRequest direct;
+        direct.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"dark"}, "user"));
+        REQUIRE(service.ResolveAndCommit(direct).HasValue());
+        const std::vector<ConfigurationRevision> beforeDispatch{2};
+        REQUIRE(delivered == beforeDispatch);
+        events.DispatchQueued();
+        const std::vector<ConfigurationRevision> afterDispatch{2, 1};
+        REQUIRE(delivered == afterDispatch);
+        REQUIRE_FALSE(eventAheadOfSnapshot);
+        REQUIRE(first.Revision() == 1);
+        REQUIRE(std::get<std::string>(first.Get(SettingKey{"editor.theme.active"})) == "light");
+        REQUIRE(std::get<std::string>(service.Snapshot().Get(SettingKey{"editor.theme.active"})) == "dark");
+    }
+
+    TEST_CASE("Concurrent Reload Staging And Snapshot Readers See Whole Revisions", "[unit][foundation][configuration]") {
+        ConfigurationSchema schema;
+        REQUIRE(schema.Register(kThemeDescriptor).HasValue());
+        REQUIRE(schema.Register(kAutosaveDescriptor).HasValue());
+        REQUIRE(schema.Seal().HasValue());
+        ConfigurationService service{std::move(schema)};
+        std::atomic<bool> done{false};
+        std::atomic<bool> inconsistent{false};
+        std::thread producer([&] {
+            for (int iteration = 0; iteration < 100; ++iteration) {
+                ConfigurationResolutionRequest request;
+                request.user.try_emplace(SettingKey{"editor.theme.active"},
+                                         Input(std::string{iteration % 2 == 0 ? "light" : "dark"}, "user"));
+                request.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+                if (service.StageReload(request).HasError())
+                    inconsistent.store(true);
+            }
+        });
+        std::thread reader([&] {
+            while (!done.load()) {
+                const ConfigurationSnapshot snapshot = service.Snapshot();
+                const auto theme = std::get<std::string>(snapshot.Get(SettingKey{"editor.theme.active"}));
+                const bool autosave = std::get<bool>(snapshot.Get(SettingKey{"editor.autosave.enabled"}));
+                if ((snapshot.Revision() == 0 && (theme != "midnight" || !autosave)) ||
+                    (snapshot.Revision() != 0 && (theme == "midnight" || autosave)))
+                    inconsistent.store(true);
+            }
+        });
+        producer.join();
+        REQUIRE(service.ActivateReload(ConfigurationReloadPoint::NextFrame).Value());
+        done.store(true);
+        reader.join();
+        REQUIRE_FALSE(inconsistent.load());
+        REQUIRE(service.Snapshot().Revision() == 1);
+    }
+
+    TEST_CASE("Racing Valid And Invalid Reloads Never Activate Partial Input", "[unit][foundation][configuration]") {
+        ConfigurationService service = BuildService();
+        std::atomic<bool> start{false};
+        ConfigurationResolutionRequest valid;
+        valid.user.try_emplace(SettingKey{"editor.theme.active"}, Input(std::string{"light"}, "user"));
+        valid.user.try_emplace(SettingKey{"editor.autosave.enabled"}, Input(false, "user"));
+        ConfigurationResolutionRequest invalid = valid;
+        invalid.user[SettingKey{"editor.autosave.enabled"}] = Input(std::string{"bad"}, "user");
+        std::thread first([&] {
+            while (!start.load())
+                std::this_thread::yield();
+            static_cast<void>(service.StageReload(valid));
+        });
+        std::thread second([&] {
+            while (!start.load())
+                std::this_thread::yield();
+            static_cast<void>(service.StageReload(invalid));
+        });
+        start.store(true);
+        first.join();
+        second.join();
+        const auto activation = service.ActivateReload(ConfigurationReloadPoint::NextFrame);
+        REQUIRE(activation.HasValue());
+        const ConfigurationSnapshot snapshot = service.Snapshot();
+        if (activation.Value()) {
+            REQUIRE(snapshot.Revision() == 1);
+            REQUIRE(std::get<std::string>(snapshot.Get(SettingKey{"editor.theme.active"})) == "light");
+            REQUIRE_FALSE(std::get<bool>(snapshot.Get(SettingKey{"editor.autosave.enabled"})));
+        } else {
+            REQUIRE(snapshot.Revision() == 0);
+            REQUIRE(std::get<std::string>(snapshot.Get(SettingKey{"editor.theme.active"})) == "midnight");
+            REQUIRE(std::get<bool>(snapshot.Get(SettingKey{"editor.autosave.enabled"})));
+        }
+    }
 }  // namespace

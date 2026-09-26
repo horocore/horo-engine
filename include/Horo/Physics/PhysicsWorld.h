@@ -11,6 +11,7 @@
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsQuery.h"
+#include "Horo/Physics/PhysicsQueryEventCapability.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsTickPipeline.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
@@ -231,13 +232,29 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<BodyHandle> CreateSceneBody(const PhysicsSceneBodyDescriptor &descriptor) const;
         /**
-         * @brief Stages one fixed or distance constraint after its body endpoints are resident.
+         * @brief Stages one fixed, distance, hinge or slider constraint after its body endpoints are resident.
          * @param descriptor World-scoped body anchors and typed constraint policy.
          * @return World-scoped constraint identity or a typed validation/capacity/native error.
          * @pre Active canonical world, owner-thread scene preparation, and every body endpoint is resident.
          * @post Constraint ownership remains private to this world until aggregate publication.
          */
         [[nodiscard]] Result<ConstraintHandle> CreateSceneConstraint(const PhysicsConstraintDescriptor &descriptor) const;
+        /**
+         * @brief Removes one exact resident joint before retiring either endpoint body.
+         * @param constraint Generation-scoped identity returned by CreateSceneConstraint.
+         * @return Success or typed affinity, lifecycle, foreign-world or stale-handle error.
+         * @pre Active canonical world on its owner thread, outside a fixed tick.
+         * @post Native solver ownership and collision policy are removed; repeated destruction is stale.
+         */
+        [[nodiscard]] Result<void> DestroySceneConstraint(ConstraintHandle constraint) const;
+        /**
+         * @brief Reads the current signed coordinate of one resident hinge or slider joint.
+         * @param constraint Exact generation-scoped joint identity.
+         * @return Angle in radians or displacement in meters; typed lifecycle, affinity, stale-handle or
+         * OperationUnsupported error for a fixed/distance joint.
+         * @pre Active canonical world on its owner thread, outside a fixed tick. This copy retains no joint lease.
+         */
+        [[nodiscard]] Result<PhysicsJointState> ReadSceneJointState(ConstraintHandle constraint) const;
         /**
          * @brief Executes one immediate query against the current owner-thread broadphase.
          * @param descriptor Exact world/scene query request.
@@ -246,6 +263,16 @@ namespace Horo::Physics {
          * @pre Active canonical world, outside a fixed-step execution, and owner-thread affinity.
          */
         [[nodiscard]] Result<PhysicsQueryResult> Query(const PhysicsQueryDescriptor &descriptor, std::span<PhysicsQueryHit> hits) const;
+        /** @brief Issues one revocable access identity for an active canonical world.
+         * @return Independent capability state or typed unavailable, lifecycle, affinity or capacity error.
+         * @note The caller chooses who receives this capability; Physics applies no module policy.
+         */
+        [[nodiscard]] Result<PhysicsQueryEventCapability> IssueQueryEventCapability();
+        /** @brief Revokes every copy of one issued capability before its client or world retires.
+         * @param capability Capability issued by this exact world.
+         * @return Success, or a typed foreign/stale identity or owner-thread error.
+         */
+        [[nodiscard]] Result<void> RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability) const;
         /** @brief Executes one exact host-issued fixed tick and publishes its results atomically.
          * @param input One-based next tick, exact immutable world delta and optional synchronous observer.
          * @return Success or typed affinity/lifecycle/sequence/delta/job/native-capacity error without partial publication.
@@ -264,6 +291,7 @@ namespace Horo::Physics {
 
     private:
         friend class PhysicsRuntime;
+        friend class PhysicsQueryEventCapability;
         struct Impl;
         /** @brief Takes one prepared world's ownership. @param impl Owned isolated world state. */
         explicit PhysicsWorld(std::unique_ptr<Impl> impl) noexcept;

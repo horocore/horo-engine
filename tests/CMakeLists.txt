@@ -339,7 +339,9 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsMaterialAssetTests.cpp
         unit/runtime/physics/PhysicsMassPropertiesTests.cpp
         unit/runtime/physics/PhysicsPoseTests.cpp
+        unit/runtime/physics/PhysicsPropertyFuzzTests.cpp
         unit/runtime/physics/PhysicsQueryTests.cpp
+        unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
         unit/runtime/physics/PhysicsShapeDescriptorTests.cpp
@@ -520,10 +522,11 @@ horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 add_executable(HoroTerrainApiTests
         unit/runtime/terrain/FoliageDefinitionTests.cpp
         unit/runtime/terrain/TerrainDescriptorTests.cpp
+        unit/runtime/terrain/TerrainFoliageRegistryTests.cpp
         unit/runtime/terrain/TerrainIdentityTests.cpp
 )
 target_compile_features(HoroTerrainApiTests PRIVATE cxx_std_20)
-target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi)
+target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi Threads::Threads)
 horo_register_catch_test(HoroTerrainApiTests LABELS "unit;terrain;headless")
 
 add_executable(HoroWorldStreamingTests
@@ -687,6 +690,7 @@ target_compile_features(HoroStructuredLogStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroStructuredLogStoreTests PRIVATE HoroEngine::Foundation Threads::Threads)
 add_executable(HoroObservabilityTests
         unit/foundation/ObservabilityTests.cpp
+        unit/foundation/TelemetryContractTests.cpp
 )
 target_compile_features(HoroObservabilityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroObservabilityTests PRIVATE HoroEngine::Foundation Threads::Threads miniz)
@@ -1209,14 +1213,21 @@ target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
 add_executable(HoroPlatformRequestTests
         support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
+        unit/platform_services/PlatformCloudObjectsTests.cpp
         unit/platform_services/PlatformAchievementCoordinatorTests.cpp
         unit/platform_services/PlatformDefinitionRegistriesTests.cpp
+        unit/platform_services/PlatformPresenceCoordinatorTests.cpp
+        unit/platform_services/PlatformOfflineQueueStorageTests.cpp
+        unit/platform_services/PlatformProgressionIdempotencyTests.cpp
         unit/platform_services/PlatformOfflineQueueTests.cpp
         unit/platform_services/PlatformOfflineQueueLifecycleTests.cpp
         unit/platform_services/PlatformProjectConfigurationTests.cpp
+        unit/platform_services/PlatformProviderManifestCookTests.cpp
         unit/platform_services/PlatformRequestTests.cpp
         unit/platform_services/PlatformServicesBackendTests.cpp
         unit/platform_services/PlatformServicesFrontendTests.cpp
+        unit/platform_services/PlatformSessionObserverTests.cpp
+        unit/platform_services/PlatformServicesMetricsTests.cpp
         unit/platform_services/PlatformStatCacheCoordinatorTests.cpp
         unit/platform_services/PlatformStableIdRegistryTests.cpp
         unit/platform_services/PlatformUserSessionTests.cpp
@@ -1246,6 +1257,7 @@ target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentTests.cpp
+        unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/SceneDocumentExtractionTests.cpp
         unit/editor/SceneDocumentPrefabTests.cpp
@@ -1254,6 +1266,7 @@ target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
+        unit/editor/SceneDocumentAudioPersistenceTests.cpp
         unit/editor/SceneDocumentTriggerVolumePersistenceTests.cpp
         unit/editor/SceneDocumentGameplayPersistenceTests.cpp
         unit/editor/SceneDocumentComparisonPersistenceTests.cpp
@@ -1748,6 +1761,7 @@ target_compile_features(HoroRuntimeSaveSlotRecoveryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotRecoveryTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSafePointCoordinatorTests
         unit/runtime/save/SaveSafePointCoordinatorTests.cpp
+        unit/runtime/save/SaveFoundationQualificationTests.cpp
 )
 target_compile_features(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
@@ -1951,6 +1965,8 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
+        unit/extensions/EditorSurfaceRegistryTests.cpp
+        unit/extensions/EditorCommandRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp

@@ -94,6 +94,9 @@ namespace Horo::Physics::Detail {
     public:
         explicit CanonicalContactListener(CanonicalWorld &world) noexcept : world_(world) {}
 
+        JPH::ValidateResult OnContactValidate(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg baseOffset,
+                                              const JPH::CollideShapeResult &collision) override;
+
         void OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
                             JPH::ContactSettings &settings) override;
         void OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
@@ -125,6 +128,9 @@ namespace Horo::Physics::Detail {
     struct CanonicalSceneConstraintRecord final {
         ConstraintHandle handle;
         JPH::Ref<JPH::Constraint> constraint;
+        JPH::BodyID firstBody;
+        JPH::BodyID secondBody;
+        PhysicsJointCollisionPolicy collisionPolicy{};
     };
 
     /** @brief Native solver objects retained in dependency order for one world. */
@@ -146,6 +152,7 @@ namespace Horo::Physics::Detail {
         std::vector<CanonicalSceneShapeRecord> shapes;
         std::vector<CanonicalSceneBodyRecord> bodies;
         std::vector<CanonicalSceneConstraintRecord> constraints;
+        std::vector<std::uint64_t> disabledJointCollisionPairs;
         std::uint32_t nextShapeSlot{};
         std::uint32_t nextBodySlot{};
         std::uint32_t nextConstraintSlot{};

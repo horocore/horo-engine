@@ -30,10 +30,10 @@ namespace Horo::PlatformServices::Tests {
             return 1U << static_cast<std::uint8_t>(HostPlatform());
         }
 
-        /** @brief Stages the provider-operations fixture with an exact manifest contribution. */
-        [[nodiscard]] bool WriteOperationsProviderPackage(const std::filesystem::path &root) {
-            const std::filesystem::path modulePath = root / std::filesystem::path{HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE}.filename();
-            if (!std::filesystem::copy_file(HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE, modulePath))
+        /** @brief Stages a native provider fixture and its matching manifest in a temporary package. */
+        [[nodiscard]] bool WriteProviderPackage(const std::filesystem::path &root, const std::filesystem::path &fixture) {
+            const std::filesystem::path modulePath = root / fixture.filename();
+            if (!std::filesystem::copy_file(fixture, modulePath))
                 return false;
             std::ofstream manifest{root / "extension.json"};
             manifest
@@ -340,16 +340,7 @@ namespace Horo::PlatformServices::Tests {
             }
         } cleanup{root};
 
-        const fs::path modulePath = root / fs::path{HORO_PLATFORM_PROVIDER_FIXTURE}.filename();
-        REQUIRE(fs::copy_file(HORO_PLATFORM_PROVIDER_FIXTURE, modulePath));
-        {
-            std::ofstream manifest{root / "extension.json"};
-            manifest
-                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
-                << modulePath.filename().generic_string()
-                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
-            REQUIRE(manifest.good());
-        }
+        REQUIRE(WriteProviderPackage(root, HORO_PLATFORM_PROVIDER_FIXTURE));
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();
@@ -400,7 +391,7 @@ namespace Horo::PlatformServices::Tests {
             }
         } cleanup{root};
 
-        REQUIRE(WriteOperationsProviderPackage(root));
+        REQUIRE(WriteProviderPackage(root, HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE));
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();

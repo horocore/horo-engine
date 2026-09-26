@@ -37,7 +37,7 @@ namespace Horo::Assets {
             ~CookOperationScope() {
                 if (completed_)
                     return;
-                const bool cancelled = cancellation_->IsCancellationRequested();
+                const bool cancelled = cancelledResult_.value_or(cancellation_->IsCancellationRequested());
                 if (store_ != nullptr && id_.has_value())
                     static_cast<void>(
                         store_->Update(*id_, OperationUpdate{.state = cancelled ? OperationState::Cancelled : OperationState::Failed,
@@ -53,6 +53,16 @@ namespace Horo::Assets {
 
             CookOperationScope(const CookOperationScope &) = delete;
             CookOperationScope &operator=(const CookOperationScope &) = delete;
+
+            void RecordOutcome(const bool cancelled) {
+                cancelledResult_ = cancelled;
+            }
+
+            void RecordError(const Error &error) {
+                const std::string_view domain = error.domain.Value();
+                cancelledResult_ = error.code.Value() == CookErrors::Cancelled.code.Value() &&
+                                   (domain.empty() || domain == CookErrors::Cancelled.domain.Value());
+            }
 
             void Update(std::string phase, std::string message, const float progress) {
                 if (store_ != nullptr && id_.has_value())
@@ -92,6 +102,7 @@ namespace Horo::Assets {
             BuildOutputSessionId sessionId_;
             std::optional<OperationId> id_;
             bool completed_{false};
+            std::optional<bool> cancelledResult_;
         };
 
         /**
@@ -201,6 +212,28 @@ namespace Horo::Assets {
 
             slot.cookedArtifact = std::move(encodeResult).Value();
             return Result<void>::Success();
+        }
+
+        /** @brief Runs uncached cook slots as a fail-fast group while preserving cancellation causes. */
+        Result<void> CookUncachedSlots(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
+                                       std::span<CookSlot> slots, const CancellationToken &cancellation) {
+            TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
+            for (CookSlot &slot : slots) {
+                if (slot.cacheHit)
+                    continue;
+                const JobFunction work = [&slot, &catalog, &request](const CancellationToken &jobCancellation) {
+                    if (jobCancellation.IsCancellationRequested())
+                        return JobCancelled(MakeError(CookErrors::Cancelled));
+                    Result<void> cooked = CookAndEncodeSlot(catalog, slot, request.target, jobCancellation);
+                    if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
+                        jobCancellation.IsCancellationRequested())
+                        return JobCancelled(cooked.ErrorValue());
+                    return cooked;
+                };
+                if (auto spawned = group.Spawn({}, work); spawned.HasError())
+                    return Result<void>::Failure(spawned.ErrorValue());
+            }
+            return group.Join();
         }
 
         Result<AssetCookReport> PublishCookedSlots(const AssetCookRequest &request, const AssetCookCache &cache,
@@ -377,45 +410,40 @@ namespace Horo::Assets {
         if (records.empty())
             return HandleEmptyCookSnapshot(request, operation);
 
-        if (records.size() > request.limits.maximumAssets)
+        if (records.size() > request.limits.maximumAssets) {
+            operation.RecordOutcome(false);
             return Result<AssetCookReport>::Failure(Error{CookErrors::TooLarge.code});
+        }
 
         AssetCookCache cache(request.cacheRoot, request.limits);
         auto slotsResult = PrepareCookSlots(request, *catalog_, records, operation);
-        if (slotsResult.HasError())
+        if (slotsResult.HasError()) {
+            operation.RecordError(slotsResult.ErrorValue());
             return Result<AssetCookReport>::Failure(slotsResult.ErrorValue());
+        }
         auto slots = std::move(slotsResult).Value();
 
         auto cacheHitsResult = ResolveCacheHits(request, cache, slots, cancellation, operation);
-        if (cacheHitsResult.HasError())
+        if (cacheHitsResult.HasError()) {
+            operation.RecordError(cacheHitsResult.ErrorValue());
             return Result<AssetCookReport>::Failure(cacheHitsResult.ErrorValue());
+        }
         const std::size_t cacheHits = cacheHitsResult.Value();
 
         if (cacheHits < slots.size()) {
             operation.Update("cook", std::format("Cooking {} assets", slots.size() - cacheHits), 0.4F);
-
-            TaskGroup group(jobs_, TaskGroupFailurePolicy::FailFast, cancellation);
-            for (auto &slot : slots) {
-                if (slot.cacheHit)
-                    continue;
-
-                const JobFunction work = [&slot, this, &request](const CancellationToken &jobCancellation) {
-                    if (jobCancellation.IsCancellationRequested())
-                        return Result<void>::Failure(Error{CookErrors::Cancelled.code});
-
-                    return CookAndEncodeSlot(*catalog_, slot, request.target, jobCancellation);
-                };
-                auto spawnResult = group.Spawn({}, work);
-                if (spawnResult.HasError())
-                    return Result<AssetCookReport>::Failure(spawnResult.ErrorValue());
+            if (const auto cooked = CookUncachedSlots(jobs_, *catalog_, request, slots, cancellation); cooked.HasError()) {
+                const bool cancelled = IsJobCancelled(cooked.ErrorValue());
+                Error error = cancelled ? WithCause(MakeError(CookErrors::Cancelled), cooked.ErrorValue()) : cooked.ErrorValue();
+                operation.RecordOutcome(cancelled);
+                return Result<AssetCookReport>::Failure(std::move(error));
             }
-
-            auto joinResult = group.Join();
-            if (joinResult.HasError())
-                return Result<AssetCookReport>::Failure(joinResult.ErrorValue());
         }
 
-        return PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);
+        Result<AssetCookReport> published = PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);
+        if (published.HasError())
+            operation.RecordError(published.ErrorValue());
+        return published;
     }
 
 }  // namespace Horo::Assets

@@ -2,6 +2,8 @@
 #include "Horo/Runtime/Save/SaveSafePointCoordinator.h"
 #include "TypedIdentityTestSupport.h"
 
+#include <array>
+#include <barrier>
 #include <catch2/catch_test_macros.hpp>
 #include <functional>
 #include <future>
@@ -306,5 +308,99 @@ namespace Horo::Runtime {
         REQUIRE(coordinator->Acknowledge(101).HasValue());
         RequireError(coordinator->Snapshot(101), SaveErrors::OperationInvalid);
         REQUIRE(coordinator->Admit({.operation = 102, .action = SaveSafePointAction::Capture, .generation = Generation()}).HasValue());
+    }
+
+    TEST_CASE("Concurrent worker completions terminalize each detached capture once", "[unit][save][concurrency]") {
+        constexpr std::size_t operationCount = 16;
+        auto coordinator = Coordinator(Generation(), operationCount);
+        RecordingExecutor executor;
+        for (std::size_t index = 0; index < operationCount; ++index)
+            REQUIRE(coordinator->Admit({.operation = 200 + index, .action = SaveSafePointAction::Capture, .generation = Generation()})
+                        .HasValue());
+        CHECK(Commit(*coordinator, executor, Generation(), operationCount).captured == operationCount);
+
+        std::array<std::thread, operationCount> workers;
+        std::array<bool, operationCount> firstAccepted{};
+        std::array<bool, operationCount> duplicateRejected{};
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            workers[index] = std::thread([&, index] {
+                const SaveWorkerCompletion completion{.operation = 200 + index,
+                                                      .generation = Generation(),
+                                                      .outcome = SaveWorkerCompletionOutcome::Succeeded};
+                firstAccepted[index] = coordinator->PublishWorkerCompletion(completion).HasValue();
+                const auto duplicate = coordinator->PublishWorkerCompletion(completion);
+                duplicateRejected[index] =
+                    duplicate.HasError() && duplicate.ErrorValue().code.Value() == SaveErrors::CompletionInvalid.code.Value();
+            });
+        }
+        for (auto &worker : workers)
+            worker.join();
+        for (std::size_t index = 0; index < operationCount; ++index) {
+            CHECK(firstAccepted[index]);
+            CHECK(duplicateRejected[index]);
+            const auto completed = Snapshot(*coordinator, 200 + index);
+            CHECK(completed.state == SaveSafePointOperationState::Completed);
+            CHECK(completed.revision == 4);
+        }
+    }
+
+    TEST_CASE("Scene transition racing restore completion never applies a stale candidate", "[unit][save][concurrency]") {
+        auto coordinator = Coordinator();
+        RecordingExecutor executor;
+        REQUIRE(coordinator->Admit({.operation = 301, .action = SaveSafePointAction::Restore, .generation = Generation()}).HasValue());
+        std::barrier rendezvous{2};
+        std::optional<Result<void>> workerResult;
+        std::thread worker([&] {
+            rendezvous.arrive_and_wait();
+            workerResult = coordinator->PublishWorkerCompletion(
+                {.operation = 301, .generation = Generation(), .outcome = SaveWorkerCompletionOutcome::Succeeded});
+        });
+        rendezvous.arrive_and_wait();
+        REQUIRE(coordinator->TransitionScene(Generation(1, 9, 3)).HasValue());
+        worker.join();
+
+        REQUIRE(workerResult.has_value());
+        if (workerResult->HasError())
+            RequireError(*workerResult, SaveErrors::CompletionInvalid);
+        const auto stale = Snapshot(*coordinator, 301);
+        CHECK(stale.state == SaveSafePointOperationState::Stale);
+        CHECK(stale.disposition == SaveLifecycleDisposition::SceneTransition);
+        CHECK(Commit(*coordinator, executor, Generation(1, 9, 3)).restored == 0);
+        CHECK(executor.restores.empty());
+        RequireError(coordinator->PublishWorkerCompletion(
+                         {.operation = 301, .generation = Generation(), .outcome = SaveWorkerCompletionOutcome::Succeeded}),
+                     SaveErrors::CompletionInvalid);
+    }
+
+    TEST_CASE("Shutdown racing detached completion leaves one immutable terminal result", "[unit][save][concurrency]") {
+        auto coordinator = Coordinator();
+        RecordingExecutor executor;
+        REQUIRE(coordinator->Admit({.operation = 302, .action = SaveSafePointAction::Capture, .generation = Generation()}).HasValue());
+        CHECK(Commit(*coordinator, executor).captured == 1);
+        std::barrier rendezvous{2};
+        std::optional<Result<void>> workerResult;
+        std::thread worker([&] {
+            rendezvous.arrive_and_wait();
+            workerResult = coordinator->PublishWorkerCompletion(
+                {.operation = 302, .generation = Generation(), .outcome = SaveWorkerCompletionOutcome::Succeeded});
+        });
+        rendezvous.arrive_and_wait();
+        REQUIRE(coordinator->BeginShutdown().HasValue());
+        worker.join();
+        REQUIRE(workerResult.has_value());
+        const auto terminal = Snapshot(*coordinator, 302);
+        CHECK(terminal.IsTerminal());
+        if (workerResult->HasValue())
+            CHECK(terminal.state == SaveSafePointOperationState::Completed);
+        else {
+            RequireError(*workerResult, SaveErrors::CompletionInvalid);
+            CHECK(terminal.state == SaveSafePointOperationState::Cancelled);
+            CHECK(terminal.disposition == SaveLifecycleDisposition::HostShutdown);
+        }
+        RequireError(coordinator->PublishWorkerCompletion(
+                         {.operation = 302, .generation = Generation(), .outcome = SaveWorkerCompletionOutcome::Succeeded}),
+                     SaveErrors::CompletionInvalid);
+        REQUIRE(coordinator->BeginShutdown().HasValue());
+        CHECK(Snapshot(*coordinator, 302).revision == terminal.revision);
     }
 }  // namespace Horo::Runtime
