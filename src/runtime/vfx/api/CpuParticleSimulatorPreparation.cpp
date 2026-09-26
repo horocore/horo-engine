@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <limits>
 #include <new>
 #include <string>
@@ -101,7 +102,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             error.diagnostics.push_back({.code = DiagnosticCode{"vfx.payload.module_contract"},
                                          .severity = DiagnosticSeverity::Error,
                                          .message = std::string{code.summary},
-                                         .path = "payloadModules[" + std::to_string(index) + "]." + std::string{field}});
+                                         .path = std::format("payloadModules[{}].{}", index, field)});
             return Result<void>::Failure(std::move(error));
         }
 
@@ -115,20 +116,33 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             return channels.size();
         }
 
+        /** @brief Checks the complete output domain of one prepared transform. */
+        [[nodiscard]] bool ValidPayloadRange(const CpuParticlePayloadModule &payload, const CpuParticlePayloadChannel &source,
+                                             const CpuParticlePayloadChannel &target) noexcept {
+            if (payload.operation == CpuParticlePayloadOperation::Affine) {
+                const double low = (static_cast<double>(source.minimum) * payload.scale) + payload.bias;
+                const double high = (static_cast<double>(source.maximum) * payload.scale) + payload.bias;
+                return std::min(low, high) >= target.minimum && std::max(low, high) <= target.maximum;
+            }
+            return payload.threshold >= source.minimum && payload.threshold <= source.maximum && payload.belowValue >= target.minimum &&
+                   payload.belowValue <= target.maximum && payload.atOrAboveValue >= target.minimum &&
+                   payload.atOrAboveValue <= target.maximum;
+        }
+
         /** @brief Validates every declared read/write edge before publishing a simulator. */
         [[nodiscard]] Result<void> ValidatePayloadModules(const CpuParticleSimulatorCreateInfo &info) {
             std::array<bool, CpuParticleSimulationHardLimits::PayloadChannels> writerSeen{};
             for (std::size_t index = 0; index < info.payloadModules.size(); ++index) {
-                const auto &module = info.payloadModules[index];
-                if (module.stage != CpuParticleStage::Integrate)
+                const auto &payload = info.payloadModules[index];
+                if (payload.stage != CpuParticleStage::Integrate)
                     return PayloadModuleFailure(VfxErrors::ParticleStageContractViolation, index, "stage");
-                if (module.operation >= CpuParticlePayloadOperation::Count)
+                if (payload.operation >= CpuParticlePayloadOperation::Count)
                     return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "operation");
-                if (!Finite(module.scale) || !Finite(module.bias) || !Finite(module.threshold) || !Finite(module.belowValue) ||
-                    !Finite(module.atOrAboveValue))
+                if (!Finite(payload.scale) || !Finite(payload.bias) || !Finite(payload.threshold) || !Finite(payload.belowValue) ||
+                    !Finite(payload.atOrAboveValue))
                     return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "parameters");
-                const std::size_t read = PayloadChannelIndex(info.payloadChannels, module.readChannel);
-                const std::size_t write = PayloadChannelIndex(info.payloadChannels, module.writeChannel);
+                const std::size_t read = PayloadChannelIndex(info.payloadChannels, payload.readChannel);
+                const std::size_t write = PayloadChannelIndex(info.payloadChannels, payload.writeChannel);
                 if (read == info.payloadChannels.size() || write == info.payloadChannels.size())
                     return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "channels");
                 if (info.payloadChannels[read].classification != CpuParticlePayloadClass::GameplayInput ||
@@ -137,19 +151,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 if (writerSeen[write])
                     return PayloadModuleFailure(VfxErrors::ParticleStageContractViolation, index, "writeChannel");
                 writerSeen[write] = true;
-                const auto &source = info.payloadChannels[read];
-                const auto &target = info.payloadChannels[write];
-                if (module.operation == CpuParticlePayloadOperation::Affine) {
-                    const double low = (static_cast<double>(source.minimum) * module.scale) + module.bias;
-                    const double high = (static_cast<double>(source.maximum) * module.scale) + module.bias;
-                    if (std::min(low, high) < target.minimum || std::max(low, high) > target.maximum)
-                        return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
-                } else {
-                    if (module.threshold < source.minimum || module.threshold > source.maximum || module.belowValue < target.minimum ||
-                        module.belowValue > target.maximum || module.atOrAboveValue < target.minimum ||
-                        module.atOrAboveValue > target.maximum)
-                        return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
-                }
+                if (!ValidPayloadRange(payload, info.payloadChannels[read], info.payloadChannels[write]))
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
             }
             return Result<void>::Success();
         }
@@ -233,20 +236,20 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 state.inputValues[index] = state.payloadChannels[index].minimum;
             state.payloadModuleCount = static_cast<std::uint32_t>(info.payloadModules.size());
             for (std::uint32_t index = 0; index < state.payloadModuleCount; ++index) {
-                const auto &module = info.payloadModules[index];
-                const std::size_t read = PayloadChannelIndex(channels, module.readChannel);
-                const std::size_t write = PayloadChannelIndex(channels, module.writeChannel);
-                state.payloadModules[index] = {.stage = module.stage,
-                                               .operation = module.operation,
-                                               .readChannel = module.readChannel,
-                                               .writeChannel = module.writeChannel,
+                const auto &payload = info.payloadModules[index];
+                const std::size_t read = PayloadChannelIndex(channels, payload.readChannel);
+                const std::size_t write = PayloadChannelIndex(channels, payload.writeChannel);
+                state.payloadModules[index] = {.stage = payload.stage,
+                                               .operation = payload.operation,
+                                               .readChannel = payload.readChannel,
+                                               .writeChannel = payload.writeChannel,
                                                .readStream = channels[read].customFloatStream,
                                                .writeStream = channels[write].customFloatStream,
-                                               .scale = module.scale,
-                                               .bias = module.bias,
-                                               .threshold = module.threshold,
-                                               .belowValue = module.belowValue,
-                                               .atOrAboveValue = module.atOrAboveValue};
+                                               .scale = payload.scale,
+                                               .bias = payload.bias,
+                                               .threshold = payload.threshold,
+                                               .belowValue = payload.belowValue,
+                                               .atOrAboveValue = payload.atOrAboveValue};
                 state.outputHasModule[write] = true;
             }
         }

@@ -46,6 +46,11 @@ namespace Horo::Vfx {
         struct AdvanceScope final {
             bool &active;
 
+            explicit AdvanceScope(bool &activeState) noexcept : active(activeState) {}
+
+            AdvanceScope(const AdvanceScope &) = delete;
+            AdvanceScope &operator=(const AdvanceScope &) = delete;
+
             ~AdvanceScope() {
                 active = false;
             }

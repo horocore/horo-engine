@@ -162,12 +162,12 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 }
             }
             for (std::uint32_t moduleIndex = 0; moduleIndex < state.payloadModuleCount; ++moduleIndex) {
-                const auto &module = state.payloadModules[moduleIndex];
-                const float input = view.customFloats[module.readStream][dense];
-                const float output = module.operation == CpuParticlePayloadOperation::Threshold
-                                         ? (input < module.threshold ? module.belowValue : module.atOrAboveValue)
-                                         : (input * module.scale) + module.bias;
-                view.customFloats[module.writeStream][dense] = output;
+                const auto &payload = state.payloadModules[moduleIndex];
+                const float input = view.customFloats[payload.readStream][dense];
+                float output = (input * payload.scale) + payload.bias;
+                if (payload.operation == CpuParticlePayloadOperation::Threshold)
+                    output = input < payload.threshold ? payload.belowValue : payload.atOrAboveValue;
+                view.customFloats[payload.writeStream][dense] = output;
             }
         }
 
