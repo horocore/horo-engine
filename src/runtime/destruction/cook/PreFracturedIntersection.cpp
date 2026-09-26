@@ -198,39 +198,45 @@ namespace Horo::Destruction::Detail {
                 return true;
             if (sharedCount == 2)
                 return coplanar && CoplanarAreaOverlap(pointsA, pointsB, normal);
-            const std::optional<Point> sharedPoint = sharedCount == 0 ? std::nullopt : std::optional{Position(node, shared[0])};
-            if (EdgesPierceBeyondShared(pointsA, pointsB, sharedPoint) || EdgesPierceBeyondShared(pointsB, pointsA, sharedPoint))
+            if (const std::optional<Point> sharedPoint = sharedCount == 0 ? std::nullopt : std::optional{Position(node, shared[0])};
+                EdgesPierceBeyondShared(pointsA, pointsB, sharedPoint) || EdgesPierceBeyondShared(pointsB, pointsA, sharedPoint))
                 return true;
             if (!coplanar)
                 return false;
             return sharedCount == 0 ? CoplanarOverlap(pointsA, pointsB, normal) : CoplanarAreaOverlap(pointsA, pointsB, normal);
         }
+
+        [[nodiscard]] Triangle MakeTriangle(const Assets::PreFracturedSourceNode &node, const std::size_t offset) {
+            Triangle triangle;
+            triangle.indices[0] = node.triangleIndices[offset];
+            triangle.minimum = Position(node, triangle.indices[0]);
+            triangle.maximum = triangle.minimum;
+            for (std::size_t vertex = 1; vertex < 3; ++vertex) {
+                triangle.indices[vertex] = node.triangleIndices[offset + vertex];
+                const Point point = Position(node, triangle.indices[vertex]);
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    triangle.minimum[axis] = std::min(triangle.minimum[axis], point[axis]);
+                    triangle.maximum[axis] = std::max(triangle.maximum[axis], point[axis]);
+                }
+            }
+            return triangle;
+        }
+
+        [[nodiscard]] std::vector<Triangle> SortedTriangles(const Assets::PreFracturedSourceNode &node) {
+            std::vector<Triangle> triangles;
+            triangles.reserve(node.triangleIndices.size() / 3U);
+            for (std::size_t offset = 0; offset < node.triangleIndices.size(); offset += 3U)
+                triangles.push_back(MakeTriangle(node, offset));
+            std::ranges::sort(triangles, [](const Triangle &a, const Triangle &b) {
+                return a.minimum[0] < b.minimum[0];
+            });
+            return triangles;
+        }
     }  // namespace
 
     IntersectionCheck CheckSelfIntersection(const Assets::PreFracturedSourceNode &node, std::uint64_t &remainingWork,
                                             const CancellationToken &cancellation) {
-        std::vector<Triangle> triangles;
-        triangles.reserve(node.triangleIndices.size() / 3U);
-        for (std::size_t offset = 0; offset < node.triangleIndices.size(); offset += 3U) {
-            Triangle triangle;
-            for (std::size_t vertex = 0; vertex < 3; ++vertex) {
-                triangle.indices[vertex] = node.triangleIndices[offset + vertex];
-                const Point point = Position(node, triangle.indices[vertex]);
-                if (vertex == 0) {
-                    triangle.minimum = point;
-                    triangle.maximum = point;
-                } else {
-                    for (std::size_t axis = 0; axis < 3; ++axis) {
-                        triangle.minimum[axis] = std::min(triangle.minimum[axis], point[axis]);
-                        triangle.maximum[axis] = std::max(triangle.maximum[axis], point[axis]);
-                    }
-                }
-            }
-            triangles.push_back(triangle);
-        }
-        std::ranges::sort(triangles, [](const Triangle &a, const Triangle &b) {
-            return a.minimum[0] < b.minimum[0];
-        });
+        const auto triangles = SortedTriangles(node);
         for (std::size_t left = 0; left < triangles.size(); ++left) {
             if (cancellation.IsCancellationRequested())
                 return IntersectionCheck::Cancelled;
