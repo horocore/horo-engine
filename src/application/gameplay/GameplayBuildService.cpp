@@ -948,12 +948,21 @@ namespace Horo::Application {
         struct AdmissionGuard final {
             State &state;
 
+            explicit AdmissionGuard(State &target) : state(target) {}
+
+            AdmissionGuard(const AdmissionGuard &) = delete;
+            AdmissionGuard &operator=(const AdmissionGuard &) = delete;
+            AdmissionGuard(AdmissionGuard &&) = delete;
+            AdmissionGuard &operator=(AdmissionGuard &&) = delete;
+
             ~AdmissionGuard() {
                 std::lock_guard lock(state.Mutex());
                 --state.activeAdmissions;
                 state.admissionsFinished.notify_all();
             }
-        } admission{*state_};
+        };
+
+        AdmissionGuard admission{*state_};
 
         const std::string projectKey = std::filesystem::absolute(request.projectRoot).lexically_normal().generic_string();
         Result<SessionPreparation> prepared = PrepareSession(state_, request, hash.Value(), projectKey);
